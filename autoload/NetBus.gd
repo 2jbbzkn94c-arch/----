@@ -1,0 +1,152 @@
+extends Node
+## 联机网络单例（NetBus）：主机/客户端连接 + 简单消息收发。
+## 用底层 ENetMultiplayerPeer（put_packet/get_packet），与 NetBusVerify 已验证的方式一致，可单进程 headless 验证。
+## 阶段3：先确保两台机器能连上、能双向发消息；后续用来驱动 Battle 指令。
+
+signal host_started(display: String)      # 主机已开启
+signal client_connected                  # 客户端已连上主机
+signal packet_received(from_id: int, text: String)
+signal connected                         # 与对端建立连接（CONNECTION_CONNECTED）
+signal disconnected                      # 连接断开
+
+var is_host := false
+var is_online := false
+var last_tick_error := ""
+var active_port := -1   # 主机实际监听端口（自动避让被占用端口后的结果）
+
+const DEFAULT_PORT := 18861
+const HB_INTERVAL := 0.5      # 心跳发送间隔（秒）
+const HB_TIMEOUT := 3.0       # 超过该时长未收到对端任何包 -> 判定对端离开
+
+var _peer: ENetMultiplayerPeer = null
+var _peers: Array[int] = []   # 已连接的对等方 id（主机侧记录客户端）
+var _was_status := MultiplayerPeer.CONNECTION_DISCONNECTED   # 上一次连接状态（整数，检测连接建立/断开）
+var _hb_acc := 0.0            # 心跳发送累加器
+var _hb_text := "%shb" % char(1)   # 心跳包文本（带控制符前缀，与业务 JSON 区分）
+var _last_recv_ms := 0        # 最近一次收到对端包的时间（Time.get_ticks_msec）；0=尚未收到过
+var _peer_gone_emitted := false   # 已发出"对端离开"断线（防重复触发）
+
+func _process(dt: float) -> void:
+	if not is_online or _peer == null:
+		return
+	var st := _peer.get_connection_status()
+	# 仅当实例仍活跃时 poll：连接失败/对端断开后 ENet 可能已销毁底层 host，
+	# 此时再 poll 会报 "The multiplayer instance isn't currently active"。
+	# 用状态先探测（不活跃时 get_connection_status 安全返回 DISCONNECTED），避免撞空。
+	if st != MultiplayerPeer.CONNECTION_DISCONNECTED:
+		_peer.poll()
+		st = _peer.get_connection_status()   # poll 后重读，检测连接建立/断开
+	# 仅在"已连接 <-> 非已连接"边界发信号（CONNECTING 等中间态不当作断开）
+	if st == MultiplayerPeer.CONNECTION_CONNECTED and _was_status != MultiplayerPeer.CONNECTION_CONNECTED:
+		_was_status = MultiplayerPeer.CONNECTION_CONNECTED
+		# 注意：服务器 create_server 后自己立即 CONNECTED，不代表对端已加入；
+		# _last_recv_ms 保持 0（从未收到对端包），超时判定从"收到第一包"起才算。
+		_peer_gone_emitted = false
+		_hb_acc = 0.0
+		connected.emit()
+	elif st != MultiplayerPeer.CONNECTION_CONNECTED and _was_status == MultiplayerPeer.CONNECTION_CONNECTED:
+		_was_status = st
+		_peer_gone_emitted = true   # 底层已断开：不再走心跳判定
+		disconnected.emit()
+	if st == MultiplayerPeer.CONNECTION_CONNECTED:
+		while _peer.get_available_packet_count() > 0:
+			# 先取发送者 id 再取内容：get_packet() 会把该包弹出队列，
+			# 若先取内容再 get_packet_peer()，最后一条包已被弹出 -> 队空报错。
+			var from := _peer.get_packet_peer()
+			var bytes := _peer.get_packet()
+			if bytes.size() > 0:
+				_last_recv_ms = Time.get_ticks_msec()   # 收到对端任何包 = 对端仍在线
+				var text := bytes.get_string_from_utf8()
+				if text == _hb_text:
+					continue   # 心跳包：不转发给业务层
+				packet_received.emit(from, text)
+		# 心跳保活：连上后周期发心跳（让对端知道自己还活着）
+		_hb_acc += dt
+		if _hb_acc >= HB_INTERVAL:
+			_hb_acc = 0.0
+			send_all(_hb_text)
+		# 对端失联判定：已连上且曾收到过包，但超过 HB_TIMEOUT 没任何包 -> 判定对方退出
+		var now_ms := Time.get_ticks_msec()
+		if _last_recv_ms > 0 and not _peer_gone_emitted and now_ms - _last_recv_ms > int(HB_TIMEOUT * 1000.0):
+			_peer_gone_emitted = true
+			disconnected.emit()   # 注意：不改 _was_status——ENet 自身状态未变，改了会触发"重新连接"误复位
+
+# ---- 主机 ----
+func host_match(port: int = DEFAULT_PORT) -> void:
+	stop()
+	# 端口可能被占用（例如上一局残留进程/同机第二实例已开房）。
+	# 先用 PacketPeerUDP 探出空闲端口（失败不产生 ENet 的报错日志），
+	# 再在该端口创建 ENet 主机；从给定端口开始逐一向后尝试。
+	var first_err := -1
+	var tried := ""
+	for i in 12:
+		var p := port + i
+		var udp := PacketPeerUDP.new()
+		if udp.bind(p, "*") != OK:
+			tried += ("%d, " % p)
+			continue
+		udp.close()
+		var cand := ENetMultiplayerPeer.new()
+		var err := cand.create_server(p, 2)
+		if err == OK:
+			_peer = cand
+			active_port = p
+			is_host = true
+			is_online = true
+			host_started.emit("localhost:%d" % active_port)
+			return
+		if first_err < 0:
+			first_err = err
+		tried += ("%d, " % p)
+	last_tick_error = "主机开启失败（端口 %s不可用，首次错误 %s）" % [tried, error_string(first_err)]
+	push_error(last_tick_error)
+	_peer = null
+
+# ---- 客户端 ----
+func join_match(address: String, port: int = DEFAULT_PORT) -> void:
+	stop()
+	_peer = ENetMultiplayerPeer.new()
+	var err := _peer.create_client(address, port)
+	if err != OK:
+		last_tick_error = "连接失败: %s" % err
+		push_error(last_tick_error)
+		_peer = null
+		return
+	is_host = false
+	is_online = true
+	client_connected.emit()
+
+# ---- 发送 ----
+# 底层实例是否仍活跃（连接已建立且未被销毁）。断线/对端离开后 ENet 可能已不可用，
+# 此时 get_connection_status 安全返回 DISCONNECTED，发送会撞 "instance isn't currently active"。
+func _peer_active() -> bool:
+	if not is_online or _peer == null:
+		return false
+	return _peer.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED
+
+func send_to(peer_id: int, text: String) -> void:
+	if not _peer_active():
+		return
+	_peer.set_target_peer(peer_id)
+	_peer.put_packet(text.to_utf8_buffer())
+
+func send_all(text: String) -> void:
+	if not _peer_active():
+		return
+	_peer.set_target_peer(MultiplayerPeer.TARGET_PEER_BROADCAST)
+	_peer.put_packet(text.to_utf8_buffer())
+
+# ---- 停止/断开 ----
+func stop() -> void:
+	if _peer != null:
+		_peer.close()
+		_peer = null
+	is_online = false
+	is_host = false
+	active_port = -1
+	_was_status = MultiplayerPeer.CONNECTION_DISCONNECTED   # 复位连接状态检测，避免下次 host/join 误判
+	_peers.clear()
+	_hb_acc = 0.0
+	_last_recv_ms = 0
+	_peer_gone_emitted = false
+	last_tick_error = ""

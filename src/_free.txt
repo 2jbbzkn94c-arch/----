@@ -1,0 +1,13 @@
+L6: signal highlight_changed                 # 高亮状态变化（HUD 可重绘提示）
+L8: signal sub_select_requested              # 触发替补选择（HUD 弹列表）
+L9: signal sub_placed                        # 替补成功落位（HUD 可关闭替补面板）
+L10: signal action_finished                   # 某单位一招（移动/攻击）动画完全结束后发出（敌方回放等待用
+L11: signal team_updated                      # 英雄阵容变化（上替补/变身/阵亡）——HUD 刷新下方队伍展示
+L12: signal enemy_turn_waiting                # 联机：敌方回合已开始，等待对端真人发行动指
+L654: signal arena_draft_done                     # 8轮选完
+L1649: 				continue   # 被障碍物隔断不算贴身
+L3256: 		pass   # 变回自身：无额外效果（正常不会发生，候选排除自身）
+L3391: 			"hero_16":   # 波盾：登场让己方全体获得圣盾
+L3393: 			"hero_36":   # 梅林：治疗最低血量队友并与其换位
+L3395: 			"hero_29":   # 太阳斩：登场攻击3（短时爆发）
+L3397: 			"hero_39":   # 猎颅者：登场锁定目标

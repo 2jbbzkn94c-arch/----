@@ -1,0 +1,448 @@
+extends Node
+## 卡牌/英雄数据注册表（全局自动加载）。
+## 从 res://角色列表.md 解析全部角色，生成数值、品级、类型与关键词标签。
+## 复杂/角色专属技能全文存入 desc（暂未实现），引擎已支持：近战/远程、嘲讽、疾行、渗透。
+
+# 攻击类型
+enum AttackType { MELEE, RANGED }
+
+# 关键词技能（引擎已实现其基础机制）
+enum Skill { NONE, TAUNT, SWIFT, RANGED, BENCH, LOGISTICS, INFILTRATE }
+
+# ---- 机制协同知识库（选人/战斗 AI 共用）----
+const SYNERGY := {
+	"hero_30": {"hero_41": 2.0, "hero_05": 2.0, "hero_21": 2.0, "hero_32": 2.0},
+	"hero_41": {"hero_18": 2.0, "hero_30": 2.0},
+	"hero_10": {"hero_37": 2.0, "hero_22": 1.5, "hero_15": 1.5, "hero_31": 1.0},
+	"hero_17": {"hero_37": 2.0},
+	"hero_18": {"hero_37": 2.0, "hero_41": 2.0},
+	"hero_31": {"hero_37": 2.0, "hero_10": 1.0},
+	"hero_37": {"hero_10": 2.0, "hero_17": 2.0, "hero_18": 2.0, "hero_31": 2.0},
+	"hero_19": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5, "hero_20": 1.5},
+	"hero_11": {"hero_23": 2.0, "hero_13": 1.5, "hero_22": 1.5},
+	"hero_23": {"hero_11": 2.0, "hero_13": 1.5},
+	"hero_22": {"hero_10": 1.5, "hero_11": 1.5, "hero_17": 1.5},
+	"hero_34": {"hero_04": 1.0, "hero_09": 1.0, "hero_07": 1.0},
+	"hero_26": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5},
+	"hero_25": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5},
+	"hero_43": {"hero_04": 1.5, "hero_07": 1.5, "hero_09": 1.5, "hero_18": 1.5},
+	"hero_06": {"hero_11": 1.5, "hero_23": 1.5, "hero_13": 1.5},
+	"hero_08": {"hero_11": 1.5, "hero_23": 1.5},
+	"hero_05": {"hero_30": 2.0, "hero_33": 1.0},
+	"hero_33": {"hero_05": 1.0, "hero_11": 1.0},
+	"hero_15": {"hero_10": 1.5, "hero_17": 1.5, "hero_18": 1.5},
+	"hero_20": {"hero_11": 1.0, "hero_12": 1.0, "hero_13": 1.0},
+	"hero_39": {"hero_30": 1.0, "hero_15": 1.0},
+}
+
+func synergy_bonus(a: String, b: String) -> float:
+	var s := 0.0
+	var d1: Dictionary = SYNERGY.get(a, {})
+	if d1.has(b):
+		s += d1[b]
+	var d2: Dictionary = SYNERGY.get(b, {})
+	if d2.has(a):
+		s += d2[a]
+	return s
+
+# 克制分：a 是否克制 b（依据角色列表"被克制/有效行为"列的明确关系）。a 提供分，a 克制 b 时返回正值。
+func counter_bonus(a: String, b: String) -> float:
+	var s := 0.0
+	var bd: HeroDef = heroes.get(b, null)
+	if bd != null and bd.counters.has(a):
+		s += 2.0   # b 被 a 克制
+	var ad: HeroDef = heroes.get(a, null)
+	if ad != null and ad.counters.has(b):
+		s += 2.0
+	return s
+
+# 从一段中文文本里抽取出现的英雄 id（用 NAME_ALIAS 简称 + 英雄显示名全名匹配）。
+func _extract_ids(text: String) -> Array:
+	var out: Array = []
+	if text == "":
+		return out
+	for alias in NAME_ALIAS.keys():
+		if text.contains(alias) and not out.has(NAME_ALIAS[alias]):
+			out.append(NAME_ALIAS[alias])
+	# 全名匹配（若文本里直接写了某英雄显示名）
+	for id in heroes.keys():
+		var nm: String = heroes[id].display_name
+		if nm != "" and text.contains(nm) and not out.has(id):
+			out.append(id)
+	return out
+
+# 从文本的"语义关键词"(如 坦克/位移/攻击力收益)展开出对应机制标签下的英雄 id——
+# 用于把"配合/被克制"列的宽泛描述转成可计算的协同/克制候选。
+func _semantic_heroes(text: String) -> Array:
+	var out: Array = []
+	if text == "":
+		return out
+	for kw in SEMANTIC.keys():
+		if text.contains(kw):
+			for tag in SEMANTIC[kw]:
+				for hid in MECH_TAGS.get(tag, []):
+					if not out.has(hid):
+						out.append(hid)
+	return out
+
+# 品级
+enum Rarity { SILVER, GOLD, MASTER, LEGEND }
+
+# 阵营
+enum Faction { PLAYER, ENEMY }
+
+## 每位角色的数据结构
+class HeroDef:
+	var id: String
+	var display_name: String
+	var rarity: int
+	var attack_type: int
+	var max_hp: int
+	var atk: int
+	var move_range: int
+	var attack_range: int
+	var skills: Array = []
+	var desc: String = ""
+	var is_summon := false   # 衍生物（召唤单位，不入卡池）
+	# 角色列表新增三列（不用于显示，仅供 AI 策略参考/结构化抽取）
+	var synergy_note: String = ""       # 配合（文本备注）
+	var effective_behavior: String = "" # 有效行为（文本备注）
+	var countered_by_note: String = ""  # 被克制（文本备注）
+	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
+	var counters: Array = []            # 被克制/有效行为里抽出的克制己方(id)
+
+	func _init(id_: String = "") -> void:
+		id = id_
+
+# 角色列表文本里的中文名/简称 -> hero_id 映射（三列解析时抽取协同/克制用）
+const NAME_ALIAS := {
+	"死神": "hero_30", "嬉皮死神": "hero_30",
+	"小红帽": "hero_40", "红帽": "hero_40",
+	"烈焰祭祀": "hero_19", "烈焰祭司": "hero_19",
+	"风语者": "hero_43", "死灵法师": "hero_33", "末日": "hero_31",
+}
+
+# 机制标签：hero_id -> [标签]。用于把"配合/有效行为/被克制"列的宽泛语义翻译成可计算的协同/克制。
+const MECH_TAGS := {
+	"坦克": ["hero_11", "hero_12", "hero_13", "hero_22", "hero_23", "hero_24", "hero_25", "hero_26", "hero_36"],
+	"位移": ["hero_21", "hero_27", "hero_05", "hero_32", "hero_35", "hero_31"],
+	"攻击增益": ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14"],
+	"多倍": ["hero_23", "hero_30", "hero_32", "hero_15", "hero_14"],
+	"AOE": ["hero_10", "hero_17", "hero_18", "hero_40", "hero_31"],
+	"治疗": ["hero_06", "hero_08", "hero_43", "hero_36", "hero_02"],
+	"召唤": ["hero_33"],
+	"减益": ["hero_25", "hero_26", "hero_34", "hero_38"],
+}
+
+# 文本语义关键词 -> 相关机制标签（用于把三列的宽泛描述翻译成标签偏好）
+const SEMANTIC := {
+	"坦克": ["坦克"],
+	"位移": ["位移"],
+	"攻击力收益": ["攻击增益", "多倍", "AOE"],
+	"攻击力": ["攻击增益", "多倍", "AOE"],
+	"多倍伤害": ["多倍"],
+	"AOE": ["AOE"],
+	"治疗": ["治疗"],
+	"召唤": ["召唤"],
+	"减攻": ["减益"],
+	"克制": ["减益"],
+	"依赖技能": ["攻击增益"],
+}
+
+# 英雄专属技能特效：id -> {color 主色, text 机制飘字文案}。触发时呈现贴合英雄特点的演出。
+const HERO_FX := {
+	"hero_01": { "color": Color(0.95, 0.72, 0.35), "text": "伐木" },
+	"hero_02": { "color": Color(1.0, 0.3, 0.3), "text": "圣诞" },
+	"hero_03": { "color": Color(0.4, 0.9, 0.45), "text": "猛毒" },
+	"hero_04": { "color": Color(0.85, 0.5, 0.95), "text": "疾行" },
+	"hero_05": { "color": Color(0.75, 0.4, 0.9), "text": "傀儡" },
+	"hero_06": { "color": Color(0.4, 0.95, 0.55), "text": "治疗" },
+	"hero_07": { "color": Color(0.35, 0.4, 0.95), "text": "影击" },
+	"hero_08": { "color": Color(0.4, 0.9, 0.5), "text": "德鲁伊" },
+	"hero_09": { "color": Color(1.0, 0.5, 0.3), "text": "火枪" },
+	"hero_10": { "color": Color(0.45, 0.8, 1.0), "text": "冰霜" },
+	"hero_11": { "color": Color(0.7, 0.8, 0.95), "text": "塔盾" },
+	"hero_12": { "color": Color(1.0, 0.4, 0.35), "text": "重伤" },
+	"hero_13": { "color": Color(0.75, 0.7, 0.5), "text": "坚盾" },
+	"hero_14": { "color": Color(0.9, 0.2, 0.35), "text": "吸血" },
+	"hero_15": { "color": Color(0.35, 0.35, 0.35), "text": "阴影" },
+	"hero_16": { "color": Color(0.5, 0.85, 1.0), "text": "圣盾" },
+	"hero_17": { "color": Color(1.0, 0.55, 0.25), "text": "烛火" },
+	"hero_18": { "color": Color(0.9, 0.85, 0.7), "text": "穿透" },
+	"hero_19": { "color": Color(1.0, 0.5, 0.6), "text": "烈焰" },
+	"hero_20": { "color": Color(1.0, 0.8, 0.3), "text": "赏金" },
+	"hero_21": { "color": Color(0.6, 0.7, 1.0), "text": "击退" },
+	"hero_22": { "color": Color(0.95, 0.85, 0.4), "text": "圣光" },
+	"hero_23": { "color": Color(0.85, 0.2, 0.25), "text": "复仇" },
+	"hero_24": { "color": Color(0.9, 0.5, 0.2), "text": "冲锋" },
+	"hero_25": { "color": Color(0.6, 0.6, 0.65), "text": "麻痹" },
+	"hero_26": { "color": Color(0.5, 0.85, 1.0), "text": "冰冻" },
+	"hero_27": { "color": Color(0.3, 0.3, 0.45), "text": "换位" },
+	"hero_28": { "color": Color(0.75, 0.4, 0.95), "text": "变身" },
+	"hero_29": { "color": Color(1.0, 0.75, 0.25), "text": "太阳斩" },
+	"hero_30": { "color": Color(0.5, 0.35, 0.75), "text": "收割" },
+	"hero_31": { "color": Color(0.35, 0.3, 0.55), "text": "末日" },
+	"hero_32": { "color": Color(1.0, 0.55, 0.3), "text": "击退" },
+	"hero_33": { "color": Color(0.45, 0.75, 0.4), "text": "召唤" },
+	"hero_34": { "color": Color(0.55, 0.5, 0.75), "text": "沉默" },
+	"hero_35": { "color": Color(1.0, 0.6, 0.15), "text": "爆破" },
+	"hero_36": { "color": Color(0.5, 0.8, 0.95), "text": "置换" },
+	"hero_37": { "color": Color(0.6, 0.85, 1.0), "text": "锤头" },
+	"hero_38": { "color": Color(0.6, 0.9, 0.9), "text": "涌电" },
+	"hero_39": { "color": Color(0.9, 0.4, 0.6), "text": "猎颅" },
+	"hero_40": { "color": Color(0.95, 0.3, 0.25), "text": "扑街" },
+	"hero_41": { "color": Color(0.9, 0.2, 0.3), "text": "血锁" },
+	"hero_42": { "color": Color(1.0, 0.8, 0.3), "text": "金矿" },
+	"hero_43": { "color": Color(0.5, 1.0, 0.8), "text": "风语" },
+}
+
+# 取某英雄的技能特效（颜色 + 文案），返回 {color, text}
+func hero_fx(id: String) -> Dictionary:
+	return HERO_FX.get(id, { "color": Color(1.0, 1.0, 1.0), "text": "" })
+var heroes: Dictionary = {}
+# id -> HeroDef（衍生物/召唤单位）
+var summons: Dictionary = {}
+
+func _ready() -> void:
+	_load_heroes()
+
+func _load_heroes() -> void:
+	heroes.clear()
+	summons.clear()
+	var lines: PackedStringArray = []
+	var f := FileAccess.open("res://角色列表.md", FileAccess.READ)
+	if f == null:
+		push_error("无法读取 res://角色列表.md")
+		return
+	lines = f.get_as_text().split("\n")
+	f.close()
+
+	for line in lines:
+		var t := line.strip_edges()
+		if not t.begins_with("|"):
+			continue
+		var cells := t.split("|")
+		if cells.size() < 7:
+			continue
+		var grade: String = cells[2].strip_edges()
+		if grade == "":
+			continue
+		# 跳过表头/分隔行（No 列非整数且非"-"）
+		var no_text: String = cells[1].strip_edges()
+		var is_summon := (grade == "衍生物")
+		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
+			continue
+
+		var h := HeroDef.new()
+		if is_summon:
+			h.id = "summon_skeleton"
+		else:
+			h.id = "hero_%02d" % no_text.to_int()
+		h.display_name = cells[3].strip_edges()
+		h.atk = cells[4].strip_edges().to_int()
+		h.max_hp = cells[5].strip_edges().to_int()
+		var skill_text: String = cells[6].strip_edges()
+		skill_text = skill_text.replace("\\", "")   # 去掉 markdown 转义反斜杠，\<远程\> -> <远程>
+		h.desc = skill_text
+		h.is_summon = is_summon
+
+		# 解析三列（配合/有效行为/被克制）：文本存备注，并抽取其中的英雄名 -> 协同/克制 id
+		if cells.size() >= 10:
+			h.synergy_note = cells[7].strip_edges()
+			h.effective_behavior = cells[8].strip_edges()
+			h.countered_by_note = cells[9].strip_edges()
+		h.sy_partners = _extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)
+		h.counters = _extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)
+
+		var has_ranged := _tail_has(skill_text, "<远程>")
+		var has_taunt := _tail_has(skill_text, "<嘲讽>")
+		var has_swift := _tail_has(skill_text, "<疾行>")
+		var has_infiltrate := _tail_has(skill_text, "<渗透>")
+		var has_logistics := _tail_has(skill_text, "<后勤>")
+		var has_bench := skill_text.begins_with("<替补>") or _tail_has(skill_text, "<替补>")
+
+		h.rarity = _rarity_of(grade)
+		h.attack_type = AttackType.RANGED if has_ranged else AttackType.MELEE
+		# 基础移动力 2（疾行由生成时 +1），射程 1（远程 → 2）
+		h.move_range = 2
+		h.attack_range = 2 if has_ranged else 1
+		h.skills = []
+		if has_taunt:
+			h.skills.append(Skill.TAUNT)
+		if has_swift:
+			h.skills.append(Skill.SWIFT)
+		if has_infiltrate:
+			h.skills.append(Skill.INFILTRATE)
+		if has_logistics:
+			h.skills.append(Skill.LOGISTICS)
+		if has_bench:
+			h.skills.append(Skill.BENCH)
+
+		if is_summon:
+			summons[h.id] = h
+		else:
+			heroes[h.id] = h
+
+# 判断某关键词是否出现在技能文本"尾部标签区"（最后一个'。'之后）
+# 正文中引用他人关键词（如"目标有<嘲讽>"）属于正文，不计为自身关键词。
+func _tail_has(text: String, tag: String) -> bool:
+	var tail := text
+	var dot := text.rfind("。")
+	if dot >= 0:
+		tail = text.substr(dot + 1)
+	return tail.contains(tag)
+
+func _rarity_of(grade: String) -> int:
+	match grade:
+		"白":
+			return Rarity.SILVER
+		"金":
+			return Rarity.GOLD
+		"紫":
+			return Rarity.MASTER
+		"虹":
+			return Rarity.LEGEND
+	return Rarity.SILVER
+
+func get_hero(id: String) -> HeroDef:
+	return heroes.get(id, null)
+
+func get_summon(id: String) -> HeroDef:
+	return summons.get(id, null)
+
+# 词条 -> 中文解释（供选人/属性/工具提示共用）
+func keyword_lines(skills: Array, attack_type: int) -> Array:
+	var out: Array = []
+	if attack_type == AttackType.RANGED:
+		out.append("远程：射程为2，身边紧邻敌人时射程降为1、攻击降为1且技能效果失效")
+	for s in skills:
+		match s:
+			Skill.SWIFT:
+				out.append("疾行：移动力+1")
+			Skill.TAUNT:
+				out.append("嘲讽：攻击范围内有带【嘲讽】的敌人时，只能先攻击它")
+			Skill.INFILTRATE:
+				out.append("渗透：可穿过敌方单位与障碍物（但不能落停在它们占据的格）")
+			Skill.LOGISTICS:
+				out.append("后勤：不能主动攻击，仅提供光环/支援效果")
+			Skill.BENCH:
+				out.append("替补：替补登场时触发一次技能效果")
+	return out
+
+# 技能/词条“自身标签”的中文短名（名字行挂的 [疾行 嘲讽 …]）
+func hero_tag_text(def: HeroDef) -> String:
+	var out := ""
+	for s in def.skills:
+		match s:
+			Skill.TAUNT:
+				out += "嘲讽 "
+			Skill.SWIFT:
+				out += "疾行 "
+			Skill.INFILTRATE:
+				out += "渗透 "
+			Skill.LOGISTICS:
+				out += "后勤 "
+			Skill.BENCH:
+				out += "替补 "
+	if out != "":
+		out = out.strip_edges()
+	return out
+
+# 技能原文里的“自身标签”只用于识别，展示前剔除：
+# 最后一个“。”之后的 <远程>/<疾行>/<嘲讽>/<渗透>/<后勤>/<替补> 是本角色的关键词；
+# 正文里出现的（如“目标有<嘲讽>”）是对他人关键词的引用，予以保留。
+# <替补>：效果…… 的“<替补>：”前缀也一并去掉。
+func clean_skill_desc(raw: String) -> String:
+	if raw == "":
+		return ""
+	var dot := raw.rfind("。")
+	var body := ""
+	var tail := ""
+	if dot >= 0:
+		body = raw.substr(0, dot + 1)
+		tail = raw.substr(dot + 1)
+	else:
+		# 只有标签没有技能正文（如“<远程>”），直接整段当尾部处理
+		tail = raw
+	# 尾部标签区里的自身关键词剔除（含整段只有标签的情况）
+	for tag in ["<远程>", "<嘲讽>", "<疾行>", "<渗透>", "<后勤>", "<替补>"]:
+		tail = tail.replace(tag, "")
+	# <替补>：效果…… 的“<替补>：”前缀去掉
+	if body.begins_with("<替补>"):
+		body = body.trim_prefix("<替补>")
+		body = body.trim_prefix("：")
+		body = body.trim_prefix(":")
+	var out := (body + tail).strip_edges()
+	return out.replace("  ", " ")
+
+# 技能正文中以 [方括号] 出现的状态词（对目标施加的减益/增益）-> 中文解释行。
+# 与 keyword_lines 的"英雄自身关键词"互补：状态词是效果对象，不是英雄自带标签。
+const STATUS_DESC := {
+	"猛毒": "猛毒：回合开始时受到1点伤害（无视圣盾）",
+	"重伤": "重伤：受到的伤害+1",
+	"麻痹": "麻痹：攻击力-1",
+	"冰冻": "冰冻：移动力-1",
+	"沉默": "沉默：无法主动使用技能",
+	"眩晕": "眩晕：无法移动与攻击",
+	"圣盾": "圣盾：抵挡一次受到的伤害",
+}
+
+# 从技能原文提取方括号状态词的解释行（按出现顺序、去重；未收录的词忽略）。
+func desc_status_lines(raw: String) -> Array:
+	var out: Array = []
+	var text := clean_skill_desc(raw)
+	var i := 0
+	while i < text.length():
+		var a := text.find("[", i)
+		if a < 0:
+			break
+		var b := text.find("]", a + 1)
+		if b < 0:
+			break
+		var status_word := text.substr(a + 1, b - a - 1)
+		if STATUS_DESC.has(status_word) and not out.has(STATUS_DESC[status_word]):
+			out.append(STATUS_DESC[status_word])
+		i = b + 1
+	return out
+
+# 实际开局数值：注册表基础值 + 生成期加成（引擎在单位出生时叠加，属性表按实际值展示）。
+# 疾行：移动+1；大骑士（hero_24 冲锋）：移动+6；血锁（hero_41 直线锁链）：射程+2。
+func spawn_move(def: HeroDef) -> int:
+	var m := def.move_range
+	if def.skills.has(Skill.SWIFT):
+		m += 1
+	if def.id == "hero_24":
+		m += 6
+	return m
+
+func spawn_attack_range(def: HeroDef) -> int:
+	var r := def.attack_range
+	if def.id == "hero_41":
+		r += 2
+	return r
+
+# 属性表内容分“显示区”：①名字+近/远程+词条标签 ②基础属性 ③“技能”+技能描述 ④词条解释。
+# 各区由弹框负责用贴左短线分行；本函数只负责产出各区文本。
+func hero_info_zones(def: HeroDef) -> Array[String]:
+	var atk_type := "近战" if def.attack_type == AttackType.MELEE else "远程"
+	var head := "%s  %s" % [def.display_name, atk_type]
+	var tags := hero_tag_text(def)
+	if tags != "":
+		head += "　[%s]" % tags
+	var zones: Array[String] = []
+	zones.append(head)
+	# 大骑士移动＝直线冲锋任意距离，按"无限"展示（实际可沿直线冲满棋盘）
+	var move_txt := "移动 %d" % spawn_move(def)
+	if def.id == "hero_24":
+		move_txt = "移动 ∞"
+	zones.append("HP %d　攻击 %d　%s　射程 %d" % [
+		def.max_hp, def.atk, move_txt, spawn_attack_range(def)])
+	var desc := clean_skill_desc(def.desc)
+	if desc != "":
+		zones.append("技能\n%s" % desc)
+	# 词条解释 = 自身关键词 + 技能正文里 [方括号] 状态词的解释（沉默/重伤/猛毒…）
+	var lines := keyword_lines(def.skills, def.attack_type)
+	lines.append_array(desc_status_lines(def.desc))
+	if lines.size() > 0:
+		zones.append("\n".join(lines))
+	return zones

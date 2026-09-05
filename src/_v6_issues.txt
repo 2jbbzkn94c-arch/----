@@ -1,0 +1,98 @@
+C L28 parenbal=3: 		var tail := PackedVector2Array([
+C L32 parenbal=-3: 		])
+C L48 parenbal=3: 		var blade := PackedVector2Array([
+C L55 parenbal=-3: 		])
+C L80 parenbal=3: 		var blade := PackedVector2Array([
+C L83 parenbal=-3: 		])
+C L88 parenbal=3: 		var wisp := PackedVector2Array([
+C L90 parenbal=-3: 		])
+C L244 parenbal=1: 				action_info.emit("选人时间到，自动随机上人)"
+C L252 parenbal=1: 				action_info.emit("选卡超时，自动选择第一张)"
+C L262 parenbal=1: 			action_info.emit("回合超时，自动结束回合)"
+C L320 parenbal=1: 		log_message.emit("竞技场选人完成：我%d 名，敌方 %d 名 % [GameState.player_deck.size(), GameState.enemy_deck.size()])"
+C L333 parenbal=1: 			action_info.emit("竞技场选人（第 %d/%d 轮，你的回合）：从两名英雄中1 名加入你的队伍 % [_arena_player_rounds + 1, ARENA_PICKS_PER_SIDE])"
+C L416 parenbal=1: 	log_message.emit("敌方选择%ss 归你 % [DataRegistry.get_hero(en_hid).display_name, DataRegistry.get_hero(give_player).display_name])"
+C L438 parenbal=-2: 	log_message.emit("你选择%s。敌方获%s % [DataRegistry.get_hero(hid).display_name, DataRegistry.get_hero(_arena_enemy.back()).display_name if _arena_enemy.siz
+C L483 parenbal=1: 	log_message.emit("竞技场选卡开始：4 轮，每轮从给你的两张中1 张留用，另一张送给对方)"
+C L498 parenbal=1: 		action_info.emit("你已完成选卡，等待对方完成…)"
+C L505 parenbal=1: 	action_info.emit("竞技场选卡（第 %d/%d 轮）：从两张中1 张留下，另一张将送给对方 % [_oa_round + 1, ARENA_PICKS_PER_SIDE])"
+C L540 parenbal=1: 	log_message.emit("你留下了 %s，s」将送给对方 % [DataRegistry.get_hero(hid).display_name, DataRegistry.get_hero(gift).display_name])"
+C L602 parenbal=1: 	log_message.emit("竞技场选卡完成：我%d / 敌方 %d 名，开始部署 % [GameState.player_deck.size(), GameState.enemy_deck.size()])"
+C L612 parenbal=2: const ENEMY_ZONE_CELLS: Array = [
+C L615 parenbal=-2: ]
+C L781 parenbal=1: 	action_info.emit("点击我方能上阵的位置（绿色格）)"
+C L795 parenbal=1: 	action_info.emit("点击敌方上阵的位置（绿色格）)"
+C L895 parenbal=1: 	action_info.emit("请点选要上阵的英雄（再次点击可反悔）)"
+C L919 parenbal=1: 	action_info.emit("请点选要上阵的英雄（再次点击可反悔）)"
+C L924 parenbal=1: 	action_info.emit("点击我方能上阵的位置（绿色格）)"
+C L937 parenbal=-1: _deploy_side==0)；联本端对应半场轮（主机=玩家0，客户端=敌轮/1）
+C L1101 parenbal=1: 		log_message.emit("已按自由部署放置双方单位)"
+C L1127 parenbal=1: 	log_message.emit("双方各上3 名英雄，另有 %d / %d 名替补待命 % [player_roster.size(), enemy_roster.size()])"
+C L1132 parenbal=2: 		var spots := [
+C L1135 parenbal=-2: 	]
+C L1152 parenbal=1: 		log_message.emit("障碍物被摧毁)"
+C L1173 parenbal=1: 		log_message.emit("%s 在空地放置了 %d 个增益道具 % [u.display_name, placed])"
+C L1201 parenbal=1: 	log_message.emit("%s %s 丢下一块金矿 % [u.display_name, str(c)])"
+C L1231 parenbal=1: 	log_message.emit("对局开始！你率 3 名英雄迎战敌手)"
+C L1281 parenbal=1: 		action_info.emit("你的回合（第 %d 回合）：点击一名己方英雄 % GameState.round_number)"
+C L1296 parenbal=1: 			action_info.emit("等待对方行动…)"
+C L1299 parenbal=1: 			action_info.emit("敌方回合…)"
+C L1308 parenbal=1: 			log_message.emit("%s 受到[猛毒] 1 点伤害 % u.display_name)"
+C L1424 parenbal=1: 		log_message.emit("双方都阵亡达 %d 名，同归于尽——但判本端获胜（对方负） % LOSS_DEATH_COUNT)"
+C L1432 parenbal=1: 		log_message.emit("败北……我方英雄阵亡达 %d 名 % LOSS_DEATH_COUNT)"
+C L1441 parenbal=1: 		log_message.emit("胜利！敌方英雄阵亡达 %d 名 % LOSS_DEATH_COUNT)"
+C L1527 parenbal=1: 			action_info.emit("%s 本回合已完成（移动、攻击各一次） % clicked_unit.display_name)"
+C L1531 parenbal=1: 			action_info.emit("已取消选择)"
+C L1557 parenbal=1: 	action_info.emit("请点击一名己方英雄)"
+C L1764 parenbal=1: 		info += (""
+C L1765 parenbal=-1: 		 if not u.moved_this_turn else "") + "红色可攻"
+C L1800 parenbal=1: 	action_info.emit("%s（敌方）HP %d 攻击 %d · 可移可攻 % [u.display_name, u.hp, u.effective_atk()])"
+C L1945 parenbal=1: 	t.tween_callback(func():
+C L1947 parenbal=-1: 		_impact_obstacle(u, cell))
+C L1955 parenbal=1: 	t.tween_callback(func():
+C L1960 parenbal=1: 		back.tween_callback(func():
+C L1962 parenbal=-2: 				_impact_obstacle(u, cell)))
+C L1975 parenbal=1: 	log_message.emit("%s 攻击障碍物 % u.display_name)"
+C L2231 parenbal=-1: 			_finish_move(u, for_enemy))
+C L2243 parenbal=1: 	log_message.emit("%s 踩中炸弹 % u.display_name)"
+C L2257 parenbal=1: 	log_message.emit("%s 踩中炸弹 % u.display_name)"
+C L2301 parenbal=1: 		log_message.emit("%s 移动 %d 格，风语者令其回%d 点生命 % [u.display_name, u.last_move_dist, u.last_move_dist])"
+C L2314 parenbal=1: 				log_message.emit("%s 拾取攻击道具：下一次攻+1 % u.display_name)"
+C L2317 parenbal=1: 				log_message.emit("%s 拾取移动道具：下一次移动力 +1 % u.display_name)"
+C L2324 parenbal=1: 				log_message.emit("%s 拾取护盾道具，获得[圣盾] % u.display_name)"
+C L2331 parenbal=1: 				log_message.emit("%s 拾取金矿！攻1、血量上3 % u.display_name)"
+C L2371 parenbal=1: 	log_message.emit("%s 攻击 %s % [attacker.display_name, target.display_name])"
+C L2389 parenbal=1: 	t.tween_callback(func():
+C L2395 parenbal=-1: 		back.tween_callback(func(): _apply_attack(attacker, target, for_enemy)))
+C L2409 parenbal=1: 	t.tween_callback(func():
+C L2411 parenbal=-1: 		_apply_attack(attacker, target, for_enemy))
+C L2462 parenbal=1: 	ct.tween_callback(func():
+C L2466 parenbal=1: 			log_message.emit("%s 反击 %s，造成 %d 伤害 % [counterer.display_name, attacker.display_name, cdmg])"
+C L2470 parenbal=1: 		br.tween_callback(func():
+C L2474 parenbal=-2: 			_finish_attack(attacker, for_enemy)))
+C L2502 parenbal=1: 		action_info.emit("还有英雄未完成行动：点击选择，或点「结束回合」)"
+C L2506 parenbal=1: 		action_info.emit("所有英雄已完成行动，点「结束回合」交给敌方)"
+C L2598 parenbal=1: 			log_message.emit("%s 的塔盾代替承1 点伤害 % s.display_name)"
+C L2657 parenbal=1: 	log_message.emit("%s 获得[%s] % [u.display_name, label])"
+C L2692 parenbal=1: 		log_message.emit("骷髅兵随回合结束而消散)"
+C L2815 parenbal=1: 	action_info.emit("%s：选择一处空地放置炸弹 % u.display_name)"
+C L2843 parenbal=1: 	action_info.emit("请点击炸弹人相邻的空地放置炸弹)"
+C L2871 parenbal=1: 	log_message.emit("%s %s 放置了炸弹 % [u.display_name, str(cell)])"
+C L2993 parenbal=1: 	log_message.emit("血锁把 %s 拉到面前s） % [target.display_name, str(best)])"
+C L3099 parenbal=1: 		log_message.emit("召唤了骷髅兵)"
+C L3342 parenbal=1: 	action_info.emit("有英雄阵亡！从替补队伍中选择一名上阵)"
+C L3360 parenbal=1: 	action_info.emit("选择 %s 的登场位置（绿格=出生地，土黄本方阵亡墓碑处） % DataRegistry.get_hero(hero_id).display_name)"
+C L3405 parenbal=1: 	log_message.emit("替补登场s % DataRegistry.get_hero(hero_id).display_name)"
+C L3448 parenbal=1: 			action_info.emit("继续你的回合)"
+C L3454 parenbal=1: 			action_info.emit("等待对方行动…)"
+C L3457 parenbal=1: 			action_info.emit("敌方回合…)"
+C L3464 parenbal=1: 		action_info.emit("请先选中一名我方英雄，再点击「撤下」)"
+C L3486 parenbal=1: 	log_message.emit("%s 被主动撤下（视为阵亡） % u.display_name)"
+C L3502 parenbal=1: 		action_info.emit("已无替补，本阵减少一名英雄)"
+C L3526 parenbal=1: 		action_info.emit("把英雄拖到最下方（出生点之下）松开即可撤下)"
+C L3561 parenbal=1: 			action_info.emit("未拖到出生点下方，「撤下」已取消)"
+C L3629 parenbal=2: 		var ecells: Array = [
+C L3632 parenbal=-2: 		]
+C L3656 parenbal=1: 	log_message.emit("%s 替补登场s） % [def.display_name, "我方" if side == DataRegistry.Faction.PLAYER else "敌方"])"
+C L3673 parenbal=1: 		descs.append({
+C L3681 parenbal=-1: 		})

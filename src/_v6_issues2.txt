@@ -1,0 +1,24 @@
+P L108: 			var oy := -3.0 if (i % 2 == 0) else 3.0
+P L412: 	var give_player: String = _arena_pending[1] if en_hid == _arena_pending[0] else _arena_pending[0]
+P L538: 	var gift: String = pair[1] if pair[0] == hid else pair[0]
+P L719: 			var who := "我方" if _first_side == _my_side() else "敌方"
+P L966: 		var sel := _pending_deploy if fn == DataRegistry.Faction.PLAYER else _pending_enemy_deploy
+P L976: 	var pool: Array = player_pool if fn == DataRegistry.Faction.PLAYER else enemy_pool
+P L1311: 	return DataRegistry.Faction.PLAYER if side == GameState.SIDE_PLAYER else DataRegistry.Faction.ENEMY
+P L1321: 	return GameState.SIDE_ENEMY if _my_faction() == DataRegistry.Faction.ENEMY else GameState.SIDE_PLAYER
+P L1324: 	return GameState.SIDE_ENEMY if _my_side() == GameState.SIDE_PLAYER else GameState.SIDE_PLAYER
+P L1328: 	return DataRegistry.Faction.ENEMY if _my_faction() == DataRegistry.Faction.PLAYER else DataRegistry.Faction.PLAYER
+P L1332: 	return player_dead if _my_faction() == DataRegistry.Faction.PLAYER else enemy_dead
+P L1335: 	return enemy_dead if _my_faction() == DataRegistry.Faction.PLAYER else player_dead
+P L1339: 	return player_roster if _my_faction() == DataRegistry.Faction.PLAYER else enemy_roster
+P L1342: 	return enemy_roster if _my_faction() == DataRegistry.Faction.PLAYER else player_roster
+P L1345: 	return player_roster if fn == DataRegistry.Faction.PLAYER else enemy_roster
+P L1456: 	return player_dead if faction == DataRegistry.Faction.PLAYER else enemy_dead
+P L1664: 	return player_pool if _my_faction() == DataRegistry.Faction.PLAYER else enemy_pool
+P L1668: 	return player_deployed.size() if _my_faction() == DataRegistry.Faction.PLAYER else enemy_deployed.size()
+P L1671: 	return enemy_deployed.size() if _my_faction() == DataRegistry.Faction.PLAYER else player_deployed.size()
+P L1891: 	var u: Unit = units[u_idx] if u_idx >= 0 and u_idx < units.size() else null
+P L1899: 			var t: Unit = units[t_idx] if t_idx >= 0 and t_idx < units.size() else null
+P L2127: 			var wu: Unit = units[w_idx] if w_idx >= 0 and w_idx < units.size() else null
+P L2207: 	var final_cell: Vector2i = path[path.size() - 1] if path.size() > 0 else target_cell
+P L3151: 	var roster: Array = player_roster if u.faction == DataRegistry.Faction.PLAYER else enemy_roster
