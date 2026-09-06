@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cqtsubmatrixprobe"]
+
+[ext_resource type="Script" path="res://tests/SubMatrixVerify.gd" id="1_script"]
+
+[node name="SubMatrixVerify" type="Node"]
+script = ExtResource("1_script")
