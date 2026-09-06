@@ -72,20 +72,14 @@ func _process(dt: float) -> void:
 			disconnected.emit()   # 注意：不改 _was_status——ENet 自身状态未变，改了会触发"重新连接"误复位
 
 # ---- 主机 ----
+# 直接尝试 ENet 建服（安卓上额外的 PacketPeerUDP 探测可能误报失败，导致明明可开却说失败）。
+# 端口被占用时 create_server 会返回错误，据此逐一向后试端口即可。
 func host_match(port: int = DEFAULT_PORT) -> void:
 	stop()
-	# 端口可能被占用（例如上一局残留进程/同机第二实例已开房）。
-	# 先用 PacketPeerUDP 探出空闲端口（失败不产生 ENet 的报错日志），
-	# 再在该端口创建 ENet 主机；从给定端口开始逐一向后尝试。
 	var first_err := -1
 	var tried := ""
 	for i in 12:
 		var p := port + i
-		var udp := PacketPeerUDP.new()
-		if udp.bind(p, "*") != OK:
-			tried += ("%d, " % p)
-			continue
-		udp.close()
 		var cand := ENetMultiplayerPeer.new()
 		var err := cand.create_server(p, 2)
 		if err == OK:
@@ -98,7 +92,7 @@ func host_match(port: int = DEFAULT_PORT) -> void:
 		if first_err < 0:
 			first_err = err
 		tried += ("%d, " % p)
-	last_tick_error = "主机开启失败（端口 %s不可用，首次错误 %s）" % [tried, error_string(first_err)]
+	last_tick_error = "主机开启失败（端口 %s不可用，首次错误 %s）" % [tried, error_string(first_err) if first_err >= 0 else "未知"]
 	push_error(last_tick_error)
 	_peer = null
 

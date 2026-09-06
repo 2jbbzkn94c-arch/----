@@ -5,6 +5,9 @@ extends CanvasLayer
 var battle: Battle
 
 var _round_label: Label
+var _last_phase_state := -1   # 上次刷新时的 Battle.state（_process 检测阶段切换，补刷新顶部标签）
+var _turn_banner: Label = null       # 回合切换中央大字横幅（短暂显示后自动消失）
+var _turn_banner_tween: Tween = null
 var _flame_icon: Control = null   # 扣血提醒火焰（第11回合起常驻脉动）
 var _round_fire_tween: Tween = null   # 回合标签的"燃烧"颜色脉动 tween（第11回合起）
 var _turn_timer_label: Label   # 本端回合剩余时间（对局中我方回合显示）
@@ -43,6 +46,8 @@ func bind(b: Battle) -> void:
 	battle.first_side_notice.connect(_show_first_side_notice)
 	battle.card_view_requested.connect(show_unit_card)
 	battle.item_view_requested.connect(show_item_info)
+	battle.touch_view_end_requested.connect(_close_unit_card)
+	battle.turn_banner.connect(_show_turn_banner)
 	# 用对象方法而非 lambda 连接 autoload 信号：场景释放时 Godot 自动断开连接，
 	# 避免"全局信号在对象释放后仍回调其 lambda（Lambda capture freed）"。
 	GameState.round_changed.connect(_on_round_changed)
@@ -58,6 +63,8 @@ func show_item_info(type: String) -> void:
 	overlay.gui_input.connect(_on_unit_card_overlay_input)
 	add_child(overlay)
 	_unit_card_overlay = overlay
+	if battle != null and is_instance_valid(battle):
+		battle.set_unit_card_open(true)
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.18)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -110,6 +117,8 @@ func show_unit_card(u: Unit) -> void:
 	overlay.gui_input.connect(_on_unit_card_overlay_input)
 	add_child(overlay)
 	_unit_card_overlay = overlay
+	if battle != null and is_instance_valid(battle):
+		battle.set_unit_card_open(true)
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.18)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -126,12 +135,16 @@ func show_unit_card(u: Unit) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 5)
 	panel.add_child(v)
-	# 显示区①：名字 + 阵营
+	# 显示区①：名字 + 阵营（按本端视角标注：联机客户端操作红方，红方是"我方"）
+	var my_f := DataRegistry.Faction.PLAYER
+	if battle != null and is_instance_valid(battle):
+		my_f = battle._my_faction()
 	var title := Label.new()
-	title.text = "%s  ·  %s" % [u.display_name, "我方" if u.faction == DataRegistry.Faction.PLAYER else "敌方"]
+	title.text = "%s  ·  %s" % [u.display_name, "我方" if u.faction == my_f else "敌方"]
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # 名字较长时换行，避免显示不全
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	v.add_child(title)
 	# 显示区②：实战属性（HP 现值/上限 + 有效数值 + 状态）
@@ -187,10 +200,62 @@ func _close_unit_card() -> void:
 	if _unit_card_overlay != null and is_instance_valid(_unit_card_overlay):
 		_unit_card_overlay.queue_free()
 		_unit_card_overlay = null
+	if battle != null and is_instance_valid(battle):
+		battle.set_unit_card_open(false)
 
-func _on_unit_card_overlay_input(ev: InputEvent) -> void:
-	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
+# 回合切换横幅：屏幕中央弹出大字号提示（"你的回合"/"敌方回合"），放大浮现、短暂停留后淡出。
+# 仅视觉层，不拦截任何输入（鼠标/触摸照常操作棋盘）。
+func _show_turn_banner(text: String) -> void:
+	if _turn_banner_tween != null and _turn_banner_tween.is_valid():
+		_turn_banner_tween.kill()
+	if _turn_banner != null and is_instance_valid(_turn_banner):
+		_turn_banner.queue_free()
+	var vs := get_viewport().get_visible_rect().size
+	var label := Label.new()
+	label.name = "TurnBanner"
+	label.text = text
+	label.add_theme_font_size_override("font_size", 54)
+	label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.45))
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override("outline_size", 8)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不拦截点击
+	add_child(label)
+	_turn_banner = label
+	var t := create_tween()
+	_turn_banner_tween = t
+	label.modulate.a = 0.0
+	label.scale = Vector2(1.4, 1.4)
+	label.pivot_offset = vs / 2.0
+	# 放大+淡入 → 停留 → 淡出并移除
+	t.tween_property(label, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(label, "modulate:a", 1.0, 0.16)
+	t.tween_interval(0.9)
+	t.tween_property(label, "modulate:a", 0.0, 0.35)
+	t.tween_callback(func():
+		if is_instance_valid(label):
+			label.queue_free()
+		if _turn_banner == label:
+			_turn_banner = null)
+
+# 点面板外任意处关闭浮层。返回 true 表示本次事件已消费（阻止漏给 Battle 触发重复查看/行动）
+func _on_unit_card_overlay_input(ev: InputEvent) -> bool:
+	var close_now := false
+	if ev is InputEventMouseButton:
+		var mb := ev as InputEventMouseButton
+		# 鼠标/触摸统一：按下或（触屏）抬起都关闭
+		close_now = mb.pressed or DisplayServer.is_touchscreen_available()
+	elif ev is InputEventScreenTouch:
+		close_now = true   # 触摸事件（未模拟成鼠标时）同样关闭
+	if close_now:
+		var card_ctl := _unit_card_overlay
 		_close_unit_card()
+		if card_ctl != null and is_instance_valid(card_ctl):
+			card_ctl.accept_event()   # 关键：消费事件，阻止其继续漏给 Battle 的触摸手势
+		return true
+	return false
 
 # 等 PanelContainer 完成布局后按内容尺寸定位并收敛到屏内（overlay/panel 由成员引用，安全判空）
 func _position_unit_card(overlay: Control, panel: PanelContainer, vsize: Vector2) -> void:
@@ -453,6 +518,18 @@ func _on_deploy_click(hid: String) -> void:
 
 var _score_tooltip_wrap: PanelContainer = null   # 属性浮层面板（带背景，显示/隐藏及定位用）
 var _score_tooltip_box: VBoxContainer = null     # 浮层内容（各显示区 + 短线）
+var _tooltip_pin_rect := Rect2()                 # 非空=浮层固定到该矩形上方（触屏查看，避免手指遮挡）；空=跟随鼠标
+
+# 竞技场选人触屏手势（安卓/iOS）：短按确认；长按查看；按住滑动切换查看卡；松手不确认。
+var _arena_confirm_cb: Callable = Callable()   # 本轮竞技场选人确认回调（短按触发，触屏用手势层复用它）
+var _arena_card_centers := {}    # hid -> 卡中心（层/宿主坐标系，命中判定用）
+var _arena_touch_active := false
+var _arena_touch_down_ms := 0
+var _arena_touch_down_pos := Vector2.ZERO   # 按下起点（滑动判定）
+var _arena_touch_id := ""          # 当前手指所在/查看的英雄
+var _arena_touch_held := false     # 已判定长按查看（松手不确认）
+var _arena_touch_moved := false    # 已滑动（抬起不确认）
+var _arena_gesture_layer: Control = null   # 触屏手势拦截层（竞技场两张卡上）
 
 # 贴左短分行线（属性弹框各显示区之间的分隔短线）
 func _make_zone_sep() -> HSeparator:
@@ -697,12 +774,116 @@ func _show_arena_pair(pair: Array) -> void:
 			_set_score_tooltip_hero(hid2))
 		card.clicked.connect(click_cb)
 		host.add_child(card)
+	# 触屏（安卓/iOS）：竞技场选人 = 短按确认、长按查看、按住滑动切换查看、松手不确认。
+	# 桌面保留 HexCard 自身的 hover 查看 + 点击确认。
+	if DisplayServer.is_touchscreen_available():
+		_setup_arena_touch(pair, host, card_r, click_cb)
 	var pw := total_w + 40.0
 	var ph := card_h + 40.0 + 78.0   # 预留顶部大字倒计时空间
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
 	# 画面正中央（略偏上，给下方飞入路径留空间）
 	panel.position = Vector2((vsize.x - pw) / 2.0, (vsize.y - ph) / 2.0 - 40)
+
+# 竞技场触屏（安卓/iOS）：短按=确认选择；按住超时=查看属性；按住滑动=切换查看另一卡；
+# 长按/滑动后松手均不确认（属性浮层固定显示在卡上方，不跟随手指）。
+# 桌面不用本层：HexCard 自身 hover 查看 + 点击确认。
+func _setup_arena_touch(pair: Array, host: Control, card_r: float, confirm: Callable) -> void:
+	var gesture := Control.new()
+	gesture.name = "ArenaTouchLayer"
+	gesture.mouse_filter = Control.MOUSE_FILTER_STOP
+	gesture.custom_minimum_size = host.size
+	gesture.size = host.size
+	gesture.gui_input.connect(_on_arena_touch_gui)
+	host.add_child(gesture)   # 后加 → 位于两卡之上，拦截全部点击
+	_arena_gesture_layer = gesture
+	_arena_confirm_cb = confirm
+	# 记录两张卡在层坐标系中的中心（层与 host 同位），供命中判定
+	_arena_card_centers.clear()
+	for i in pair.size():
+		var hid: String = pair[i]
+		var cx := float(i) * (card_r * 2.0 + 40.0) + card_r
+		var cy := sqrt(3.0) * card_r / 2.0
+		_arena_card_centers[hid] = Vector2(cx, cy)
+	# 触屏下卡片自身不响应（hover/click 由拦截层接管）
+	for c in host.find_children("*", "HexCard", true, false):
+		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_arena_touch_active = false
+	_arena_touch_held = false
+	_arena_touch_moved = false
+	_arena_touch_id = ""
+
+func _on_arena_touch_gui(ev: InputEvent) -> void:
+	if ev is InputEventMouseMotion or ev is InputEventScreenDrag:
+		# 手指/鼠标按住移动：若已进入查看则跟随切换；否则超阈值视为滑动（不再确认）
+		if not _arena_touch_active:
+			return
+		var pos := (ev as InputEventMouseMotion).position if ev is InputEventMouseMotion else (ev as InputEventScreenDrag).position
+		if _arena_touch_down_pos.distance_to(pos) > 20.0:
+			_arena_touch_moved = true
+		if _arena_touch_held:
+			var hid := _arena_hit_card(pos)
+			if hid != "" and hid != _arena_touch_id:
+				_arena_touch_id = hid
+				_show_arena_view(hid)
+		return
+	var mb := ev as InputEventMouseButton
+	var st := ev as InputEventScreenTouch
+	if mb != null and mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if (ev is InputEventMouseButton and mb.pressed) or (st != null and st.pressed):
+		# 按下：记录起点与时间。倒计时不暂停——长按查看期间正常走秒，不消失也不重置
+		_arena_touch_down_ms = Time.get_ticks_msec()
+		_arena_touch_down_pos = mb.position if mb != null else st.position
+		_arena_touch_active = true
+		_arena_touch_moved = false
+		_arena_touch_held = false
+		_arena_touch_id = _arena_hit_card(_arena_touch_down_pos)
+		return
+	# 抬起：松开位置落在某张卡上 -> 选择该英雄（含长按查看后手指仍停在卡上松开）
+	# 否则（滑到空白处松开 / 未落在卡上）只收起浮层，不选择
+	if not _arena_touch_active:
+		return
+	_arena_touch_active = false
+	var up_pos := mb.position if mb != null else (st.position if st != null else _arena_touch_down_pos)
+	var up_hid := _arena_hit_card(up_pos)
+	_hide_arena_view()
+	if up_hid != "" and _arena_confirm_cb.is_valid():
+		_arena_confirm_cb.call(up_hid)
+
+# 按住不动超时 → 长按查看（仅竞技场选人且存在手势层时）
+func _update_arena_touch_hold() -> void:
+	if _arena_gesture_layer == null or not is_instance_valid(_arena_gesture_layer):
+		return
+	if not _arena_touch_active or _arena_touch_held:
+		return
+	if Time.get_ticks_msec() - _arena_touch_down_ms < 450:
+		return
+	_arena_touch_held = true
+	if _arena_touch_id != "":
+		_show_arena_view(_arena_touch_id)
+
+# 命中判定：点落在某张卡的外接圆内即视为该卡
+func _arena_hit_card(pos: Vector2) -> String:
+	for hid in _arena_card_centers.keys():
+		if _arena_card_centers[hid].distance_to(pos) <= 88.0:
+			return hid
+	return ""
+
+# 触屏查看某张卡：属性浮层固定显示在该卡上方（不跟随手指）
+func _show_arena_view(hid: String) -> void:
+	var def := DataRegistry.get_hero(hid)
+	if def == null:
+		return
+	_set_score_tooltip_hero(hid)
+	var card := _find_arena_card(hid)
+	if card != null and is_instance_valid(card):
+		_tooltip_pin_rect = card.get_global_rect()
+	_set_score_tooltip_visible(true)
+
+func _hide_arena_view() -> void:
+	_tooltip_pin_rect = Rect2()
+	_set_score_tooltip_visible(false)
 
 # 在竞技场面板里按 hero_id 找对应 HexCard
 func _find_arena_card(hid: String) -> Control:
@@ -719,6 +900,14 @@ func _close_arena_panel() -> void:
 		_arena_panel.queue_free()
 		_arena_panel = null
 	_arena_timer_label = null
+	_arena_gesture_layer = null
+	_arena_confirm_cb = Callable()
+	_arena_card_centers.clear()
+	_arena_touch_active = false
+	_arena_touch_held = false
+	_arena_touch_moved = false
+	_arena_touch_id = ""
+	_hide_arena_view()
 
 # 下方常驻队伍展示：整支卡组（上阵 + 替补），一字行透明卡牌。
 # 通过与替补面板相同的 HexCard 样式画出，随 team_updated 刷新。
@@ -1015,10 +1204,18 @@ func _refresh_deaths() -> void:
 func _process(_dt: float) -> void:
 	_refresh_deaths()
 	_refresh_controls()
+	# 检测战斗阶段切换（替补落位完成/部署完成/回输入态等）→ 补刷新顶部"第X回合·阶段"标签。
+	# 阶段是本地状态机、无专门信号：仅在真正变化时刷新一次，避免每帧重写。
+	if battle != null and is_instance_valid(battle):
+		var st: int = battle.state
+		if st != _last_phase_state:
+			_last_phase_state = st
+			_refresh_round()
 	_update_turn_timer()
 	_update_arena_pick_timer()
 	_update_deploy_pick_timer()
 	_update_score_tooltip_pos()
+	_update_arena_touch_hold()   # 竞技场触屏：按住不动超时 -> 转为查看模式（长按）
 
 # 部署面板上方大字倒计时：本端真人选人轮（battle.deploy_budget_active）显示共享预算剩余秒
 func _update_deploy_pick_timer() -> void:
@@ -1115,15 +1312,41 @@ func _refresh_controls() -> void:
 		_back_btn.text = "返回大厅" if GameState.is_online else "返回选人"
 
 # 属性浮层实时跟随鼠标，并收敛到屏幕内（避免被底部/右侧挡住）
+# 触屏长按查看时 _tooltip_pin_rect 非空：固定显示在目标卡上方，不跟随手指（避免被手指遮挡）。
+# 竞技场倒计时在屏幕中央上方：查看左卡则浮层靠左、查看右卡则靠右，中央让位给倒计时。
 func _update_score_tooltip_pos() -> void:
 	if _score_tooltip_wrap == null or not _score_tooltip_wrap.visible:
 		return
 	var vs := get_viewport().get_visible_rect().size
-	var mp := get_viewport().get_mouse_position()
-	# 默认在鼠标右上方；若右缘/上方越界则翻转/收敛
-	var pos := mp + Vector2(16, 18)
 	var tw := _score_tooltip_wrap.size.x
 	var th := _score_tooltip_wrap.size.y
+	var pos: Vector2
+	if not _tooltip_pin_rect.size.is_zero_approx():
+		# 纵向：优先显示在卡上方（避免手指遮挡）；上方不够则贴顶/卡下方兜底
+		pos = Vector2.ZERO
+		pos.y = _tooltip_pin_rect.position.y - th - 10.0
+		if pos.y < 8.0:
+			pos.y = 8.0
+		# 横向：按查看卡所在半边贴边，中央让给倒计时
+		var mid := vs.x / 2.0
+		var pin_cx := _tooltip_pin_rect.position.x + _tooltip_pin_rect.size.x / 2.0
+		if pin_cx < mid:
+			# 查看左侧卡 -> 浮层靠左，右缘不越过中央
+			pos.x = 8.0
+			if pos.x + tw > mid - 6.0:
+				pos.x = maxf(8.0, mid - 6.0 - tw)
+		else:
+			# 查看右侧卡 -> 浮层靠右，左缘不越过中央
+			pos.x = vs.x - tw - 8.0
+			if pos.x < mid + 6.0:
+				pos.x = mid + 6.0
+		pos.x = clampf(pos.x, 8.0, maxf(8.0, vs.x - tw - 8.0))
+		pos.y = clampf(pos.y, 8.0, maxf(8.0, vs.y - th - 8.0))
+		_score_tooltip_wrap.position = pos
+		return
+	var mp := get_viewport().get_mouse_position()
+	# 默认在鼠标右上方；若右缘/上方越界则翻转/收敛
+	pos = mp + Vector2(16, 18)
 	if pos.x + tw > vs.x - 4:
 		pos.x = mp.x - tw - 10   # 翻到鼠标左侧
 	if pos.y + th > vs.y - 190:   # 底部留出按钮行，改为弹到鼠标上方

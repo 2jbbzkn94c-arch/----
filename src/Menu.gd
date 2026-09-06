@@ -363,12 +363,17 @@ func _update_ui() -> void:
 		_desc_label.text = "阵容： " + "、 ".join(names)
 
 func _on_random() -> void:
-	_selected.clear()
+	_selected = _random_full_deck()
+	_update_ui()
+
+# 随机挑一整队 PICK_COUNT 名不重复英雄 —— 「随机选人」与"卡组不足 5 人时兜底"共用
+func _random_full_deck() -> Array:
 	var pool: Array = DataRegistry.heroes.keys()
 	pool.shuffle()
+	var out: Array = []
 	for i in PICK_COUNT:
-		_selected.append(pool[i])
-	_update_ui()
+		out.append(pool[i])
+	return out
 
 func _on_start() -> void:
 	if _selected.size() < MIN_PICK:
@@ -467,7 +472,10 @@ func _save_current_deck(slot: int) -> void:
 func _load_deck(slot: int) -> void:
 	var ids: Array = DeckStore.load_deck(slot)
 	if ids.size() < MIN_PICK:
-		_desc_label.text = "卡组 %d 为空或不足 %d 人。" % [slot, MIN_PICK]
+		# 普通模式：卡组槽不足 5 人（旧档/半存卡组）→ 自动随机选 8 名英雄顶上，不再拒绝读取
+		_selected = _random_full_deck()
+		_update_ui()
+		_desc_label.text = "卡组 %d 不足 %d 人，已自动随机选满 %d 名英雄。" % [slot, MIN_PICK, PICK_COUNT]
 		return
 	_selected.clear()
 	for id in ids:

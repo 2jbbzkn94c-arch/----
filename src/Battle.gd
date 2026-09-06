@@ -117,6 +117,11 @@ var grid: HexGrid
 var board_view: BoardView
 var rng := RandomNumberGenerator.new()   # 统一随机源：单机默认随机，联机时由主机播种保证确定
 var _session_id := 0   # 对局会话代：重开/重置时递增，让残留的异步协程（敌方回放等）检测到并安全退
+var _ai_thread: Thread = null      # 敌方 AI 后台搜索线程（避免主线程卡死无法查看/操作）
+var _ai_plan: Array = []           # 线程算出的敌方行动计划
+var _ai_done := false              # 线程是否已完成
+var _ai_used := false              # 是否已消费本次线程结果
+var _ai_mutex := Mutex.new()       # 保护 _ai_plan/_ai_done 跨线程读写
 var _ending_side := false   # 正在"结束回合/结算扣血"流程中：期间阵亡不立即替补（推迟到本方下回合
 var _rematch_requested := false   # 客户端已请求"再来一局"（防重复发请求）
 var _rematch_started := false     # 主机已发起联机重开（防重入，重载场景后新实例自动重置）
@@ -146,6 +151,21 @@ var board_size := Vector2i(7, 9)  # 7 × 8 满行 + 顶部 3 格顶帽（总高 
 var hex_size := 60.0   # 六边形外接半径（像素）：整体放大棋盘改这里（480 放大25%
 var state := State.IDLE
 var selected: Unit = null
+var _unit_card_open := false   # 属性卡浮层是否打开（打开期间触摸全部交给卡层，避免重复查看/误触）
+# 触屏手势（安卓/iOS）：短按=点击选中/行动；按住不动超时=查看属性；按住移动=拖动英雄。
+# 桌面保留原鼠标逻辑（右键查看、左键点击/按下拖动），不走手势。
+var _press_active := false
+var _press_pos := Vector2.ZERO
+var _press_cell := Vector2i(-99, -99)
+var _press_unit: Unit = null      # 按下格的我方英雄（拖动候选）
+var _press_time_ms := 0
+var _press_viewed := false        # 已作为长按查看处理（抬起不再当点击）
+var _press_drag_started := false  # 已从长按转为拖动
+var _press_seen := false          # 本次抬手前是否收到过对应按下：
+	# 属性浮层(GUI)消费掉按下后再抬起时,Godot 可能把"孤抬手"漏给本层;
+	# 若没有对应按下就处理,会用上一次手势遗留的 _press_cell 在手指处误重新打开卡面(框"跟手")。
+const _PRESS_LONG_MS := 450       # 长按判定时长
+const _PRESS_DRAG_PX := 14.0      # 位移超过该值判定为拖动
 var _last_attacked: Unit = null   # 最近一次攻击的目标（供攻击后技能使用）
 var _attack_hp_before := 0   # 最近一次攻击结算前目标的生命值（攻击后技能用攻击前血量判定，如古拉吸血
 # 拖拽撤下：按住己方英雄拖到出生点
@@ -184,6 +204,12 @@ var enemy_roster: Array = []    # 敌方替补英雄 id
 var _sub_faction := -1          # 当前替补操作的目标阵营（-1=无；PLAYER/ENEMY
 var player_dead := 0
 var enemy_dead := 0
+
+func _exit_tree() -> void:
+	# 兜底：场景卸载前回收可能仍在跑的后台 AI 线程，避免节点释放后线程写成员报错
+	if _ai_thread != null and _ai_thread.is_started():
+		_ai_thread.wait_to_finish()
+	_ai_thread = null
 
 func _ready() -> void:
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
@@ -291,6 +317,15 @@ func _process(dt: float) -> void:
 				continue
 			u.set_action_markers(false, false)
 			u.set_action_marker(false)
+	# 触屏长按查看：按住不动超过阈值 -> 查看该格卡面/道具（不执行行动）
+	if _press_active and not _press_viewed and not _press_drag_started:
+		if Time.get_ticks_msec() - _press_time_ms >= _PRESS_LONG_MS:
+			_press_viewed = true
+			var cu = occupancy.get(_press_cell, null)
+			if buff_items.has(_press_cell):
+				item_view_requested.emit(buff_items[_press_cell])
+			elif cu != null:
+				card_view_requested.emit(cu)
 
 func _send_turn_time_left() -> void:
 	if not GameState.is_online or not NetBus.is_online:
@@ -656,13 +691,23 @@ signal arena_draft_done                     # 8轮选完
 signal deploy_refresh
 signal card_view_requested(unit: Unit)   # 右键查看卡面
 signal item_view_requested(type: String)  # 右键查看道具作用
+signal touch_view_end_requested           # 触屏长按查看后松手：请求 HUD 关闭属性浮层
 
 # 开局先手提示（单机）：先= 部署上首发先+ 开战先行动。短暂浮~1s 自动消失，不阻塞流程
 signal first_side_notice(text: String)   # 请求 HUD 显示"本局先手"浮框
 
+# 回合切换醒目提示：每方回合开始时屏幕中央弹横幅（我方"你的回合"、对方"敌方回合"）
+signal turn_banner(text: String)
+
 # 重开本局：清空场上单道具/状态并重新开局*不卸载场景树**，避reload 打断异步协程导致 get_tree() null 崩溃）
 func reset_match() -> void:
 	_session_id += 1   # 让上次对局的异步协程（敌方回放等）检测到会话已变并安全退
+	# 若敌方 AI 后台线程仍在跑，等它结束并回收（搜索已限幅，耗时短；避免线程泄漏）
+	if _ai_thread != null and _ai_thread.is_started():
+		_ai_thread.wait_to_finish()
+	_ai_thread = null
+	_ai_done = false
+	_ai_used = false
 	_ending_side = false
 	_clear_selection()   # 清掉选中单位 + 可移可攻击高亮：否则"点击英雄后重开"会把旧可行动范围带到新一局
 	# 清场上单
@@ -763,6 +808,7 @@ func _begin_deployment() -> void:
 			# 联机：敌轮由对端真人选人放置，本端等
 			action_info.emit("等待对方选人…" if GameState.is_host else "轮到你（敌方）选人：点选下方英雄")
 	_sync_deploy_timer()
+	_deploy_banner_if_my_turn()   # 部署开始且轮到本端：中央提示"轮到你部署队伍"
 
 func _deploy_cells(faction: int) -> Array:
 	# 双方出生区整片高亮：玩家=底行整行，敌顶部顶帽第一满行
@@ -1067,6 +1113,13 @@ func _deploy_after_pick() -> void:
 		_deploy_side = 0
 	deploy_refresh.emit()
 	_sync_deploy_timer()   # 切换后的新轮是否本端真人决定是否限时
+	_deploy_banner_if_my_turn()   # 队伍部署轮转：轮到本端时中央提示"轮到你部署队伍"
+
+# 部署轮到本端真人操作时：屏幕中央弹横幅（与回合横幅同一通道/样式）。
+# 预算耗尽后进入自动上人（deploy_budget_active=false），不再需要真人操作，不弹。
+func _deploy_banner_if_my_turn() -> void:
+	if _my_deploy_turn() and deploy_budget_active:
+		turn_banner.emit("轮到你部署队伍")
 
 func _begin_after_deploy() -> void:
 	# 其余进入替补
@@ -1337,6 +1390,7 @@ func _begin_side(side: int) -> void:
 			return
 		state = State.PLAYER_INPUT
 		action_info.emit("你的回合（第 %d 回合）：点击一名己方英雄。" % GameState.round_number)
+		turn_banner.emit("你的回合")
 		# 不自动选中，由玩家点击选择
 	else:
 		# 敌方回合：不在本端操作，清零计时（等待对端真人行动时显示对端剩余
@@ -1356,6 +1410,7 @@ func _begin_side(side: int) -> void:
 		else:
 			action_info.emit("敌方回合…")
 			_run_enemy_turn.call_deferred()
+		turn_banner.emit("敌方回合")
 
 # 回合开始时结算永久/持续状
 func _tick_statuses(faction: int) -> void:
@@ -1444,6 +1499,18 @@ func _clear_statuses(faction: int) -> void:
 			u.ramble_bonus = 0
 			u.branch_override = false
 			u.refresh_stats()
+
+# 联机客户端：收到主机 turn_end 广播时补跑"刚结束方"的回合末结算
+# （骷髅兵随回合结束消散、德鲁伊回合末治疗等），与主机 _end_side 里执行的一致。
+# 原因：_end_side 是主机权威只在主机跑；若客户端不补，主机端骷髅消失而客户端端残留，
+# 导致两端骷髅数量/占位不同步，进而后续召唤与行动全部错位。
+func _apply_turn_end_sync(faction: int) -> void:
+	if faction < 0 or get_tree() == null:
+		return   # 场景已释放/无效：安全退
+	await _trigger_turn_end_all(faction)
+	if GameState.match_over:
+		return
+	_clear_statuses(faction)
 
 # 对指定阵营的存活英雄统一扣血（回合结束伤害，只扣该方）
 # 单机：直接本地扣；联机主机：本地扣后广播让客户端对同阵营重演（保持两端血量一致）
@@ -1561,28 +1628,53 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif u != null:
 			card_view_requested.emit(u)
 		return
-	if event is InputEventMouseButton and event.pressed and event.button_index != MOUSE_BUTTON_LEFT:
+	# 非左键事件忽略（触屏拖拽用 motion 单独处理，放置类流程即时响应）
+	if event is InputEventMouseButton and event.button_index != MOUSE_BUTTON_LEFT:
 		return
-	# 部署放置：点选英雄后点击出生
-	if state == State.PLACE_DEPLOY:
+	# 触屏手势（安卓/iOS）：短按=点击；按住不动=查看；按住移动=拖动英雄
+	var is_touch := DisplayServer.is_touchscreen_available()
+	# 放置类状态（部署/替补落位/炸弹选格）：即时放置，不做长按判定
+	if state == State.PLACE_DEPLOY or state == State.PLACE_SUB or state == State.PLACE_BOMB:
 		if event is InputEventMouseButton and event.pressed:
 			var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
-			if _pending_enemy_deploy != "":
-				_try_place_enemy_deploy(cell)   # 联机敌轮：客户端放敌方英雄
+			if state == State.PLACE_DEPLOY:
+				if _pending_enemy_deploy != "":
+					_try_place_enemy_deploy(cell)   # 联机敌轮：客户端放敌方英雄
+				else:
+					_try_place_deploy(cell)
+			elif state == State.PLACE_SUB:
+				_try_place_sub(cell)
 			else:
-				_try_place_deploy(cell)
+				_submit_bomb_place(cell)
 		return
-	# 替补落位：点击出生地空格放置
-	if state == State.PLACE_SUB:
-		if event is InputEventMouseButton and event.pressed:
-			var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
-			_try_place_sub(cell)
-		return
-	# 炸弹放置：点击炸弹人相邻空地放置（联机走指令流，_submit_bomb_place
-	if state == State.PLACE_BOMB:
-		if event is InputEventMouseButton and event.pressed:
-			var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
-			_submit_bomb_place(cell)
+	if is_touch:
+		# 属性卡浮层打开期间，落到本层的触摸分两类处理：
+		# ① 长按查看后的松手(release)：_press_viewed 为真 → 请求 HUD 关闭浮层（松手自动收起）。
+		# ② 点卡外的按下泄漏到本层：视为点外关闭，吞掉该按下（不在此格开始新手势）。
+		# 其余（motion/无查看的孤 release）一律忽略，避免误动棋盘或重开卡面。
+		if _unit_card_open:
+			var rel := false
+			if event is InputEventMouseButton:
+				rel = not event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+			elif event is InputEventScreenTouch:
+				rel = not event.pressed
+			var press := false
+			if event is InputEventMouseButton:
+				press = event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+			elif event is InputEventScreenTouch:
+				press = event.pressed
+			if _press_viewed and rel:
+				touch_view_end_requested.emit()   # 长按查看松手：自动关闭
+				_press_active = false
+				_press_seen = false
+				_press_viewed = false
+			elif press:
+				touch_view_end_requested.emit()   # 点卡外的按下：关闭
+				_press_active = false
+				_press_seen = false
+				_press_viewed = false
+			return
+		_handle_touch_gesture(event)
 		return
 	if state != State.PLAYER_INPUT:
 		return
@@ -1604,6 +1696,95 @@ func _unhandled_input(event: InputEvent) -> void:
 			_begin_drag(cu)
 			return
 		_on_cell_clicked(cell)
+
+# ---- 触屏手势（安卓/iOS）----
+# 短按=点击行动；按住不动超时=查看卡面/道具；按住移动=拖动我方英雄撤下。
+# 按下时暂不执行任何操作，抬起/超时/移动后按判定分发。
+func _handle_touch_gesture(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed:
+		# 属性浮层打开期间：新的按下应被浮层(GUI)消费(点外关闭)；落到本层的按下直接忽略，
+		# 避免在旧格上开始新手势（与 _press_seen 配合杜绝"孤抬手重开卡面"）。
+		if _unit_card_open:
+			return
+		# 长按查看在非我方回合也允许（等待时看敌方属性），但点击行动仅我方回合有效
+		_press_seen = true
+		_press_pos = get_global_mouse_position()
+		_press_cell = grid.world_to_cell(_press_pos - board_view.board_origin)
+		_press_time_ms = Time.get_ticks_msec()
+		_press_unit = null
+		var cu = occupancy.get(_press_cell, null)
+		if cu != null and cu.alive and cu.faction == _my_faction():
+			_press_unit = cu
+		_press_active = true
+		_press_viewed = false
+		_press_drag_started = false
+		return
+	if event is InputEventMouseButton and not event.pressed:
+		# 拖动中：交给拖拽收尾（撤下或取消）
+		if _drag_unit != null:
+			_finish_drag()
+			_press_active = false
+			_press_seen = false
+			return
+		# 没有对应按下的"孤抬起"（按下已被属性浮层 GUI 消费/在别处释放）：
+		# 直接忽略，绝不用上次手势遗留的 _press_cell 误重开卡面（否则卡会"跟手"重弹）
+		if not _press_seen:
+			_press_active = false
+			_press_viewed = false
+			return
+		_press_seen = false
+		var was_viewed := _press_viewed
+		var cell := _press_cell
+		var drag_started := _press_drag_started
+		_press_active = false
+		if was_viewed:
+			# 长按查看过：松手即关闭浮层（按住看、松手收起），不执行点击
+			touch_view_end_requested.emit()
+			return
+		if drag_started:
+			return   # 拖动过：抬起不当作点击
+		if _press_active_clickable(cell):
+			_on_cell_clicked(cell)
+			return
+		# 非我方回合（敌方回合/等待）：短按英雄/道具 = 直接查看属性，
+		# 保持显示（不随松手关闭），关闭由点外部/点关闭按钮处理
+		if state != State.ARENA_DRAFT and state != State.PLACE_DEPLOY and state != State.PLACE_SUB:
+			var cu = occupancy.get(cell, null)
+			if buff_items.has(cell):
+				item_view_requested.emit(buff_items[cell])
+			elif cu != null:
+				card_view_requested.emit(cu)
+		return
+	if event is InputEventMouseMotion:
+		if _drag_unit != null:
+			_drag_follow()
+			return
+		if not _press_active or _press_viewed:
+			return
+		# 位移超过阈值 -> 拖动（仅按住我方英雄时），否则视为滑动取消本次点击
+		if event.position.distance_to(_press_pos) > _PRESS_DRAG_PX:
+			if _press_unit != null and GameState.active_side == _my_side():
+				_begin_drag(_press_unit)
+				_press_drag_started = true
+				_drag_follow()
+			else:
+				_press_active = false   # 滑在空地/敌方上：取消，避免误操作
+				_press_seen = false   # 取消的手势：其抬起不再当作有效手势处理
+
+# 触屏：抬起时是否可当作点击（仅我方回合且处于可输入态）
+func set_unit_card_open(open: bool) -> void:
+	_unit_card_open = open
+	if not open:
+		# 卡面关闭 = 本次查看手势结束：清空触摸手势状态。
+		# 否则长按查看中卡由 GUI 松手关闭时 Battle 收不到 release，残留的 _press_seen/
+		# _press_cell 会让下一次"孤抬起"（点外部关卡的抬起漏到本层）误重开卡面。
+		_press_active = false
+		_press_seen = false
+		_press_viewed = false
+		_press_drag_started = false
+
+func _press_active_clickable(_cell: Vector2i) -> bool:
+	return state == State.PLAYER_INPUT and GameState.active_side == _my_side()
 
 func _on_cell_clicked(cell: Vector2i) -> void:
 	var clicked_unit = occupancy.get(cell, null)   # 可能null/单位；用真值判
@@ -2201,6 +2382,12 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			if not GameState.is_host:
 				_begin_side(GameState.active_side)
 			return
+		if t == "turn_end":
+			# 主机在开始回合末结算时广播：客户端同步消散该阵营骷髅等回合末技能，
+			# 与主机同一时刻淡出（避免等 begin_side 才补、骷髅消失明显延迟）
+			if not GameState.is_host:
+				_apply_turn_end_sync(int(cmd.get("faction", -1)))
+			return
 		if t == "end_turn":
 			# 只有主机执行回合推进；客户端不本地推进，等主机的 begin_side 广播
 			if GameState.is_host:
@@ -2542,7 +2729,18 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	_hero(attacker).on_after_attack()
 	# 反击：后勤单位也会反击（后勤不能主动攻击，但被近战攻击后会还手）
 	# 普通单位默认每回合只能反击一次；复仇者（无限反击）不已用过一限制
-	var can_counter := target.alive and target.can_attack() and grid.distance(attacker.cell, target.cell) == 1 and (not target.counter_used_this_turn or _hero(target).infinite_counter())
+	# 距离=1（近战互搏 / 贴身）：维持原规则，攻击范围内即可反击
+	# 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，
+	# 才以全额攻击力反击（被贴身=压制中：攻击降为1/技能失效，反击不了）
+	var can_counter := false
+	if target.alive and target.can_attack() and (not target.counter_used_this_turn or _hero(target).infinite_counter()):
+		var dist_c := grid.distance(attacker.cell, target.cell)
+		if dist_c <= 1:
+			can_counter = true
+		elif attacker.attack_type == DataRegistry.AttackType.RANGED \
+				and target.attack_type == DataRegistry.AttackType.RANGED \
+				and not _has_enemy_adjacent(target):
+			can_counter = true   # 远程对射：目标未被贴身，可全额反击
 	if can_counter:
 		target.counter_used_this_turn = true
 	_clear_selection()
@@ -2563,10 +2761,14 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 反击前先同步"远程被贴状态：战锤攻降(-1)debuff 已在命中时施加，
 	# 而远程被贴身时基础攻击应降（若不同步，反击者会按未贴身的基础攻击反击，伤害错误偏高）
 	_sync_ranged_adjacent()
+	var cdmg := counterer.effective_atk() * _counter_bonus(counterer, attacker)
+	# 远程对射（距离>1）：反击者原地发射投掷物，不贴脸突进
+	if grid.distance(counterer.cell, attacker.cell) > 1:
+		_launch_counter_projectile(attacker, counterer, cdmg, for_enemy)
+		return
 	var cpos := board_view.cell_world_center(counterer.cell)   # 落点=自身格子中心（不受中途换瞬移影响
 	var lunge_to := cpos.lerp(board_view.cell_world_center(attacker.cell), 0.62)   # 沿反向直线轻
 	# 反击伤害 = 反击*实时攻击*（含buff/攻降/冲锋加成，不套用远程相邻降攻
-	var cdmg := counterer.effective_atk() * _counter_bonus(counterer, attacker)
 	AudioManager.play("attack")
 	var ct := create_tween()
 	ct.tween_property(counterer, "position", lunge_to, 0.1)
@@ -2584,6 +2786,30 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			if is_instance_valid(counterer) and counterer.alive:
 				_hero(counterer).on_after_counter()
 			_finish_attack(attacker, for_enemy)))
+
+# 远程对射反击演出：反击者原地发射投掷物飞向攻击者，命中全额结算（不贴脸）
+func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_enemy: bool) -> void:
+	if not is_instance_valid(counterer):
+		_finish_attack(attacker, for_enemy)
+		return
+	var from := board_view.cell_world_center(counterer.cell)
+	var to := board_view.cell_world_center(attacker.cell)
+	var proj := Projectile.new()
+	proj.position = from
+	proj.rotation = (to - from).angle()
+	add_child(proj)
+	var flight := clampf(grid.distance(counterer.cell, attacker.cell) * 0.08, 0.15, 0.4)
+	var t := create_tween()
+	t.tween_property(proj, "position", to, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_callback(func():
+		proj.queue_free()
+		if is_instance_valid(attacker):
+			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
+			attacker.take_damage(cdmg, false, true)
+		# 太阳斩：每次反击后攻击力-1，直到恢复正
+		if is_instance_valid(counterer) and counterer.alive:
+			_hero(counterer).on_after_counter()
+		_finish_attack(attacker, for_enemy))
 
 func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 	# 攻击者可能已在演出链中阵被释放（反击、炸弹、光环反伤等）：
@@ -2642,6 +2868,10 @@ func _end_side(side: int) -> void:
 	_ending_side = true   # 结束/结算期间阵亡的替补一律推迟到本方下回合再
 	state = State.ANIMATING   # 回合结束技能逐个触发期间锁定输入
 	_clear_selection()       # 结束回合：清除选中单位及其移动/攻击范围高亮，避免残
+	# 联机：开始回合末结算的同一时刻广播 turn_end，让客户端同步开始骷髅消散等
+	# 回合末技能（与主机淡出同时进行，避免客户端等 begin_side 才补、消失明显延迟）
+	if GameState.is_online and GameState.is_host:
+		NetBus.send_all(JSON.stringify({ "type": "turn_end", "faction": side_faction(side) }))
 	await _trigger_turn_end_all(side_faction(side))
 	_clear_statuses(side_faction(side))
 	# 11 回合起：本方回合结束只扣本方的血（双方各自回合结束各扣各，不一起扣
@@ -3315,7 +3545,7 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	else:
 		_hero(u).on_turn_start()   # 只继回合开类效
 	log_message.emit("%s 变身 %s。" % [u.display_name, def.display_name])
-	u.display_name = def.display_name + "("
+	u.display_name = def.display_name   # 完整显示变身后的英雄名（曾误留孤立 "(" 致名字残缺）
 	u._update_name_label()   # 卡面名字跟随变化
 	u._update_tags_label()   # 技能词条标签跟随变
 	u.refresh_stats()        # 攻击等数值也刷新
@@ -3805,7 +4035,7 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	units.append(u)
 	occupancy[grave] = u
 	t.tween_property(u, "modulate:a", 1.0, 0.3)
-	log_message.emit("%s 替补登场（%s）。" % [def.display_name, "我方" if side == DataRegistry.Faction.PLAYER else "敌方"])
+	log_message.emit("%s 替补登场（%s）。" % [def.display_name, "我方" if side == _my_faction() else "敌方"])
 	# 替补登场效果
 	_trigger_on_enter.call_deferred(u)
 
@@ -3849,15 +4079,62 @@ func _run_enemy_turn() -> void:
 	var obstacle_snap := {}
 	for c in obstacles.keys():
 		obstacle_snap[c] = true
-	var sim := ai.build_state(descs, occ_snap, gold_snap, grave_snap, obstacle_snap)
-	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+	# 后台线程搜索：AI 计算期间主线程保持响应（可点英雄查看属性），算完再回放。
+	# BattleAI 只读 grid 几何与 DataRegistry 静态数据，不触碰场景节点，线程安全。
+	_ai_plan = []
+	_ai_done = false
+	_ai_used = false
+	if _ai_thread != null and _ai_thread.is_started():
+		_ai_thread.wait_to_finish()   # 保险：不应有残留线程
+	_ai_thread = Thread.new()
+	_ai_thread.start(_enemy_ai_worker.bind(ai, descs, occ_snap, gold_snap, grave_snap, obstacle_snap))
+	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
+	while true:
+		if get_tree() == null or my_session != _session_id:
+			return   # 场景已释放/已重开：安全退出（线程结果作废）
+		_ai_mutex.lock()
+		var finished := _ai_done
+		_ai_mutex.unlock()
+		if finished:
+			break
+		await get_tree().process_frame
+	_ai_thread.wait_to_finish()   # 回收线程资源（结果已写入 _ai_plan）
+	_ai_thread = null
+	if _ai_done and not _ai_used:
+		_ai_used = true
+		_ai_mutex.lock()
+		var plan: Array = _ai_plan
+		_ai_mutex.unlock()
+		await _replay_enemy_plan(plan, refs, my_session)
+		if my_session != _session_id or get_tree() == null:
+			return
+		if not _check_win():
+			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
+			_clear_statuses(DataRegistry.Faction.ENEMY)
+			_settle_side_round_damage(GameState.SIDE_ENEMY)   # 1回合起：敌半回合结束只扣敌方
+			GameState.end_current_side(_first_side)
+			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
+			await get_tree().create_timer(0.8).timeout
+			_begin_side(GameState.SIDE_PLAYER)
 
-	# 回放执行最优序
+# 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
+func _enemy_ai_worker(ai: BattleAI, descs: Array, occ_snap: Dictionary, gold_snap: Dictionary, grave_snap: Dictionary, obstacle_snap: Dictionary) -> void:
+	var sim := ai.build_state(descs, occ_snap, gold_snap, grave_snap, obstacle_snap)
+	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+	_ai_mutex.lock()
+	_ai_plan = result
+	_ai_done = true
+	_ai_mutex.unlock()
+
+# 回放执行 AI 计划（主线程逐招执行并等待动画）
+func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 	for step in plan:
 		if GameState.match_over:
 			break
 		if my_session != _session_id:
 			return   # 已重开：安全退出，避免访问已释放单位
+		if get_tree() == null:
+			return
 		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
 		var idx: int = step["idx"]
 		if idx < 0 or idx >= refs.size():
@@ -3878,14 +4155,6 @@ func _run_enemy_turn() -> void:
 					if _in_attack_range(u, t):
 						_do_attack(u, t, true)
 						await _wait_action_done()   # 等待攻击（含反击）演出完全结
-	if not _check_win():
-		await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
-		_clear_statuses(DataRegistry.Faction.ENEMY)
-		_settle_side_round_damage(GameState.SIDE_ENEMY)   # 1回合起：敌半回合结束只扣敌方
-		GameState.end_current_side(_first_side)
-		# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
-		await get_tree().create_timer(0.8).timeout
-		_begin_side(GameState.SIDE_PLAYER)
 
 # 替补流程期间暂停敌方 AI 执行（轮询直到替补结束）
 func _wait_sub_done() -> void:

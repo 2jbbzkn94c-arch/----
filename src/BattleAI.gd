@@ -77,7 +77,7 @@ class Sim:
 var grid: HexGrid
 var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
 
-const MAX_MOVE_OPTIONS := 10
+const MAX_MOVE_OPTIONS := 16
 
 func _init(g: HexGrid) -> void:
 	grid = g
@@ -154,12 +154,12 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 		return []
 	return states[0]["path"]
 
-# 难度决定保留的状态数（困难=搜索更充分；波束越大越接近全局最优，代价是耗时）
+# 难度决定保留的状态数（困难=搜索更充分；波束越大越接近全局最优）
 func _beam() -> int:
 	if difficulty >= 2:
-		return 72
+		return 110
 	if difficulty == 1:
-		return 44
+		return 60
 	return 20
 
 # 难度相关的随机抖动（简单=易失误，困难=纯最优）
@@ -631,12 +631,24 @@ func _sim_pull_target(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	t.cell = best
 	sim.occ[best] = t
 
-# 贴身反击判定（普通单位每回合一次；复仇者无限反击；眩晕/已死不反）
+# 反击判定（与真实规则一致）：普通单位每回合一次；复仇者无限反击；眩晕/已死不反。
+# 距离=1（近战互搏 / 贴身）：照常反击。
+# 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，才全额反击。
 func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	if not t.alive or t.stunned:
 		return
-	if grid.distance(u.cell, t.cell) != 1:
-		return
+	var dist_c := grid.distance(u.cell, t.cell)
+	if dist_c > 1:
+		# 远程对射：攻击方与反击方都必须是远程；被攻击方被贴身则反击不了
+		if u.atk_type != DataRegistry.AttackType.RANGED:
+			return
+		if t.atk_type != DataRegistry.AttackType.RANGED:
+			return
+		if _sim_enemy_adjacent(sim, t, t.cell):
+			return   # 目标正被敌人贴身（压制中），无法远程反击
+	else:
+		if dist_c != 1:
+			return
 	if t.counter_used and t.hero_id != "hero_23":
 		return
 	t.counter_used = true
