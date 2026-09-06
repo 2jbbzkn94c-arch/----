@@ -29,7 +29,7 @@ var enemy_deck: Array = []
 var player_placement: Dictionary = {}
 var enemy_placement: Dictionary = {}
 
-# 自由部署沙箱（TestDeploy）：取消"3 名阵亡判负"，改为一方无人可上（场上为 0 且替补池空）才算负；
+# 自由部署沙箱（测试场景）：取消"3 名阵亡判负"，改为一方无人可上（场上为 0 且替补池空）才算负；
 # 场上阵亡/撤下后可从全英雄池自由替补。
 var no_death_limit := false
 
