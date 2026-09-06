@@ -2823,14 +2823,9 @@ func _trigger_turn_end(u: Unit) -> bool:
 func _trigger_on_enter(u: Unit) -> void:
 	if not u.skill_allowed():   # 沉默：无法触发登场技能
 		return
-	# 替补专属登场技能（波盾/太阳斩/梅林/猎颅者）
+	# 只有带"<替补>"标签的英雄，替补登场时才触发技能（波盾/太阳斩/梅林/猎颅者的 on_enter 实现）。
+	# 其它回合开始技（烈焰祭司加攻/圣诞老人放道具/黄金矿工丢矿等）不因替补登场触发，等下一个己方回合开始生效。
 	_hero(u).on_enter()
-	# 仅"放置/召唤型"回合开始技在替补登场时也立即触发（圣诞放道具/黄金矿工丢矿/死灵法师召唤/血锁直线激活），
-	# 否则要等下一个己方回合开始，显得技能无效。
-	# 光环型回合开始技（烈焰祭司加攻、风语者光环等）不在此列：替补登场不立即触发，等下个己方回合开始生效。
-	if u.hero_id in ["hero_02", "hero_33", "hero_42", "hero_41"]:
-		if _hero(u).on_turn_start():
-			u.burst_fx(DataRegistry.hero_fx(u.hero_id).color, DataRegistry.hero_fx(u.hero_id).text)
 
 # ============ 效果原语 ============
 func _heal(u: Unit, amt: int) -> void:
