@@ -99,11 +99,13 @@ func _build() -> void:
 
 	vbox.add_child(_spacer(10))
 
-	# 卡池：蜂巢式六边形布局（放入滚动容器）
+	# 卡池：固定 7 列放大卡面，放入滚动容器（桌面滚轮 / 安卓触摸滑动）
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
+	scroll.gui_input.connect(_on_pool_scroll_input)
+	_pool_scroll = scroll
 	vbox.add_child(scroll)
 	var hex_host := Control.new()
 	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -207,37 +209,50 @@ func _build() -> void:
 	_update_ui()
 
 var _hex_pool_size := Vector2.ZERO
+var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸滑动用）
+const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
-# 蜂巢式六边形卡池：按行错位摆放
+# 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
+# 六边形边对边贴紧连成蜂窝）。固定 7 列、卡面放大；超高时滚动容器出现滚动条。
 func _build_hex_pool(host: Control) -> void:
-	var ids := DataRegistry.heroes.keys()
-	var r := 46.0
-	var col_step := 1.5 * r           # 平顶：列中心横向间距
-	var row_step := sqrt(3.0) * r     # 平顶：行中心纵向间距
-	var avail: float = get_viewport().get_visible_rect().size.x - 48 - 16
-	var cols := int((avail - 2.0 * r) / col_step) + 1
-	if cols < 1:
-		cols = 1
+	var ids: Array = DataRegistry.heroes.keys()
+	var cols := 7
+	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 56.0, 340.0)
+	# 半径：让 7 列蜂窝（总宽 = 2r + 6*1.5r = 11r）尽量宽大，但不超过上限
+	var r: float = clampf(avail_w / 11.0, 30.0, 96.0)
+	var sq3 := sqrt(3.0)
 	var per := int(ceil(float(ids.size()) / float(cols)))
-	var total_w := 2.0 * r + float(cols - 1) * col_step
-	var total_h := row_step * float(per) + row_step
-	_hex_pool_size = Vector2(total_w, total_h)
-	host.custom_minimum_size = Vector2(total_w, total_h)
-	host.size = Vector2(total_w, total_h)
+	var total_w := 11.0 * r
+	_hex_pool_size = Vector2(total_w, float(per + 1) * sq3 * r)
+	host.custom_minimum_size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
+	host.size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	_card_buttons.clear()
-	var margin_x: float = max((avail - total_w) / 2.0, 0.0)
+	var margin_x: float = max((avail_w - total_w) / 2.0, 0.0)
+	var max_x := 0.0
+	var max_y := 0.0
 	for i in ids.size():
 		var id: String = ids[i]
-		var col := int(i / float(per))
-		var row := i % per
-		var cx := margin_x + r + float(col) * col_step
-		var cy := r + float(row) * row_step + (row_step / 2.0 if col % 2 == 1 else 0.0)
+		var col := i % cols
+		var row := int(i / float(cols))
+		var cx := margin_x + r + float(col) * 1.5 * r
+		var cy := r + sq3 * r * (float(row) + (0.5 if col % 2 == 1 else 0.0))
 		var card := HexCard.new(DataRegistry.heroes[id], id, r)
-		card.position = Vector2(cx - r, cy - row_step / 2.0)
+		card.position = Vector2(cx - r, cy - sq3 * r * 0.5)
 		card.hovered.connect(_on_hex_hovered)
 		card.clicked.connect(_on_hex_clicked)
 		host.add_child(card)
 		_card_buttons[id] = card
+		max_x = maxf(max_x, cx + r)
+		max_y = maxf(max_y, cy + sq3 * r * 0.5)
+	_hex_pool_size = Vector2(max_x, max_y)
+	host.custom_minimum_size = Vector2(max_x, max_y + _DETAIL_H)
+	host.size = Vector2(max_x, max_y + _DETAIL_H)
+
+# 安卓/触屏：手指上下滑动滚动卡池；桌面鼠标滚轮由 ScrollContainer 原生处理。
+func _on_pool_scroll_input(ev: InputEvent) -> void:
+	if ev is InputEventScreenDrag and _pool_scroll != null:
+		var sd := ev as InputEventScreenDrag
+		_pool_scroll.scroll_vertical = maxi(_pool_scroll.scroll_vertical - int(sd.relative.y), 0)
 
 func _on_hex_hovered(id: String) -> void:
 	if id == "":
@@ -400,22 +415,8 @@ func _on_start() -> void:
 
 # 英雄强度打分（单体基准，协同另行加分）
 func _hero_strength(id: String) -> float:
-	var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
-	var s := float(def.atk) * 1.8 + float(def.max_hp)
-	if def.attack_type == DataRegistry.AttackType.RANGED:
-		s += 2.0
-	for sk in def.skills:
-		match sk:
-			DataRegistry.Skill.TAUNT:
-				s += 2.0
-			DataRegistry.Skill.SWIFT:
-				s += 1.0
-			DataRegistry.Skill.INFILTRATE:
-				s += 1.5
-			DataRegistry.Skill.LOGISTICS:
-				s += 1.0
-	s += float(def.rarity) * 0.5
-	return s
+	# 单体评分唯一实现在 DataRegistry.hero_strength()（避免两处公式漂移）
+	return DataRegistry.hero_strength(id)
 
 # 两英雄之间的协同分（取自共享知识库 DataRegistry.SYNERGY）
 func _synergy_bonus(a: String, b: String) -> float:
@@ -444,6 +445,7 @@ func _synergy_pick(want: int) -> Array:
 			var sc := _hero_strength(id)
 			for c in chosen:
 				sc += _synergy_bonus(c, id)
+			sc += DataRegistry.role_balance_bonus(chosen, id)   # 职能配比：缺坦克/输出/功能/替补适当加分
 			var w := maxf(sc, 0.0) + 1.0   # 权重下限为1，保证任何英雄都有机会
 			wins.append(w)
 			ids.append(id)
@@ -537,10 +539,10 @@ func _open_help() -> void:
 	sb.corner_radius_bottom_right = 12
 	sb.set_border_width_all(2)
 	sb.border_color = Color(1.0, 0.85, 0.5)
-	sb.content_margin_left = 18
-	sb.content_margin_right = 18
-	sb.content_margin_top = 14
-	sb.content_margin_bottom = 14
+	sb.content_margin_left = 18.0
+	sb.content_margin_right = 18.0
+	sb.content_margin_top = 14.0
+	sb.content_margin_bottom = 14.0
 	panel.add_theme_stylebox_override("panel", sb)
 	overlay.add_child(panel)
 	panel.size = Vector2(minf(vsize.x - 48, 640), vsize.y - 120)

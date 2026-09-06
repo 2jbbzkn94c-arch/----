@@ -96,25 +96,47 @@ func _build_visual() -> void:
 	_label.position = Vector2(-hex_radius, -hex_radius * 0.5)
 	_label.size = Vector2(hex_radius * 2.0, 15.0 * fs)
 	_label.add_theme_color_override("font_color", Color.WHITE)
+	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_label.add_theme_constant_override("outline_size", maxi(3, int(4.5 * fs)))
 	add_child(_label)
 
-	# 攻击：框内下方左半区
+	# 数值图标簇：左下=攻击.png、右下=爱心.png，数字居中压在图标内（先加图标、后加文字）
+	var num_icon_w := hex_radius * 0.7   # 剑（攻击）的框大小
+	var hp_icon_w := num_icon_w * 1.0   # 爱心单独放大：比剑大 10%；想更大就加大系数并配合把 hp_c.x 往左调
+	var atk_c := Vector2(-hex_radius * 0.34, hex_radius * 0.6)
+	var hp_c := Vector2(hex_radius * 0.36, hex_radius * 0.6)   # 爱心中心（大爱心需稍左移避免出右边框）
+	var atk_icon := _make_stat_icon(DataRegistry.ICON_ATK, atk_c, num_icon_w)
+	if atk_icon != null:
+		atk_icon.name = "AtkIcon"
+		add_child(atk_icon)
 	_atk_label = Label.new()
-	_atk_label.add_theme_font_size_override("font_size", int(13.0 * fs))
-	_atk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_atk_label.position = Vector2(-hex_radius * 0.5, hex_radius * 0.24)
-	_atk_label.size = Vector2(hex_radius * 0.5, 16.0 * fs)
-	_atk_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
+	_atk_label.add_theme_font_size_override("font_size", int(17.0 * fs))
+	_atk_label.add_theme_font_override("font", DataRegistry.stat_bold_font())   # 数字加粗
+	_atk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_atk_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_atk_label.size = Vector2(num_icon_w, num_icon_w * 0.8)
+	_atk_label.position = atk_c - _atk_label.size / 2.0 + Vector2(0, num_icon_w * 0.06)
+	_atk_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+	_atk_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+	_atk_label.add_theme_constant_override("outline_size", maxi(4, int(5.0 * fs)))
 	add_child(_atk_label)
 	_update_atk_label()
 
-	# 当前血量：框内下方右半区
+	var hp_icon := _make_stat_icon(DataRegistry.ICON_HEART, hp_c, hp_icon_w)
+	if hp_icon != null:
+		hp_icon.name = "HpHeart"
+		add_child(hp_icon)
 	_hp_label = Label.new()
-	_hp_label.add_theme_font_size_override("font_size", int(13.0 * fs))
-	_hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_hp_label.position = Vector2(0, hex_radius * 0.24)
-	_hp_label.size = Vector2(hex_radius * 0.5, 16.0 * fs)
-	_hp_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.5))
+	_hp_label.add_theme_font_size_override("font_size", int(17.0 * fs))
+	_hp_label.add_theme_font_override("font", DataRegistry.stat_bold_font())   # 数字加粗
+	_hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hp_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_hp_label.size = Vector2(hp_icon_w , hp_icon_w * 0.8)
+	# 血量数字相对爱心中心：右移 0.12×爱心框、下移 0.06×爱心框
+	_hp_label.position = hp_c - _hp_label.size / 2.0 + Vector2(hp_icon_w * 0.001, hp_icon_w * 0.06)
+	_hp_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+	_hp_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+	_hp_label.add_theme_constant_override("outline_size", maxi(4, int(5.0 * fs)))
 	add_child(_hp_label)
 	_update_hp_label()
 
@@ -142,6 +164,24 @@ func _build_visual() -> void:
 	_status_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
 	_status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.6))
 	add_child(_status_label)
+
+# 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
+# 保持长宽比缩放到"外接框边长=box"内（宽高谁大以谁定基准），并把主体中心精确放到 center。
+func _make_stat_icon(path: String, center: Vector2, box: float) -> Sprite2D:
+	var info := DataRegistry.stat_icon(path)
+	var tex: Texture2D = info.get("tex")
+	var bw := int(info.get("w", 0))
+	var bh := int(info.get("h", 0))
+	if tex == null or bw <= 0 or bh <= 0:
+		return null   # 资源未导入/缺失：退回无图标
+	var spr := Sprite2D.new()
+	spr.texture = tex
+	var sc := box / float(maxi(bw, bh))
+	spr.scale = Vector2(sc, sc)
+	var tsz := tex.get_size()
+	spr.position = center - Vector2(float(info.get("cx", tsz.x / 2.0)) - tsz.x / 2.0,
+			float(info.get("cy", tsz.y / 2.0)) - tsz.y / 2.0) * sc
+	return spr
 
 func _skill_tags() -> String:
 	var out := ""
@@ -275,7 +315,8 @@ func can_attack() -> bool:
 	return alive and not has_status("stun")
 
 func skill_allowed() -> bool:
-	return alive and not has_status("silence")
+	# 眩晕：不能移动/攻击，也不能触发任何技能（回合开始/结束、登场、光环等）
+	return alive and not has_status("silence") and not has_status("stun")
 
 func _update_status_label() -> void:
 	# 在单位牌面下加状态小字
@@ -322,10 +363,13 @@ func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46) -
 	lbl.size = Vector2(48, 24)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(lbl)
-	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留
+	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。
+	# 扣血/回血数字停留更久：先完整上浮 1.0s（期间不透明），再 0.7s 淡出。
+	var rise := 0.5
+	var fade := 0.7
 	var t := lbl.create_tween()
-	t.tween_property(lbl, "position", lbl.position + Vector2(0, -34), 1.1)
-	t.parallel().tween_property(lbl, "modulate:a", 0.0, 1.1)
+	t.tween_property(lbl, "position", lbl.position + Vector2(0, -30), rise)
+	t.tween_property(lbl, "modulate:a", 0.0, fade)
 	t.tween_callback(lbl.queue_free)
 
 # 治疗飘字（供 Battle 后勤调用）

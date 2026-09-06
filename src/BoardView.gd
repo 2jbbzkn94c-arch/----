@@ -11,7 +11,7 @@ var obstacles: Dictionary = {}     # cell -> 耐久（障碍物）
 var buff_items: Dictionary = {}    # cell -> "atk"/"move"（增益道具）
 var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可选择在此落位）
 var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 较实底色，避免透出灰木导致棋子/文字看不清
-var _cell_line := Color(0.35, 0.4, 0.5, 0.55)
+var _cell_line := Color(0, 0, 0, 0.85)   # 六边形格线：黑色，清楚显示格子边界
 var _side_zone_player := Color(0.10, 0.2, 0.35, 0.8)
 var _side_zone_enemy := Color(0.30, 0.12, 0.12, 0.75)
 # 敌方出生区完整格列表（顶帽行+第一满行）；非空时用于底色上色（整片统一）

@@ -43,6 +43,11 @@ func synergy_bonus(a: String, b: String) -> float:
 	var d2: Dictionary = SYNERGY.get(b, {})
 	if d2.has(a):
 		s += d2[a]
+	# "协同英雄"列直接点名的搭配（md 自动读取），任意一方点名对方即算搭配分
+	var ad: HeroDef = heroes.get(a, null)
+	var bd: HeroDef = heroes.get(b, null)
+	if (ad != null and ad.explicit_pairs.has(b)) or (bd != null and bd.explicit_pairs.has(a)):
+		s += 2.0
 	return s
 
 # 克制分：a 是否克制 b（依据角色列表"被克制/有效行为"列的明确关系）。a 提供分，a 克制 b 时返回正值。
@@ -55,6 +60,74 @@ func counter_bonus(a: String, b: String) -> float:
 	if ad != null and ad.counters.has(b):
 		s += 2.0
 	return s
+
+# 英雄单体评分（唯一实现）：竞技场选人/普通敌方组队/首发部署共用。
+# 权重：重攻击、轻血量——避免高血坦克把输出全挤出高分池（导致敌方全肉盾）。
+func hero_strength(id: String) -> float:
+	var def: HeroDef = heroes.get(id, null)
+	if def == null:
+		return 0.0
+	var s := float(def.atk) * 2.2 + float(def.max_hp) * 0.45
+	if def.attack_type == AttackType.RANGED:
+		s += 2.5
+	for sk in def.skills:
+		match sk:
+			Skill.TAUNT:
+				s += 0.8
+			Skill.SWIFT:
+				s += 1.0
+			Skill.INFILTRATE:
+				s += 1.5
+			Skill.LOGISTICS:
+				s += 1.0
+	s += float(def.rarity) * 0.3
+	return s
+
+# 职能分类（给 AI 组队配比用）：替补标签>嘲讽坦克>后勤功能>其余输出
+func hero_role_name(id: String) -> String:
+	var def: HeroDef = heroes.get(id, null)
+	if def == null:
+		return "输出"
+	if def.skills.has(Skill.BENCH):
+		return "替补"
+	if def.skills.has(Skill.TAUNT):
+		return "坦克"
+	if def.skills.has(Skill.LOGISTICS):
+		return "功能"
+	return "输出"
+
+# 组队职能平衡加分：按目标比例给"当前缺的职能"加价、给"超量的职能"压价。
+# deck = 已选卡组（不含 cand），cand 准备加入后总人数 N=deck.size()+1。
+func role_balance_bonus(deck: Array, cand: String) -> float:
+	var role := hero_role_name(cand)
+	var counts := { "坦克": 0, "输出": 0, "功能": 0, "替补": 0 }
+	for id in deck:
+		counts[hero_role_name(id)] = int(counts[hero_role_name(id)]) + 1
+	var n := deck.size() + 1
+	var tank_before := int(counts["坦克"])
+	counts[role] = int(counts[role]) + 1
+	var b := 0.0
+	# 各职能目标占比（取整），宽松区间：少于目标 -> 加分；比目标多 2 个及以上 -> 压价
+	var targets := {
+		"坦克": int(round(n * 0.25)),
+		"输出": int(round(n * 0.4)),
+		"功能": int(round(n * 0.2)),
+		"替补": int(round(n * 0.15)),
+	}
+	for r in targets.keys():
+		var c := int(counts[r])
+		var t := int(targets[r])
+		if c <= t:
+			b += 0.8
+		elif c >= t + 2:
+			b -= 1.4
+	# 特别拉力：己方卡组还没有坦克时，坦克候选额外加分（避免整套脆皮无前排）
+	if role == "坦克" and tank_before == 0:
+		b += 2.0
+	# 防止出现"全场清一色"的职能（如全是坦克/全是输出）
+	if int(counts[role]) >= n and n >= 3:
+		b -= 3.0
+	return b
 
 # 从一段中文文本里抽取出现的英雄 id（用 NAME_ALIAS 简称 + 英雄显示名全名匹配）。
 func _extract_ids(text: String) -> Array:
@@ -110,6 +183,7 @@ class HeroDef:
 	var countered_by_note: String = ""  # 被克制（文本备注）
 	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
 	var counters: Array = []            # 被克制/有效行为里抽出的克制己方(id)
+	var explicit_pairs: Array = []      # "协同英雄"列直接点名的搭配英雄 id（AI 协同用）
 
 	func _init(id_: String = "") -> void:
 		id = id_
@@ -253,6 +327,8 @@ func _load_heroes() -> void:
 			h.countered_by_note = cells[9].strip_edges()
 		h.sy_partners = _extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)
 		h.counters = _extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)
+		if cells.size() >= 11:
+			h.explicit_pairs = _extract_ids(cells[10].strip_edges())   # "协同英雄"列：直接点名的搭档
 
 		var has_ranged := _tail_has(skill_text, "<远程>")
 		var has_taunt := _tail_has(skill_text, "<嘲讽>")
@@ -309,6 +385,66 @@ func get_hero(id: String) -> HeroDef:
 
 func get_summon(id: String) -> HeroDef:
 	return summons.get(id, null)
+
+# —— 数值图标素材（爱心=血量、攻击=攻击力）——
+# 素材是"图标+近白实底"：首次使用把白底抠成透明，同时记录主体包围盒（宽/高/中心）。
+# 供 Unit 棋子与 HexCard 卡面按"主体宽度"等比放大，并把图标主体精确放到数字下方。
+const ICON_HEART := "res://assets/美术资源/爱心.png"
+const ICON_ATK := "res://assets/美术资源/攻击.png"
+var _stat_icons: Dictionary = {}   # path -> {tex:Texture2D, w,h,cx,cy}
+var _stat_bold_font: FontVariation = null   # 数值（攻击/血量）加粗字体，全部界面共享
+
+# 数字/名字加粗：主题无粗体字体，用带中文的系统字体 + FontVariation 合成加粗（跨平台回退列表）
+func stat_bold_font() -> FontVariation:
+	if _stat_bold_font == null:
+		var sys := SystemFont.new()
+		sys.font_names = PackedStringArray(["Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "sans-serif"])
+		_stat_bold_font = FontVariation.new()
+		_stat_bold_font.base_font = sys
+		_stat_bold_font.variation_embolden = 0.9
+	return _stat_bold_font
+
+func stat_icon(path: String) -> Dictionary:
+	if _stat_icons.has(path):
+		return _stat_icons[path]
+	var res := { "tex": null, "w": 0, "h": 0, "cx": 0, "cy": 0 }
+	var tex := load(path) as Texture2D
+	if tex != null:
+		var img := tex.get_image()
+		if img != null:
+			img.convert(Image.FORMAT_RGBA8)
+			var w := img.get_width()
+			var h := img.get_height()
+			var minx := w
+			var miny := h
+			var maxx := -1
+			var maxy := -1
+			for y in h:
+				for x in w:
+					var c := img.get_pixel(x, y)
+					if c.r > 0.90 and c.g > 0.86 and c.b > 0.82:
+						img.set_pixel(x, y, Color(0, 0, 0, 0))
+					elif c.a > 0.5:
+						if x < minx:
+							minx = x
+						if x > maxx:
+							maxx = x
+						if y < miny:
+							miny = y
+						if y > maxy:
+							maxy = y
+			res.tex = ImageTexture.create_from_image(img)
+			if maxx >= minx and maxy >= miny:
+				res.w = maxx - minx + 1
+				res.h = maxy - miny + 1
+				res.cx = (minx + maxx) / 2.0
+				res.cy = (miny + maxy) / 2.0
+		else:
+			res.tex = tex
+			res.w = tex.get_width()
+			res.h = tex.get_height()
+	_stat_icons[path] = res
+	return res
 
 # 词条 -> 中文解释（供选人/属性/工具提示共用）
 func keyword_lines(skills: Array, attack_type: int) -> Array:
@@ -378,7 +514,7 @@ func clean_skill_desc(raw: String) -> String:
 # 技能正文中以 [方括号] 出现的状态词（对目标施加的减益/增益）-> 中文解释行。
 # 与 keyword_lines 的"英雄自身关键词"互补：状态词是效果对象，不是英雄自带标签。
 const STATUS_DESC := {
-	"猛毒": "猛毒：回合开始时受到1点伤害（无视圣盾）",
+	"猛毒": "猛毒：回合开始时受到1点伤害（圣盾可抵挡一次）",
 	"重伤": "重伤：受到的伤害+1",
 	"麻痹": "麻痹：攻击力-1",
 	"冰冻": "冰冻：移动力-1",

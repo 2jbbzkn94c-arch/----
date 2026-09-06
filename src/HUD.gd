@@ -321,10 +321,10 @@ func _show_first_side_notice(text: String) -> void:
 	sb.corner_radius_bottom_right = 10
 	sb.set_border_width_all(1)
 	sb.border_color = Color(1.0, 0.85, 0.5)
-	sb.content_margin_left = 20
-	sb.content_margin_right = 20
-	sb.content_margin_top = 10
-	sb.content_margin_bottom = 10
+	sb.content_margin_left = 20.0
+	sb.content_margin_right = 20.0
+	sb.content_margin_top = 10.0
+	sb.content_margin_bottom = 10.0
 	box.add_theme_stylebox_override("panel", sb)
 	box.mouse_filter = Control.MOUSE_FILTER_STOP   # 框体可点击关闭，但不挡棋盘
 	box.gui_input.connect(_on_first_notice_input)
@@ -434,7 +434,7 @@ func _show_deploy_panel() -> void:
 	var sel := battle._pending_deploy
 	if battle._my_faction() == DataRegistry.Faction.ENEMY:
 		sel = battle._pending_enemy_deploy
-	var pool := _make_hex_pool(ids, _on_deploy_hover, _on_deploy_click, not my_pick or placing, sel, true)
+	var pool := _make_hex_pool(ids, _on_deploy_hover, _on_deploy_click, not my_pick or placing, sel, true, 48.0)
 	wrapbox.add_child(pool)
 	var pw: float = pool.custom_minimum_size.x + 20.0
 	var ph: float = pool.custom_minimum_size.y + 34.0
@@ -651,11 +651,12 @@ func _show_sub_select() -> void:
 			_set_score_tooltip_hero(hid)   # 位置由 _process 实时跟随鼠标并越界收敛
 		var click_cb := func(hid: String):
 			# 点击英雄：选中并进入落位阶段；再点其他英雄可切换
+			print("[subclick-hud] 点击了 %s" % hid)
 			battle._on_sub_pick(hid)
 			# 刷新面板选中态（battle._pending_sub 为当前选中者）
 			for c in _sub_panel.find_children("*", "HexCard", true, false):
 				c.set_selected(c.hero_id == battle._pending_sub)
-		var pool := _make_hex_pool(sub_roster, hover_cb, click_cb, false, battle._pending_sub, true)
+		var pool := _make_hex_pool(sub_roster, hover_cb, click_cb, false, battle._pending_sub, true, 48.0)
 		wrapbox.add_child(pool)
 		# 面板宽度 = 一行卡牌宽度 + 内边距；高度 = 标题 + 一行卡牌
 		var pw := pool.custom_minimum_size.x + 20.0
@@ -961,7 +962,7 @@ func _refresh_team_panel() -> void:
 			_set_score_tooltip_visible(false)
 			return
 		_set_score_tooltip_hero(hid)
-	var pool := _make_hex_pool(ids, hover_cb, func(_h): pass, false, "", true)
+	var pool := _make_hex_pool(ids, hover_cb, func(_h): pass, false, "", true, 48.0)
 	wrapbox.add_child(pool)
 	var pw := pool.custom_minimum_size.x + 20.0
 	var ph := pool.custom_minimum_size.y + 34.0
@@ -1008,9 +1009,12 @@ func _build() -> void:
 	toph.add_child(flame)
 	_flame_icon = flame
 	_turn_timer_label = Label.new()
-	_turn_timer_label.add_theme_font_size_override("font_size", 18)
+	_turn_timer_label.add_theme_font_size_override("font_size", 26)
 	_turn_timer_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.6))
+	_turn_timer_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_turn_timer_label.add_theme_constant_override("outline_size", 3)
 	_turn_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_turn_timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_turn_timer_label.visible = false
 	toph.add_child(_turn_timer_label)
 

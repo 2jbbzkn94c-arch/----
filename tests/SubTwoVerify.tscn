@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cqtsub2probe"]
+
+[ext_resource type="Script" path="res://tests/SubTwoVerify.gd" id="1_script"]
+
+[node name="SubTwoVerify" type="Node"]
+script = ExtResource("1_script")

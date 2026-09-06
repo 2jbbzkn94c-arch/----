@@ -53,11 +53,19 @@ class SwordQi:
 			Vector2(0, 8),
 			Vector2(10, 0),
 		])
-		draw_colored_polygon(blade, Color(0.65, 0.95, 1.0, 0.85))
+		if _poly_ok(blade):
+			draw_colored_polygon(blade, Color(0.65, 0.95, 1.0, 0.85))
 		# 亮芯
 		draw_polyline(PackedVector2Array([Vector2(-4, 0), Vector2(46, 0)]), Color(1.0, 1.0, 0.95, 0.95), 2.0, true)
 		# 光晕
 		draw_circle(Vector2(24, 0), 22, Color(0.6, 0.9, 1.0, 0.12))
+
+	# 多边形可安全绘制？（顶点有限且能三角剖分，避免 C++ 层 triangulation failed 刷屏/中断）
+	func _poly_ok(poly: PackedVector2Array) -> bool:
+		for v in poly:
+			if not (is_finite(v.x) and is_finite(v.y)):
+				return false
+		return Geometry2D.triangulate_polygon(poly).size() > 0
 
 # 障碍受击冲击波：白色扩散圆环（障碍物被攻击时的命中演出）
 class RingFlash:
@@ -81,16 +89,25 @@ class ScytheBlade:
 			Vector2(0, 3), Vector2(30, -22), Vector2(64, -16), Vector2(84, 0),
 			Vector2(64, 16), Vector2(30, 22), Vector2(0, -3),
 		])
-		draw_colored_polygon(blade, Color(0.4, 0.12, 0.55, 0.95))
+		if _poly_ok(blade):
+			draw_colored_polygon(blade, Color(0.4, 0.12, 0.55, 0.95))
 		# 刃口亮紫弧线（刃尖亮、往刃柄渐暗
 		draw_polyline(PackedVector2Array([Vector2(4, 0), Vector2(80, 0)]), Color(1.0, 0.6, 1.0, 0.98), 3.0, true)
 		# 紫色拖尾刃气（内侧一束流光的弧；末点不再重复首点，避免退化多边形
 		var wisp := PackedVector2Array([
 			Vector2(10, 0), Vector2(46, -14), Vector2(76, -6), Vector2(46, 14),
 		])
-		draw_colored_polygon(wisp, Color(0.7, 0.35, 0.9, 0.35))
+		if _poly_ok(wisp):
+			draw_colored_polygon(wisp, Color(0.7, 0.35, 0.9, 0.35))
 		# 光晕
 		draw_circle(Vector2(40, 0), 34, Color(0.55, 0.2, 0.7, 0.18))
+
+	# 多边形可安全绘制？（顶点有限且能三角剖分，避免 C++ 层 triangulation failed 刷屏/中断）
+	func _poly_ok(poly: PackedVector2Array) -> bool:
+		for v in poly:
+			if not (is_finite(v.x) and is_finite(v.y)):
+				return false
+		return Geometry2D.triangulate_polygon(poly).size() > 0
 
 # 血锁的链子：一长串鲜红链环，从血锁射向目标并被勾拉收拢
 class BloodChain:
@@ -176,6 +193,8 @@ var _dragging := false
 const _DRAG_THRESHOLD = 12.0
 var _pending_bomb_unit: Unit = null   # 炸弹人待放置（等待点选空地）
 var _pending_player_subs := 0     # 我方阵亡待替补名额数（可 >1：同时阵亡多人时逐个替补
+var _defer_side_skills := false   # 回合开始先补位：替补全部落位完成后才触发回合开始技
+var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位（跳过即时光环补发，技能阶段会统一触发）
 var _pending_enemy_sub := 0        # 敌方阵亡待替补数量（轮到敌方回合时按此数量补位）
 var bombs: Dictionary = {}        # cell -> true（炸弹陷阱）
 var obstacles: Dictionary = {}    # cell -> 耐久（障碍物，阻挡移动，可被破坏
@@ -189,6 +208,7 @@ var _preview_unit: Unit = null       # 当前预览描边的敌方单位（清�
 # 开局兜底阵容：取注册表前若干名可用角色（若非卡池进入对战
 const DEPLOY_COUNT := 3
 const DEFAULT_DECK_SIZE := 5
+const _CONSOLE_AI_LOG := false   # 分析日志：AI 各决策（行动/竞技场/首发/替补）输出到控制台
 
 func _default_deck() -> Array:
 	var ids := DataRegistry.heroes.keys()
@@ -402,22 +422,8 @@ func _order_deck(deck: Array) -> Array:
 
 # 英雄强度打分（单体基准，协同另行加分；与菜单选人共用口径
 func _hero_strength(id: String) -> float:
-	var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
-	var s := float(def.atk) * 1.8 + float(def.max_hp)
-	if def.attack_type == DataRegistry.AttackType.RANGED:
-		s += 2.0
-	for sk in def.skills:
-		match sk:
-			DataRegistry.Skill.TAUNT:
-				s += 2.0
-			DataRegistry.Skill.SWIFT:
-				s += 1.0
-			DataRegistry.Skill.INFILTRATE:
-				s += 1.5
-			DataRegistry.Skill.LOGISTICS:
-				s += 1.0
-	s += float(def.rarity) * 0.5
-	return s
+	# 单体评分唯一实现在 DataRegistry.hero_strength()（避免两处公式漂移）
+	return DataRegistry.hero_strength(id)
 
 # 某英雄与"已选卡的机制协同总和（考虑已选英雄间的配合）
 func _deck_synergy(deck: Array, hid: String) -> float:
@@ -425,6 +431,16 @@ func _deck_synergy(deck: Array, hid: String) -> float:
 	for c in deck:
 		s += DataRegistry.synergy_bonus(c, hid)
 	return s
+
+# 己方协同明细（日志用）：列出与已选卡里“谁”有协同、各自多少分
+func _deck_synergy_note(deck: Array, hid: String) -> String:
+	var parts: Array[String] = []
+	for c in deck:
+		var b := DataRegistry.synergy_bonus(c, hid)
+		if b > 0.0:
+			var nm: DataRegistry.HeroDef = DataRegistry.heroes.get(c, null)
+			parts.append("%s+%.1f" % [nm.display_name if nm != null else c, b])
+	return "、".join(parts)
 
 # 敌方选人辅助：候选英雄能对玩家已选英雄的克制程度（从角色列表"被克列抽取的关系
 func _counter_player_score(hid: String) -> float:
@@ -434,6 +450,16 @@ func _counter_player_score(hid: String) -> float:
 		if cr > 0.0:
 			s += cr   # 该候选克制玩家某英雄 -> 敌方更值得
 	return s
+
+# 克玩家明细（日志用）：列出克制了玩家“哪些已选英雄”
+func _counter_player_note(hid: String) -> String:
+	var parts: Array[String] = []
+	for pid in _arena_picked:
+		var cr := DataRegistry.counter_bonus(hid, pid)
+		if cr > 0.0:
+			var nm: DataRegistry.HeroDef = DataRegistry.heroes.get(pid, null)
+			parts.append("%s+%.1f" % [nm.display_name if nm != null else pid, cr])
+	return "、".join(parts)
 
 # 敌方轮：敌方自动个候选里个，个进玩家卡组
 # 策略：与敌方已选卡组协同更高、且单体更强"的留给自己，把弱/难配合的让给玩家
@@ -445,10 +471,11 @@ func _action_arena_enemy_pick() -> void:
 		return
 	var a: String = _arena_pending[0]
 	var b: String = _arena_pending[1]
-	# 候选若加入敌方卡组带来价= 单体强度 + 与敌方已选英雄的协同 + 与对方候选的协同
-	# + 对玩家已选英雄的克制（偏好选能克制玩家的英雄）
-	var sc_a := _hero_strength(a) + _deck_synergy(_arena_enemy, a) + DataRegistry.synergy_bonus(a, b) + _counter_player_score(a)
-	var sc_b := _hero_strength(b) + _deck_synergy(_arena_enemy, b) + DataRegistry.synergy_bonus(b, a) + _counter_player_score(b)
+	# 候选价值 = 单体强度 + 与敌方已选英雄的协同 + 对玩家已选英雄的克制。
+	# （不再计入"双选协同"：本局只能选一张、另一张必给玩家，两张之间的配合分是同一个对称常数，
+	#  不改变任何选择，只让日志虚高；送强组合给玩家的顾虑由"克玩家"分体现。）
+	var sc_a := _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + DataRegistry.role_balance_bonus(_arena_enemy, a)
+	var sc_b := _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + DataRegistry.role_balance_bonus(_arena_enemy, b)
 	# 轻微随机：两个候选价值接近（差< 1.5）时随机决定，避免完全可预测
 	var en_hid: String
 	if abs(sc_a - sc_b) <= 1.5:
@@ -456,6 +483,22 @@ func _action_arena_enemy_pick() -> void:
 	else:
 		en_hid = a if sc_a >= sc_b else b
 	var give_player: String = _arena_pending[1] if en_hid == _arena_pending[0] else _arena_pending[0]
+	if _CONSOLE_AI_LOG:
+		var nm_a := DataRegistry.get_hero(a).display_name
+		var nm_b := DataRegistry.get_hero(b).display_name
+		var rb_a: float = DataRegistry.role_balance_bonus(_arena_enemy, a)
+		var rb_b: float = DataRegistry.role_balance_bonus(_arena_enemy, b)
+		var tot_a: float = _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + rb_a
+		var tot_b: float = _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + rb_b
+		var pick_name := DataRegistry.get_hero(en_hid).display_name
+		print("\n[AI竞技场选人] 敌方选人 第 %d/%d 轮（敌方此前已有 %d 名：前4轮玩家未选的自动归敌方）" % [_arena_enemy_rounds + 1, ARENA_PICKS_PER_SIDE, _arena_enemy.size()])
+		var note_a := _deck_synergy_note(_arena_enemy, a)
+		var note_b := _deck_synergy_note(_arena_enemy, b)
+		var cnt_note_a := _counter_player_note(a)
+		var cnt_note_b := _counter_player_note(b)
+		print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_a, DataRegistry.hero_role_name(a), _hero_strength(a), _deck_synergy(_arena_enemy, a), ("(" + note_a + ")") if note_a != "" else "", _counter_player_score(a), ("(" + cnt_note_a + ")") if cnt_note_a != "" else "", rb_a, tot_a])
+		print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_b, DataRegistry.hero_role_name(b), _hero_strength(b), _deck_synergy(_arena_enemy, b), ("(" + note_b + ")") if note_b != "" else "", _counter_player_score(b), ("(" + cnt_note_b + ")") if cnt_note_b != "" else "", rb_b, tot_b])
+		print("[AI竞技场选人] → 敌方选择 %s（另一张 %s 归玩家）" % [pick_name, DataRegistry.get_hero(give_player).display_name])
 	_arena_enemy.append(en_hid)
 	_arena_picked.append(give_player)   # 敌方没拿的归
 	for c in _arena_pending:
@@ -1055,6 +1098,48 @@ func _auto_deploy_random() -> void:
 		else:
 			_try_place_enemy_deploy(cell)
 
+# 首发专用评分：单体 + 与已首发协同 + 职能配比 + 首发阵容约束。
+# 约束目标：① 别一次上两个坦克 ② 别全脆皮——前 3 首发要“输出+生存/控制”成组。
+func _deploy_candidate_value(cand: String, deployed: Array) -> float:
+	var s := _hero_strength(cand) + _deck_synergy(deployed, cand) + DataRegistry.role_balance_bonus(deployed, cand)
+	var def := DataRegistry.get_hero(cand)
+	if def == null:
+		return s
+	var role := DataRegistry.hero_role_name(cand)
+	var cand_tank := role == "坦克"
+	var cand_hard := _deploy_is_hard(cand)
+	var tank_cnt := 0
+	var hard_cnt := 0
+	for id in deployed:
+		var r := DataRegistry.hero_role_name(id)
+		if r == "坦克":
+			tank_cnt += 1
+		if _deploy_is_hard(id):
+			hard_cnt += 1
+	# ① 已有坦克首发时，再上坦克大幅压价（避免双坦克开局）
+	if cand_tank and tank_cnt >= 1:
+		s -= 3.5
+	# ② 防“全脆皮”：已首发两名且都脆 → 第三名必须是硬身板/控制，脆皮压价、硬身板加分
+	if deployed.size() == 2:
+		if hard_cnt == 0:
+			s += 3.0 if cand_hard else -3.0
+	# ③ 软性引导：前两手都是脆皮时，第三手优先硬身板（上面的强约束已覆盖），
+	#    已有一名硬身板时再选坦克没必要地重复（交给职能配比整体压制）
+	if cand_tank and tank_cnt >= 1 and hard_cnt >= 1:
+		s -= 1.0
+	return s
+
+# “硬身板/控制型”判定：坦克 或 高血量(≥24) 或 功能（支援/光环/控制类）
+func _deploy_is_hard(id: String) -> bool:
+	var def := DataRegistry.get_hero(id)
+	if def == null:
+		return false
+	if def.skills.has(DataRegistry.Skill.TAUNT) or def.skills.has(DataRegistry.Skill.LOGISTICS):
+		return true
+	if def.max_hp >= 24:
+		return true
+	return false
+
 func _enemy_deploy() -> void:
 	if state != State.DEPLOY or _deploy_side != 1:
 		return
@@ -1069,7 +1154,7 @@ func _enemy_deploy() -> void:
 			var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
 			if cd != null and cd.skills.has(DataRegistry.Skill.BENCH):
 				continue
-			var sc := _hero_strength(cand) + _deck_synergy(enemy_deployed, cand)
+			var sc := _deploy_candidate_value(cand, enemy_deployed)
 			if sc > best_sc:
 				best_sc = sc
 				best_i = i
@@ -1083,6 +1168,20 @@ func _enemy_deploy() -> void:
 					bs = sc2
 					best_i = i
 		var hid: String = enemy_pool[best_i]
+		if _CONSOLE_AI_LOG:
+			var rows: Array = []
+			for i in enemy_pool.size():
+				var cand2: String = enemy_pool[i]
+				var cd2 := DataRegistry.get_hero(cand2)
+				var is_bench: bool = cd2 != null and cd2.skills.has(DataRegistry.Skill.BENCH)
+				var sc2 := _deploy_candidate_value(cand2, enemy_deployed) if not is_bench else _hero_strength(cand2)
+				rows.append({ "n": cd2.display_name if cd2 != null else cand2, "role": DataRegistry.hero_role_name(cand2), "sc": sc2, "b": is_bench })
+			rows.sort_custom(func(x, y): return x["sc"] > y["sc"])
+			print("\n[AI首发部署] 第 %d 名首发（敌方，剩余 %d 人）" % [enemy_deployed.size() + 1, enemy_pool.size()])
+			for r in rows.slice(0, mini(4, rows.size())):
+				var mark := "（带<替补>标签，不首发）" if r["b"] else ""
+				print("  - %s[%s]  价值%.1f%s" % [r["n"], r["role"], float(r["sc"]), mark])
+			print("[AI首发部署] → 上阵 %s" % DataRegistry.get_hero(hid).display_name)
 		enemy_pool.remove_at(best_i)
 		enemy_deployed.append(hid)
 		var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
@@ -1373,6 +1472,19 @@ func _begin_side(side: int) -> void:
 			u.refresh_stats()
 	_sync_ranged_adjacent()   # 回合切换：敌方移换位后刷新远程被贴身状
 	_tick_statuses(side)   # 猛毒等：回合开始结
+	# —— 回合开始顺序：先完成上一方回合阵亡留下的替补，再触发各英雄回合开始技 ——
+	# 本端真人方（我方）的补位需要玩家点击选择，无法在此同步落位：
+	# 打开替补面板并把"回合开始技"顺延到全部补位完成后再触发（见 _resume_after_sub）。
+	# 必须走 _try_begin_next_sub 消费 1 个名额（否则落位完成后 more_subs 误判还有名额 → 重复弹面板）。
+	if side == _my_side() and _pending_player_subs > 0 and _my_roster().size() > 0:
+		_defer_side_skills = true
+		_try_begin_next_sub()
+		return
+	# 单机敌方（AI）待补位：先自动落位，再统一触发技能（联机敌方为对端真人，按其补位节奏同步）
+	if not GameState.is_online and side != _my_side() and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
+		_start_placing_subs = true
+		_place_enemy_sub()
+		_start_placing_subs = false
 	await _trigger_turn_start_all(side)   # 回合开始的角色技能（逐个触发+边框闪烁
 	# 让回合开始增益在牌面上可
 	for u in units:
@@ -1419,8 +1531,10 @@ func _tick_statuses(faction: int) -> void:
 		if u == null or not is_instance_valid(u):
 			continue
 		if u.alive and u.faction == faction and u.has_status("poison"):
-			log_message.emit("%s 受到[猛毒] 1 点伤害。" % u.display_name)
-			u.take_damage(1, true)   # 猛毒无条件伤
+			var hp_before := u.hp
+			u.take_damage(1)   # [猛毒]：圣盾可抵挡一次（抵挡则消耗圣盾不掉血）
+			if u.hp < hp_before:
+				log_message.emit("%s 受到[猛毒] 1 点伤害。" % u.display_name)
 func side_faction(side: int) -> int:
 	return DataRegistry.Faction.PLAYER if side == GameState.SIDE_PLAYER else DataRegistry.Faction.ENEMY
 
@@ -1620,6 +1734,30 @@ func _alive_count(faction: int) -> int:
 
 # ---- 输入处理（全局鼠标点击---
 func _unhandled_input(event: InputEvent) -> void:
+	# 调试键（敌方回合测试替补用，仅在非本端回合生效）：
+	#   F7 = 敌方回合，我方与敌方【所有】存活英雄各扣 20；
+	#   F8 = 敌方回合，只给我方前 2 名存活英雄各扣 20；
+	#   F9 = 敌方回合，直接击杀我方前 2 名存活英雄（扣 999）。
+	if event is InputEventKey and event.pressed and not event.echo \
+			and (event.keycode == KEY_F7 or event.keycode == KEY_F8 or event.keycode == KEY_F9):
+		if GameState.match_running and GameState.active_side != _my_side():
+			var ek: InputEventKey = event as InputEventKey
+			var keycode := ek.keycode
+			var dmg: int = 999 if keycode == KEY_F9 else 20
+			var all_units: bool = keycode == KEY_F7
+			var sides: Array = [DataRegistry.Faction.PLAYER, DataRegistry.Faction.ENEMY] if event.keycode == KEY_F7 else [_my_faction()]
+			var log_parts: Array[String] = []
+			for fn in sides:
+				var hits := 0
+				for u in units:
+					if u != null and is_instance_valid(u) and u.alive and u.faction == fn:
+						u.take_damage(dmg)
+						hits += 1
+						if not all_units and hits >= 2:
+							break
+				log_parts.append("%s×%d" % ["敌方" if fn == DataRegistry.Faction.ENEMY else "我方", hits])
+			log_message.emit("【调试】敌方回合扣血：%s 各 %d 伤" % ["、".join(log_parts), dmg])
+		return
 	# 右键查看卡面 / 生成物作用（任意时刻
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
@@ -2268,6 +2406,19 @@ func _obstacle_hit_fx(cell: Vector2i) -> void:
 	t.parallel().tween_property(ring, "modulate:a", 0.0, 0.28)
 	t.tween_callback(ring.queue_free)
 
+# 通用爆炸环演出（红帽自爆等）：在格心扩散一圈彩色冲击波后消散
+func _boom_ring_fx(cell: Vector2i, color := Color(1.0, 0.6, 0.3), grow := 1.6, dur := 0.35) -> void:
+	if board_view == null:
+		return
+	var ring := RingFlash.new()
+	ring.color = color
+	ring.position = board_view.cell_world_center(cell)
+	add_child(ring)
+	var t := ring.create_tween()
+	t.tween_property(ring, "scale", Vector2(grow, grow), dur).from(Vector2(0.15, 0.15))
+	t.parallel().tween_property(ring, "modulate:a", 0.0, dur)
+	t.tween_callback(ring.queue_free)
+
 # ---- 玩家操作提交（区单机 / 联机主机 / 联机客户端）----
 # _on_cell_clicked 等界面输入调用：单机直接执行；联机客户端发指令给主机（不本地执行）；
 # 联机主机本地执行并广播。返true 表示已提交
@@ -2889,6 +3040,7 @@ func _end_side(side: int) -> void:
 	if GameState.match_over:
 		_ending_side = false
 		return   # 结算扣血导致本局已结束（如超回合烧死判负）：不再推进回合/开下回合界
+	print("[替补统计] 我方回合结束：我还可替补次数=%d" % _pending_player_subs)
 	_ending_side = false   # 结算完毕：之后（含换边演出期间）的阵亡恢复正常替补规
 	GameState.end_current_side(_first_side)
 	# 换边停顿：让"上一方回合结束的演出"下一方回合开始被动的演出"之间
@@ -2932,7 +3084,7 @@ func _on_unit_hp_changed(_u: Unit) -> void:
 # 单位受到伤害时触发的被动机制（光环类：圣塔盾/锤头鲨，交由各英雄脚本处理）
 func _on_unit_damaged(u: Unit, amount: int) -> void:
 	for s in units:
-		if s.alive:
+		if s.alive and s.skill_allowed():
 			_hero(s).on_someone_damaged(u, amount)
 
 # 塔盾主动减免：在目标受伤害结*之前**调用
@@ -2945,13 +3097,17 @@ func _bulwark_absorb(target: Unit, dmg: int) -> int:
 	if target == null or not target.alive:
 		return dmg
 	for s in units:
-		if s.alive and s != target and s.hero_id == "hero_11" and s.faction == target.faction and grid.distance(s.cell, target.cell) == 1:
+		if s.alive and s != target and s.hero_id == "hero_11" and s.faction == target.faction \
+				and grid.distance(s.cell, target.cell) == 1 and s.skill_allowed():
 			# 塔盾代替承受1点（直接扣血，不触发塔盾递归/伤害后钩子）
 			s.hp = max(s.hp - 1, 0)
 			s.hp_changed.emit(s)
 			s._update_hp_label()
 			if s.hp <= 0:
 				s.die()
+			elif s.is_inside_tree():
+				# 演出：塔盾亮起蓝色守护特效（扩散环+粒子+飘字），提示这次伤害被格挡
+				s.burst_fx(DataRegistry.hero_fx("hero_11").color, "格挡")
 			log_message.emit("%s 的塔盾代替承受 1 点伤害。" % s.display_name)
 			return dmg - 1
 	return dmg
@@ -3619,10 +3775,14 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 				# 我方在回合行动中阵亡（如被反击击杀）：立即替补
 				# 同时阵亡多人则计数，逐个替补（落位后自动开下一个面板）
 				_pending_player_subs += 1
+				if _CONSOLE_AI_LOG:
+					print("[替补] 我方%s 即时阵亡，待补名额=%d" % [u.display_name, _pending_player_subs])
 				_try_begin_next_sub()
 			else:
 				# 对方回合 / 本方"结束回合-结算扣血"期间阵亡：不立即替补，等本方下回合开始再逐个补位
 				_pending_player_subs += 1
+				if _CONSOLE_AI_LOG:
+					print("[替补] 我方%s 延迟阵亡（敌回合/结算），待补名额=%d" % [u.display_name, _pending_player_subs])
 	elif not GameState.is_online:
 		# 单机：敌AI)阵亡 -> 自动按阵亡数量补
 		if enemy_roster.size() > 0:
@@ -3630,6 +3790,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
 			if GameState.active_side == GameState.SIDE_ENEMY:
 				_place_enemy_sub()
+	print("[替补统计] %s（%s）阵亡后：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", _pending_player_subs])
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
@@ -3651,7 +3812,7 @@ func _place_enemy_sub() -> void:
 			graves.erase(cell)
 			_refresh_board()
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
-		_grant_sub_aura(eu)   # 替补补发光环（风语者等：回合开始已发过，替补中途上场需补）
+		_grant_sub_aura_after_enter(eu)   # 替补补发光环（风语者等：中途上场才补；先补位再技能阶段跳过）
 		_trigger_on_enter(eu)   # 敌方替补登场技能已触发
 		_pending_enemy_sub -= 1
 	# 全部敌方替补补完后：清理剩余敌方墓碑（安葬完毕）
@@ -3664,6 +3825,7 @@ func _place_enemy_sub() -> void:
 func _best_enemy_sub_idx() -> int:
 	var best_i := 0
 	var best_s := -1e18
+	var cand_rows: Array = []   # 分析日志用：候选价值明细
 	var has_taunt := false
 	var wounded := 0
 	var live_melee := 0   # 存活且能上前线的敌方单位数（近战或嘲讽）
@@ -3695,35 +3857,53 @@ func _best_enemy_sub_idx() -> int:
 		if def == null:
 			continue
 		var s := float(def.atk) * 1.6 + float(def.max_hp) * 0.9
+		var why: Array[String] = []
 		if def.attack_type == DataRegistry.AttackType.RANGED:
 			s += 2.5
+			why.append("远程")
 		if not has_taunt and def.skills.has(DataRegistry.Skill.TAUNT):
 			s += 11.0   # 缺前排：嘲讽坦克优先补位
+			why.append("缺前排坦克")
 		elif def.skills.has(DataRegistry.Skill.TAUNT) and live_melee < 2:
 			s += 3.0
+			why.append("补坦克位")
 		if def.skills.has(DataRegistry.Skill.LOGISTICS):
 			# 后勤/支援：队伍伤员多或交战胶着时价值上升；平时不优先（不能主动输出
 			if wounded > 0:
 				s += float(wounded) * 1.2
+				why.append("支援伤员")
 			elif player_near:
 				s -= 4.0
 			else:
 				s -= 1.5
 		if def.skills.has(DataRegistry.Skill.BENCH):
 			s += 0.5   # 替补标签：登场触发技能，小加
-		# 替补入场技的情境价值（谁先上场收益更大
+			why.append("替补技")
 		match hid:
 			"hero_16":   # 波盾：登场让己方全体获得圣盾
 				s += 5.0 + (3.0 if wounded > 0 else 0.0)
+				why.append("登场全队圣盾")
 			"hero_36":   # 梅林：治疗最低血量队友并与其换位
 				s += 5.0 if wounded > 0 else 1.0
+				why.append("登场治疗换位")
 			"hero_29":   # 太阳斩：登场攻击3（短时爆发）
 				s += 3.0
+				why.append("登场爆发")
 			"hero_39":   # 猎颅者：登场锁定目标
 				s += 2.0
+				why.append("登场锁定")
+		if _CONSOLE_AI_LOG:
+			cand_rows.append({ "hid": hid, "n": def.display_name, "s": s, "why": why })
 		if s > best_s:
 			best_s = s
 			best_i = i
+	if _CONSOLE_AI_LOG and cand_rows.size() > 0:
+		cand_rows.sort_custom(func(x, y): return x["s"] > y["s"])
+		print("\n[AI替补上人] 敌方需要补位（现有 %d 人待选）" % cand_rows.size())
+		for r in cand_rows.slice(0, mini(3, cand_rows.size())):
+			var why_txt := "、".join(r["why"]) if (r["why"] as Array).size() > 0 else "常规"
+			print("  - %s 价值%.1f（%s）" % [r["n"], float(r["s"]), why_txt])
+		print("[AI替补上人] → 上 %s" % cand_rows[0]["n"])
 	return best_i
 
 # ---- 替补选择与落位（本端"我方"；联主机玩家/客户端敌方，单机=玩家----
@@ -3738,6 +3918,8 @@ func _try_begin_next_sub() -> void:
 	if state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		return   # 替补面板已在进行：本次落位后会自动开启下一个替补名额
 	_pending_player_subs -= 1
+	if _CONSOLE_AI_LOG:
+		print("[替补面板] 开新面板：本次后待补=%d，替补席=%d" % [_pending_player_subs, _my_roster().size()])
 	_begin_substitution()
 
 func _begin_substitution() -> void:
@@ -3747,6 +3929,7 @@ func _begin_substitution() -> void:
 	action_info.emit("有英雄阵亡！从替补队伍中选择一名上阵")
 
 func _on_sub_pick(hero_id: String) -> void:
+	print("[subclick-battle] 收到点击 %s state=%d sub_faction=%d roster=%s" % [hero_id, state, _sub_faction, str(_roster_of(_sub_faction))])
 	var roster := _roster_of(_sub_faction)
 	if not roster.has(hero_id):
 		return
@@ -3804,6 +3987,13 @@ func _apply_sub_ui_cleanup(fn: int) -> void:
 # 替补落位时补发光环：风语者的移动力 +1 在回合开始时发给当时在场队友，
 # 替补是在回合中/回合开始结算后才上场，会错过那一次发放 → 若本方场上仍有存活风语者则补 +1。
 # 回合结束时 _clear_statuses 统一清零，不会与下回合重复叠加。
+# 替补登场后的光环补发：仅"回合中途换人"需要（回合开始技能已触发过）；
+# "回合开始先补位"阶段（_defer_side_skills / _start_placing_subs）由随后的回合开始技统一发放，避免 +2。
+func _grant_sub_aura_after_enter(u: Unit) -> void:
+	if _defer_side_skills or _start_placing_subs:
+		return
+	_grant_sub_aura(u)
+
 func _grant_sub_aura(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
@@ -3821,7 +4011,7 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i) -> void:
 	var roster := _roster_of(fn)
 	roster.erase(hero_id)
 	var nu := _spawn_unit(hero_id, fn, cell)
-	_grant_sub_aura(nu)   # 替补补发光环（风语者回合开始已给在场队友+1，替补中途上场需补上）
+	_grant_sub_aura_after_enter(nu)   # 替补补发光环（风语者…中途上场才补；先补位再技能阶段跳过）
 	_trigger_on_enter(nu)   # 替补登场技能（波盾/太阳梅林/猎颅者）
 	_preview_cells = {}
 	_apply_highlights()
@@ -3838,11 +4028,12 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i) -> void:
 	# 注意：连续替补期*不刷*常驻"替补队伍"面板（避免它和替补面板重叠）
 	# 常驻面板留到最后一个替补完成后再刷新
 	var more_subs := _pending_player_subs > 0 and fn == _my_faction() and _my_roster().size() > 0
+	if _CONSOLE_AI_LOG and fn == _my_faction():
+		print("[替补面板] 落位完成：待补=%d 替补席=%d → 再开=%s" % [_pending_player_subs, _my_roster().size(), more_subs])
 	if more_subs:
 		_try_begin_next_sub()
 	else:
-		_resume_after_sub() # 恢复回合状
-		_notify_team()      # 全部替补完成后：刷新常驻"替补队伍"面板
+		_resume_after_sub()   # 恢复回合状（内部完成后刷新常驻队伍面板，避免与替补面板叠层）
 	# 只有"确实没有下一个替时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
 	if not more_subs:
 		var fn_done := _roster_of(fn).size() == 0
@@ -3865,7 +4056,28 @@ func _clear_side_graves(fn: int) -> void:
 		_refresh_board()
 
 func _resume_after_sub() -> void:
-	# 恢复流程：本轮是否我方行动。是我方回合 -> 回到我方输入；否则等待对AI
+	# 回合开始先补位模式：全部替补落位完成后，此刻才统一触发回合开始技，
+	# 再按"我方回合"正式入场（计时/横幅/可操作）。中途换人的补位不进此分支。
+	if _defer_side_skills:
+		_defer_side_skills = false
+		state = State.ANIMATING
+		await _trigger_turn_start_all(_my_faction())
+		for u in units:
+			if u.alive and u.faction == _my_faction():
+				u.refresh_stats()
+		if GameState.active_side != _my_side():
+			return   # 防御：状态异常时直接交还流程
+		turn_time_left = TURN_TIME_LIMIT
+		peer_turn_time_left = 0.0
+		_time_sync_acc = 0.0
+		if GameState.is_online:
+			_send_turn_time_left()
+		state = State.PLAYER_INPUT
+		action_info.emit("你的回合（第 %d 回合）：点击一名己方英雄。" % GameState.round_number)
+		turn_banner.emit("你的回合")
+		_notify_team()   # 先补位再技能流程全部完成：此刻才刷新常驻"替补队伍"（避免与替补面板叠层/吞点击）
+		return
+	# 恢复流程（回合中途换人）：本轮是否我方行动。是我方回合 -> 回到我方输入；否则等待对AI
 	if GameState.active_side == _my_side():
 		state = State.PLAYER_INPUT
 		if _has_remaining_player():
@@ -3880,6 +4092,7 @@ func _resume_after_sub() -> void:
 			enemy_turn_waiting.emit()
 		else:
 			action_info.emit("敌方回合…")
+	_notify_team()   # 中途换人恢复后刷新常驻"替补队伍"面板
 
 # 主动撤下（提交入口，仅本端操作时调用）：校验后执行，联机走网令同步
 func _withdraw_unit(u: Unit) -> void:
@@ -4157,6 +4370,7 @@ func _run_enemy_turn() -> void:
 			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
 			_clear_statuses(DataRegistry.Faction.ENEMY)
 			_settle_side_round_damage(GameState.SIDE_ENEMY)   # 1回合起：敌半回合结束只扣敌方
+			print("[替补统计] 敌方回合结束：我可替补次数=%d" % _pending_player_subs)
 			GameState.end_current_side(_first_side)
 			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
 			await get_tree().create_timer(0.8).timeout
@@ -4184,8 +4398,13 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 		var idx: int = step["idx"]
 		if idx < 0 or idx >= refs.size():
 			continue
-		var u: Unit = refs[idx]
-		if not is_instance_valid(u) or not u.alive:
+		var raw_u: Variant = refs[idx]
+		if raw_u == null or not is_instance_valid(raw_u):
+			continue
+		if not (raw_u is Unit):
+			continue
+		var u: Unit = raw_u as Unit
+		if u == null or not u.alive:
 			continue
 		var a: Dictionary = step["action"]
 		if a.has("move") and a["move"] != null:

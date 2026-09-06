@@ -76,6 +76,7 @@ class Sim:
 
 var grid: HexGrid
 var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
+var log_decisions := false   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
 
 const MAX_MOVE_OPTIONS := 16
 
@@ -152,7 +153,72 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 		states = next.slice(0, _beam())
 	if states.size() == 0:
 		return []
+	if log_decisions:
+		_print_decision(sim, states[0])
 	return states[0]["path"]
+
+# 控制台输出本次敌方决策说明：总评分 + 每步行动的理由 + 每步得分变化（分析 AI 用）
+func _print_decision(sim: Sim, chosen: Dictionary) -> void:
+	var path: Array = chosen["path"]
+	var txt := "\n===== 敌方AI 行动方案 · 总评分 %.1f · %d 步 =====" % [float(chosen["score"]), path.size()]
+	# 回放克隆：按路径逐步执行，算出每一步给局面评分带来的增量 Δ
+	var replay := sim.clone()
+	var prev := _evaluate(replay)
+	var start_score := prev
+	for step in path:
+		var idx := int(step["idx"])
+		var u0: SimUnit = sim.units[idx]        # 名字用初始
+		var ur: SimUnit = replay.units[idx]     # 数值用回放当前状态
+		var a: Dictionary = step["action"]
+		var line := " · %s" % u0.name
+		var moved_to: Variant = a.get("move")
+		if moved_to != null:
+			var nc: Vector2i = moved_to
+			var old_d := -1
+			var new_d := -1
+			var near: SimUnit = _nearest_player(replay, ur.cell)
+			if near != null:
+				old_d = grid.distance(ur.cell, near.cell)
+			var near2: SimUnit = _nearest_player(replay, nc)
+			if near2 != null:
+				new_d = grid.distance(nc, near2.cell)
+			line += " 移动 %s→%s" % [str(ur.cell), str(nc)]
+			var reason: Array[String] = []
+			if u0.hero_id == "hero_42" and sim.gold_cells.has(nc):
+				reason.append("捡金矿")
+			if old_d >= 0 and new_d >= 0:
+				if new_d < old_d:
+					reason.append("贴近玩家(近%d格)" % new_d)
+				else:
+					reason.append("保持/拉距")
+			var threat0 := _incoming_damage(replay, ur.cell, u0.fn)
+			var threat1 := _incoming_damage(replay, nc, u0.fn)
+			if threat1 < threat0 - 0.01:
+				reason.append("避威胁(-%.0f伤)" % (threat0 - threat1))
+			if reason.size() == 0:
+				reason.append("走位")
+			line += "(%s)" % "、".join(reason)
+		else:
+			line += " 原地"
+		var atk := int(a.get("atk", -1))
+		if atk >= 0 and atk < replay.units.size():
+			var t: SimUnit = replay.units[atk]
+			line += " → 攻击 %s" % t.name
+			if t.hp <= ur.eatk:
+				line += "（此击可击杀 hp%d≤攻%d）" % [t.hp, ur.eatk]
+			else:
+				line += "（造成%d伤，剩hp%d）" % [ur.eatk, maxi(t.hp - ur.eatk, 0)]
+		else:
+			line += " → 不攻击"
+		_apply(replay, idx, a)
+		var aft := _evaluate(replay)
+		var delta := aft - prev
+		prev = aft
+		line += "  [本步 Δ%+.1f]" % delta
+		txt += "\n" + line
+	txt += "\n · 局面纯评分：%.1f → %.1f（决策总评含难度抖动=%.1f）" % [start_score, prev, float(chosen["score"])]
+	txt += "\n===== 决策输出结束 ====="
+	print(txt)
 
 # 难度决定保留的状态数（困难=搜索更充分；波束越大越接近全局最优）
 func _beam() -> int:
@@ -176,6 +242,21 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 	# 眩晕：无法移动、攻击、反击（真实规则）
 	if u.stunned:
 		return [{ "move": null, "atk": -1 }]
+	# 末日：移动后会伤害"所有 HP 小于末日"的角色（优先敌人）。
+	# 若己方低血单位比对方更多，触发会净亏——本回合不应移动（不触发末日）。
+	if u.hero_id == "hero_31":
+		var own_low := 0
+		var foe_low := 0
+		for v in sim.units:
+			if v == null or not v.alive:
+				continue
+			if v.fn == u.fn:
+				if v.hp < u.hp:
+					own_low += 1
+			elif v.hp < u.hp:
+				foe_low += 1
+		if own_low > foe_low:
+			return [{ "move": null, "atk": -1 }]
 	# 可移动到的空格（不含自己被占格外的空位；若是原地则移动为空）
 	var move_cells: Array = []
 	if not u.moved:
@@ -189,13 +270,23 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 			# 黄金矿工：可达的金矿格优先列入候选（优先走过去拾取）
 			if u.hero_id == "hero_42" and sim.gold_cells.has(c):
 				d = -1
+			# 排序键：近战越近越好；远程以"正好站在射程边缘(通常2格)"为最优，
+			# 贴脸(d=1)被贴脸降攻/挨打视为很差，避免远程总往敌人脸上贴。
+			var dkey: float = float(d)
+			if u.atk_type == DataRegistry.AttackType.RANGED and d >= 0:
+				if d <= 1:
+					dkey = 60.0
+				elif d == u.atk_range:
+					dkey = 1.0
+				else:
+					dkey = 2.0 + absf(float(d - u.atk_range))
 			# 走位质量：落点被玩家威胁越强，排序越靠后（同时保留近战贴脸候选）
 			var threat := _incoming_damage(sim, c, u.fn)
-			ranked.append({ "cell": c, "d": d, "threat": threat })
-		# 主排序：接近玩家（攻击机会）优先；同距离下威胁小的格优先
+			ranked.append({ "cell": c, "d": d, "dkey": dkey, "threat": threat })
+		# 主排序：dkey（近战=距离、远程=射程边缘优先）；同键威胁小的格优先
 		ranked.sort_custom(func(a, b):
-			if a["d"] != b["d"]:
-				return a["d"] < b["d"]
+			if a["dkey"] != b["dkey"]:
+				return a["dkey"] < b["dkey"]
 			return a["threat"] < b["threat"])
 		for i in mini(MAX_MOVE_OPTIONS, ranked.size()):
 			move_cells.append(ranked[i]["cell"])
@@ -230,6 +321,8 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		var targets := _valid_targets(sim, u, mc)
 		if targets.size() > 0 and not u.attacked and can_attack:
 			for t in targets:
+				if _redhood_kill_unsafe(sim, u, t):
+					continue   # 会点杀红帽且她身旁有己方单位：自爆13伤不划算，不打这一击
 				combos.append({ "move": null if mc == u.cell else mc, "atk": t })
 		elif not u.attacked and can_attack:
 			# 无目标可打，仅移动
@@ -240,12 +333,46 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		for mc in move_cells:
 			if mc != u.cell:
 				combos.append({ "move": mc, "atk": -1 })
+	# 撤退克制：只有“移动且本步不打”的拉远走位才可能被去掉。
+	# ① 当前格不疼（受威胁伤害 ≤1.5）→ 玩家下回合也碰不到/伤害可接受，站着占主动，没必要后撤；
+	# ② 就算现在疼，退到“下回合移动力+射程也够不着敌人”的范围外 → 白白丢下一轮主动，也不退。
+	var cur_inc := _incoming_damage(sim, u.cell, u.fn)
+	var kept: Array = []
+	for combo in combos:
+		var mv: Variant = combo.get("move")
+		if mv != null and int(combo.get("atk", -1)) == -1:
+			var nc: Vector2i = mv
+			var p0 := _nearest_player(sim, u.cell)
+			var p1 := _nearest_player(sim, nc)
+			var d0 := 1 << 30
+			var d1 := 1 << 30
+			if p0 != null:
+				d0 = grid.distance(u.cell, p0.cell)
+			if p1 != null:
+				d1 = grid.distance(nc, p1.cell)
+			if d1 > d0 and (cur_inc <= 3.0 or d1 > u.emove + u.atk_range):
+				continue   # 丢弃这种“无谓后撤/退到够不着”
+		kept.append(combo)
+	combos = kept
 	if combos.size() == 0:
 		combos.append({ "move": null, "atk": -1 })
 	return combos
 
-func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:
-	# 大骑士：沿 6 个轴向直线冲锋（与玩家一致，避免规划与执行轨迹不符）。
+# 红帽(hero_40)点杀风险：该击能把红帽打死（无圣盾且伤害≥其血），
+# 而她死前会对"相邻的所有敌人"自爆13——若她身边有己方单位，点杀很亏，应避免。
+# target 传入的是 sim.units 里的下标（生产路径），兼容直接传对象（测试）。
+func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
+	var t: SimUnit = sim.units[int(target)] if target is int else target
+	if t == null or t.hero_id != "hero_40" or not t.alive:
+		return false
+	if t.shield or t.hp > u.eatk:
+		return false   # 这一击打不死，没有自爆风险
+	for v in sim.units:
+		if v.alive and v.fn == u.fn and grid.distance(v.cell, t.cell) == 1:
+			return true   # 有己方单位贴着她，点杀会把她炸到己方
+	return false
+
+func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴向直线冲锋（与玩家一致，避免规划与执行轨迹不符）。
 	# 途中被单位/墓碑/**障碍物**阻挡即停：障碍同样挡冲锋，防止 AI 计划穿墙。
 	if u.hero_id == "hero_24":
 		var out := {}
@@ -266,14 +393,25 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:
 	if u.skills.has(DataRegistry.Skill.INFILTRATE):
 		blockers = {}
 		for c in sim.occ.keys():
-			if sim.units[sim.occ[c]].fn == u.fn:
+			var occv: Variant = sim.occ[c]
+			var occ_unit: SimUnit = null
+			if occv is int:
+				occ_unit = sim.units[int(occv)]
+			else:
+				occ_unit = occv
+			if occ_unit != null and occ_unit.fn == u.fn:
 				blockers[c] = true
 		for g in sim.graves.keys():
 			stop[g] = true   # 渗透：墓碑可穿行，但不可落停
+		for o in sim.obstacles.keys():
+			stop[o] = true   # 渗透：可穿过障碍，但不能停在障碍格上
 	else:
 		for g in sim.graves.keys():
 			stop[g] = true
 			blockers[g] = true
+		for o in sim.obstacles.keys():
+			stop[o] = true   # 普通单位：障碍既不能穿过也不能停留
+			blockers[o] = true
 	return grid.reachable(u.cell, u.emove, stop, blockers)
 
 func _in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, t: SimUnit) -> bool:
@@ -914,9 +1052,18 @@ func _position_score(sim: Sim) -> float:
 		if u.atk_type == DataRegistry.AttackType.RANGED:
 			var near := _nearest_enemy_dist(sim, u)
 			if near == 1:
-				s -= 3.0                               # 被贴脸：远程大难
+				s -= 8.0                               # 被贴脸：远程大难（更重的惩罚，避免贴脸站位）
 			elif near == u.atk_range:
-				s += 1.0                               # 卡在射程边缘：安全又能打
+				s += 2.0                               # 卡在射程边缘：安全又能打
+			elif near > u.atk_range and near <= u.emove:
+				s -= float(near - u.atk_range) * 0.4   # 超射程略减分（需再走一步才能开火）
+		elif not u.skills.has(DataRegistry.Skill.LOGISTICS):
+			# 近战/坦克够不着时的贴近激励：离玩家越远减分越多，驱动尽量贴近；
+			# “靠近会吃多少伤害”由威胁图/落点威胁负责权衡，不会让它无脑踩雷。
+			var near_m := _nearest_enemy_dist(sim, u)
+			var engage := u.emove + u.atk_range   # 本回合全力后可够到的距离
+			if near_m > engage:
+				s -= 0.8 * float(near_m - engage)
 		# 保留移动力 = 机动性价值
 		if not u.moved:
 			s += 0.5
