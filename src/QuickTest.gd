@@ -1,10 +1,10 @@
 class_name QuickTest
 extends Control
-## 快速角色测试场（自由部署沙箱）：勾选最多 8 个我方可上场角色，敌方自动配好。
-## 无 3 人判负（全灭/替补池空才负）；未上场的全英雄会作为替补池，阵亡可自由补位。
-## 战斗中还可拖动撤下/换角。
+## 快速角色测试场（自由部署沙箱）：勾选 8 名我方可上角色。
+## 开局首发 3v3（我方前 3、敌方 3），其余为替补；无 3 人判负（替补用尽才负）。
+## 替补队伍 = 你选的 8 人里没上场的 5 人。
 
-const MIN_PICK := 1
+const MIN_PICK := 8
 const MAX_PICK := 8
 
 var _selected: Array[String] = []
@@ -117,12 +117,12 @@ func _refresh() -> void:
 	for id in _btns.keys():
 		_btns[id].set_pressed_no_signal(_selected.has(id))
 	if _selected.size() == 0:
-		_status_label.text = "勾选 1-8 个角色即可开测（自由部署沙箱：无 3 人判负、可自由替补）。"
+		_status_label.text = "勾选 8 名角色（前 3 名首发，后 5 名替补），敌方自动配好 3 首发。"
 	else:
 		var names: Array[String] = []
 		for id in _selected:
 			names.append(DataRegistry.heroes[id].display_name)
-		_status_label.text = "将测试： " + "、 ".join(names)
+		_status_label.text = "将测试： " + "、 ".join(names) + "（首发=前3，其余替补）"
 
 func _on_clear() -> void:
 	_selected.clear()
@@ -132,15 +132,15 @@ func _on_menu() -> void:
 	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
 func _on_start() -> void:
-	if _selected.size() < MIN_PICK:
+	if _selected.size() != MAX_PICK:
 		return
-	GameState.no_death_limit = true   # 快速测试 = 自由部署沙箱：无 3 人判负，全灭/替补池空才负
 	GameState.clear_placement()
-	for i in mini(_selected.size(), PLAYER_CELLS.size()):
+	GameState.no_death_limit = true   # 自由部署沙箱：无 3 人判负，替补用尽才算负
+	# 首发各 3 名直接摆到出生格（我方=勾选前 3，敌方=固定靶前 3）
+	for i in 3:
 		GameState.player_placement[PLAYER_CELLS[i]] = _selected[i]
-	GameState.player_deck = _selected.duplicate()
-	# 敌方自动配好（固定测试靶子）
-	for i in ENEMY_DUMMIES.size():
 		GameState.enemy_placement[ENEMY_CELLS[i]] = ENEMY_DUMMIES[i]
+	# 完整队伍：首发 + 替补（我方 8 人，敌方 5 人靶子）
+	GameState.player_deck = _selected.duplicate()
 	GameState.enemy_deck = ENEMY_DUMMIES.duplicate()
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")

@@ -1121,20 +1121,30 @@ func _place_units() -> void:
 		_place_obstacles()
 		log_message.emit("已按自由部署放置双方单位")
 		if GameState.no_death_limit:
-			# 自由部署沙箱：未上场英雄 = 自由替补池（双方都从全英雄池补位），场上阵亡/撤下可随时换人
+			# 自由部署沙箱：替补 = "该方队伍卡组里没上场的人"（我方为 8 人里未首发的 5 人）
 			var used := {}
 			for v in GameState.player_placement.values():
 				used[v] = true
 			for v in GameState.enemy_placement.values():
 				used[v] = true
-			var pool := DataRegistry.heroes.keys()
-			pool.sort()
-			for hid in pool:
-				if used.has(hid):
-					continue
-				player_roster.append(hid)
-				enemy_roster.append(hid)
+			_seed_sandbox_roster(GameState.player_deck, used, player_roster)
+			_seed_sandbox_roster(GameState.enemy_deck, used, enemy_roster)
 		return
+
+# 沙箱替补池：队伍里未上场的先进替补；若没给队伍卡组（兼容旧测试），退回"全英雄池减已上场"
+func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
+	if deck.size() > 0:
+		for hid in deck:
+			if used.has(hid) or roster.has(hid):
+				continue
+			roster.append(hid)
+		return
+	var pool := DataRegistry.heroes.keys()
+	pool.sort()
+	for hid in pool:
+		if used.has(hid):
+			continue
+		roster.append(hid)
 	var p_deck := GameState.player_deck
 	var e_deck := GameState.enemy_deck
 	if p_deck.size() == 0:
