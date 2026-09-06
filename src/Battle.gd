@@ -1284,7 +1284,11 @@ func _start_match() -> void:
 			# 导致"先手提示写我方、状态栏却是敌方回合"
 			NetBus.send_all(JSON.stringify({ "type": "begin_side", "side": _first_side, "round": GameState.round_number }))
 			_begin_side(_first_side)
-		# 客户端：不本地推进开局首回合，等主机的 begin_side 广播统一行动return
+		# 联机客户端：不本地推进开局首回合，等主机的 begin_side 广播到达后再执行一次。
+		# 必须在此 return：否则下方还会再执行一次 _begin_side（主机=同帧开两次首回合，
+		# 客户端=本地开一次+广播到达再开一次），导致先手方回合开始技被触发两次
+		# （如风语者光环给队友移动力 +2 而非 +1）。
+		return
 	# 单机：先选人方先行动（与部署阶段的选人顺序一致）
 	_begin_side(_first_side)
 
