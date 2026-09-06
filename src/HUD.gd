@@ -24,6 +24,8 @@ var _warn_holder: Control = null   # 回合剩余时间不足警告：屏幕边�
 var _warn_tween: Tween = null      # 边缘警告呼吸 tween
 var _unit_card_overlay: Control = null   # 右键英雄信息卡（成员持有，避免 lambda 捕获被释放节点）
 var _notice_overlay: Control = null      # 开局"先手"浮框（短暂显示后自动消失）
+var _notice_show_ms := 0                  # 先手提示出现时间（最短展示时间判定用）
+const FIRST_NOTICE_MIN_SECONDS := 3.0     # 先手提示在普通模式下最少展示时长（秒）
 
 func _ready() -> void:
 	layer = 50
@@ -271,15 +273,27 @@ func _show_first_side_notice(text: String) -> void:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
-	# 常驻显示：不自动消失；等"部署选人面板出现"那一刻收起（_deploy_panel_shown 触发淡出）
+	_notice_show_ms = Time.get_ticks_msec()   # 记录出现时刻：普通模式至少展示 FIRST_NOTICE_MIN_SECONDS
 
-func _deploy_panel_shown_notice_gone() -> void:
-	# 部署面板已出现 = 部署选人阶段开始：先手提示在此刻淡出收起（无计时器，不提前消失）
+# 先手提示淡出收起（仅当仍存在时执行）
+func _fade_close_first_notice() -> void:
 	if _notice_overlay != null and is_instance_valid(_notice_overlay):
 		var ov: Control = _notice_overlay
 		var tw2 := ov.create_tween()
 		tw2.tween_property(ov, "modulate:a", 0.0, 0.2)
 		tw2.tween_callback(_close_first_notice)
+
+func _deploy_panel_shown_notice_gone() -> void:
+	# 部署选人面板已出现 = 阶段开始；但先手提示至少要展示满最短时长，没看够就延后收起
+	if _notice_overlay == null or not is_instance_valid(_notice_overlay):
+		return
+	var elapsed := float(Time.get_ticks_msec() - _notice_show_ms) / 1000.0
+	if elapsed >= FIRST_NOTICE_MIN_SECONDS:
+		_fade_close_first_notice()
+	else:
+		var wait := FIRST_NOTICE_MIN_SECONDS - elapsed
+		var timer := get_tree().create_timer(wait)
+		timer.timeout.connect(_fade_close_first_notice)
 
 func _on_first_notice_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:

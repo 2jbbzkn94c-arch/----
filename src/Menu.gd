@@ -181,13 +181,25 @@ func _build() -> void:
 	net_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn_row.add_child(net_btn)
 
-	# 游戏说明
+	# 底部小按钮并排：游戏说明 / 复制诊断信息
+	var help_row := HBoxContainer.new()
+	help_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	help_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(help_row)
 	var help_btn := Button.new()
 	help_btn.text = "游戏说明"
 	help_btn.add_theme_font_size_override("font_size", 15)
 	help_btn.custom_minimum_size = Vector2(0, 40)
+	help_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	help_btn.pressed.connect(_open_help)
-	vbox.add_child(help_btn)
+	help_row.add_child(help_btn)
+	var diag_btn := Button.new()
+	diag_btn.text = "复制诊断信息"
+	diag_btn.add_theme_font_size_override("font_size", 15)
+	diag_btn.custom_minimum_size = Vector2(0, 40)
+	diag_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	diag_btn.pressed.connect(_copy_diagnostics)
+	help_row.add_child(diag_btn)
 
 	_build_tooltip()
 	_update_ui()
@@ -551,3 +563,33 @@ func _close_help() -> void:
 	if _help_overlay != null and is_instance_valid(_help_overlay):
 		_help_overlay.queue_free()
 	_help_overlay = null
+
+# ---- 崩溃诊断：把引擎日志等现场信息复制到剪贴板 ----
+# 玩家遇到问题(闪退/卡死/报错)后点此按钮 → 粘贴发给开发者即可定位。
+func _copy_diagnostics() -> void:
+	var lines: Array = []
+	lines.append("【酒馆纷争 诊断信息】")
+	lines.append("引擎: Godot %s" % Engine.get_version_info().get("string", "?"))
+	lines.append("系统: %s %s" % [OS.get_name(), OS.get_version().get("string", "?")])
+	var vp := get_viewport()
+	lines.append("窗口: %d x %d" % [int(vp.get_visible_rect().size.x), int(vp.get_visible_rect().size.y)])
+	lines.append("存档目录: %s" % OS.get_user_data_dir())
+	lines.append("")
+	lines.append("===== 引擎日志(godot.log) 末尾 =====")
+	var log_path := OS.get_user_data_dir().path_join("logs").path_join("godot.log")
+	var f := FileAccess.open(log_path, FileAccess.READ)
+	if f == null:
+		lines.append("(未找到 %s)" % log_path)
+	else:
+		var raw: String = f.get_as_text()
+		f.close()
+		# 只取末尾 200 行，避免剪贴板过大
+		var tail: Array = raw.split("\n")
+		if tail.size() > 200:
+			tail = tail.slice(tail.size() - 200)
+		if tail.size() == 0:
+			lines.append("(日志为空)")
+		else:
+			lines.append_array(tail)
+	DisplayServer.clipboard_set("\n".join(lines))
+	_desc_label.text = "诊断信息已复制到剪贴板（含引擎日志末尾 200 行）。请直接粘贴发给开发者。"
