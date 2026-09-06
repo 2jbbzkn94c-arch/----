@@ -6,6 +6,7 @@ extends Control
 
 const TEAM_SIZE := 8
 const STARTERS := 3
+const MIN_PLAYER := 3   # 我方最少可选 3 名（首发三人即满）；敌方未选则自动随机 8 名
 
 var _side := 0              # 当前编辑的队伍：0=我方 1=敌方
 var _sel_p: Array[String] = []
@@ -131,7 +132,7 @@ func _toggle(id: String) -> void:
 		arr.erase(id)
 	else:
 		if arr.size() >= TEAM_SIZE:
-			_status_label.text = "每队固定 %d 人（前 3 首发、后 5 替补）。" % TEAM_SIZE
+			_status_label.text = "每队上限 %d 人（前 %d 首发、其余替补）。" % [TEAM_SIZE, STARTERS]
 			_btns[id].set_pressed_no_signal(false)
 			return
 		arr.append(id)
@@ -140,13 +141,19 @@ func _toggle(id: String) -> void:
 func _refresh() -> void:
 	_side_label.text = "当前编辑：%s" % ("敌方" if _side == 1 else "我方")
 	_count_label.text = "我方 %d/%d   敌方 %d/%d" % [_sel_p.size(), TEAM_SIZE, _sel_e.size(), TEAM_SIZE]
-	_start_btn.disabled = not (_sel_p.size() == TEAM_SIZE and _sel_e.size() == TEAM_SIZE)
+	# 我方至少 MIN_PLAYER 名；敌方可不选（0 名）→ 开局自动随机 8 名
+	var player_ok := _sel_p.size() >= MIN_PLAYER and _sel_p.size() <= TEAM_SIZE
+	var enemy_ok := _sel_e.size() == 0 or _sel_e.size() <= TEAM_SIZE
+	_start_btn.disabled = not (player_ok and enemy_ok)
 	for id in _btns.keys():
 		_btns[id].set_pressed_no_signal(_cur().has(id))
-	if _sel_p.size() < TEAM_SIZE or _sel_e.size() < TEAM_SIZE:
-		_status_label.text = "请分别组建我方与敌方队伍：各勾选 %d 人（勾选顺序前 3 名首发，其余替补）。当前先编辑%s。" % [TEAM_SIZE, "敌方" if _side == 1 else "我方"]
+	if not player_ok or not enemy_ok:
+		var hint := "请组建我方队伍：最少 %d 名（上限 %d，前 %d 名首发，其余替补）。当前先编辑%s。" % [MIN_PLAYER, TEAM_SIZE, STARTERS, "敌方" if _side == 1 else "我方"]
+		if _sel_p.size() >= MIN_PLAYER and _sel_e.size() == 0:
+			hint += "\n敌方未选择：开局将自动随机 8 名。"
+		_status_label.text = hint
 	else:
-		_status_label.text = "我方：%s\n敌方：%s" % [_names(_sel_p), _names(_sel_e)]
+		_status_label.text = "我方：%s\n敌方：%s" % [_names(_sel_p), ("未选择（开局随机 8 名）" if _sel_e.size() == 0 else _names(_sel_e))]
 
 func _names(arr: Array) -> String:
 	var ns: Array[String] = []
@@ -162,15 +169,34 @@ func _on_menu() -> void:
 	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
 func _on_start() -> void:
-	if _sel_p.size() != TEAM_SIZE or _sel_e.size() != TEAM_SIZE:
+	if _sel_p.size() < MIN_PLAYER or _sel_p.size() > TEAM_SIZE:
 		return
+	if _sel_e.size() > TEAM_SIZE:
+		return
+	var edeck: Array = _sel_e.duplicate()
+	if edeck.size() == 0:
+		# 敌方未选：从全英雄池随机挑 8 名（避免与我方已选重复）
+		var pool: Array = DataRegistry.heroes.keys()
+		var excl: Dictionary = {}
+		for id in _sel_p:
+			excl[id] = true
+		var cand: Array = []
+		for id in pool:
+			if not excl.has(id):
+				cand.append(id)
+		cand.shuffle()
+		for i in mini(TEAM_SIZE, cand.size()):
+			edeck.append(cand[i])
 	GameState.clear_placement()
 	GameState.no_death_limit = true   # 自由部署沙箱：无 3 人判负，替补用完才算负
-	# 首发各 3 名直接摆到出生格
-	for i in STARTERS:
-		GameState.player_placement[PLAYER_CELLS[i]] = _sel_p[i]
-		GameState.enemy_placement[ENEMY_CELLS[i]] = _sel_e[i]
-	# 完整队伍：首发 + 替补（替补=各队剩余 5 人）
+	# 首发各 3 名直接摆到出生格（若我方不足 3 首发时按实际前几名摆放）
+	var p_first: Array = _sel_p.slice(0, STARTERS)
+	var e_first: Array = edeck.slice(0, STARTERS)
+	for i in p_first.size():
+		GameState.player_placement[PLAYER_CELLS[i]] = p_first[i]
+	for i in e_first.size():
+		GameState.enemy_placement[ENEMY_CELLS[i]] = e_first[i]
+	# 完整队伍：首发 + 替补（替补=各队剩余未上场的人）
 	GameState.player_deck = _sel_p.duplicate()
-	GameState.enemy_deck = _sel_e.duplicate()
+	GameState.enemy_deck = edeck.duplicate()
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")

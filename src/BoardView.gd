@@ -46,10 +46,10 @@ func _draw() -> void:
 		draw_circle(center, grid.hex_size * 0.32, Color(0.15, 0.15, 0.17, 1.0))
 		draw_circle(center, grid.hex_size * 0.18, Color(1.0, 0.55, 0.2, 1.0))
 		draw_arc(center, grid.hex_size * 0.4, 0, TAU, 16, Color(1.0, 0.4, 0.2, 0.9), 2.0)
-	# 障碍物（灰色岩石）
+	# 障碍物（灰色岩石）：半径放大到贴近格子（0.88），避免周边露出一圈空隙
 	for cell in obstacles.keys():
 		var center := board_origin + grid.cell_to_world(cell)
-		_draw_hex(center, grid.hex_size * 0.78, Color(0.35, 0.33, 0.30, 1.0), Color(0.55, 0.52, 0.48, 1.0))
+		_draw_hex(center, grid.hex_size * 0.88, Color(0.35, 0.33, 0.30, 1.0), Color(0.55, 0.52, 0.48, 1.0))
 		draw_arc(center, grid.hex_size * 0.5, -1.2, 1.2, 10, Color(0.6, 0.58, 0.5, 0.9), 2.0)
 		# 剩余血量
 		var hpv: int = obstacles[cell]

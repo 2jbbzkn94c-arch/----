@@ -184,6 +184,7 @@ var graves: Dictionary = {}       # cell -> hero_id（阵亡单位的墓碑：�
 var reachable_map: Dictionary = {}   # cell -> true (可移
 var enemy_cells: Dictionary = {}     # cell -> true (可攻击高
 var _preview_cells: Dictionary = {}  # cell -> Color（敌方预览范围）
+var _preview_unit: Unit = null       # 当前预览描边的敌方单位（清除时移除其金边）
 
 # 开局兜底阵容：取注册表前若干名可用角色（若非卡池进入对战
 const DEPLOY_COUNT := 3
@@ -1851,6 +1852,9 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 	return true
 
 # 从指定格出发、某单位能攻击到的目标（含嘲讽、远程动态）
+# 与点击攻击判定(_valid_targets/_taunters_in_range)同口径：
+# 嘲讽目标必须本身可被攻击到(视线通畅、血锁直线)才触发"只能打嘲讽"限制，
+# 否则被墙挡住的嘲讽会把本可攻击的目标从高亮里误滤掉（"能打到的没标红"）。
 func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 	var range_at := _effective_range_at(u, from_cell)
 	var taunts: Array = []
@@ -1858,6 +1862,10 @@ func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 		if v.alive and v.faction != u.faction and v.skills.has(DataRegistry.Skill.TAUNT):
 			var d := grid.distance(from_cell, v.cell)
 			if d >= 1 and d <= range_at:
+				if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):
+					continue
+				if _attack_path_blocked(from_cell, v.cell):
+					continue
 				taunts.append(v)
 	var out: Array = []
 	for v in units:
@@ -1995,22 +2003,13 @@ func _gcd(a: int, b: int) -> int:
 		b = t
 	return max(a, 1)
 
-# 攻击视线：从 from to 之间（不含两端）是否存在障碍物阻挡
-# 用轴向坐标做 Bresenham 式插值，逐格检obstacles。任一中间格有障碍则攻击被挡
+# 攻击视线：从 from to 之间（不含两端）是否存在障碍物/单位阻挡
+# 用六边形 cube 直线插值（los_mid_cells），修正轴向各自 round 的旧插值在斜向偏格、
+# 把贴边格误判为直线途经格的问题。
 func _attack_path_blocked(from_cell: Vector2i, to_cell: Vector2i) -> bool:
 	if from_cell == to_cell:
 		return false
-	var fa := grid.axial_of(from_cell)
-	var ta := grid.axial_of(to_cell)
-	var dx := ta.x - fa.x
-	var dy := ta.y - fa.y
-	var steps := maxi(abs(dx), abs(dy))
-	if steps <= 1:
-		return false   # 贴身/相邻：中间无
-	for s in range(1, steps):
-		var ax: int = fa.x + int(round(float(dx) * float(s) / float(steps)))
-		var ay: int = fa.y + int(round(float(dy) * float(s) / float(steps)))
-		var off := grid.offset_of(Vector2i(ax, ay))
+	for off in grid.los_mid_cells(from_cell, to_cell):
 		if obstacles.has(off):
 			return true
 		if occupancy.has(off):
@@ -2044,6 +2043,9 @@ func _clear_selection() -> void:
 	if selected:
 		selected.set_selected(false)
 	selected = null
+	if _preview_unit != null and is_instance_valid(_preview_unit):
+		_preview_unit.set_highlight_ring(false)
+	_preview_unit = null
 	reachable_map = {}
 	enemy_cells = {}
 	_preview_cells = {}
@@ -2054,6 +2056,7 @@ func _clear_selection() -> void:
 # 敌方预览：点击敌方棋子显示其移动范围当前格可攻击范围"（不打断回合
 func _preview_enemy(u: Unit) -> void:
 	_clear_selection()
+	_preview_unit = u   # 记录预览对象：其格由单位描边标识（与己方选中同粗细），不用格子黄底
 	var pc := {}
 	var reach := _move_reachable(u)
 	for k in reach.keys():
@@ -2064,9 +2067,9 @@ func _preview_enemy(u: Unit) -> void:
 		attack_cells[v.cell] = true
 	for c in attack_cells.keys():
 		pc[c] = Color(1.0, 0.6, 0.25, 0.9)   # 橙：当前格可攻击
-	pc[u.cell] = Color(0.95, 0.85, 0.3, 0.9)
 	_preview_cells = pc
 	_apply_highlights()
+	u.set_highlight_ring(true)   # 与选中己方同一细金边
 	action_info.emit("%s（敌方）HP %d 攻击 %d · 可移动可攻击。" % [u.display_name, u.hp, u.effective_atk()])
 
 func _compute_ranges(u: Unit) -> void:
@@ -2092,6 +2095,8 @@ func _compute_ranges(u: Unit) -> void:
 				# 血锁：攻击障碍同样只能6 方向直线（与攻击敌方单位一致）
 				if u.branch_override and not _is_straight_line_cells(u.cell, oc):
 					continue
+				if _attack_path_blocked(u.cell, oc):
+					continue   # 与攻击单位一致：中间有单位/障碍挡视线时打不到
 				enemy_cells[oc] = true
 
 func _is_logistics(u: Unit) -> bool:
@@ -2141,7 +2146,7 @@ func _build_highlight_colors() -> Dictionary:
 	for c in reachable_map.keys():
 		colors[c] = Color(0.25, 0.75, 0.3, 0.7)
 	for c in enemy_cells.keys():
-		colors[c] = Color(0.9, 0.25, 0.2, 0.8)
+		colors[c] = Color(1.0, 0.9, 0.45, 0.85)   # 可攻击：浅黄（与敌方单位的红区分开）
 	if selected != null:
 		colors[selected.cell] = Color(1.0, 0.85, 0.3, 0.9)
 	for c in _preview_cells.keys():
@@ -2165,12 +2170,14 @@ func apply_command(cmd: Dictionary) -> void:
 		"move":
 			var to: Vector2i = _v2(cmd.get("to"))
 			if u != null and is_instance_valid(u) and u.alive:
-				_do_move(u, to, false)
+				# 联机权威执行/回放：对端(敌方)操作按敌方回放处理(for_enemy=true)，
+				# 避免主机把敌方英雄当作本端选中(金色选中框/行动范围不应出现在敌方单位上)
+				_do_move(u, to, GameState.is_online and u.faction != _my_faction())
 		"attack":
 			var t_idx := int(cmd.get("t", -1))
 			var t: Unit = units[t_idx] if t_idx >= 0 and t_idx < units.size() else null
 			if u != null and t != null and is_instance_valid(u) and is_instance_valid(t) and u.alive and t.alive:
-				_do_attack(u, t, false)
+				_do_attack(u, t, GameState.is_online and u.faction != _my_faction())
 		"select":
 			if u != null and is_instance_valid(u) and u.alive:
 				_select(u)
@@ -2193,6 +2200,9 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i) -> void:
 	# 血锁：攻击障碍同样只能6 方向直线（权威执行处也校验，防绕UI 高亮
 	if u.branch_override and not _is_straight_line_cells(u.cell, cell):
 		return   # 非法目标直接忽略，不消耗行动（UI 高亮已过滤，此处为兜底）
+	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮）
+	if _attack_path_blocked(u.cell, cell):
+		return
 	state = State.ANIMATING   # 演出期间锁定输入
 	u.attacked_this_turn = true
 	_clear_selection()
@@ -3441,6 +3451,7 @@ func _summon_skeletons(u: Unit) -> void:
 		if def == null:
 			return
 		var s := Unit.new(def, u.faction, slots[i], hex_size * 0.9)
+		s.summon_owner = u.id   # 记录召唤者：死灵法师阵亡时其骷髅随之消散
 		s.position = board_view.cell_world_center(slots[i])
 		s.hp_changed.connect(_on_unit_hp_changed)
 		s.died.connect(_on_unit_died)
@@ -3567,6 +3578,17 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 		_clear_selection()
 	# 从单位列表移除，避免后续遍历触发已释放节点访
 	units.erase(u)
+	# 死灵法师阵亡：他召唤的骷髅兵一起消散（骷髅都带召唤者 id，逐个淡出离场）
+	if u.hero_id == "hero_33" and not is_summon:
+		for s in units.duplicate():
+			if s == null or not is_instance_valid(s) or not s.alive:
+				continue
+			if s.hero_id == "summon_skeleton" and s.summon_owner == u.id:
+				log_message.emit("%s 召唤的骷髅兵随之消散。" % s.display_name)
+				s.alive = false
+				var st := create_tween()
+				st.tween_property(s, "modulate:a", 0.0, 0.25)
+				st.tween_callback(_skeleton_owner_gone.bind(s))
 	# 风语者离场：立即收回本回合发给队友的移动力 +1（光环只在他在场时存在）
 	if u.hero_id == "hero_43" and not is_summon:
 		for v in units:
@@ -3610,6 +3632,11 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 				_place_enemy_sub()
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
+# 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
+func _skeleton_owner_gone(s: Unit) -> void:
+	if s != null and is_instance_valid(s):
+		_on_unit_died(s)
+
 # 敌方替补：按阵亡数量在出生区自动落位（我方回合结束时、敌方回合开始前触发）
 func _place_enemy_sub() -> void:
 	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
@@ -3624,6 +3651,7 @@ func _place_enemy_sub() -> void:
 			graves.erase(cell)
 			_refresh_board()
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
+		_grant_sub_aura(eu)   # 替补补发光环（风语者等：回合开始已发过，替补中途上场需补）
 		_trigger_on_enter(eu)   # 敌方替补登场技能已触发
 		_pending_enemy_sub -= 1
 	# 全部敌方替补补完后：清理剩余敌方墓碑（安葬完毕）
@@ -3773,10 +3801,27 @@ func _apply_sub_ui_cleanup(fn: int) -> void:
 	_resume_after_sub()   # 恢复回合状态（本端保持输入，等待主机广播回来）
 
 # 权威落位（两端一致执行）：spawn + 收尾（清墓碑/恢复回合/广播）
+# 替补落位时补发光环：风语者的移动力 +1 在回合开始时发给当时在场队友，
+# 替补是在回合中/回合开始结算后才上场，会错过那一次发放 → 若本方场上仍有存活风语者则补 +1。
+# 回合结束时 _clear_statuses 统一清零，不会与下回合重复叠加。
+func _grant_sub_aura(u: Unit) -> void:
+	if u == null or not is_instance_valid(u) or not u.alive:
+		return
+	if u.hero_id == "hero_43":
+		return   # 风语者本人不吃自己光环
+	for v in units:
+		if v == null or not is_instance_valid(v) or not v.alive:
+			continue
+		if v.faction == u.faction and v.hero_id == "hero_43":
+			u.move_buff += 1
+			u.refresh_stats()
+			return
+
 func _place_sub(fn: int, hero_id: String, cell: Vector2i) -> void:
 	var roster := _roster_of(fn)
 	roster.erase(hero_id)
 	var nu := _spawn_unit(hero_id, fn, cell)
+	_grant_sub_aura(nu)   # 替补补发光环（风语者回合开始已给在场队友+1，替补中途上场需补上）
 	_trigger_on_enter(nu)   # 替补登场技能（波盾/太阳梅林/猎颅者）
 	_preview_cells = {}
 	_apply_highlights()

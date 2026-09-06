@@ -136,6 +136,53 @@ func flip_center() -> Vector2:
 	_ensure_flip_center()
 	return _flip_center
 
+# 攻击视线：返回从 from 到 to 直线上的中间格（不含两端）。
+# 规则（与多数六边形战棋一致）：只有当两点位于**同一条六向轴线**上时，中间格才参与
+# 视线阻挡（可被障碍/单位挡住）；斜向目标（不在同轴直线）不受中间障碍影响——
+# 因为斜向连线的"中间格"在相邻两格边界上有歧义，把贴边障碍误判为挡路会让远程
+# 在障碍旁却打不到远处敌人。六向轴线 = 轴向差满足 dq==0 或 dr==0 或 dq==-dr。
+func los_mid_cells(from: Vector2i, to: Vector2i) -> Array:
+	var out: Array = []
+	if from == to:
+		return out
+	var fa := _offset_to_axial(from)
+	var ta := _offset_to_axial(to)
+	var dq := ta.x - fa.x
+	var dr := ta.y - fa.y
+	# 非轴向（斜向）目标：中间无阻挡格，直接返回空
+	if dq != 0 and dr != 0 and dq != -dr:
+		return out
+	# 轴向直线：cube 线性插值取中间格
+	var cube_a := Vector3(float(fa.x), float(fa.y), -float(fa.x + fa.y))
+	var cube_b := Vector3(float(ta.x), float(ta.y), -float(ta.x + ta.y))
+	var n := distance(from, to)
+	if n <= 1:
+		return out
+	for i in range(1, n):
+		var t := float(i) / float(n)
+		var cx := cube_a.x + (cube_b.x - cube_a.x) * t
+		var cy := cube_a.y + (cube_b.y - cube_a.y) * t
+		var cz := cube_a.z + (cube_b.z - cube_a.z) * t
+		var rc := _cube_round(cx, cy, cz)
+		out.append(_axial_to_offset(Vector2i(int(rc.x), int(rc.y))))
+	return out
+
+# 把浮点 cube 坐标四舍五入到最近的合法 cube（三坐标和为 0）
+func _cube_round(x: float, y: float, z: float) -> Vector3:
+	var rx: float = round(x)
+	var ry: float = round(y)
+	var rz: float = round(z)
+	var dx: float = absf(rx - x)
+	var dy: float = absf(ry - y)
+	var dz: float = absf(rz - z)
+	if dx >= dy and dx >= dz:
+		rx = -ry - rz
+	elif dy >= dz:
+		ry = -rx - rz
+	else:
+		rz = -rx - ry
+	return Vector3(rx, ry, rz)
+
 # 返回从 start 出发、步数 <= move_range 的**可停靠**格子集合。
 # stop_forbidden: 不可停靠的格子（例如被单位占据），但仍可作为"通行"中转。
 # path_blockers: 阻挡通行的格子（无法穿过），例如普通单位视所有单位均为阻挡。

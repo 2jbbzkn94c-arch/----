@@ -316,20 +316,11 @@ func _gcd(a: int, b: int) -> int:
 	return max(a, 1)
 
 # 模拟：from->to 之间（不含两端）是否有障碍物阻挡攻击
+# 与真实规则一致：用六边形 cube 直线插值（修正旧轴向 round 插值在斜向偏格的问题）
 func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool:
 	if from_cell == to_cell:
 		return false
-	var fa := grid.axial_of(from_cell)
-	var ta := grid.axial_of(to_cell)
-	var dx := ta.x - fa.x
-	var dy := ta.y - fa.y
-	var steps := maxi(abs(dx), abs(dy))
-	if steps <= 1:
-		return false
-	for s in range(1, steps):
-		var ax: int = fa.x + int(round(float(dx) * float(s) / float(steps)))
-		var ay: int = fa.y + int(round(float(dy) * float(s) / float(steps)))
-		var off := grid.offset_of(Vector2i(ax, ay))
+	for off in grid.los_mid_cells(from_cell, to_cell):
 		if sim.obstacles.has(off):
 			return true
 		if sim.occ.has(off):

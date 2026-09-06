@@ -42,6 +42,7 @@ var atk_use_buff := 0          # 攻击 buff：下一次攻击伤害+ 该项，�
 var move_use_buff := 0         # 移动 buff：下一次移动力+ 该项，移动后自减
 var transform_base_id := ""    # 古灵精怪：变身后回溯本源（hero_28），便于每回合重新变身
 var last_transform_id := ""    # 古灵精怪：上一次变身后为了不重复变成同一对象
+var summon_owner := ""         # 召唤者的单位 id（死灵法师召唤的骷髅兵：主人阵亡时随之消散）
 var behavior: HeroBase = null  # 该单位所属英雄的行为脚本（HeroRegistry 创建），技能逻辑分发用
 
 var hex_radius := 44.0
@@ -54,6 +55,7 @@ var _status_label: Label
 var _tags_label: Label
 var _passive_border: Line2D
 var _passive_tween: Tween
+var _sel_border: Line2D = null   # 金色选中描边（选中时叠加在单位六边形上）
 var _action_dot: Label   # 本回合仍有行动的顶部标识（旧，保留兼容）
 var _move_dot: Label      # 可移动标识（绿色）
 var _attack_dot: Label    # 可攻击标识（红色）
@@ -123,9 +125,12 @@ func _build_visual() -> void:
 		tag_label.text = tags
 		tag_label.add_theme_font_size_override("font_size", int(10.0 * fs))
 		tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		tag_label.position = Vector2(-hex_radius, -hex_radius * 0.98)
-		tag_label.size = Vector2(hex_radius * 2.0, hex_radius * 0.5)
-		tag_label.add_theme_color_override("font_color", Color(0.7, 0.95, 1.0))
+		tag_label.position = Vector2(-hex_radius, -hex_radius * 0.84)
+		tag_label.size = Vector2(hex_radius * 2.0, hex_radius * 0.34)
+		# 白字+深色描边：蓝/红双方底上都能看清（原淡蓝与蓝方底色难区分）
+		tag_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+		tag_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		tag_label.add_theme_constant_override("outline_size", 3)
 		add_child(tag_label)
 		_tags_label = tag_label
 
@@ -276,7 +281,7 @@ func _update_status_label() -> void:
 	# 在单位牌面下加状态小字
 	var txt := ""
 	if has_status("poison"):
-		txt += "猛"
+		txt += "毒"
 	if has_status("heavy"):
 		txt += "伤"
 	if has_status("atkdown"):
@@ -425,6 +430,25 @@ func set_selected(sel: bool) -> void:
 		else:
 			z_index = 2
 			scale = Vector2.ONE
+	set_highlight_ring(sel)
+
+# 高亮描边（选中己方 / 预览敌方共用同一粗细的金边，保证视觉一致）
+func set_highlight_ring(on: bool) -> void:
+	if not on:
+		if _sel_border != null:
+			_sel_border.visible = false
+		return
+	# 金色选中描边：棋盘层高亮的黄格会被单位自身实心六边形盖住，
+	# 故在单位上叠加金边；与点击己方/敌方统一粗细
+	if _sel_border == null:
+		_sel_border = Line2D.new()
+		_sel_border.points = _hex_points(hex_radius + 2.0)
+		_sel_border.closed = true
+		_sel_border.width = 3.5
+		_sel_border.z_index = 16
+		_sel_border.default_color = Color(1.0, 0.85, 0.3)
+		add_child(_sel_border)
+	_sel_border.visible = true
 
 # 本回合仍有行动（未完成移动+攻击）的标识：顶部亮点
 func set_action_marker(show_dot: bool) -> void:

@@ -136,11 +136,11 @@ func show_unit_card(u: Unit) -> void:
 	v.add_theme_constant_override("separation", 5)
 	panel.add_child(v)
 	# 显示区①：名字 + 阵营（按本端视角标注：联机客户端操作红方，红方是"我方"）
-	var my_f := DataRegistry.Faction.PLAYER
+	var is_my := false
 	if battle != null and is_instance_valid(battle):
-		my_f = battle._my_faction()
+		is_my = u.faction == battle._my_faction()
 	var title := Label.new()
-	title.text = "%s  ·  %s" % [u.display_name, "我方" if u.faction == my_f else "敌方"]
+	title.text = "%s  ·  %s" % [u.display_name, "我方" if is_my else "敌方"]
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -150,7 +150,11 @@ func show_unit_card(u: Unit) -> void:
 	# 显示区②：实战属性（HP 现值/上限 + 有效数值 + 状态）
 	v.add_child(_make_zone_sep())
 	var stats := Label.new()
-	stats.text = "HP %d/%d   攻击 %d   移动 %d   射程 %d\n状态：%s" % [u.hp, u.max_hp, u.effective_atk(), u.effective_move(), u.attack_range, _status_text(u)]
+	# 大骑士移动=直线冲锋任意距离（与选卡界面一致按 ∞ 展示，不显示误导性的数值）
+	var move_txt := "%d" % u.effective_move()
+	if u.hero_id == "hero_24":
+		move_txt = "∞"
+	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %d\n状态：%s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, u.attack_range, _status_text(u)]
 	stats.add_theme_font_size_override("font_size", 17)
 	stats.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1364,6 +1368,12 @@ func _on_restart() -> void:
 		# 关闭结算浮层（场景不卸载，需手动收起，否则遮住重开的选人/部署界面）
 		_result_overlay.queue_free()
 		_result_overlay = null
+	# 重开前收起棋盘下方的全部临时面板：替补选人行 / 常驻"替补队伍" / 开局部署面板。
+	# 否则在替补阶段（SUBSTITUTING/PLACE_SUB）点重开时，reset_match 只重置战斗数据，
+	# 已打开的替补面板/队伍面板不会随 deploy_refresh 收起，上一局的英雄行会残留在屏底。
+	_close_sub_panel()
+	_close_team_panel()
+	_close_deploy_panel()
 	if battle != null and is_instance_valid(battle):
 		if GameState.is_online:
 			battle.request_rematch_online()   # 联机：请求再来一局（不退出连接/大厅）
