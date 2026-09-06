@@ -1,10 +1,11 @@
 class_name QuickTest
 extends Control
-## 快速角色测试场：勾选 3 个我方可上场角色，敌方自动配好，一键开测。
-## 战斗中还可用"换角"面板随时把己方单位换成任意角色。
+## 快速角色测试场（自由部署沙箱）：勾选最多 8 个我方可上场角色，敌方自动配好。
+## 无 3 人判负（全灭/替补池空才负）；未上场的全英雄会作为替补池，阵亡可自由补位。
+## 战斗中还可拖动撤下/换角。
 
-const MIN_PICK := 3
-const MAX_PICK := 3
+const MIN_PICK := 1
+const MAX_PICK := 8
 
 var _selected: Array[String] = []
 var _btns: Dictionary = {}     # hero_id -> Button
@@ -104,7 +105,7 @@ func _toggle(id: String) -> void:
 		_selected.erase(id)
 	else:
 		if _selected.size() >= MAX_PICK:
-			_status_label.text = "本测试场固定只选 %d 名角色。" % MAX_PICK
+			_status_label.text = "最多同时测试 %d 个角色。" % MAX_PICK
 			_btns[id].set_pressed_no_signal(false)
 			return
 		_selected.append(id)
@@ -112,11 +113,11 @@ func _toggle(id: String) -> void:
 
 func _refresh() -> void:
 	_count_label.text = "已选 %d / %d" % [_selected.size(), MAX_PICK]
-	_start_btn.disabled = _selected.size() != MIN_PICK
+	_start_btn.disabled = _selected.size() < MIN_PICK
 	for id in _btns.keys():
 		_btns[id].set_pressed_no_signal(_selected.has(id))
 	if _selected.size() == 0:
-		_status_label.text = "勾选 3 名角色即可开测，敌方会自动配好。"
+		_status_label.text = "勾选 1-8 个角色即可开测（自由部署沙箱：无 3 人判负、可自由替补）。"
 	else:
 		var names: Array[String] = []
 		for id in _selected:
@@ -133,7 +134,7 @@ func _on_menu() -> void:
 func _on_start() -> void:
 	if _selected.size() < MIN_PICK:
 		return
-	GameState.no_death_limit = false   # 快速测试仍用 3 人判负规则
+	GameState.no_death_limit = true   # 快速测试 = 自由部署沙箱：无 3 人判负，全灭/替补池空才负
 	GameState.clear_placement()
 	for i in mini(_selected.size(), PLAYER_CELLS.size()):
 		GameState.player_placement[PLAYER_CELLS[i]] = _selected[i]
