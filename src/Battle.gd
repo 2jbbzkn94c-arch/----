@@ -194,6 +194,7 @@ const _DRAG_THRESHOLD = 12.0
 var _pending_bomb_unit: Unit = null   # 炸弹人待放置（等待点选空地）
 var _pending_player_subs := 0     # 我方阵亡待替补名额数（可 >1：同时阵亡多人时逐个替补
 var _defer_side_skills := false   # 回合开始先补位：替补全部落位完成后才触发回合开始技
+var _in_begin_phase := false      # 回合开始演出期（技能逐个触发中）：此间阵亡先排队，演出结束再弹替补面板
 var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位（跳过即时光环补发，技能阶段会统一触发）
 var _pending_enemy_sub := 0        # 敌方阵亡待替补数量（轮到敌方回合时按此数量补位）
 var bombs: Dictionary = {}        # cell -> true（炸弹陷阱）
@@ -1457,6 +1458,7 @@ func _begin_side(side: int) -> void:
 	AudioManager.play("turn")
 	_turn_expired = false   # 新回合开始：清除上个回合的超时待提交标记
 	state = State.ANIMATING   # 回合开始技能逐个演出期间锁定输入
+	_in_begin_phase = true   # 演出期内阵亡先排队，结束再弹替补面板（避免面板插入回合开始流程）
 	_clear_selection()       # 切回合：清除上回合选中单位及移攻击范围高亮（含客户端收begin_side 路径
 	for u in units:
 		u.reset_for_new_turn()
@@ -1500,6 +1502,7 @@ func _begin_side(side: int) -> void:
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
 			u.refresh_stats()
+	_in_begin_phase = false   # 演出结束：此间积压的阵亡已在队列中，下面统一开面板
 	# 本端是否操作这一方：是我方回-> 进入我方输入；否则（对方回合）等AI
 	if side == _my_side():
 		# 我方回合
@@ -3788,8 +3791,8 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	if u.faction == _my_faction():
 		var my_roster: Array = _my_roster()
 		if my_roster.size() > 0:
-			if GameState.active_side == _my_side() and not _ending_side:
-				# 我方在回合行动中阵亡（如被反击击杀）：立即替补
+			if GameState.active_side == _my_side() and not _ending_side and not _in_begin_phase:
+				# 我方在回合行动中阵亡（如被反击击杀）：立即替补（回合开始演出期除外）
 				# 同时阵亡多人则计数，逐个替补（落位后自动开下一个面板）
 				_pending_player_subs += 1
 				if _CONSOLE_AI_LOG:
@@ -3799,7 +3802,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 				# 对方回合 / 本方"结束回合-结算扣血"期间阵亡：不立即替补，等本方下回合开始再逐个补位
 				_pending_player_subs += 1
 				if _CONSOLE_AI_LOG:
-					print("[替补] 我方%s 延迟阵亡（敌回合/结算），待补名额=%d" % [u.display_name, _pending_player_subs])
+					print("[替补] 我方%s 延迟阵亡（敌回合/结算/回合开始演出期），待补名额=%d" % [u.display_name, _pending_player_subs])
 	elif not GameState.is_online:
 		# 单机：敌AI)阵亡 -> 自动按阵亡数量补
 		if enemy_roster.size() > 0:
@@ -4110,6 +4113,7 @@ func _resume_after_sub() -> void:
 	# 再按"我方回合"正式入场（计时/横幅/可操作）。中途换人的补位不进此分支。
 	if _defer_side_skills:
 		_defer_side_skills = false
+		_in_begin_phase = false   # 补位+技能演出期结束
 		state = State.ANIMATING
 		await _trigger_turn_start_all(_my_faction())
 		for u in units:
@@ -4117,6 +4121,11 @@ func _resume_after_sub() -> void:
 				u.refresh_stats()
 		if GameState.active_side != _my_side():
 			return   # 防御：状态异常时直接交还流程
+		# 技能演出期间若有新阵亡排队：继续开面板补齐（补完走非挂起恢复），否则正式入场
+		if _pending_player_subs > 0 and _my_roster().size() > 0:
+			state = State.IDLE
+			_try_begin_next_sub()
+			return
 		turn_time_left = TURN_TIME_LIMIT
 		peer_turn_time_left = 0.0
 		_time_sync_acc = 0.0

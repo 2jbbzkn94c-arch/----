@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bcaedh57alvde"]
+
+[ext_resource type="Script" path="res://tests/StraddleDeathVerify.gd" id="1_script"]
+
+[node name="StraddleDeathVerify" type="Node"]
+script = ExtResource("1_script")
