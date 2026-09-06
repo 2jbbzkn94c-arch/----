@@ -1,10 +1,10 @@
 class_name QuickTest
 extends Control
-## 快速角色测试场：勾选 2-5 个我方可上场角色，敌方自动配好，一键开测。
+## 快速角色测试场：勾选 3 个我方可上场角色，敌方自动配好，一键开测。
 ## 战斗中还可用"换角"面板随时把己方单位换成任意角色。
 
-const MIN_PICK := 2
-const MAX_PICK := 8
+const MIN_PICK := 3
+const MAX_PICK := 3
 
 var _selected: Array[String] = []
 var _btns: Dictionary = {}     # hero_id -> Button
@@ -104,19 +104,19 @@ func _toggle(id: String) -> void:
 		_selected.erase(id)
 	else:
 		if _selected.size() >= MAX_PICK:
-			_status_label.text = "最多同时测试 %d 个角色。" % MAX_PICK
+			_status_label.text = "本测试场固定只选 %d 名角色。" % MAX_PICK
 			_btns[id].set_pressed_no_signal(false)
 			return
 		_selected.append(id)
 	_refresh()
 
 func _refresh() -> void:
-	_count_label.text = "已选 %d / %d（可 2-%d）" % [_selected.size(), MAX_PICK, MAX_PICK]
-	_start_btn.disabled = _selected.size() < MIN_PICK
+	_count_label.text = "已选 %d / %d" % [_selected.size(), MAX_PICK]
+	_start_btn.disabled = _selected.size() != MIN_PICK
 	for id in _btns.keys():
 		_btns[id].set_pressed_no_signal(_selected.has(id))
 	if _selected.size() == 0:
-		_status_label.text = "勾选 2-5 个你想测试的角色，敌方会自动配好一键开测。"
+		_status_label.text = "勾选 3 名角色即可开测，敌方会自动配好。"
 	else:
 		var names: Array[String] = []
 		for id in _selected:
