@@ -230,7 +230,7 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
 
-# 开局"谁先手"提示：显示约 1 秒后自动淡出消失——选人/部署阶段开始时基本已收起，不挡操作。
+# 开局"谁先手"提示：常驻悬浮，直到"部署选人面板出现"（部署选人阶段开始）才淡出收起。
 # 点一下提示框也可提前关闭；浮框不拦截棋盘操作。
 func _show_first_side_notice(text: String) -> void:
 	_refresh_round()   # 提示时已进入部署/选人态：顶部立即显示"部署选人/竞技场选人"
@@ -271,13 +271,15 @@ func _show_first_side_notice(text: String) -> void:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
-	# 短显示：约 1 秒后淡出消失（进入选人/部署阶段即收起，不遮挡操作）
-	overlay.modulate.a = 0.0
-	var tw := overlay.create_tween()
-	tw.tween_property(overlay, "modulate:a", 1.0, 0.1)
-	tw.tween_interval(0.9)
-	tw.tween_property(overlay, "modulate:a", 0.0, 0.2)
-	tw.tween_callback(_close_first_notice)
+	# 常驻显示：不自动消失；等"部署选人面板出现"那一刻收起（_deploy_panel_shown 触发淡出）
+
+func _deploy_panel_shown_notice_gone() -> void:
+	# 部署面板已出现 = 部署选人阶段开始：先手提示在此刻淡出收起（无计时器，不提前消失）
+	if _notice_overlay != null and is_instance_valid(_notice_overlay):
+		var ov: Control = _notice_overlay
+		var tw2 := ov.create_tween()
+		tw2.tween_property(ov, "modulate:a", 0.0, 0.2)
+		tw2.tween_callback(_close_first_notice)
 
 func _on_first_notice_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
@@ -369,6 +371,8 @@ func _show_deploy_panel() -> void:
 	tlabel.size = Vector2(pw, 60)
 	overlay.add_child(tlabel)
 	_deploy_timer_label = tlabel
+	# 部署选人面板已出现 = 阶段开始：先手提示此刻收起（若有）
+	_deploy_panel_shown_notice_gone()
 
 # 本端当前轮是否轮到本端部署选人（主机=玩家轮，客户端=敌轮；单机=仅玩家轮）
 func _deploy_my_pick() -> bool:
