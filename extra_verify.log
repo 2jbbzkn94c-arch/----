@@ -1,0 +1,247 @@
+============================================================ 
+============  AISmokeTest  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+AI[相邻1HP] plan=[{ "idx": 0, "action": { "move": <null>, "atk": 1 } }]
+T1 击杀优先: PASS
+AI[远程被贴脸] plan=[{ "idx": 0, "action": { "move": <null>, "atk": 1 } }]
+T2 远程被贴脸 plan=[{ "idx": 0, "action": { "move": <null>, "atk": 1 } }]
+AI[两敌集火] plan=[{ "idx": 0, "action": { "move": <null>, "atk": 2 } }, { "idx": 1, "action": { "move": (5, 8), "atk": -1 } }]
+T3 集火目标次数: 1 -> PASS
+T4 远程贴身被反击: 攻方 20 -> 18 => PASS
+T5 远程远距不被反击: 攻方 20 -> 20 => PASS
+T6 远程贴面板: 远=4 贴=1 => PASS
+T7 远程贴身+buff: 攻=3 => PASS
+T8 变身触发回合开始技能: 变身=true 丢矿=true => PASS
+T9 圣诞(替补登场)立即放道具: 道具=2 => PASS
+T10 血锁直线限制: 直线=true 非直线=false => PASS
+T11 血锁视线阻挡: 隔墙=false 无墙=true => PASS
+T12 战锤麻痹0反击0伤: 战锤 24->24 目标atkdown=true => PASS
+T13 非矿工不捡金矿: 升攻=false 金矿保留=true => PASS
+T14 矿工捡金矿: 升攻=true 金矿消失=true => PASS
+T15 变身替补英雄不触发替补效果: 变身=true 队友圣盾=false => PASS
+T16 变身保留永久攻加成: 变身=true 攻=5 => PASS
+AI[骷髅兵贴脸] plan=[{ "idx": 0, "action": { "move": (3, 7), "atk": 1 } }]
+T17 骷髅兵贴脸咬人: plan=[{ "idx": 0, "action": { "move": (3, 7), "atk": 1 } }] 攻击=true => PASS
+T18 攻击buff一次性: 攻击时=5 攻击后=4 => PASS
+T19 移动buff一次性: 移动时=4 移动后=3 => PASS
+AI[能攻残血] plan=[{ "idx": 0, "action": { "move": <null>, "atk": 1 } }]
+T20 能攻残血就打: plan=[{ "idx": 0, "action": { "move": <null>, "atk": 1 } }] 攻击=true => PASS
+AI[大骑士冲锋] plan=[{ "idx": 0, "action": { "move": (3, 5), "atk": 1 } }]
+T21 大骑士冲锋攻击: plan=[{ "idx": 0, "action": { "move": (3, 5), "atk": 1 } }] 移动=true 攻击=true => PASS
+T22 队伍仅替补席: team=["hero_42", "hero_43"] => PASS
+T23 敌方落位分散: cols=[0, 6, 3] => PASS
+T24 捡移动buff保留: move_use_buff=1 eff_move=4 => PASS
+============================================================ 
+============  SkillVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+hero_01  [PASS] 障碍可打
+hero_02  [PASS] 道具=2
+hero_03  [PASS] poison
+hero_04  [PASS] 标签
+hero_05  [PASS] 敌人位移
+hero_06  [PASS] 友血4
+hero_07  [PASS] 标签
+hero_08  [PASS] 友血3
+hero_09  [PASS] 标签
+hero_10  [PASS] freeze
+hero_11  [PASS] 塔盾代受
+hero_12  [PASS] heavy
+hero_13  [PASS] 标签
+hero_14  [PASS] 自疗5->9
+hero_15  [PASS] 倍率2
+hero_16  [PASS] 圣盾
+hero_17  [PASS] AOE伤3
+hero_18  [PASS] 身后伤
+hero_19  [PASS] buff=1
+hero_20  [PASS] 倍率2
+hero_21  [PASS] 击退邻敌
+hero_22  [PASS] 圣盾
+hero_23  [PASS] 反击2倍
+hero_24  [PASS] 冲刺=14
+hero_25  [PASS] freeze
+hero_26  [PASS] freeze
+hero_27  [PASS] 换位
+hero_28  [PASS] 再变身=小阴影(
+hero_29  [PASS] buff=3
+hero_30  [PASS] 倍率2
+hero_31  [PASS] 弱敌伤
+hero_32  [PASS] 击退
+hero_33  [PASS] 召唤=3
+hero_34  [PASS] silence
+hero_35  [PASS] 待放=@Node2D@641:<Node2D#111820148157>
+hero_36  [PASS] 治疗换位
+hero_37  [PASS] buff=1
+hero_38  [PASS] 攻=1
+hero_39  [PASS] 敌受创/眩晕
+hero_40  [PASS] AOE伤13
+hero_41  [PASS] 拉近
+hero_42  [PASS] 金矿1
+hero_43  [PASS] buff=1
+WARNING: 8 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 1 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+============================================================ 
+============  ArenaTest  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+A1 进入竞技场选人: state=9 pending=["hero_38", "hero_04"] => PASS
+A2 玩家第1轮点击: hero_38
+A2 玩家第2轮点击: hero_02
+A2b 选人实时更新: live=["hero_38", "hero_02"] => PASS
+A2 玩家第3轮点击: hero_31
+A2 玩家第4轮点击: hero_43
+A3 全部8轮结束: state=4 p_deck=8 e_deck=8 => PASS
+A4 卡组无重复: 16/16 => PASS
+A5 竞技场模式持久: arena_mode=true => PASS
+A6 替补英雄不进首发: 我方=true 敌方=true => PASS
+============================================================ 
+============  SubVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+SCRIPT ERROR: Invalid access to property or key '_pending_player_sub' on a base object of type 'Node2D (Battle)'.
+   at: _run (res://tests/SubVerify.gd:49)
+   GDScript backtrace (most recent call first):
+       [0] _run (res://tests/SubVerify.gd:49)
+       [1] sleep_frames (res://tests/SubVerify.gd:29)
+============================================================ 
+============  BombVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+  PATH=[(4, 8), (5, 8)]
+T1 普通英雄经过炸弹爆炸: hp=5(原10) 炸后消失=true 终格=(5, 8) => PASS
+T2 炸弹人经过安全: hp=10(原10) 炸保留=true => PASS
+============================================================ 
+============  FreeDeployRegression  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _run (res://tests/FreeDeployRegression.gd:26)
+T1 清空placement后正常部署: units=6 roster(player=2,enemy=2) => PASS
+T2 placement残留走自由放置: units=2 => PASS
+============================================================ 
+============  NetFullMatchVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetFullMatchVerify.gd:38)
+       [2] _run (res://tests/NetFullMatchVerify.gd:58)
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetFullMatchVerify.gd:38)
+       [2] _run (res://tests/NetFullMatchVerify.gd:58)
+T1 整局同步: PASS
+  主机:hero_06@(2, 8)=16 hero_13@(0, 1)=30 hero_17@(3, 8)=17 hero_12@(6, 1)=24 hero_26@(5, 8)=26 hero_23@(3, 0)=26
+  客户端:hero_06@(2, 8)=16 hero_13@(0, 1)=30 hero_17@(3, 8)=17 hero_12@(6, 1)=24 hero_26@(5, 8)=26 hero_23@(3, 0)=26
+============================================================ 
+============  NetSubVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _run (res://tests/NetSubVerify.gd:71)
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _run (res://tests/NetSubVerify.gd:72)
+  第二段 死后: host_units=5 client_units=5 host_sub=0 client_sub=0
+  第二段 主机落位: placed=true cell=(1, 8)
+  第二段 落位后: host_units=6 client_units=6
+T1 联机替补回环: 客户端落位=true 双端一致=true => PASS
+  主机enemy_roster=["hero_24"] 客户端enemy_roster=["hero_24"]
+============================================================ 
+============  NetSubmitVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+============================================================ 
+============  NetTurnGateVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetTurnGateVerify.gd:35)
+       [2] _run (res://tests/NetTurnGateVerify.gd:43)
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetTurnGateVerify.gd:35)
+       [2] _run (res://tests/NetTurnGateVerify.gd:43)
+  [主机视角][玩家回合] 主机state=1
+  [主机视角][敌回合] 主机state=3
+  [客户端视角][敌回合] 客户端state=1
+  [客户端视角][玩家回合] 客户端state=3
+T1 回合门控: => PASS
+WARNING: 5 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 1 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+============================================================ 
+============  NetBeginSideCorrVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetBeginSideCorrVerify.gd:34)
+       [2] _run (res://tests/NetBeginSideCorrVerify.gd:45)
+ERROR: String formatting error: not enough arguments for format string.
+   at: validated_evaluate (core/variant/variant_op.h:770)
+   GDScript backtrace (most recent call first):
+       [0] _place_units (res://src/Battle.gd:1148)
+       [1] _setup (res://tests/NetBeginSideCorrVerify.gd:34)
+       [2] _run (res://tests/NetBeginSideCorrVerify.gd:45)
+  [校正后] 主机state=1 客户端state=3
+  [敌回合] 主机state=3 客户端state=1
+T1 begin_side校正+回合门控: => PASS
+WARNING: 6 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 1 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+============================================================ 
+============  NetDeployTurnVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+T1 轮流部署推进一致: 主机(pl=3,en=3) 客户端(pl=3,en=3) => PASS
+============================================================ 
+============  NetSyncVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+T1 主机-客户端结果一致: move cell=(3, 7)/(3, 7) 敌血=19/19 => PASS
+============================================================ 
+============  NetCmdVerify  ============ 
+============================================================ 
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+T1 move指令: cell=(3, 7) => PASS
+T2 attack指令: 敌方20->19 => PASS
+T3 非法指令容错: 未崩 => PASS

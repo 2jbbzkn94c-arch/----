@@ -230,7 +230,8 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
 
-# 开局"谁先手"提示：居中短浮框，约 1 秒后自动淡出消失（不阻塞、无需点击）
+# 开局"谁先手"提示：居中浮框，**一直悬浮到选人/部署结束**（对局正式开始才收起）。
+# 点一下提示框可提前关闭；浮框本身不拦截棋盘操作。
 func _show_first_side_notice(text: String) -> void:
 	_refresh_round()   # 提示时已进入部署/选人态：顶部立即显示"部署选人/竞技场选人"
 	_close_first_notice()
@@ -254,11 +255,12 @@ func _show_first_side_notice(text: String) -> void:
 	sb.content_margin_top = 10
 	sb.content_margin_bottom = 10
 	box.add_theme_stylebox_override("panel", sb)
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.mouse_filter = Control.MOUSE_FILTER_STOP   # 框体可点击关闭，但不挡棋盘
+	box.gui_input.connect(_on_first_notice_input)
 	overlay.add_child(box)
 	var bw := minf(vsize.x - 120, 420)
 	box.size = Vector2(bw, 0)
-	box.position = Vector2((vsize.x - bw) / 2.0, vsize.y * 0.24)
+	box.position = Vector2((vsize.x - bw) / 2.0, vsize.y * 0.22)
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", 24)
@@ -267,14 +269,13 @@ func _show_first_side_notice(text: String) -> void:
 	label.add_theme_constant_override("outline_size", 4)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
-	# 短暂停留后淡出消失（tween 绑定在浮框自身，回调用方法避免捕获已释放节点）
-	overlay.modulate.a = 0.0
-	var t := overlay.create_tween()
-	t.tween_property(overlay, "modulate:a", 1.0, 0.12)
-	t.tween_interval(0.7)
-	t.tween_property(overlay, "modulate:a", 0.0, 0.25)
-	t.tween_callback(_close_first_notice)
+	# 常驻：不自动消失；对局正式开始（进入战斗）时由回合信号统一收起
+
+func _on_first_notice_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
+		_close_first_notice()
 
 func _close_first_notice() -> void:
 	if _notice_overlay != null and is_instance_valid(_notice_overlay):
@@ -956,6 +957,9 @@ func _refresh_round() -> void:
 # GameState 回合信号回调（对象方法，便于释放时自动断开）
 func _on_round_changed(_r: int) -> void:
 	_refresh_round()
+	# 先手提示常驻到"对局正式开始"：进入战斗后第一个回合信号到达时收起
+	if GameState.match_running and not GameState.match_over:
+		_close_first_notice()
 
 # 阵亡计数图标（骷髅）= 已阵亡，空心 = 尚未阵亡
 func _refresh_deaths() -> void:

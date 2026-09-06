@@ -1145,7 +1145,7 @@ func _place_units() -> void:
 	for i in range(DEPLOY_COUNT, e_deck.size()):
 		enemy_roster.append(e_deck[i])
 	_place_obstacles()
-	log_message.emit("双方各上 %d 名英雄，另有 %d / %d 名替补待命。" % [player_roster.size(), enemy_roster.size()])
+	log_message.emit("双方各上 %d 名英雄，另有 %d / %d 名替补待命。" % [DEPLOY_COUNT, player_roster.size(), enemy_roster.size()])
 
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:

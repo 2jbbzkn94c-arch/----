@@ -46,7 +46,7 @@ func _run() -> void:
 	await sleep_frames(200)
 	var st := int(battle.state)
 	var sub_now := st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB
-	print("T1 反击致死后立即替补: state=%d pending=%s => %s" % [st, str(battle._pending_player_sub), "PASS" if sub_now and not battle._pending_player_sub else "FAIL"])
+	print("T1 反击致死后立即替补: state=%d pending=%s => %s" % [st, str(battle._pending_player_subs), "PASS" if sub_now and battle._pending_player_subs == 0 else "FAIL"])
 
 	# 对照：无替补时不应卡在替补态（应能继续）
 	clear_all()
