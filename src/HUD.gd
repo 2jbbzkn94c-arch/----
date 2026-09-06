@@ -230,8 +230,8 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
 
-# 开局"谁先手"提示：居中浮框，**一直悬浮到选人/部署结束**（对局正式开始才收起）。
-# 点一下提示框可提前关闭；浮框本身不拦截棋盘操作。
+# 开局"谁先手"提示：显示约 1 秒后自动淡出消失——选人/部署阶段开始时基本已收起，不挡操作。
+# 点一下提示框也可提前关闭；浮框不拦截棋盘操作。
 func _show_first_side_notice(text: String) -> void:
 	_refresh_round()   # 提示时已进入部署/选人态：顶部立即显示"部署选人/竞技场选人"
 	_close_first_notice()
@@ -271,7 +271,13 @@ func _show_first_side_notice(text: String) -> void:
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(label)
-	# 常驻：不自动消失；对局正式开始（进入战斗）时由回合信号统一收起
+	# 短显示：约 1 秒后淡出消失（进入选人/部署阶段即收起，不遮挡操作）
+	overlay.modulate.a = 0.0
+	var tw := overlay.create_tween()
+	tw.tween_property(overlay, "modulate:a", 1.0, 0.1)
+	tw.tween_interval(0.9)
+	tw.tween_property(overlay, "modulate:a", 0.0, 0.2)
+	tw.tween_callback(_close_first_notice)
 
 func _on_first_notice_input(ev: InputEvent) -> void:
 	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
