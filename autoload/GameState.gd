@@ -29,6 +29,10 @@ var enemy_deck: Array = []
 var player_placement: Dictionary = {}
 var enemy_placement: Dictionary = {}
 
+# 自由部署沙箱（TestDeploy）：取消"3 名阵亡判负"，改为一方无人可上（场上为 0 且替补池空）才算负；
+# 场上阵亡/撤下后可从全英雄池自由替补。
+var no_death_limit := false
+
 # AI 难度：0=简单 1=普通 2=困难
 var ai_difficulty := 1
 
@@ -54,6 +58,7 @@ func reset_online() -> void:
 	enemy_placement.clear()
 	match_running = false
 	match_over = false
+	no_death_limit = false
 
 func clear_placement() -> void:
 	player_placement.clear()

@@ -133,6 +133,7 @@ func _on_menu() -> void:
 func _on_start() -> void:
 	if _selected.size() < MIN_PICK:
 		return
+	GameState.no_death_limit = false   # 快速测试仍用 3 人判负规则
 	GameState.clear_placement()
 	for i in mini(_selected.size(), PLAYER_CELLS.size()):
 		GameState.player_placement[PLAYER_CELLS[i]] = _selected[i]

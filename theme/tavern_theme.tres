@@ -88,3 +88,5 @@ Button/styles/focus = SubResource("sb_focus")
 Button/styles/hover = SubResource("sb_hover")
 Button/styles/normal = SubResource("sb_normal")
 Button/styles/pressed = SubResource("sb_pressed")
+Label/colors/font_outline_color = Color(0, 0, 0, 0.72)
+Label/constants/outline_size = 3

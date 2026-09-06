@@ -1120,6 +1120,20 @@ func _place_units() -> void:
 				_spawn_unit(GameState.enemy_placement[cell], DataRegistry.Faction.ENEMY, cell)
 		_place_obstacles()
 		log_message.emit("已按自由部署放置双方单位")
+		if GameState.no_death_limit:
+			# 自由部署沙箱：未上场英雄 = 自由替补池（双方都从全英雄池补位），场上阵亡/撤下可随时换人
+			var used := {}
+			for v in GameState.player_placement.values():
+				used[v] = true
+			for v in GameState.enemy_placement.values():
+				used[v] = true
+			var pool := DataRegistry.heroes.keys()
+			pool.sort()
+			for hid in pool:
+				if used.has(hid):
+					continue
+				player_roster.append(hid)
+				enemy_roster.append(hid)
 		return
 	var p_deck := GameState.player_deck
 	var e_deck := GameState.enemy_deck
@@ -1443,6 +1457,8 @@ func _settle_side_round_damage(side: int) -> void:
 
 # ---- 胜负：一方累3 名英雄阵亡即判负 ----
 func _check_win() -> bool:
+	if GameState.no_death_limit:
+		return _check_no_limit_end()
 	# 一方累计阵3 人就判负（含替补阵亡）。用本端视角化计数：我方阵亡=判负，对方阵判胜
 	var my_dead: int = _my_dead()
 	var opp_dead: int = _opp_dead()
@@ -1474,6 +1490,31 @@ func _check_win() -> bool:
 		_emit_match_result(winner3)
 		return true
 	return false
+
+# 自由部署沙箱胜负：取消"3 名阵亡判负"；某方场上 0 存活且替补池已空 = 判负（另一方胜）。
+func _check_no_limit_end() -> bool:
+	var my_fn := _my_faction()
+	var opp_fn := _opp_faction()
+	var my_done: bool = _alive_count(my_fn) == 0 and _roster_of(my_fn).size() == 0
+	var opp_done: bool = _alive_count(opp_fn) == 0 and _roster_of(opp_fn).size() == 0
+	var winner := -1
+	if my_done and opp_done:
+		winner = _my_side()   # 同时打空：判本端胜（测试友好）
+		log_message.emit("双方都无人可上——判本端获胜。")
+	elif my_done:
+		winner = _opp_side()
+		log_message.emit("败北……我方已无人可上。")
+	elif opp_done:
+		winner = _my_side()
+		log_message.emit("胜利！敌方已无人可上。")
+	else:
+		return false
+	GameState.end_match(winner)
+	state = State.ENDED
+	_clear_selection()
+	AudioManager.play("win")
+	_emit_match_result(winner)
+	return true
 
 # 联机胜负展示：本端弹框，并把"全局赢家阵营"广播给对方，对方据此弹自己的胜负框
 # 保证死亡即使只在一端结算，另一端也能立即显示对局结束。单机仅本地弹框

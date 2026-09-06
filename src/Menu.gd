@@ -31,7 +31,7 @@ func _build() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.10)
+	dim.color = Color(0, 0, 0, 0.22)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
@@ -61,7 +61,9 @@ func _build() -> void:
 
 	_desc_label = Label.new()
 	_desc_label.add_theme_font_size_override("font_size", 14)
-	_desc_label.add_theme_color_override("font_color", Color(0.6, 0.65, 0.75))
+	_desc_label.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
+	_desc_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_desc_label.add_theme_constant_override("outline_size", 4)
 	_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_desc_label)
@@ -387,6 +389,7 @@ func _on_start() -> void:
 	var ordered: Array = starts + bench
 	GameState.set_decks(ordered, enemy)
 	GameState.clear_placement()   # 普通模式用正常部署，不沿用"自由部署"放置，避免选人异常
+	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
 	GameState.arena_mode = false
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
@@ -493,6 +496,7 @@ func _go_test_deploy() -> void:
 # 竞技场模式：无需预选队伍，进入对战后随机2选1构建双方卡组
 func _go_arena() -> void:
 	GameState.arena_mode = true
+	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
 	GameState.clear_placement()   # 竞技场用随机2选1构建卡组，不沿用"自由部署"放置
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 

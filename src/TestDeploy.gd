@@ -180,6 +180,11 @@ func _place(cell: Vector2i) -> void:
 	var def := DataRegistry.get_hero(picked)
 	if def == null:
 		return
+	# 每方最多 8 人
+	var side_units: Dictionary = player_units if target_side == 0 else enemy_units
+	if side_units.size() >= 8:
+		_status_label.text = "每方最多 8 人（当前 %s 已放满）。" % ("我方" if target_side == 0 else "敌方")
+		return
 	# 移除该格原有预览
 	if _previews.has(cell):
 		if is_instance_valid(_previews[cell]):
@@ -201,6 +206,7 @@ func _place(cell: Vector2i) -> void:
 
 func _on_start() -> void:
 	GameState.clear_placement()
+	GameState.no_death_limit = true   # 自由部署沙箱：无 3 人判负，打空/替补池空才算负；阵亡可自由补位
 	var p_ids: Array = []
 	var e_ids: Array = []
 	for cell in player_units.keys():
