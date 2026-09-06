@@ -367,10 +367,10 @@ func _on_random() -> void:
 	_update_ui()
 
 # 随机挑一整队 PICK_COUNT 名不重复英雄 —— 「随机选人」与"卡组不足 5 人时兜底"共用
-func _random_full_deck() -> Array:
+func _random_full_deck() -> Array[String]:
 	var pool: Array = DataRegistry.heroes.keys()
 	pool.shuffle()
-	var out: Array = []
+	var out: Array[String] = []
 	for i in PICK_COUNT:
 		out.append(pool[i])
 	return out
