@@ -309,9 +309,13 @@ func _process(dt: float) -> void:
 			turn_time_left = 0.0
 			_turn_expired = true
 			action_info.emit("回合超时，自动结束回合")
-	if _turn_expired and state == State.PLAYER_INPUT and my_turn_live:
-		_turn_expired = false
-		submit_end_turn()   # 客户端超-> 发主机；主机超时 -> 本地结束
+	if _turn_expired and my_turn_live:
+		# 替补/落位中卡住的超时：自动选出替补并落位，直到回到可提交状态再自动结束回合
+		if state == State.SUBSTITUTING or state == State.PLACE_SUB:
+			_auto_sub_on_timeout()
+		elif state == State.PLAYER_INPUT:
+			_turn_expired = false
+			submit_end_turn()   # 客户端超-> 发主机；主机超时 -> 本地结束
 	# 联机等待对端行动：对端广播只作为基准，本端每帧自行递减（对端演断包期间不消失）
 	if GameState.is_online and match_live and not my_turn_live and peer_turn_time_left > 0.0:
 		peer_turn_time_left = maxf(peer_turn_time_left - dt, 0.0)
@@ -1477,6 +1481,12 @@ func _begin_side(side: int) -> void:
 	# 打开替补面板并把"回合开始技"顺延到全部补位完成后再触发（见 _resume_after_sub）。
 	# 必须走 _try_begin_next_sub 消费 1 个名额（否则落位完成后 more_subs 误判还有名额 → 重复弹面板）。
 	if side == _my_side() and _pending_player_subs > 0 and _my_roster().size() > 0:
+		# 先启动本端回合倒计时：等替补期间超时也能自动替补并结束回合（不会永久卡在面板）
+		turn_time_left = TURN_TIME_LIMIT
+		peer_turn_time_left = 0.0
+		_time_sync_acc = 0.0
+		if GameState.is_online:
+			_send_turn_time_left()
 		_defer_side_skills = true
 		_try_begin_next_sub()
 		return
@@ -3040,7 +3050,7 @@ func _end_side(side: int) -> void:
 	if GameState.match_over:
 		_ending_side = false
 		return   # 结算扣血导致本局已结束（如超回合烧死判负）：不再推进回合/开下回合界
-	print("[替补统计] 我方回合结束：我还可替补次数=%d" % _pending_player_subs)
+	print("[替补统计] 我方回合结束：我还可替补次数=%d" % _my_sub_quota())
 	_ending_side = false   # 结算完毕：之后（含换边演出期间）的阵亡恢复正常替补规
 	GameState.end_current_side(_first_side)
 	# 换边停顿：让"上一方回合结束的演出"下一方回合开始被动的演出"之间
@@ -3717,6 +3727,13 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	u._update_tags_label()   # 技能词条标签跟随变
 	u.refresh_stats()        # 攻击等数值也刷新
 	_notify_team()           # 变身改变卡组：刷新下方队
+# 我方“实际还需替补的次数”= 待补队列名额 + 当前正开着的替补面板（若有，队列名额已先消费）
+func _my_sub_quota() -> int:
+	var q := _pending_player_subs
+	if (_sub_faction == _my_faction() and (state == State.SUBSTITUTING or state == State.PLACE_SUB)):
+		q += 1
+	return q
+
 func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	if u == null or not is_instance_valid(u):
 		return   # 单位已释放：安全退
@@ -3790,7 +3807,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
 			if GameState.active_side == GameState.SIDE_ENEMY:
 				_place_enemy_sub()
-	print("[替补统计] %s（%s）阵亡后：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", _pending_player_subs])
+	print("[替补统计] %s（%s）阵亡后：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", _my_sub_quota()])
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
@@ -3927,6 +3944,39 @@ func _begin_substitution() -> void:
 	state = State.SUBSTITUTING
 	sub_select_requested.emit()
 	action_info.emit("有英雄阵亡！从替补队伍中选择一名上阵")
+
+# 回合超时且卡在替补/落位面板：自动上替补席第 1 名（落本方墓碑优先，其次出生区空位），
+# 直到补完回到输入态，再由 _turn_expired 自动结束回合。
+func _auto_sub_on_timeout() -> void:
+	var roster := _my_roster()
+	if roster.size() <= 0:
+		# 没有替补可上：收掉面板直接恢复（超时结束仍由 _turn_expired 兜底）
+		_pending_sub = ""
+		if state == State.SUBSTITUTING or state == State.PLACE_SUB:
+			state = State.IDLE
+			_resume_after_sub()
+		return
+	if state == State.SUBSTITUTING:
+		_on_sub_pick(roster[0])
+	if _pending_sub == "" or state != State.PLACE_SUB:
+		return
+	var cell := _auto_sub_cell()
+	if cell.x == -99:
+		return   # 暂无可落位点：下一帧继续尝试（超时标记仍在）
+	_try_place_sub(cell)
+
+# 自动落位点：本方墓碑（含旧格式墓碑）优先，其次本方出生区空格
+func _auto_sub_cell() -> Vector2i:
+	var my_fn := _my_faction()
+	for c in graves.keys():
+		var gd = graves[c]
+		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == my_fn
+		if mine and not occupancy.has(c):
+			return c
+	for c in _spawn_cells(my_fn):
+		if not occupancy.has(c) and not graves.has(c):
+			return c
+	return Vector2i(-99, -99)
 
 func _on_sub_pick(hero_id: String) -> void:
 	print("[subclick-battle] 收到点击 %s state=%d sub_faction=%d roster=%s" % [hero_id, state, _sub_faction, str(_roster_of(_sub_faction))])
@@ -4370,7 +4420,7 @@ func _run_enemy_turn() -> void:
 			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
 			_clear_statuses(DataRegistry.Faction.ENEMY)
 			_settle_side_round_damage(GameState.SIDE_ENEMY)   # 1回合起：敌半回合结束只扣敌方
-			print("[替补统计] 敌方回合结束：我可替补次数=%d" % _pending_player_subs)
+			print("[替补统计] 敌方回合结束：我可替补次数=%d" % _my_sub_quota())
 			GameState.end_current_side(_first_side)
 			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
 			await get_tree().create_timer(0.8).timeout
