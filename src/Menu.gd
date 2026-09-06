@@ -570,7 +570,7 @@ func _copy_diagnostics() -> void:
 	var lines: Array = []
 	lines.append("【酒馆纷争 诊断信息】")
 	lines.append("引擎: Godot %s" % Engine.get_version_info().get("string", "?"))
-	lines.append("系统: %s %s" % [OS.get_name(), OS.get_version().get("string", "?")])
+	lines.append("系统: %s %s" % [OS.get_name(), OS.get_version()])
 	var vp := get_viewport()
 	lines.append("窗口: %d x %d" % [int(vp.get_visible_rect().size.x), int(vp.get_visible_rect().size.y)])
 	lines.append("存档目录: %s" % OS.get_user_data_dir())
