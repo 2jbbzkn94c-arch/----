@@ -580,7 +580,8 @@ func _copy_diagnostics() -> void:
 	lines.append("存档目录: %s" % OS.get_user_data_dir())
 	lines.append("")
 	lines.append("===== 引擎日志(godot.log) 末尾 =====")
-	var log_path := OS.get_user_data_dir().path_join("logs").path_join("godot.log")
+	var logs_dir := OS.get_user_data_dir().path_join("logs")
+	var log_path := logs_dir.path_join("godot.log")
 	var f := FileAccess.open(log_path, FileAccess.READ)
 	if f == null:
 		lines.append("(未找到 %s)" % log_path)
@@ -595,5 +596,29 @@ func _copy_diagnostics() -> void:
 			lines.append("(日志为空)")
 		else:
 			lines.append_array(tail)
+	# 附上最近的会话/崩溃日志文件（每次运行 Godot 都会生成时间戳日志；崩了重进后也仍能找到）
+	var recent: Array = []
+	var da := DirAccess.open(logs_dir)
+	if da != null:
+		da.list_dir_begin()
+		var fn := da.get_next()
+		while fn != "":
+			if not da.current_is_dir() and fn.ends_with(".log") and fn != "godot.log":
+				var p := logs_dir.path_join(fn)
+				recent.append({ "name": fn, "path": p, "time": FileAccess.get_modified_time(p) })
+			fn = da.get_next()
+		da.list_dir_end()
+	recent.sort_custom(func(a, b): return a["time"] > b["time"])
+	for c in recent.slice(0, 4):
+		lines.append("")
+		lines.append("===== 历史会话日志: %s =====" % c["name"])
+		var hf := FileAccess.open(c["path"], FileAccess.READ)
+		if hf != null:
+			var hraw: String = hf.get_as_text()
+			hf.close()
+			var htail: Array = hraw.split("\n")
+			if htail.size() > 120:
+				htail = htail.slice(htail.size() - 120)
+			lines.append_array(htail)
 	DisplayServer.clipboard_set("\n".join(lines))
-	_desc_label.text = "诊断信息已复制到剪贴板（含引擎日志末尾 200 行）。请直接粘贴发给开发者。"
+	_desc_label.text = "诊断信息已复制到剪贴板（含引擎日志末尾 200 行 + 最近 %d 份历史会话日志）。请粘贴发给开发者。" % mini(recent.size(), 4)
