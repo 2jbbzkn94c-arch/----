@@ -1395,7 +1395,8 @@ func _damage_obstacle(cell: Vector2i, amt: int) -> void:
 func _place_buff_items(u: Unit, n: int) -> void:
 	var spots: Array = []
 	for cell in grid.all_cells():
-		if not occupancy.has(cell) and not obstacles.has(cell) and not bombs.has(cell) and not buff_items.has(cell):
+		if not occupancy.has(cell) and not obstacles.has(cell) and not bombs.has(cell) \
+				and not buff_items.has(cell) and not graves.has(cell):   # 墓碑格不放道具
 			spots.append(cell)
 	_rng_shuffle(spots)
 	var types: Array = ["heal", "atk", "move", "shield"]   # 圣诞老人的四种礼
@@ -1427,7 +1428,8 @@ func item_desc(type: String) -> String:
 func _place_gold(u: Unit) -> void:
 	var spots: Array = []
 	for cell in grid.all_cells():
-		if not occupancy.has(cell) and not obstacles.has(cell) and not bombs.has(cell) and not buff_items.has(cell):
+		if not occupancy.has(cell) and not obstacles.has(cell) and not bombs.has(cell) \
+				and not buff_items.has(cell) and not graves.has(cell):   # 墓碑格不放金矿
 			spots.append(cell)
 	if spots.size() == 0:
 		return
