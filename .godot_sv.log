@@ -1,0 +1,48 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+[替补统计] 红帽（我方）阵亡后：我可替补次数=0
+hero_01  [PASS] 障碍可打
+hero_02  [PASS] 道具=2
+hero_03  [PASS] poison
+hero_04  [PASS] 标签
+hero_05  [PASS] 敌人位移
+hero_06  [PASS] 友血4
+hero_07  [PASS] 标签
+hero_08  [PASS] 友血3
+hero_09  [PASS] 标签
+hero_10  [PASS] freeze
+hero_11  [PASS] 塔盾代受
+hero_12  [PASS] heavy
+hero_13  [PASS] 标签
+hero_14  [PASS] 自疗5->9
+hero_15  [PASS] 倍率2
+hero_16  [PASS] 圣盾
+hero_17  [PASS] AOE伤3
+hero_18  [PASS] 身后伤
+hero_19  [PASS] buff=1
+hero_20  [PASS] 倍率2
+hero_21  [PASS] 击退邻敌
+hero_22  [PASS] 圣盾
+hero_23  [PASS] 反击2倍
+hero_24  [PASS] 冲刺=9
+hero_25  [PASS] freeze
+hero_26  [PASS] freeze
+hero_27  [PASS] 换位
+hero_28  [PASS] 再变身=小阴影
+hero_29  [PASS] buff=3
+hero_30  [PASS] 倍率2
+hero_31  [PASS] 弱敌伤
+hero_32  [PASS] 击退
+hero_33  [PASS] 召唤=3
+hero_34  [PASS] silence
+hero_35  [PASS] 待放=@Node2D@649:<Node2D#120510746237>
+hero_36  [PASS] 治疗换位
+hero_37  [PASS] buff=1
+hero_38  [PASS] 攻=1
+hero_39  [PASS] 敌受创/眩晕
+hero_40  [PASS] AOE伤13
+hero_41  [PASS] 拉近
+hero_42  [PASS] 金矿1
+hero_43  [PASS] buff=1

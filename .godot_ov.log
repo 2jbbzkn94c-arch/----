@@ -1,0 +1,12 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+
+===== 敌方AI 行动方案 · 总评分 93.6 · 2 步 =====
+ · 鼠队长 移动 (5, 5)→(4, 5)(贴近玩家(近1格)) → 攻击 独脚龟（造成6伤，剩hp4）  [本步 Δ+22.5]
+ · 独脚龟 原地 → 攻击 独脚龟（造成2伤，剩hp2）  [本步 Δ+17.2]
+ · 局面纯评分：53.9 → 93.6（决策总评含难度抖动=93.6）
+===== 决策输出结束 =====
+T1 先手秒残血: 计划=[{ "idx": 0, "action": { "move": (4, 5), "atk": 3 } }, { "idx": 1, "action": { "move": <null>, "atk": 3 } }] => FAIL
+  first_atk(A对残血)=false

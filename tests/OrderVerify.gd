@@ -42,17 +42,17 @@ func build_desc(u: Unit) -> Dictionary:
 func _run() -> void:
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	# 敌方 A：远程，能一刀秒残血 P1
-	var a := spawn("hero_04", DataRegistry.Faction.ENEMY, Vector2i(5, 5))
+	# 敌方 A：远程，能一刀秒残血 P1（旧坐标整体左移 3 入 5 列界内）
+	var a := spawn("hero_04", DataRegistry.Faction.ENEMY, Vector2i(2, 5))
 	a.atk = 6; a.attack_range = 3; a.refresh_stats()
 	# 敌方 B：近战，能打 P2
-	var b := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(6, 5))
+	var b := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(3, 5))
 	b.atk = 2; b.refresh_stats()
 	# 玩家 P1：1血残血，A 一击可秒
-	var p1 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 5))
+	var p1 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(0, 5))
 	p1.hp = 1; p1.max_hp = 10; p1.refresh_stats()
 	# 玩家 P2：近战贴脸 B，会反击
-	var p2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(7, 5))
+	var p2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(4, 5))
 	p2.hp = 10; p2.max_hp = 10; p2.refresh_stats()
 
 	var descs: Array = []

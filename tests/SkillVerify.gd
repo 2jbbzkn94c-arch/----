@@ -41,10 +41,12 @@ func _test_hero(id: String) -> void:
 				"hero_25": battle._trigger_on_attack(u,t,false); rec(id, t.has_status("freeze"), "freeze")
 				"hero_34": t.cell=Vector2i(5, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(5, 6)]=t; battle._trigger_on_attack(u,t,false); rec(id, t.has_status("silence"), "silence")
 				"hero_27": var hc:=u.cell; battle._trigger_on_attack(u,t,false); rec(id, u.cell!=hc, "换位")
-				"hero_32": var oc:=t.cell; battle._trigger_on_attack(u,t,false); rec(id, t.cell!=oc, "击退")
-				"hero_18": var b:=spawn("hero_11", DataRegistry.Faction.ENEMY, Vector2i(5,5)); var h1:=b.hp; battle._trigger_on_attack(u,t,false); rec(id, b.hp<h1, "身后伤")
+				# 5列棋盘 x∈0..4：击退/剑气落点须在界内
+				"hero_32": t.cell=Vector2i(2, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(2, 6)]=t; var oc:=t.cell; battle._trigger_on_attack(u,t,false); rec(id, t.cell!=oc, "击退")
+				"hero_18": t.cell=Vector2i(2, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(2, 6)]=t; var b:=spawn("hero_11", DataRegistry.Faction.ENEMY, Vector2i(1, 5)); var h1:=b.hp; battle._trigger_on_attack(u,t,false); rec(id, b.hp<h1, "身后伤")
 				# 白游侠/超新星为远程：需距攻击者2格(非贴身)否则技能失效；邻敌须紧邻目标
-				"hero_21": t.cell=Vector2i(5, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(5, 6)]=t; var a:=spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(5,5)); var ac:=a.cell; battle._trigger_on_attack(u,t,false); rec(id, a.cell!=ac, "击退邻敌")
+				# 5列棋盘：u=(3,6) 距2的界内格为 (1,6)；邻敌放 (1,5)，击退其落点 (1,4) 界内
+				"hero_21": t.cell=Vector2i(1, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(1, 6)]=t; var a:=spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(1,5)); var ac:=a.cell; battle._trigger_on_attack(u,t,false); rec(id, a.cell!=ac, "击退邻敌")
 				"hero_41": t.cell=Vector2i(6, 6); battle.occupancy.erase(Vector2i(4, 6)); battle.occupancy[Vector2i(6, 6)]=t; var oc:=t.cell; battle._trigger_on_attack(u,t,false); rec(id, t.cell!=oc, "拉近")
 				"hero_14":
 					u.hp=5; t.hp=20; var hh:=u.hp

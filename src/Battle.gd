@@ -2755,6 +2755,40 @@ func _current_path_blockers(u: Unit) -> Dictionary:
 			blockers[g] = true
 	return blockers
 
+# 落到“增益道具/金矿”格时拾取（正常移动与强制位移共用：傀儡师推人、击退/换位等落点一致）
+func _pickup_buff_at_cell(u: Unit) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	if not buff_items.has(u.cell):
+		return
+	var btype: String = buff_items[u.cell]
+	if btype == "gold" and u.hero_id != "hero_42":
+		return   # 金矿只有黄金矿工可拾取：其他单位踩到不消费、金矿保留在格上
+	buff_items.erase(u.cell)
+	if btype == "atk":
+		u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
+		u.refresh_stats()
+		log_message.emit("%s 拾取攻击道具：下一次攻击 +1。" % u.display_name)
+	elif btype == "move":
+		u.move_use_buff += 1   # 一次性：下一次移1，移动后消失
+		log_message.emit("%s 拾取移动道具：下一次移动力 +1。" % u.display_name)
+	elif btype == "heal":
+		var g := mini(3, u.max_hp - u.hp)
+		_heal(u, 3)
+		log_message.emit("%s 拾取回血道具，恢复 %d 点生命！" % [u.display_name, g])
+	elif btype == "shield":
+		u.add_status("shield")   # 圣盾：抵挡一次受到的伤害（非叠加
+		u.refresh_stats()
+		log_message.emit("%s 拾取护盾道具，获得[圣盾]。" % u.display_name)
+	elif btype == "gold":
+		u.atk += 1
+		u.perm_atk += 1   # 永久加成，变身时保留
+		u.max_hp += 3
+		u.hp = min(u.hp + 3, u.max_hp)
+		u.refresh_stats()
+		log_message.emit("%s 拾取金矿！攻击 +1、血量上限 +3。" % u.display_name)
+	_refresh_board()
+
 # 先移动到指定格、再攻击同一目标（合并的"移动+攻击"
 func _finish_move(u: Unit, for_enemy: bool) -> void:
 	if u == null or not is_instance_valid(u):   # 防御：单位已释放则跳过
@@ -2766,37 +2800,7 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 		_heal(u, u.last_move_dist)
 		log_message.emit("%s 移动 %d 格，风语者令其回复 %d 点生命。" % [u.display_name, u.last_move_dist, u.last_move_dist])
 	# 炸弹爆炸：非炸弹人踏上炸弹格（已_bomb_enter_check 在逐格动画中处理：经过或停留均爆炸
-	# 增益道具/金矿：拾取加
-	if buff_items.has(u.cell):
-		var btype: String = buff_items[u.cell]
-		if btype == "gold" and u.hero_id != "hero_42":
-			# 金矿只有黄金矿工可拾取：其他单位踩到不消费、金矿保留在格上
-			pass
-		else:
-			buff_items.erase(u.cell)
-			if btype == "atk":
-				u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
-				u.refresh_stats()
-				log_message.emit("%s 拾取攻击道具：下一次攻击 +1。" % u.display_name)
-			elif btype == "move":
-				u.move_use_buff += 1   # 一次性：下一次移1，移动后消失
-				log_message.emit("%s 拾取移动道具：下一次移动力 +1。" % u.display_name)
-			elif btype == "heal":
-				var g := mini(3, u.max_hp - u.hp)
-				_heal(u, 3)
-				log_message.emit("%s 拾取回血道具，恢复 %d 点生命！" % [u.display_name, g])
-			elif btype == "shield":
-				u.add_status("shield")   # 圣盾：抵挡一次受到的伤害（非叠加
-				u.refresh_stats()
-				log_message.emit("%s 拾取护盾道具，获得[圣盾]。" % u.display_name)
-			elif btype == "gold":
-				u.atk += 1
-				u.perm_atk += 1   # 永久加成，变身时保留
-				u.max_hp += 3
-				u.hp = min(u.hp + 3, u.max_hp)
-				u.refresh_stats()
-				log_message.emit("%s 拾取金矿！攻击 +1、血量上限 +3。" % u.display_name)
-			_refresh_board()
+	_pickup_buff_at_cell(u)   # 增益道具/金矿拾取（公共逻辑，强制位移也走这里）
 	# 先刷远程被贴状态，再触发移动后技能——医护兵等用"移动攻击贴身状态结
 	# （若贴身刷新在技能之后，远程医疗兵脱离贴身时的治疗会仍按贴身攻击算）
 	_sync_ranged_adjacent()
@@ -3613,6 +3617,8 @@ func _random_step(v: Unit) -> void:
 		occupancy.erase(v.cell)
 		v.cell = n
 		occupancy[n] = v
+		_pickup_buff_at_cell(v)   # 强制位移落点同样拾取增益/金矿
+		_sync_ranged_adjacent()
 		# 缓慢移动动画，而非瞬移
 		var t := create_tween()
 		t.tween_property(v, "position", board_view.cell_world_center(n), 0.35)

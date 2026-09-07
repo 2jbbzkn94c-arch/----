@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://caprobe00000001"]
+
+[ext_resource type="Script" path="res://tests/CapProbe.gd" id="1"]
+
+[node name="CapProbe" type="Node"]
+script = ExtResource("1")

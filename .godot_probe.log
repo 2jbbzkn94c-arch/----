@@ -1,0 +1,8 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+=== 旧7列 7x7 top_cap[1,3,5] ===
+saved old7.png  648x714
+=== 现5列 top_cap[0,2,4] ===
+saved new5.png  504x756
