@@ -7,12 +7,12 @@ func on_move() -> void:
 	# 先敌人
 	for v in battle.units:
 		if v.alive and v != unit and v.hp < unit.hp and v.faction != unit.faction:
-			v.take_damage(unit.effective_atk())
+			v.take_damage(unit.effective_atk(), false, false, "被%s的末日肃清" % unit.display_name)
 			hurt_any = true
 	# 再队友
 	for v in battle.units:
 		if v.alive and v != unit and v.hp < unit.hp and v.faction == unit.faction:
-			v.take_damage(unit.effective_atk())
+			v.take_damage(unit.effective_atk(), false, false, "被%s的末日波及" % unit.display_name)
 			hurt_any = true
 	if hurt_any:
 		fx()   # 确实伤到人才呈现专属特效

@@ -27,6 +27,7 @@ var attacked_this_turn := false
 var counter_used_this_turn := false  # 近战被动阶段每回合只能反击一次
 var last_move_dist := 0              # 最近一次移动的距离（风语者回血用）
 var once_this_turn := false          # 每回合限一次类技能（圣光等）
+var death_cause := ""                # 死因描述（阵亡排查用）：take_damage 记录最后一次有效伤害来源
 
 # 状态效果（字典：状态名 -> 值）。见 DataRegistry.Status / Effects
 var statuses: Dictionary = {}
@@ -211,7 +212,7 @@ func _faction_color(f: int) -> Color:
 		return Color(0.25, 0.55, 0.9, 1.0)
 	return Color(0.85, 0.32, 0.28, 1.0)
 
-func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false) -> void:
+func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "") -> void:
 	if not alive:
 		return
 	_was_counter_damage = counter   # 记录本次是否为反击伤害
@@ -227,6 +228,11 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	if battle_node != null and battle_node.has_method("_bulwark_absorb"):
 		dmg = battle_node._bulwark_absorb(self, dmg)
 	hp = max(hp - dmg, 0)
+	# 记录本次伤害来源（死因排查用）：无显式 cause 时按反击/普通受击兜底
+	if cause == "":
+		cause = "被反击" if counter else "受击"
+	if dmg > 0:
+		death_cause = cause
 	hp_changed.emit(self)
 	damaged.emit(self, dmg)
 	_update_hp_label()

@@ -9,11 +9,11 @@ func on_attack(target: Unit) -> void:
 		return
 	for v in battle._same_side_adjacent(target):
 		if not battle._knockback(v, target.cell):
-			v.take_damage(unit.effective_atk())
+			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)
 
 func on_attack_dead(target: Unit) -> void:
 	if target == null or not target.alive:
 		return
 	for v in battle._same_side_adjacent(target):
 		if not battle._knockback(v, target.cell):
-			v.take_damage(unit.effective_atk())
+			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)

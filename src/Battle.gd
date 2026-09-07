@@ -219,7 +219,11 @@ var _preview_unit: Unit = null       # 当前预览描边的敌方单位（清�
 # 开局兜底阵容：取注册表前若干名可用角色（若非卡池进入对战
 const DEPLOY_COUNT := 3
 const DEFAULT_DECK_SIZE := 5
-const _CONSOLE_AI_LOG := true   # 分析日志：AI 各决策（行动/竞技场/首发/替补）输出到控制台
+# 控制台日志分类开关（Godot 输出面板）：
+# _CONSOLE_SUB_LOG = 替补流程日志（阵亡→待补→面板→落位→统计）：检查替补用，默认开
+# _CONSOLE_AI_LOG  = AI 行为决策日志（行动方案评分/竞技场选人/首发部署/敌方AI替补上人）：默认关，避免刷屏
+const _CONSOLE_SUB_LOG := true
+const _CONSOLE_AI_LOG := false
 
 func _default_deck() -> Array:
 	var ids := DataRegistry.heroes.keys()
@@ -1657,7 +1661,7 @@ func _tick_statuses(faction: int) -> void:
 			continue
 		if u.alive and u.faction == faction and u.has_status("poison"):
 			var hp_before := u.hp
-			u.take_damage(1)   # [猛毒]：圣盾可抵挡一次（抵挡则消耗圣盾不掉血）
+			u.take_damage(1, false, false, "猛毒")   # [猛毒]：圣盾可抵挡一次（抵挡则消耗圣盾不掉血）
 			if u.hp < hp_before:
 				log_message.emit("%s 受到[猛毒] 1 点伤害。" % u.display_name)
 func side_faction(side: int) -> int:
@@ -1756,7 +1760,7 @@ func _apply_turn_end_sync(faction: int) -> void:
 func _apply_round_damage_to(faction: int, amount: int) -> void:
 	for u in units:
 		if u.alive and u.faction == faction:
-			u.take_damage(amount)
+			u.take_damage(amount, false, false, "回合烧血")
 
 # 某方（side）行动回合结束时的超回合扣血结算（第 11 回合起，扣血= 当前回合- 10）
 # 每半回合结束各扣各：玩家回合结束扣玩家队、敌方回合结束扣敌方队（单机 AI 亦然）
@@ -1875,7 +1879,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				var hits := 0
 				for u in units:
 					if u != null and is_instance_valid(u) and u.alive and u.faction == fn:
-						u.take_damage(dmg)
+						u.take_damage(dmg, false, false, "调试扣血")
 						hits += 1
 						if not all_units and hits >= 2:
 							break
@@ -2265,7 +2269,7 @@ func _gcd(a: int, b: int) -> int:
 		b = t
 	return max(a, 1)
 
-# 攻击视线：从 from to 之间（不含两端）是否存在障碍物/单位阻挡
+# 攻击视线：从 from to 之间（不含两端）是否存在 障碍物/单位/墓碑 阻挡
 # 用六边形 cube 直线插值（los_mid_cells），修正轴向各自 round 的旧插值在斜向偏格、
 # 把贴边格误判为直线途经格的问题。
 func _attack_path_blocked(from_cell: Vector2i, to_cell: Vector2i) -> bool:
@@ -2274,6 +2278,8 @@ func _attack_path_blocked(from_cell: Vector2i, to_cell: Vector2i) -> bool:
 	for off in grid.los_mid_cells(from_cell, to_cell):
 		if obstacles.has(off):
 			return true
+		if graves.has(off):
+			return true   # 墓碑像障碍物一样挡攻击视线
 		if occupancy.has(off):
 			return true   # 单位（敌我）也阻挡攻击视线：直线不可穿过他人钩目
 	return false
@@ -2777,8 +2783,15 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 				break
 	else:
 		path = grid.find_path(u.cell, target_cell, _current_path_blockers(u))
-		if path.size() == 0 or path.back() != target_cell:
-			path = [target_cell]
+		# 防御：find_path 在目标不可达时按约定也返回 [goal]（单格直跳）。
+		# 若中间格在寻路后被新墓碑/新单位占据（敌方回放中我方英雄中途阵亡），
+		# 禁止整段越过（否则敌方会穿过墓碑/单位）——保持墓碑/单位挡路规则一致：
+		# 仅当目标确实相邻(距离1)才允许该"单步直跳"，否则本次移动放弃。
+		if path.size() == 1 and grid.distance(u.cell, target_cell) > 1:
+			path = []
+		if path.size() == 0:
+			_finish_move(u, for_enemy)
+			return
 	# 防御：无论调用方传入多远的目标，单次移动不得超过单位的实际移动力
 	# 把路径截断到有效移动力步数，杜绝敌方 AI 计划偏差/偏移导致程移动
 	var max_steps := u.effective_move()
@@ -2835,7 +2848,7 @@ func _bomb_enter_check(u: Unit, cell: Vector2i, _for_enemy: bool) -> bool:
 		board_view.bombs = bombs
 		board_view.queue_redraw()
 	log_message.emit("%s 踩中炸弹！" % u.display_name)
-	u.take_damage(5)
+	u.take_damage(5, false, false, "踩中炸弹")
 	return u.alive   # 爆炸致死 -> 停止前进（不再走完剩余路径）
 
 # 统一炸弹触发：任意方式（击退/拉近/换位/瞬移/随机步…）让炸弹人以外的单位出现在炸弹格上都会引爆
@@ -2850,7 +2863,7 @@ func _trigger_bomb(u: Unit) -> void:
 		board_view.bombs = bombs
 		board_view.queue_redraw()
 	log_message.emit("%s 踩中炸弹！" % u.display_name)
-	u.take_damage(5)
+	u.take_damage(5, false, false, "踩中炸弹")
 
 # 冲锋（hero_24）：from 沿某*轴向**直线方向逐格直到 to 的直线格
 func _charge_line_cells(from: Vector2i, to: Vector2i) -> Array:
@@ -2923,8 +2936,8 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 		return
 	var prev_move_buff := u.move_use_buff   # 移动开始前已有的移动 buff（本次移动应消耗的部分）
 	u.moved_this_turn = true
-	# 风语者光环：该阵营有风语者时，其他队友按移动距离回血（风语者本人不在光环内
-	if u.alive and u.hero_id != "hero_43" and _has_wind_speaker(u.faction) and u.last_move_dist > 0:
+	# 风语者光环：移动回血（自己不吃自己的光环，但场上另有风语者时互为"其他队友"可回血）
+	if u.alive and u.last_move_dist > 0 and _has_other_wind_speaker(u):
 		_heal(u, u.last_move_dist)
 		log_message.emit("%s 移动 %d 格，风语者令其回复 %d 点生命。" % [u.display_name, u.last_move_dist, u.last_move_dist])
 	# 炸弹爆炸：非炸弹人踏上炸弹格（已_bomb_enter_check 在逐格动画中处理：经过或停留均爆炸
@@ -2938,6 +2951,11 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 	# 因为buff 靠走过去，此时本次移动已结算，不应把新捡的当作被本次移动用掉
 	if prev_move_buff > 0:
 		u.move_use_buff = maxi(u.move_use_buff - prev_move_buff, 0)
+		u.refresh_stats()
+	# 攻击道具的+1 只在攻击结算（主动攻击/反击）后消耗；后勤不能主动攻击，
+	# 其整回合行动=移动，移动完成即视为该道具作废清掉，避免无限残留到以后回合
+	if _is_logistics(u) and u.atk_use_buff > 0:
+		u.atk_use_buff = 0
 		u.refresh_stats()
 	_clear_selection()
 	if for_enemy:
@@ -2958,6 +2976,10 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 
 # 移动后的通用收尾：还能攻击则继续选中该单位，否则进入回合结束判断
 func _continue_after_move(u: Unit) -> void:
+	# 替补面板已开/待落位期间：不恢复玩家输入（面板开着不能点其它英雄行动/再选中）。
+	# 恢复交给替补落位完成后的 _resume_after_sub()。
+	if _sub_faction != -1 or state == State.SUBSTITUTING or state == State.PLACE_SUB:
+		return
 	# 后勤不能主动攻击：移动后即完成，直接进入回合结束判断
 	if _is_logistics(u):
 		_after_player_action()
@@ -3034,7 +3056,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 长角未沉默：on_attack 统一结算基础伤害（击退倍，不能倍单次）
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
-			target.take_damage(dmg)
+			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name)
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤攻降/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
@@ -3091,7 +3113,11 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			return   # 反击者在演出期间被释放：跳过反击，正常收尾
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			attacker.take_damage(cdmg, false, true)
+			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
+		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
+			counterer.atk_use_buff = 0
+			counterer.refresh_stats()
 		var br := create_tween()
 		br.tween_property(counterer, "position", cpos, 0.12)
 		br.tween_callback(func():
@@ -3118,7 +3144,11 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		proj.queue_free()
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			attacker.take_damage(cdmg, false, true)
+			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
+		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
+			counterer.atk_use_buff = 0
+			counterer.refresh_stats()
 		# 太阳斩：每次反击后攻击力-1，直到恢复正
 		if is_instance_valid(counterer) and counterer.alive:
 			_hero(counterer).on_after_counter()
@@ -3148,6 +3178,10 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 	_after_player_action()
 
 func _after_player_action() -> void:
+	# 替补面板已开/待落位期间：不在这里恢复玩家输入（否则面板开着还能点其它英雄行动）。
+	# 恢复交给替补落位完成后的 _resume_after_sub() 统一处理。
+	if _sub_faction != -1 or state == State.SUBSTITUTING or state == State.PLACE_SUB:
+		return
 	if _has_remaining_player():
 		state = State.PLAYER_INPUT
 		# 不自动选中下一个，由玩家点击（也可点结束回合提前结束）
@@ -3193,7 +3227,11 @@ func _end_side(side: int) -> void:
 	if GameState.match_over:
 		_ending_side = false
 		return   # 结算扣血导致本局已结束（如超回合烧死判负）：不再推进回合/开下回合界
-	print("[替补统计] 我方回合结束：我还可替补次数=%d" % _my_sub_quota())
+	# 排空淡出中的死亡结算（与敌回合末一致）：先让本回合内死亡全部落定（墓碑/替补统计），
+	# 再打印"回合结束"并切边，避免死亡结算撞上回合切换、日志/补位顺序错乱
+	await _drain_pending_deaths()
+	if _CONSOLE_SUB_LOG:
+		print("[替补统计] 我方回合结束：我还可替补次数=%d" % _my_sub_quota())
 	_ending_side = false   # 结算完毕：之后（含换边演出期间）的阵亡恢复正常替补规
 	GameState.end_current_side(_first_side)
 	# 换边停顿：让"上一方回合结束的演出"下一方回合开始被动的演出"之间
@@ -3416,9 +3454,11 @@ func _same_side_adjacent(x: Unit) -> Array:
 			out.append(v)
 	return out
 
-func _has_wind_speaker(faction: int) -> bool:
+# 场上是否存在"另一位"存活风语者（≠u）：移动回血按"其他队友"判定——
+# 风语者本人吃不到自己发的光环，但两个风语者在场时互为队友、都可回血
+func _has_other_wind_speaker(u: Unit) -> bool:
 	for v in units:
-		if v.alive and v.faction == faction and v.hero_id == "hero_43":
+		if v.alive and v.faction == u.faction and v.hero_id == "hero_43" and v != u:
 			return true
 	return false
 
@@ -3684,7 +3724,7 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 			break
 		var v = occupancy.get(off, null)
 		if v != null and v.alive and v.faction != u.faction:
-			v.take_damage(u.effective_atk())
+			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name)
 		cur += step
 
 # 剑气演出：从攻击者沿目标直线方向飞到尽头后消
@@ -3796,7 +3836,7 @@ func _hurt_lowest_enemy_stun(u: Unit) -> bool:
 			if best == null or v.hp < best.hp:
 				best = v
 	if best != null:
-		best.take_damage(3)
+		best.take_damage(3, false, false, "被%s锁定重创" % u.display_name)
 		_add_status_msg(best, "stun", "眩晕")
 		return true
 	return false   # 没有敌方目标：技能未生效
@@ -3892,7 +3932,10 @@ func _my_sub_quota() -> int:
 func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	if u == null or not is_instance_valid(u):
 		return   # 单位已释放：安全退
-	log_message.emit("%s 阵亡。" % u.display_name)
+	var cause_txt := ""
+	if u != null and u.death_cause != "":
+		cause_txt = "（%s）" % u.death_cause
+	log_message.emit("%s 阵亡%s。" % [u.display_name, cause_txt])
 	# 专属阵亡效果（红帽扑街等
 	_hero(u).on_died()
 	if occupancy.get(u.cell) == u:
@@ -3947,13 +3990,13 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 				# 我方在回合行动中阵亡（如被反击击杀）：立即替补（回合开始演出期除外）
 				# 同时阵亡多人则计数，逐个替补（落位后自动开下一个面板）
 				_pending_player_subs += 1
-				if _CONSOLE_AI_LOG:
+				if _CONSOLE_SUB_LOG:
 					print("[替补] 我方%s 即时阵亡，待补名额=%d" % [u.display_name, _pending_player_subs])
 				_try_begin_next_sub()
 			else:
 				# 对方回合 / 本方"结束回合-结算扣血"期间阵亡：不立即替补，等本方下回合开始再逐个补位
 				_pending_player_subs += 1
-				if _CONSOLE_AI_LOG:
+				if _CONSOLE_SUB_LOG:
 					print("[替补] 我方%s 延迟阵亡（敌回合/结算/回合开始演出期），待补名额=%d" % [u.display_name, _pending_player_subs])
 	elif not GameState.is_online:
 		# 单机：敌AI)阵亡 -> 自动按阵亡数量补
@@ -3962,7 +4005,11 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
 			if GameState.active_side == GameState.SIDE_ENEMY:
 				_place_enemy_sub()
-	print("[替补统计] %s（%s）阵亡后：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", _my_sub_quota()])
+	if _CONSOLE_SUB_LOG:
+		var cause_txt2 := ""
+		if u != null and u.death_cause != "":
+			cause_txt2 = " 死因：%s" % u.death_cause
+		print("[替补统计] %s（%s）阵亡后%s：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", cause_txt2, _my_sub_quota()])
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
@@ -4090,7 +4137,7 @@ func _try_begin_next_sub() -> void:
 	if state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		return   # 替补面板已在进行：本次落位后会自动开启下一个替补名额
 	_pending_player_subs -= 1
-	if _CONSOLE_AI_LOG:
+	if _CONSOLE_SUB_LOG:
 		print("[替补面板] 开新面板：本次后待补=%d，替补席=%d" % [_pending_player_subs, _my_roster().size()])
 	_begin_substitution()
 
@@ -4134,7 +4181,8 @@ func _auto_sub_cell() -> Vector2i:
 	return Vector2i(-99, -99)
 
 func _on_sub_pick(hero_id: String) -> void:
-	print("[subclick-battle] 收到点击 %s state=%d sub_faction=%d roster=%s" % [hero_id, state, _sub_faction, str(_roster_of(_sub_faction))])
+	if _CONSOLE_SUB_LOG:
+		print("[subclick-battle] 收到点击 %s state=%d sub_faction=%d roster=%s" % [hero_id, state, _sub_faction, str(_roster_of(_sub_faction))])
 	var roster := _roster_of(_sub_faction)
 	if not roster.has(hero_id):
 		return
@@ -4252,7 +4300,7 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	# 注意：连续替补期*不刷*常驻"替补队伍"面板（避免它和替补面板重叠）
 	# 常驻面板留到最后一个替补完成后再刷新
 	var more_subs := _pending_player_subs > 0 and fn == _my_faction() and _my_roster().size() > 0
-	if _CONSOLE_AI_LOG and fn == _my_faction():
+	if _CONSOLE_SUB_LOG and fn == _my_faction():
 		print("[替补面板] 落位完成：待补=%d 替补席=%d → 再开=%s" % [_pending_player_subs, _my_roster().size(), more_subs])
 	if more_subs:
 		_try_begin_next_sub()
@@ -4559,6 +4607,7 @@ func _run_enemy_turn() -> void:
 
 	var ai := BattleAI.new(grid)
 	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = _CONSOLE_AI_LOG   # AI 行动方案评分输出跟随 AI 行为日志总开关（默认关）
 	# 金矿（buff_items[cell]=="gold"）供 AI 参考，让黄金矿工优先走过去拾取
 	var gold_snap := {}
 	for c in buff_items.keys():
@@ -4605,7 +4654,12 @@ func _run_enemy_turn() -> void:
 			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
 			_clear_statuses(DataRegistry.Faction.ENEMY)
 			_settle_side_round_damage(GameState.SIDE_ENEMY)   # 1回合起：敌半回合结束只扣敌方
-			print("[替补统计] 敌方回合结束：我可替补次数=%d" % _my_sub_quota())
+			# 排空淡出中的死亡结算：死在敌回合最后一步的单位其 died 晚 0.3s 触发，
+			# 若在此切边，补位窗口（active_side==ENEMY）会错过、阵亡日志晚于"回合结束"打印。
+			# 先把死亡全部结算完（墓碑/补位/统计），再打印回合结束并切边。
+			await _drain_pending_deaths()
+			if _CONSOLE_SUB_LOG:
+				print("[替补统计] 敌方回合结束：我可替补次数=%d" % _my_sub_quota())
 			GameState.end_current_side(_first_side)
 			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
 			await get_tree().create_timer(0.8).timeout
@@ -4680,4 +4734,22 @@ func _wait_action_done() -> void:
 			return   # 已重开：安全退出
 		if get_tree() == null:
 			return   # 已脱离场景树：停止轮询
+		await get_tree().process_frame
+
+# 排空"淡出中的死亡结算"：die() 先淡出 0.3s 才发 died（墓碑/补位/阵亡日志都在 died 后执行）。
+# 若回合末不等待，死在敌方回合最后一步的单位，其结算会撞上回合切换（补位窗口按 active_side
+# 判断会错过、"敌方回合结束"日志先打印、墓碑晚一拍）。回合切边前调用，让死亡先结算完。
+func _drain_pending_deaths() -> void:
+	var my_session := _session_id
+	var deadline := Time.get_ticks_msec() + 2500   # 兜底超时：异常卡住不永久阻塞回合
+	while true:
+		var pending := false
+		for u in units:
+			if u != null and is_instance_valid(u) and not u.alive:
+				pending = true   # 还有已死未结算（淡出中）的单位
+				break
+		if not pending:
+			return
+		if get_tree() == null or my_session != _session_id or Time.get_ticks_msec() > deadline:
+			return   # 场景已释放/已重开/超时：安全退出
 		await get_tree().process_frame

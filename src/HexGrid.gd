@@ -137,22 +137,15 @@ func flip_center() -> Vector2:
 	return _flip_center
 
 # 攻击视线：返回从 from 到 to 直线上的中间格（不含两端）。
-# 规则（与多数六边形战棋一致）：只有当两点位于**同一条六向轴线**上时，中间格才参与
-# 视线阻挡（可被障碍/单位挡住）；斜向目标（不在同轴直线）不受中间障碍影响——
-# 因为斜向连线的"中间格"在相邻两格边界上有歧义，把贴边障碍误判为挡路会让远程
-# 在障碍旁却打不到远处敌人。六向轴线 = 轴向差满足 dq==0 或 dr==0 或 dq==-dr。
+# 任一方向都按 cube 线性插值取途经格（含斜向）参与视线阻挡：
+# 只要视线连线上存在障碍/单位/墓碑（含斜向中间格），就被挡住。
 func los_mid_cells(from: Vector2i, to: Vector2i) -> Array:
 	var out: Array = []
 	if from == to:
 		return out
 	var fa := _offset_to_axial(from)
 	var ta := _offset_to_axial(to)
-	var dq := ta.x - fa.x
-	var dr := ta.y - fa.y
-	# 非轴向（斜向）目标：中间无阻挡格，直接返回空
-	if dq != 0 and dr != 0 and dq != -dr:
-		return out
-	# 轴向直线：cube 线性插值取中间格
+	# cube 线性插值取中间格（任意方向）
 	var cube_a := Vector3(float(fa.x), float(fa.y), -float(fa.x + fa.y))
 	var cube_b := Vector3(float(ta.x), float(ta.y), -float(ta.x + ta.y))
 	var n := distance(from, to)

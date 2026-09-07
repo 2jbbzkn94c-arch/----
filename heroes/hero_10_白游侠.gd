@@ -9,7 +9,7 @@ func on_attack(target: Unit) -> void:
 		return
 	battle._add_status_msg(target, "freeze", "冰冻")
 	for v in battle._same_side_adjacent(target):
-		v.take_damage(unit.effective_atk())
+		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name)
 		battle._add_status_msg(v, "freeze", "冰冻")
 
 func on_attack_dead(target: Unit) -> void:
@@ -17,5 +17,5 @@ func on_attack_dead(target: Unit) -> void:
 		return
 	# 死亡目标：仍冰冻其相邻敌人（目标本体已亡，不再冰冻自身）
 	for v in battle._same_side_adjacent(target):
-		v.take_damage(unit.effective_atk())
+		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name)
 		battle._add_status_msg(v, "freeze", "冰冻")

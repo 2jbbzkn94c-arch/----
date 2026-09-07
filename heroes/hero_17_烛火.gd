@@ -14,4 +14,4 @@ func on_move() -> void:
 		return   # 无相邻敌人也无相邻障碍：技能未生效，不演出
 	fx()   # 确实烫到目标时才呈现专属特效
 	for v in enemies:
-		v.take_damage(unit.effective_atk())
+		v.take_damage(unit.effective_atk(), false, false, "被%s的烛火灼烧" % unit.display_name)
