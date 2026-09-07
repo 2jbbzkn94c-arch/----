@@ -237,7 +237,7 @@ func _ready() -> void:
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
 	grid = HexGrid.new(board_size.x, board_size.y, hex_size)
-	grid.top_cap_cols = [0, 2, 4]   # 删左右各一列后:顶帽行保留原 1,3,5 → 左移为 0,2,4
+	grid.top_cap_cols = [1, 3]   # 删左右各一列后:5列棋盘顶帽行为居中 2 格(奇列 1,3),保持与下方偶列交错
 	# 联机访客：把棋盘绕中心旋180°，让"我方阵营"始终落在屏幕下方
 	# 只影响渲鼠标回查，不改任何逻辑阵营，故两端确定性不受影响
 	grid.view_flip = GameState.is_online and not GameState.is_host

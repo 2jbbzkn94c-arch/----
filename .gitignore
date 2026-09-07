@@ -10,3 +10,9 @@ Thumbs.db
 .DS_Store
 
 # 本地快照库不在工程内（位于 战旗_snapshots/），无需在此忽略
+
+# 调试临时产物
+/.godot_*.log
+/.cap_probe_out/
+/tests/CapProbe.*
+
