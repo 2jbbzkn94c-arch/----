@@ -10,6 +10,7 @@ signal sub_placed                        # 替补成功落位（HUD 可关闭替
 signal action_finished                   # 某单位一招（移动/攻击）动画完全结束后发出（敌方回放等待用
 signal team_updated                      # 英雄阵容变化（上替补/变身/阵亡）——HUD 刷新下方队伍展示
 signal enemy_turn_waiting                # 联机：敌方回合已开始，等待对端真人发行动指
+signal peer_message(text: String)        # 联机:收到对端快捷喊话(顶栏下方弹气泡)
 enum State { IDLE, PLAYER_INPUT, ANIMATING, ENEMY_TURN, DEPLOY, PLACE_DEPLOY, SUBSTITUTING, PLACE_SUB, PLACE_BOMB, ARENA_DRAFT, ENDED }
 
 # 远程攻击的投掷物：飞向目标后命中
@@ -361,6 +362,12 @@ func _send_turn_time_left() -> void:
 	if not GameState.is_online or not NetBus.is_online:
 		return
 	NetBus.send_all(JSON.stringify({ "type": "turn_time", "left": int(ceil(turn_time_left)) }))
+
+# 联机快捷喊话:把预置言论发给对端(仅联机对战中有意义)
+func send_quick_chat(text: String) -> void:
+	if text == "" or not GameState.is_online or not NetBus.is_online:
+		return
+	NetBus.send_all(JSON.stringify({ "type": "chat", "text": text }))
 
 # ---- 竞技场模式：随机2构建双方卡组 ----
 func _begin_arena_draft() -> void:
@@ -2599,6 +2606,12 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			apply_deployment(int(cmd.get("faction", 0)), String(cmd.get("hero", "")), _v2(cmd.get("cell")))
 			if state == State.DEPLOY or state == State.PLACE_DEPLOY:
 				_deploy_after_pick()
+			return
+		if t == "chat":
+			# 联机快捷喊话:对端点选预置言论后发出,本端在顶部状态栏下方弹气泡
+			var chat_txt := String(cmd.get("text", ""))
+			if chat_txt != "":
+				peer_message.emit(chat_txt)
 			return
 		if t == "begin_side":
 			# 主机权威公布"当前行动回合：客户端据此同步 active_side/round 并执_begin_side

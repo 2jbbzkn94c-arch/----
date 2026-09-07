@@ -28,6 +28,11 @@ var _unit_card_overlay: Control = null   # 右键英雄信息卡（成员持有�
 var _notice_overlay: Control = null      # 开局"先手"浮框（短暂显示后自动消失）
 var _notice_show_ms := 0                  # 先手提示出现时间（最短展示时间判定用）
 const FIRST_NOTICE_MIN_SECONDS := 3.0     # 先手提示在普通模式下最少展示时长（秒）
+# 联机快捷喊话:左下角按钮 + 选言面板 + 顶部气泡
+var _chat_btn: Button = null
+var _chat_panel: PanelContainer = null
+var _chat_bubble: PanelContainer = null
+var _chat_bubble_tween: Tween = null
 
 func _ready() -> void:
 	layer = 50
@@ -47,6 +52,7 @@ func bind(b: Battle) -> void:
 	battle.item_view_requested.connect(show_item_info)
 	battle.touch_view_end_requested.connect(_close_unit_card)
 	battle.turn_banner.connect(_show_turn_banner)
+	battle.peer_message.connect(_show_peer_chat)
 	# 用对象方法而非 lambda 连接 autoload 信号：场景释放时 Godot 自动断开连接，
 	# 避免"全局信号在对象释放后仍回调其 lambda（Lambda capture freed）"。
 	GameState.round_changed.connect(_on_round_changed)
@@ -916,6 +922,7 @@ func _close_team_panel() -> void:
 	if _team_panel:
 		_team_panel.queue_free()
 		_team_panel = null
+	_close_chat_panel()   # 阶段切换/重开时收起喊话选言面板
 
 func _build() -> void:
 	var vsize := get_viewport().get_visible_rect().size
@@ -972,7 +979,8 @@ func _build() -> void:
 	_enemy_deaths.text = "☠☠☠ 敌方"
 	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_enemy_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_enemy_deaths.size = Vector2(vsize.x - 12, 32)
+	# 右端留出 96px 给右上角音量调节按钮，阵亡计数文字随之左移，避免重叠
+	_enemy_deaths.size = Vector2(maxf(0, vsize.x - 96), 32)
 	_enemy_deaths.position = Vector2(0, 11)
 	root.add_child(_enemy_deaths)
 	_refresh_deaths()
@@ -1023,6 +1031,14 @@ func _build() -> void:
 	_refresh_controls()
 	_build_edge_warning(root, vsize)
 
+	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）
+	var volume := VolumeControl.new()
+	root.add_child(volume)
+	volume.place_top_right(vsize)
+
+	# 左下角"喊话"按钮(仅联机对战中显示)
+	_build_chat_button(root, vsize)
+
 # 屏幕边缘警告层：容器内四条浅红半透明边条；回合剩余时间不足时整体呼吸闪烁
 func _build_edge_warning(root: Control, vsize: Vector2) -> void:
 	_warn_holder = Control.new()
@@ -1053,6 +1069,146 @@ func _make_panel(bg: Color) -> StyleBoxFlat:
 	sb.corner_radius_bottom_left = 10
 	sb.corner_radius_bottom_right = 10
 	return sb
+
+# ================= 联机快捷喊话 =================
+# 左下角按钮:点开预置言论面板(嘲讽/友好各几条),点选后发给对端;
+# 收到对端喊话时在顶部状态栏(回合栏)下方弹气泡条,短暂停留后自动淡出。
+const _CHAT_TAUNTS := [
+	"就这？",
+	"投降吧，没机会了",
+	"这步走得不太行哦",
+	"嘿嘿，别跑呀",
+	"胜负已定！",
+]
+const _CHAT_FRIENDLY := [
+	"打得不错！",
+	"好险好险，精彩",
+	"交个朋友，切磋愉快",
+	"运气不错哈哈",
+	"GG 打得漂亮",
+]
+
+func _build_chat_button(root: Control, vsize: Vector2) -> void:
+	if not GameState.is_online:
+		return
+	var btn := Button.new()
+	btn.text = "喊话"
+	btn.custom_minimum_size = Vector2(76, 44)
+	btn.add_theme_font_size_override("font_size", 16)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.16, 0.18, 0.26, 0.92)
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.border_color = Color(0.6, 0.7, 1.0, 0.5)
+	sb.set_border_width_all(1)
+	btn.add_theme_stylebox_override("normal", sb)
+	btn.pressed.connect(_toggle_chat_panel)
+	btn.position = Vector2(10, vsize.y - 56 - 10)
+	root.add_child(btn)
+	_chat_btn = btn
+
+func _toggle_chat_panel() -> void:
+	if _chat_panel != null and is_instance_valid(_chat_panel):
+		_chat_panel.queue_free()
+		_chat_panel = null
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", _make_panel(Color(0.1, 0.1, 0.16, 0.96)))
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 4)
+	panel.add_child(v)
+	var add_group := func(title: String, color: Color, items: Array):
+		var lbl := Label.new()
+		lbl.text = title
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.add_theme_color_override("font_color", color)
+		v.add_child(lbl)
+		for txt in items:
+			var b := Button.new()
+			b.text = txt
+			b.custom_minimum_size = Vector2(200, 34)
+			b.add_theme_font_size_override("font_size", 15)
+			b.add_theme_color_override("font_color", Color(0.95, 0.95, 1.0))
+			var bs := StyleBoxFlat.new()
+			bs.bg_color = Color(0.2, 0.22, 0.32, 0.95)
+			bs.corner_radius_top_left = 8
+			bs.corner_radius_top_right = 8
+			bs.corner_radius_bottom_left = 8
+			bs.corner_radius_bottom_right = 8
+			b.add_theme_stylebox_override("normal", bs)
+			b.pressed.connect(func():
+				_send_chat(String(b.text)))
+			v.add_child(b)
+	add_group.call("嘲讽", Color(1.0, 0.55, 0.5), _CHAT_TAUNTS)
+	add_group.call("友好", Color(0.5, 0.9, 0.6), _CHAT_FRIENDLY)
+	var pw := 220.0
+	panel.size = Vector2(pw, 0)
+	add_child(panel)
+	# 面板出现在左下角按钮上方
+	await get_tree().process_frame
+	var ph := panel.get_combined_minimum_size().y
+	panel.position = Vector2(10, vsize.y - 56 - 10 - ph - 6)
+	_chat_panel = panel
+
+func _send_chat(txt: String) -> void:
+	_close_chat_panel()
+	if battle != null and is_instance_valid(battle):
+		battle.send_quick_chat(txt)
+
+func _close_chat_panel() -> void:
+	if _chat_panel != null and is_instance_valid(_chat_panel):
+		_chat_panel.queue_free()
+	_chat_panel = null
+
+# 收到对端喊话:顶部回合栏下方弹气泡条(横幅样式,几秒后淡出),不拦截操作
+func _show_peer_chat(txt: String) -> void:
+	if txt == "":
+		return
+	if _chat_bubble_tween != null and _chat_bubble_tween.is_valid():
+		_chat_bubble_tween.kill()
+	if _chat_bubble != null and is_instance_valid(_chat_bubble):
+		_chat_bubble.queue_free()
+	var vsize := get_viewport().get_visible_rect().size
+	var bubble := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.1, 0.16, 0.92)
+	sb.corner_radius_top_left = 12
+	sb.corner_radius_top_right = 12
+	sb.corner_radius_bottom_left = 12
+	sb.corner_radius_bottom_right = 12
+	sb.border_color = Color(1.0, 0.85, 0.4, 0.6)
+	sb.set_border_width_all(1)
+	bubble.add_theme_stylebox_override("panel", sb)
+	bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var label := Label.new()
+	label.text = "对方：%s" % txt
+	label.add_theme_font_size_override("font_size", 16)
+	label.add_theme_color_override("font_color", Color(1.0, 0.93, 0.7))
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+	label.add_theme_constant_override("outline_size", 3)
+	label.custom_minimum_size = Vector2(0, 30)
+	bubble.add_child(label)
+	add_child(bubble)
+	_chat_bubble = bubble
+	await get_tree().process_frame
+	var bw := bubble.get_combined_minimum_size().x
+	bubble.size = Vector2(bw, 0)
+	bubble.position = Vector2((vsize.x - bw) / 2.0, 62.0)   # 顶部回合栏(54)下方
+	bubble.modulate.a = 0.0
+	var t := create_tween()
+	_chat_bubble_tween = t
+	t.tween_property(bubble, "modulate:a", 1.0, 0.18)
+	t.tween_interval(2.6)
+	t.tween_property(bubble, "modulate:a", 0.0, 0.4)
+	t.tween_callback(func():
+		if is_instance_valid(bubble):
+			bubble.queue_free()
+		if _chat_bubble == bubble:
+			_chat_bubble = null)
 
 func _set_round_text(round_num: int, _player_side: bool) -> void:
 	# 联机视角：本端操作的是"我方"，另一方是"敌方"。用 battle._my_side() 判断本端是否当前行动方。
