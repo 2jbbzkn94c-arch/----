@@ -391,20 +391,12 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 	var stop := sim.occ.duplicate()
 	var blockers := sim.occ.duplicate()
 	if u.skills.has(DataRegistry.Skill.INFILTRATE):
+		# 渗透：可穿过双方单位+障碍/墓碑，只是不能停靠（stop 含全体单位/障碍/墓碑）
 		blockers = {}
-		for c in sim.occ.keys():
-			var occv: Variant = sim.occ[c]
-			var occ_unit: SimUnit = null
-			if occv is int:
-				occ_unit = sim.units[int(occv)]
-			else:
-				occ_unit = occv
-			if occ_unit != null and occ_unit.fn == u.fn:
-				blockers[c] = true
 		for g in sim.graves.keys():
-			stop[g] = true   # 渗透：墓碑可穿行，但不可落停
+			stop[g] = true
 		for o in sim.obstacles.keys():
-			stop[o] = true   # 渗透：可穿过障碍，但不能停在障碍格上
+			stop[o] = true
 	else:
 		for g in sim.graves.keys():
 			stop[g] = true

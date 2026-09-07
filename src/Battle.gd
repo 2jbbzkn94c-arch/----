@@ -2273,15 +2273,12 @@ func _move_reachable(u: Unit) -> Dictionary:
 	var stop_forbidden := occupancy.duplicate()
 	var path_blockers := occupancy.duplicate()
 	if u.skills.has(DataRegistry.Skill.INFILTRATE):
-		# 敌方单位与障碍物/墓碑都变可通行但不可停"，友方仍阻挡
+		# 渗透：可穿过 双方单位 + 障碍/墓碑，只是不能停靠在任何被占/障碍/墓碑格
 		path_blockers = {}
-		for c in occupancy.keys():
-			if occupancy[c].faction == u.faction:
-				path_blockers[c] = true
 		for oc in obstacles.keys():
-			stop_forbidden[oc] = true   # 渗透：障碍可穿行，但不可停靠
+			stop_forbidden[oc] = true   # 障碍可穿行，但不可停靠
 		for g in graves.keys():
-			stop_forbidden[g] = true    # 渗透：墓碑可穿行，但不可停靠
+			stop_forbidden[g] = true    # 墓碑可穿行，但不可停靠
 	else:
 		# 障碍墓碑同样阻挡通行——只写入本地拷贝，勿污染 occupancy
 		for oc in obstacles.keys():
@@ -2746,11 +2743,8 @@ func _charge_line_cells(from: Vector2i, to: Vector2i) -> Array:
 func _current_path_blockers(u: Unit) -> Dictionary:
 	var blockers := occupancy.duplicate()
 	if u.skills.has(DataRegistry.Skill.INFILTRATE):
+		# 渗透：双方单位/障碍/墓碑都可穿行（不可停靠在别处控制），路径无阻挡
 		blockers = {}
-		for c in occupancy.keys():
-			if occupancy[c].faction == u.faction:
-				blockers[c] = true
-		# 渗透：障碍/墓碑可穿行，不作为阻
 	else:
 		for oc in obstacles.keys():
 			blockers[oc] = true

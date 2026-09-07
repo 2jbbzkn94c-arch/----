@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 卡牌/英雄数据注册表（全局自动加载）。
 ## 从 res://角色列表.md 解析全部角色，生成数值、品级、类型与关键词标签。
 ## 复杂/角色专属技能全文存入 desc（暂未实现），引擎已支持：近战/远程、嘲讽、疾行、渗透。
@@ -458,7 +458,7 @@ func keyword_lines(skills: Array, attack_type: int) -> Array:
 			Skill.TAUNT:
 				out.append("嘲讽：攻击范围内有带【嘲讽】的敌人时，只能先攻击它")
 			Skill.INFILTRATE:
-				out.append("渗透：可穿过敌方单位与障碍物（但不能落停在它们占据的格）")
+				out.append("渗透：可穿过双方单位与障碍物（但不能落停在它们占据的格）")
 			Skill.LOGISTICS:
 				out.append("后勤：不能主动攻击，仅提供光环/支援效果")
 			Skill.BENCH:
