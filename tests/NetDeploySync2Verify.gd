@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## 联机部署双端一致：同种子两端 Battle，各自 apply_deployment 放同一批单位，验证位置/阵营完全一致。
 ## 运行：godot --headless --scene res://tests/NetDeploySync2Verify.tscn
 var host: Battle
@@ -29,14 +29,14 @@ func _setup(b: Battle) -> void:
 func _run() -> void:
 	clear_all(host); clear_all(client)
 	_setup(host); _setup(client)
-	# 双方用同一批部署消息放置（玩家方 3 名 + 敌方 3 名）
+	# 双方用同一批部署消息放置（玩家方 3 名 + 敌方 3 名；5列棋盘 x∈0..4）
 	var deploy_plan := [
-		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_06", "cell": Vector2i(1, 6) },
-		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_17", "cell": Vector2i(3, 6) },
-		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_26", "cell": Vector2i(5, 6) },
+		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_06", "cell": Vector2i(0, 6) },
+		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_17", "cell": Vector2i(2, 6) },
+		{ "faction": DataRegistry.Faction.PLAYER, "hero": "hero_26", "cell": Vector2i(4, 6) },
 		{ "faction": DataRegistry.Faction.ENEMY, "hero": "hero_13", "cell": Vector2i(0, 1) },
-		{ "faction": DataRegistry.Faction.ENEMY, "hero": "hero_12", "cell": Vector2i(6, 1) },
-		{ "faction": DataRegistry.Faction.ENEMY, "hero": "hero_23", "cell": Vector2i(3, 0) },
+		{ "faction": DataRegistry.Faction.ENEMY, "hero": "hero_12", "cell": Vector2i(2, 1) },
+		{ "faction": DataRegistry.Faction.ENEMY, "hero": "hero_23", "cell": Vector2i(1, 0) },
 	]
 	for d in deploy_plan:
 		host.apply_deployment(d.faction, d.hero, d.cell)

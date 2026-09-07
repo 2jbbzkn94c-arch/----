@@ -711,9 +711,9 @@ const DEPLOY_COUNT_BATTLE := 3
 const DEPLOY_BUDGET_SECONDS := 30.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
 var deploy_budget_left := DEPLOY_BUDGET_SECONDS   # 剩余总时间（随时间流逝减少，不按轮重置）
 var deploy_budget_active := false                 # 当前是否正处本端真人选人/放位（此时才倒计时）
-# 敌方出生区整片（顶帽 row0 的 0,2,4 + 第一满行 row1 的 1,3 交错皇冠，共 5 格）
+# 敌方出生区整片（顶帽 row0 的 1,3 + 第一满行 row1 的 0,2,4 交错皇冠，共 5 格；居中窄顶宽底）
 const ENEMY_ZONE_CELLS: Array = [
-	Vector2i(0, 0), Vector2i(1, 1), Vector2i(2, 0), Vector2i(3, 1), Vector2i(4, 0),
+	Vector2i(1, 0), Vector2i(0, 1), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1),
 ]
 var player_pool: Array = []
 var enemy_pool: Array = []
@@ -1288,21 +1288,7 @@ func _place_units() -> void:
 			_seed_sandbox_roster(GameState.player_deck, used, player_roster)
 			_seed_sandbox_roster(GameState.enemy_deck, used, enemy_roster)
 		return
-
-# 沙箱替补池：队伍里未上场的先进替补；若没给队伍卡组（兼容旧测试），退回"全英雄池减已上场"
-func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
-	if deck.size() > 0:
-		for hid in deck:
-			if used.has(hid) or roster.has(hid):
-				continue
-			roster.append(hid)
-		return
-	var pool := DataRegistry.heroes.keys()
-	pool.sort()
-	for hid in pool:
-		if used.has(hid):
-			continue
-		roster.append(hid)
+	# —— placement 为空:走正常部署(默认卡组 3 上阵,其余替补)——
 	var p_deck := GameState.player_deck
 	var e_deck := GameState.enemy_deck
 	if p_deck.size() == 0:
@@ -1329,15 +1315,29 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 	_place_obstacles()
 	log_message.emit("双方各上 %d 名英雄，另有 %d / %d 名替补待命。" % [DEPLOY_COUNT, player_roster.size(), enemy_roster.size()])
 
+# 沙箱替补池：队伍里未上场的先进替补；若没给队伍卡组（兼容旧测试），退回"全英雄池减已上场"
+func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
+	if deck.size() > 0:
+		for hid in deck:
+			if used.has(hid) or roster.has(hid):
+				continue
+			roster.append(hid)
+		return
+	var pool := DataRegistry.heroes.keys()
+	pool.sort()
+	for hid in pool:
+		if used.has(hid):
+			continue
+		roster.append(hid)
+
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
-	# 只在指定坐标生成（删左右两列后按 5 列中段重排：行 3/4 交错候选）
+	# 只在固定四个候选点随机生成 0-2 个障碍物：[2,4][3,3][3,4][4,4]
 	var spots := [
-		Vector2i(0, 4), Vector2i(0, 3), Vector2i(1, 4), Vector2i(2, 4),
-		Vector2i(2, 3), Vector2i(3, 4), Vector2i(4, 4), Vector2i(4, 3),
+		Vector2i(2, 4), Vector2i(3, 3), Vector2i(3, 4), Vector2i(4, 4),
 	]
 	_rng_shuffle(spots)
-	var count := rng.randi_range(2, 4)
+	var count := rng.randi_range(0, 2)
 	var placed := 0
 	for s in spots:
 		if placed >= count:
@@ -4346,9 +4346,9 @@ func _spawn_cells(faction: int) -> Array:
 			if grid.in_bounds(cell):
 				out.append(cell)
 	else:
-		# 敌方出生区（顶部：row 0 = 顶帽行 0,2,4，row 1 交错 1,3）——删左右两列后的 5 格皇冠
+		# 敌方出生区（顶部交错皇冠：row 0 顶帽 1,3 + row 1 偶列 0,2,4，共 5 格；删左右两列后的居中窄顶宽底）
 		var ecells: Array = [
-			Vector2i(0, 0), Vector2i(1, 1), Vector2i(2, 0), Vector2i(3, 1), Vector2i(4, 0),
+			Vector2i(1, 0), Vector2i(0, 1), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1),
 		]
 		for c in ecells:
 			if grid.in_bounds(c) and not occupancy.has(c):
