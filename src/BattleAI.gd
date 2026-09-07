@@ -11,7 +11,7 @@ class SimUnit:
 	var hp := 10
 	var max_hp := 10
 	var atk := 4          # 基础攻击
-	var eatk := 4         # 有效攻击（含buff/冲锋/太阳斩/攻降）
+	var eatk := 4         # 有效攻击（含buff/冲锋/太阳斩/麻痹减攻）
 	var move := 3         # 基础移动
 	var emove := 3        # 有效移动（含移动buff/冰冻/眩晕→0）
 	var atk_range := 1
@@ -559,7 +559,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					t.poisoned = true
 				if u.hero_id == "hero_12":   # 巨剑：重伤
 					t.heavy = true
-				if u.hero_id == "hero_25":   # 战锤：攻降（近似=攻-1有效）+ 冰冻
+				if u.hero_id == "hero_25":   # 战锤：麻痹（近似=攻-1有效）+ 冰冻
 					t.eatk = max(t.eatk - 1, 0)
 					t.frozen = true
 				if u.hero_id == "hero_34":   # 沉默术士：沉默

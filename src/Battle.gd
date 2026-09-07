@@ -3058,7 +3058,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
 			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name)
 	_last_attacked = target
-	# 攻击后技能在**命中瞬间**触发（如战锤攻降/冰冻），让反击结算时已吃debuff
+	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
 	# 太阳斩：每次攻击后攻击力-1（立即显示，不等反击
 	_hero(attacker).on_after_attack()
@@ -3093,7 +3093,7 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		_finish_attack(attacker, for_enemy)
 		return
 	var counterer := target
-	# 反击前先同步"远程被贴状态：战锤攻降(-1)debuff 已在命中时施加，
+	# 反击前先同步"远程被贴状态：战锤麻痹(-1)debuff 已在命中时施加，
 	# 而远程被贴身时基础攻击应降（若不同步，反击者会按未贴身的基础攻击反击，伤害错误偏高）
 	_sync_ranged_adjacent()
 	var cdmg := counterer.effective_atk() * _counter_bonus(counterer, attacker)
@@ -3103,7 +3103,7 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		return
 	var cpos := board_view.cell_world_center(counterer.cell)   # 落点=自身格子中心（不受中途换瞬移影响
 	var lunge_to := cpos.lerp(board_view.cell_world_center(attacker.cell), 0.62)   # 沿反向直线轻
-	# 反击伤害 = 反击*实时攻击*（含buff/攻降/冲锋加成，不套用远程相邻降攻
+	# 反击伤害 = 反击*实时攻击*（含buff/麻痹/冲锋加成，不套用远程相邻降攻
 	AudioManager.play("attack")
 	var ct := create_tween()
 	ct.tween_property(counterer, "position", lunge_to, 0.1)
@@ -3361,7 +3361,7 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 
 func _add_status_msg(u: Unit, status: String, label: String) -> void:
 	u.add_status(status)
-	u.refresh_stats()   # 状态变化后刷新牌面数值（如攻降导致攻击数字回落）
+	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
 	log_message.emit("%s 获得[%s]。" % [u.display_name, label])
 
 # 某格相邻的对立阵营单

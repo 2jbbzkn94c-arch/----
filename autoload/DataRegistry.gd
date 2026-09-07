@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## 卡牌/英雄数据注册表（全局自动加载）。
 ## 从 res://角色列表.md 解析全部角色，生成数值、品级、类型与关键词标签。
 ## 复杂/角色专属技能全文存入 desc（暂未实现），引擎已支持：近战/远程、嘲讽、疾行、渗透。
@@ -268,6 +268,7 @@ const HERO_FX := {
 	"hero_41": { "color": Color(0.9, 0.2, 0.3), "text": "血锁" },
 	"hero_42": { "color": Color(1.0, 0.8, 0.3), "text": "金矿" },
 	"hero_43": { "color": Color(0.5, 1.0, 0.8), "text": "风语" },
+	"hero_44": { "color": Color(0.75, 0.6, 0.9), "text": "负墟" },
 }
 
 # 取某英雄的技能特效（颜色 + 文案），返回 {color, text}
@@ -291,6 +292,33 @@ func _load_heroes() -> void:
 	lines = f.get_as_text().split("\n")
 	f.close()
 
+	# 表头列名 -> 下标（表格列可增改，按列名取值，避免列位置写死错位）
+	var col := {}   # "名称"/"攻击力"/"HP"/"技能"/"等级"... -> 下标
+	for line in lines:
+		var t := line.strip_edges()
+		if not t.begins_with("|"):
+			continue
+		var cells := t.split("|")
+		if cells.size() < 2:
+			continue
+		if cells[1].strip_edges() == "No." or cells[1].strip_edges() == "No":
+			for i in range(1, cells.size() - 1):
+				var col_name_cell := cells[i].strip_edges()
+				if col_name_cell != "":
+					col[col_name_cell] = i
+			break   # 表头行找到即停
+	var col_grade: int = col.get("等级", 2)
+	var col_no: int = col.get("No.", 1)
+	var col_name: int = col.get("名称", 3)
+	var col_atk: int = col.get("攻击力", 4)
+	var col_hp: int = col.get("HP", 5)
+	var col_trait: int = col.get("特性", -1)      # 新表：词条独立列（旧表无）
+	var col_skill: int = col.get("技能", 6)        # 新表7/旧表6
+	var col_syn: int = col.get("配合", 7)
+	var col_eff: int = col.get("克制", col.get("有效行为", 8))   # 表头曾用"克制"，旧称"有效行为"
+	var col_counter: int = col.get("被克制", 9)
+	var col_pairs: int = col.get("协同英雄", 10)
+
 	for line in lines:
 		var t := line.strip_edges()
 		if not t.begins_with("|"):
@@ -298,11 +326,11 @@ func _load_heroes() -> void:
 		var cells := t.split("|")
 		if cells.size() < 7:
 			continue
-		var grade: String = cells[2].strip_edges()
+		var grade: String = cells[col_grade].strip_edges()
 		if grade == "":
 			continue
 		# 跳过表头/分隔行（No 列非整数且非"-"）
-		var no_text: String = cells[1].strip_edges()
+		var no_text: String = cells[col_no].strip_edges()
 		var is_summon := (grade == "衍生物")
 		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
 			continue
@@ -312,30 +340,34 @@ func _load_heroes() -> void:
 			h.id = "summon_skeleton"
 		else:
 			h.id = "hero_%02d" % no_text.to_int()
-		h.display_name = cells[3].strip_edges()
-		h.atk = cells[4].strip_edges().to_int()
-		h.max_hp = cells[5].strip_edges().to_int()
-		var skill_text: String = cells[6].strip_edges()
-		skill_text = skill_text.replace("\\", "")   # 去掉 markdown 转义反斜杠，\<远程\> -> <远程>
-		h.desc = skill_text
+		h.display_name = cells[col_name].strip_edges()
+		h.atk = cells[col_atk].strip_edges().to_int()
+		h.max_hp = cells[col_hp].strip_edges().to_int()
+		var cell_at := func(i: int) -> String:
+			return cells[i].strip_edges() if (i >= 0 and i < cells.size()) else ""
+		# 词条检测：新表"特性"列是独立词条区(在句号前)，直接查 contains；
+		# 旧表词条嵌在技能正文尾部，用 _tail_has(最后'。'之后) 兼容。
+		var trait_txt: String = (cell_at.call(col_trait)).replace("\\", "")
+		var skill_raw: String = (cell_at.call(col_skill)).replace("\\", "")
+		h.desc = skill_raw
 		h.is_summon = is_summon
 
-		# 解析三列（配合/有效行为/被克制）：文本存备注，并抽取其中的英雄名 -> 协同/克制 id
-		if cells.size() >= 10:
-			h.synergy_note = cells[7].strip_edges()
-			h.effective_behavior = cells[8].strip_edges()
-			h.countered_by_note = cells[9].strip_edges()
+		# 解析三列（配合/克制/被克制）：文本存备注，并抽取其中的英雄名 -> 协同/克制 id
+		h.synergy_note = cell_at.call(col_syn)
+		h.effective_behavior = cell_at.call(col_eff)
+		h.countered_by_note = cell_at.call(col_counter)
 		h.sy_partners = _extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)
 		h.counters = _extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)
-		if cells.size() >= 11:
-			h.explicit_pairs = _extract_ids(cells[10].strip_edges())   # "协同英雄"列：直接点名的搭档
+		h.explicit_pairs = _extract_ids(cell_at.call(col_pairs))   # "协同英雄"列：直接点名的搭档
 
-		var has_ranged := _tail_has(skill_text, "<远程>")
-		var has_taunt := _tail_has(skill_text, "<嘲讽>")
-		var has_swift := _tail_has(skill_text, "<疾行>")
-		var has_infiltrate := _tail_has(skill_text, "<渗透>")
-		var has_logistics := _tail_has(skill_text, "<后勤>")
-		var has_bench := skill_text.begins_with("<替补>") or _tail_has(skill_text, "<替补>")
+		var has_tag := func(tag: String) -> bool:
+			return trait_txt.contains(tag) or _tail_has(skill_raw, tag)
+		var has_ranged: bool = has_tag.call("<远程>")
+		var has_taunt: bool = has_tag.call("<嘲讽>")
+		var has_swift: bool = has_tag.call("<疾行>")
+		var has_infiltrate: bool = has_tag.call("<渗透>")
+		var has_logistics: bool = has_tag.call("<后勤>")
+		var has_bench: bool = skill_raw.begins_with("<替补>") or has_tag.call("<替补>")
 
 		h.rarity = _rarity_of(grade)
 		h.attack_type = AttackType.RANGED if has_ranged else AttackType.MELEE

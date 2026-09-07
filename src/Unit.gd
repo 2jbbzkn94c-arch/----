@@ -45,6 +45,7 @@ var transform_base_id := ""    # 古灵精怪：变身后回溯本源（hero_28�
 var last_transform_id := ""    # 古灵精怪：上一次变身后为了不重复变成同一对象
 var summon_owner := ""         # 召唤者的单位 id（死灵法师召唤的骷髅兵：主人阵亡时随之消散）
 var behavior: HeroBase = null  # 该单位所属英雄的行为脚本（HeroRegistry 创建），技能逻辑分发用
+var _neg_immune_frame := -1    # 负墟：免疫负面时记录处理帧，同一帧（同一次攻击的多个负面）只计一次
 
 var hex_radius := 44.0
 
@@ -142,20 +143,8 @@ func _build_visual() -> void:
 	_update_hp_label()
 
 	# 技能词条（嘲/疾/渗/勤/候）——放在卡面名字上方（六边形顶部区域）
-	var tags := _skill_tags()
-	if tags != "":
-		var tag_label := Label.new()
-		tag_label.text = tags
-		tag_label.add_theme_font_size_override("font_size", int(10.0 * fs))
-		tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		tag_label.position = Vector2(-hex_radius, -hex_radius * 0.84)
-		tag_label.size = Vector2(hex_radius * 2.0, hex_radius * 0.34)
-		# 白字+深色描边：蓝/红双方底上都能看清（原淡蓝与蓝方底色难区分）
-		tag_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
-		tag_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-		tag_label.add_theme_constant_override("outline_size", 3)
-		add_child(tag_label)
-		_tags_label = tag_label
+	if _skill_tags() != "":
+		_ensure_tags_label()
 
 	# 状态标签（猛伤攻冻默晕盾）——放在六边形中部、界内
 	_status_label = Label.new()
@@ -163,7 +152,8 @@ func _build_visual() -> void:
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
 	_status_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
-	_status_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.6))
+	# 减益用紫色（原粉红与敌方红卡面太接近）；仅圣盾时淡蓝（见 _update_status_label 覆盖）
+	_status_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
 	add_child(_status_label)
 
 # 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
@@ -248,9 +238,27 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		die()
 
 # ---- 状态效果 ----
+# 负墟：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
+func _is_negative_status(s: String) -> bool:
+	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison"
+
 func add_status(s: String) -> void:
+	# 负墟（hero_44）：免疫负面效果——不挂状态，改为"被负面攻击命中"计数 +1 攻击
+	# （一次攻击内连续施加多个负面只计一次：同帧去重）
+	if hero_id == "hero_44" and _is_negative_status(s):
+		_neg_immune_on_hit()
+		return
 	statuses[s] = true
 	_update_status_label()
+
+func _neg_immune_on_hit() -> void:
+	var f := Engine.get_process_frames()
+	if f == _neg_immune_frame:
+		return   # 同一帧（同一次攻击的多个负面）只算一次
+	_neg_immune_frame = f
+	atk_buff += 1
+	refresh_stats()
+	_float_text("免疫负面 攻+1", Color(0.8, 0.75, 1.0), -22, -48)
 
 func remove_status(s: String) -> void:
 	statuses.erase(s)
@@ -277,9 +285,35 @@ func _update_name_label() -> void:
 		_label.text = display_name
 
 # 刷新技能词条标签（疾/嘲/渗/勤/候，用于变身继承技能后）
+# 古灵精怪变身等场景可能从"无词条"变到"有词条"：节点可能尚未创建，按需补建。
 func _update_tags_label() -> void:
+	var tags := _skill_tags()
+	if tags == "":
+		if _tags_label:
+			_tags_label.visible = false
+			_tags_label.text = ""
+		return
+	_ensure_tags_label()
+	_tags_label.text = tags
+	_tags_label.visible = true
+
+# 确保词条标签节点存在（初始无词条的单位首次获得词条时创建）
+func _ensure_tags_label() -> void:
 	if _tags_label:
-		_tags_label.text = _skill_tags()
+		return
+	var fs := hex_radius / 39.0
+	var tag_label := Label.new()
+	tag_label.add_theme_font_size_override("font_size", int(10.0 * fs))
+	tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tag_label.position = Vector2(-hex_radius, -hex_radius * 0.84)
+	tag_label.size = Vector2(hex_radius * 2.0, hex_radius * 0.34)
+	# 绿字+深色描边：特性标签(嘲/疾/渗/勤/候)，不撞本方蓝/敌方红/紫减益/金黄盾
+	tag_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.45))
+	tag_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	tag_label.add_theme_constant_override("outline_size", 3)
+	tag_label.text = _skill_tags()
+	add_child(tag_label)
+	_tags_label = tag_label
 
 func clear_temp_statuses() -> void:
 	for s in ["heavy", "atkdown", "freeze", "silence", "stun"]:
@@ -327,22 +361,34 @@ func skill_allowed() -> bool:
 func _update_status_label() -> void:
 	# 在单位牌面下加状态小字
 	var txt := ""
+	var has_debuff := false
 	if has_status("poison"):
 		txt += "毒"
+		has_debuff = true
 	if has_status("heavy"):
 		txt += "伤"
+		has_debuff = true
 	if has_status("atkdown"):
 		txt += "麻"
+		has_debuff = true
 	if has_status("freeze"):
 		txt += "冻"
+		has_debuff = true
 	if has_status("silence"):
 		txt += "默"
+		has_debuff = true
 	if has_status("stun"):
 		txt += "晕"
+		has_debuff = true
 	if has_status("shield"):
 		txt += "盾"
 	if _status_label:
 		_status_label.text = txt
+		# 配色：减益=紫色（勿与敌方红色卡面混淆）；仅剩圣盾(增益)=金黄（勿用蓝，与本方蓝卡面接近）
+		var col := Color(1.0, 0.85, 0.4)
+		if has_debuff:
+			col = Color(0.78, 0.5, 1.0)
+		_status_label.add_theme_color_override("font_color", col)
 
 # 受击震屏：仅抖动六边形本体，不影响单位移动坐标
 func _shake() -> void:
@@ -397,7 +443,7 @@ func _flash() -> void:
 	t.tween_property(_hex, "color", _faction_color(faction), 0.16)
 
 # 技能爆发特效（贴合英雄机制的可复用演出）：扩散光环 + 飞散粒子 + 闪白脉冲 + 专属飘字。
-# color: 该技能的主色；text: 机制标签文案（如"猛毒/攻降/收割/爆破/回血"）。
+# color: 该技能的主色；text: 机制标签文案（如"猛毒/麻痹/收割/爆破/回血"）。
 func burst_fx(color: Color, text: String) -> void:
 	if not is_inside_tree():
 		return

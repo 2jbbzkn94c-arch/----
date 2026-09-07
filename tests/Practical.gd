@@ -151,6 +151,20 @@ func _test_hero(id: String) -> void:
 			battle.selected = hero; battle._compute_ranges(hero)
 			rec(id, battle.enemy_cells.has(Vector2i(4, 6)), "障碍可打")
 		"hero_24": rec(id, battle._move_reachable(hero).size() > 6, "冲刺=%d" % battle._move_reachable(hero).size())
+		"hero_44":
+			var ok := hero.skills.has(DataRegistry.Skill.TAUNT)
+			# 免疫负面：施加冰冻/麻痹/猛毒均不挂状态，且一次攻击(同帧多次负面)只 +1 攻
+			var a0 := hero.atk_buff
+			hero.add_status("freeze")
+			hero.add_status("atkdown")
+			hero.add_status("poison")
+			var no_neg := not hero.has_status("freeze") and not hero.has_status("atkdown") and not hero.has_status("poison")
+			var gain1 := hero.atk_buff == a0 + 1
+			# 换一帧后再被负面攻击 -> 再 +1
+			await sleep_frames(2)
+			hero.add_status("silence")
+			var gain2 := hero.atk_buff == a0 + 2
+			rec(id, ok and no_neg and gain1 and gain2, "嘲讽=%s 免负=%s +1攻=%s 再+1=%s" % [ok, no_neg, gain1, gain2])
 		"hero_28":
 			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			var n0 := hero.display_name

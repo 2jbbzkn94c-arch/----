@@ -53,7 +53,8 @@ func _build_label() -> void:
 		tagl.add_theme_font_size_override("font_size", int(clampf(radius * 0.2, 9.0, 20.0)))
 		tagl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		tagl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		tagl.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
+		# 绿字（与棋盘棋子特性标签一致：不撞蓝/红卡面、紫减益、金黄盾）
+		tagl.add_theme_color_override("font_color", Color(0.5, 0.9, 0.45))
 		tagl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 		tagl.add_theme_constant_override("outline_size", 2)
 		tagl.mouse_filter = Control.MOUSE_FILTER_IGNORE

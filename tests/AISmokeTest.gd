@@ -161,7 +161,7 @@ func _run() -> void:
 	var vt_clear := battle._valid_targets(blood2)
 	print("T11 血锁视线阻挡: 隔墙=%s 无墙=%s => %s" % [vt_blocked.has(open_target), vt_clear.has(open_target), "PASS" if not vt_blocked.has(open_target) and vt_clear.has(open_target) else "FAIL"])
 
-	# 场景12：战锤贴身攻击远程目标 -> 目标攻降为0，反击应为0伤害
+	# 场景12：战锤贴身攻击远程目标 -> 目标麻痹攻击为0，反击应为0伤害
 	clear_all()
 	var hammer := spawn("hero_25", DataRegistry.Faction.PLAYER, Vector2i(3, 6))   # 战锤：近战
 	var rng_t := spawn("hero_09", DataRegistry.Faction.ENEMY, Vector2i(4, 6))   # 火枪手：远程 atk=4

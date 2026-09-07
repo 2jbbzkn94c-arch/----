@@ -221,7 +221,17 @@ const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起
 # 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
 # 六边形边对边贴紧连成蜂窝）。固定 7 列、卡面放大；超高时滚动容器出现滚动条。
 func _build_hex_pool(host: Control) -> void:
+	# 卡池按稀有度排：白(低)→金→紫→虹(高)，同稀有按 hero_id 排——保证初始界面顺序固定，
+	# 新增英雄无论加在角色列表的哪个位置都落到对应稀有度区段。
 	var ids: Array = DataRegistry.heroes.keys()
+	ids.sort_custom(func(a: String, b: String):
+		var da := DataRegistry.get_hero(a)
+		var db := DataRegistry.get_hero(b)
+		var ra := da.rarity if da != null else 0
+		var rb := db.rarity if db != null else 0
+		if ra != rb:
+			return ra < rb
+		return a < b)
 	var cols := 7
 	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 56.0, 340.0)
 	# 半径：让 7 列蜂窝（总宽 = 2r + 6*1.5r = 11r）尽量宽大，但不超过上限
