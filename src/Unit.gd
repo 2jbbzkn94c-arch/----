@@ -352,15 +352,16 @@ func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46) -
 	var parent := get_parent()
 	if parent == null or not is_inside_tree():
 		return
+	var k := hex_radius / 54.0   # 视觉反馈随棋盘放大(基准:旧 hex60 → radius54)
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_font_size_override("font_size", maxi(12, int(18.0 * k)))
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	lbl.add_theme_constant_override("outline_size", 4)
+	lbl.add_theme_constant_override("outline_size", maxi(2, int(4.0 * k)))
 	lbl.z_index = 120
-	lbl.position = global_position + Vector2(xoff, yoff)
-	lbl.size = Vector2(48, 24)
+	lbl.position = global_position + Vector2(xoff * k, yoff * k)
+	lbl.size = Vector2(48.0 * k, 24.0 * k)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(lbl)
 	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。
@@ -368,7 +369,7 @@ func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46) -
 	var rise := 0.5
 	var fade := 0.7
 	var t := lbl.create_tween()
-	t.tween_property(lbl, "position", lbl.position + Vector2(0, -30), rise)
+	t.tween_property(lbl, "position", lbl.position + Vector2(0, -30.0 * k), rise)
 	t.tween_property(lbl, "modulate:a", 0.0, fade)
 	t.tween_callback(lbl.queue_free)
 
@@ -488,7 +489,7 @@ func set_highlight_ring(on: bool) -> void:
 		_sel_border = Line2D.new()
 		_sel_border.points = _hex_points(hex_radius + 2.0)
 		_sel_border.closed = true
-		_sel_border.width = 3.5
+		_sel_border.width = 3.5 * (hex_radius / 54.0)   # 金边线宽随棋盘放大
 		_sel_border.z_index = 16
 		_sel_border.default_color = Color(1.0, 0.85, 0.3)
 		add_child(_sel_border)

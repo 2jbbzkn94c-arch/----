@@ -165,7 +165,8 @@ func _rng_shuffle(arr: Array) -> void:
 var units: Array[Unit] = []
 var occupancy: Dictionary = {}   # cell(Vector2i) -> Unit
 var board_size := Vector2i(5, 7)  # 5 × 6 满行 + 顶部 2 格顶帽(总高 7 行;相对旧版删左右各 1 列)
-var hex_size := 60.0   # 六边形外接半径（像素）：整体放大棋盘改这里（480 放大25%
+const TOP_CAP_COLS: Array[int] = [1, 3]   # 顶帽行(row0)保留列:删左右各一列后居中 2 格(奇列),与下方偶列交错
+var hex_size := 60.0   # 六边形外接半径(像素)。_ready 时按视口自动放大以铺满屏宽;想固定则注释 _fit 调用
 var state := State.IDLE
 var selected: Unit = null
 var _unit_card_open := false   # 属性卡浮层是否打开（打开期间触摸全部交给卡层，避免重复查看/误触）
@@ -236,8 +237,9 @@ func _exit_tree() -> void:
 func _ready() -> void:
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
+	hex_size = _fit_hex_size()   # 视口铺满自适应:棋盘宽基本占满屏幕,棋子内容随之等比放大
 	grid = HexGrid.new(board_size.x, board_size.y, hex_size)
-	grid.top_cap_cols = [1, 3]   # 删左右各一列后:5列棋盘顶帽行为居中 2 格(奇列 1,3),保持与下方偶列交错
+	grid.top_cap_cols = TOP_CAP_COLS   # 5列棋盘顶帽行为居中 2 格(奇列 1,3),保持与下方偶列交错
 	# 联机访客：把棋盘绕中心旋180°，让"我方阵营"始终落在屏幕下方
 	# 只影响渲鼠标回查，不改任何逻辑阵营，故两端确定性不受影响
 	grid.view_flip = GameState.is_online and not GameState.is_host
@@ -1245,6 +1247,31 @@ func _setup_hud() -> void:
 	hud.bind(self)
 	add_child(hud)
 
+# ---- 棋盘自适应缩放:让 5 列棋盘宽基本占满屏幕宽度(同时高度不压到底部按钮)----
+# 用 hex=1 的探针网格精确测量棋盘世界包围盒,按视口反推 hex(棋子文字随 hex 等比放大)
+func _fit_hex_size() -> float:
+	var probe := HexGrid.new(board_size.x, board_size.y, 1.0)
+	probe.top_cap_cols = TOP_CAP_COLS
+	var minx := INF
+	var miny := INF
+	var maxx := -INF
+	var maxy := -INF
+	for cell in probe.all_cells():
+		var p := probe._raw_cell_to_world(cell)
+		minx = min(minx, p.x)
+		miny = min(miny, p.y)
+		maxx = max(maxx, p.x)
+		maxy = max(maxy, p.y)
+	var w_units := (maxx - minx) + 2.0 * 1.0   # 左右各伸 横向顶点半宽(平顶 hex 顶点在 0°/180°,=1.0)
+	var h_units := (maxy - miny) + 2.0 * 0.866   # 上下各伸 纵向顶点半高(60°/120° 顶点,=sin60°≈0.866)
+	var vsize := get_viewport().get_visible_rect().size
+	var margin := 10.0            # 棋盘距屏左右留白
+	var top_reserve := 66.0       # 顶部回合栏(54) + 边距
+	var bottom_reserve := 330.0   # 屏底: 替补队伍面板(高≈200 距底76)+按钮带,再留余量避免遮棋盘
+	var fit_w := (vsize.x - margin * 2.0) / w_units
+	var fit_h := (vsize.y - top_reserve - bottom_reserve) / h_units
+	return clampf(minf(fit_w, fit_h), 40.0, 140.0)
+
 # ---- 棋盘布局居中（按实际格子像素范围计算，兼容平顶布局----
 func _board_origin() -> Vector2:
 	var vsize := get_viewport().get_visible_rect().size
@@ -1332,10 +1359,11 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
-	# 只在固定候选点随机生成 0-2 个障碍物：[1,3][1,4][2,4][3,3][3,4][4,4][5,3][5,4]
+	# 固定候选点随机 0-2 个障碍（按左下角=[1,1] 编号换算成代码坐标 y0=顶行）：
+	# 你给的 [1,3][1,4][2,4][3,3][3,4][4,4][5,3][5,4] => (0,4)(0,3)(1,3)(2,4)(2,3)(3,3)(4,4)(4,3)
 	var spots := [
-		Vector2i(1, 3), Vector2i(1, 4), Vector2i(2, 4), Vector2i(3, 3),
-		Vector2i(3, 4), Vector2i(4, 4), Vector2i(5, 3), Vector2i(5, 4),
+		Vector2i(0, 4), Vector2i(0, 3), Vector2i(1, 3), Vector2i(2, 4),
+		Vector2i(2, 3), Vector2i(3, 3), Vector2i(4, 4), Vector2i(4, 3),
 	]
 	_rng_shuffle(spots)
 	var count := rng.randi_range(0, 2)
