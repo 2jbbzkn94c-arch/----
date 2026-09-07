@@ -331,8 +331,9 @@ func _process(dt: float) -> void:
 			if u == null or not is_instance_valid(u):
 				continue
 			if u.alive and u.faction == _my_faction():
-				# 可移动=绿色、可攻击=红色；两者可独立显示（后勤不能攻击，攻击标识不亮）
-				u.set_action_markers(not u.moved_this_turn, not u.attacked_this_turn and _can_actively_attack(u))
+				# 可移动=绿色、可攻击=红色；两者可独立显示（后勤不能攻击，攻击标识不亮）。
+				# 规则：攻击后不能再移动 → 绿色可移动仅在"未移动且未攻击"时亮。
+				u.set_action_markers(not u.moved_this_turn and not u.attacked_this_turn, not u.attacked_this_turn and _can_actively_attack(u))
 			else:
 				u.set_action_marker(false)   # 旧统一标识关闭，避免残留
 				u.set_action_markers(false, false)
@@ -1941,10 +1942,10 @@ func _press_active_clickable(_cell: Vector2i) -> bool:
 func _on_cell_clicked(cell: Vector2i) -> void:
 	var clicked_unit = occupancy.get(cell, null)   # 可能null/单位；用真值判
 	var my_f := _my_faction()
-	# 点击己方单位（尚未完成两种行动）-> 选中；再次点击已选中的英雄则取消（反悔）
+	# 点击己方单位 -> 选中（可继续行动者）；攻击过的英雄视为本回合已完成
 	if clicked_unit != null and clicked_unit.alive and clicked_unit.faction == my_f:
-		if clicked_unit.moved_this_turn and clicked_unit.attacked_this_turn:
-			action_info.emit("%s 本回合已完成（移动、攻击各一次）。" % clicked_unit.display_name)
+		if _is_done(clicked_unit):
+			action_info.emit("%s 本回合已完成行动。" % clicked_unit.display_name)
 			return
 		if selected == clicked_unit:
 			_clear_selection()
@@ -2616,6 +2617,9 @@ func _v2(a) -> Vector2i:
 func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	if u == null or not is_instance_valid(u):   # 防御：单位已释放则跳过
 		return
+	# 新规则：攻击后不能再移动（攻击是本回合最后动作；含联机对端指令兜底拦截）
+	if u.attacked_this_turn:
+		return
 	# 目标已被其它单位占据 -> 拦截，避免覆盖 occupancy 造成重叠失联
 	if occupancy.has(target_cell) and occupancy[target_cell] != u:
 		_finish_move(u, for_enemy)
@@ -3009,11 +3013,7 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 		else:
 			action_finished.emit()   # 敌方攻击（含反击）演出结束，通知回放继续
 		return
-	# 还能移动 -> 继续选中该单
-	if alive_attacker and not attacker.moved_this_turn:
-		state = State.PLAYER_INPUT
-		_do_select(attacker)
-		return
+	# 攻击后本回合行动结束：不再允许"攻击后还能移动"（规则：攻击过=行动完）
 	_after_player_action()
 
 func _after_player_action() -> void:
@@ -3026,12 +3026,13 @@ func _after_player_action() -> void:
 		state = State.PLAYER_INPUT
 		action_info.emit("所有英雄已完成行动，点「结束回合」交给敌方")
 
-# 某单位是否已完成本回合（移动+攻击各一次）
-# 某单位是否已完成本回合（移动+攻击各一次；后勤不能攻击，移动后即完成）
+# 某单位是否已完成本回合行动。
+# 新规则：攻击后不能再移动 → 普通单位攻击过即算完成（无论此前是否移动过）；
+# 后勤不能攻击，只移动，移动后即完成。
 func _is_done(u: Unit) -> bool:
 	if _is_logistics(u):
 		return u.moved_this_turn   # 后勤：只移动，移动后即算完成
-	return u.moved_this_turn and u.attacked_this_turn
+	return u.attacked_this_turn    # 普通单位：攻击是最后动作，攻击过=本回合完成
 
 func _has_remaining_player() -> bool:
 	for u in units:
