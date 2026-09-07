@@ -1031,10 +1031,10 @@ func _build() -> void:
 	_refresh_controls()
 	_build_edge_warning(root, vsize)
 
-	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）
+	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）——放在顶部回合栏(高54)下方,不叠在栏内
 	var volume := VolumeControl.new()
 	root.add_child(volume)
-	volume.place_top_right(vsize)
+	volume.place_top_right(vsize, 8.0, 60.0)
 
 	# 左下角"喊话"按钮(仅联机对战中显示)
 	_build_chat_button(root, vsize)

@@ -208,6 +208,11 @@ func _build() -> void:
 	_build_tooltip()
 	_update_ui()
 
+	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）
+	var volume := VolumeControl.new()
+	add_child(volume)
+	volume.place_top_right(get_viewport().get_visible_rect().size, 8.0, 6.0)
+
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸滑动用）
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
@@ -227,6 +232,9 @@ func _build_hex_pool(host: Control) -> void:
 	host.custom_minimum_size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	host.size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	_card_buttons.clear()
+	# 卡片绘制半径比蜂窝间距半径略小（0.92）：六边形间留出均匀小空隙，
+	# 避免边贴边让相邻描边重叠、选中高亮被邻卡盖住；图标溢出也落在空隙里。
+	var card_r: float = r * 0.92
 	var margin_x: float = max((avail_w - total_w) / 2.0, 0.0)
 	var max_x := 0.0
 	var max_y := 0.0
@@ -236,8 +244,8 @@ func _build_hex_pool(host: Control) -> void:
 		var row := int(i / float(cols))
 		var cx := margin_x + r + float(col) * 1.5 * r
 		var cy := r + sq3 * r * (float(row) + (0.5 if col % 2 == 1 else 0.0))
-		var card := HexCard.new(DataRegistry.heroes[id], id, r)
-		card.position = Vector2(cx - r, cy - sq3 * r * 0.5)
+		var card := HexCard.new(DataRegistry.heroes[id], id, card_r)
+		card.position = Vector2(cx - card_r, cy - sq3 * card_r * 0.5)
 		card.hovered.connect(_on_hex_hovered)
 		card.clicked.connect(_on_hex_clicked)
 		host.add_child(card)
