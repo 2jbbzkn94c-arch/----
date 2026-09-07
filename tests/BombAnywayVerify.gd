@@ -31,17 +31,16 @@ func _run() -> void:
 	# T1: 击退到炸弹格 -> 非炸弹人爆炸
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	# 目标在 (4,8)，攻击者在 (3,8)（直线），击退目标到 (5,8)，(5,8) 放炸弹
-	# 目标在 (4,8)，攻击者在 (3,8)（直线），击退目标到落点 (5,7)，(5,7) 放炸弹
-	var target := spawn("hero_06", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
+	# 5列棋盘:目标 (2,6) 从 (1,6) 击退,落点 (3,5) 放炸弹(界内)
+	var target := spawn("hero_06", DataRegistry.Faction.ENEMY, Vector2i(2, 6))
 	target.hp = 20; target.max_hp = 20; target.refresh_stats()
-	battle.bombs[Vector2i(5, 5)] = true   # 实际击退落点（轴向）
+	battle.bombs[Vector2i(3, 5)] = true
 	if battle.board_view:
 		battle.board_view.bombs = battle.bombs
 	var t0 := target.hp
-	battle._knockback(target, Vector2i(3, 6))   # 击退，落点 (5,5)=炸弹
+	battle._knockback(target, Vector2i(1, 6))
 	await battle.get_tree().create_timer(0.3).timeout
-	var exploded := battle.bombs.has(Vector2i(5, 5)) == false
+	var exploded := battle.bombs.has(Vector2i(3, 5)) == false
 	print("T1 击退到炸弹爆炸: 目标%d->%d 炸=%s cell=%s => %s" % [t0, target.hp, str(exploded), str(target.cell), "PASS" if target.hp < t0 and exploded else "FAIL"])
 
 	# T2: 换位（swap）把非炸弹人换到炸弹格 -> 爆炸
@@ -62,14 +61,13 @@ func _run() -> void:
 	# T3: 炸弹人被击退到炸弹格安全
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var atk3 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
-	var bom := spawn("hero_35", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
+	var bom := spawn("hero_35", DataRegistry.Faction.ENEMY, Vector2i(2, 6))
 	bom.hp = 20; bom.max_hp = 20; bom.refresh_stats()
-	battle.bombs[Vector2i(5, 5)] = true
+	battle.bombs[Vector2i(3, 5)] = true
 	if battle.board_view:
 		battle.board_view.bombs = battle.bombs
 	var bom0 := bom.hp
-	battle._knockback(bom, Vector2i(3, 6))   # 击退炸弹人到 (5,5)=炸弹
+	battle._knockback(bom, Vector2i(1, 6))   # 击退炸弹人到 (3,5)=炸弹
 	await battle.get_tree().create_timer(0.3).timeout
 	print("T3 炸弹人被击退安全: hp=%d->%d => %s" % [bom0, bom.hp, "PASS" if bom.hp == bom0 else "FAIL"])
 

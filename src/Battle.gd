@@ -3638,15 +3638,17 @@ func _random_step(v: Unit) -> void:
 	var nbrs := grid.neighbors(v.cell)
 	var options: Array = []
 	for n in nbrs:
-		# 只允许移动到界内、且未被单位/障碍/炸弹/墓碑占据的格
-		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not bombs.has(n) and not graves.has(n):
+		# 允许移动到界内、且未被单位/障碍/墓碑占据的格（炸弹格允许：与击退/换位等强制位移一致，可被推上炸弹引爆）
+		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not graves.has(n):
 			options.append(n)
 	if options.size() > 0:
 		var n: Vector2i = options[rng.randi() % options.size()]
 		occupancy.erase(v.cell)
 		v.cell = n
 		occupancy[n] = v
-		_pickup_buff_at_cell(v)   # 强制位移落点同样拾取增益/金矿
+		_trigger_bomb(v)   # 被推上炸弹格：非炸弹人即引爆（与其它强制位移统一）
+		if v.alive:
+			_pickup_buff_at_cell(v)   # 强制位移落点同样拾取增益/金矿
 		_sync_ranged_adjacent()
 		# 缓慢移动动画，而非瞬移
 		var t := create_tween()

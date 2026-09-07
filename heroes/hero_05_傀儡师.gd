@@ -3,7 +3,7 @@ extends HeroBase
 class_name HeroPuppeteer
 
 func on_turn_start() -> bool:
-	for v in battle.units:
+	for v in battle.units.duplicate():
 		if v.alive and v.faction != unit.faction:
-			battle._random_step(v)
+			battle._random_step(v)   # 可能把敌人推上炸弹引爆致死：用快照遍历防漏
 	return true
