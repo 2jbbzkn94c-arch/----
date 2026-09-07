@@ -195,6 +195,7 @@ const _DRAG_THRESHOLD = 12.0
 var _pending_bomb_unit: Unit = null   # 炸弹人待放置（等待点选空地）
 var _pending_player_subs := 0     # 我方阵亡待替补名额数（可 >1：同时阵亡多人时逐个替补
 var _defer_side_skills := false   # 回合开始先补位：替补全部落位完成后才触发回合开始技
+var _waiting_side_skills_round := -1   # 联机等待端：行动方补位完成后广播 side_skills,收到后本端才执行回合开始技(同步 rng)
 var _in_begin_phase := false      # 回合开始演出期（技能逐个触发中）：此间阵亡先排队，演出结束再弹替补面板
 var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位（跳过即时光环补发，技能阶段会统一触发）
 var _pending_enemy_sub := 0        # 敌方阵亡待替补数量（轮到敌方回合时按此数量补位）
@@ -784,6 +785,8 @@ func reset_match() -> void:
 	_pending_player_subs = 0
 	_pending_enemy_sub = 0
 	_pending_sub = ""
+	_defer_side_skills = false   # 重开清除补位延标志（新局回合开始重走流程）
+	_waiting_side_skills_round = -1   # 重开清除等待技能广播标记
 	selected = null
 	# 重置 GameState（按当前模式；重置后重新部署/竞技场选人
 	if GameState.arena_mode:
@@ -1526,6 +1529,27 @@ func _begin_side(side: int) -> void:
 		_start_placing_subs = true
 		_place_enemy_sub()
 		_start_placing_subs = false
+	# —— 回合开始技（圣诞放道具/矿工放金矿等,内含 rng）——
+	# 联机关键：两端的技能触发必须发生在"行动方补位全部完成"之后、且两端同一时点执行。
+	# 若行动方还有待补,上面 1514 分支已 defer(先补位、后技能,return);此处只剩两种情况:
+	#   1) 行动方=本端且无待补 → 本端执行技能,并广播 side_skills 让等待端在同一时机执行;
+	#   2) 行动方≠本端(等待端) → 不自行执行,等 side_skills 广播到达后再执行(与行动端补位后的时点一致)。
+	if GameState.is_online:
+		if side == _my_side():
+			if GameState.is_host:
+				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
+			else:
+				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
+			await _run_side_skills(side)
+		else:
+			_waiting_side_skills_round = GameState.round_number   # 等行动端广播后执行技能
+		return
+	await _run_side_skills(side)   # 单机:直接执行
+
+# 回合开始技执行段（含演出、入场上/下文的计时/横幅）。
+# 两端在同一触发点执行:行动方补位完成后(或无需补位时)由行动端广播 side_skills,两端同跑,
+# 保证金矿/道具等 rng 落点与单位集合一致。单机/等待端均经由本函数统一收尾。
+func _run_side_skills(side: int) -> void:
 	await _trigger_turn_start_all(side)   # 回合开始的角色技能（逐个触发+边框闪烁
 	# 让回合开始增益在牌面上可
 	for u in units:
@@ -1600,7 +1624,6 @@ func _opp_faction() -> int:
 # 胜负判定用视角化的阵亡计数：本端"我方"阵亡 / "对方"阵亡
 func _my_dead() -> int:
 	return player_dead if _my_faction() == DataRegistry.Faction.PLAYER else enemy_dead
-
 func _opp_dead() -> int:
 	return enemy_dead if _my_faction() == DataRegistry.Faction.PLAYER else player_dead
 
@@ -2581,6 +2604,16 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			GameState.sync_turn(int(cmd.get("side", GameState.active_side)), int(cmd.get("round", GameState.round_number)))
 			if not GameState.is_host:
 				_begin_side(GameState.active_side)
+			return
+		if t == "side_skills":
+			# 行动方补位全部完成后广播：两端此刻才执行本回合回合开始技（同步 rng,金矿/道具落点一致）。
+			# 行动方自己已在 _begin_side/_resume_after_sub 本地执行(广播不回环),这里处理"等待端"：
+			# 等待端在 _begin_side 中登记了本回合,收到后执行并清除标记。
+			var side2 := int(cmd.get("side", GameState.active_side))
+			var rd2 := int(cmd.get("round", GameState.round_number))
+			if rd2 == _waiting_side_skills_round and side2 != _my_side():
+				_waiting_side_skills_round = -1
+				_run_side_skills(side2)
 			return
 		if t == "turn_end":
 			# 主机在开始回合末结算时广播：客户端同步消散该阵营骷髅等回合末技能，
@@ -4194,25 +4227,17 @@ func _resume_after_sub() -> void:
 		_defer_side_skills = false
 		_in_begin_phase = false   # 补位+技能演出期结束
 		state = State.ANIMATING
-		await _trigger_turn_start_all(_my_faction())
-		for u in units:
-			if u.alive and u.faction == _my_faction():
-				u.refresh_stats()
-		if GameState.active_side != _my_side():
-			return   # 防御：状态异常时直接交还流程
-		# 技能演出期间若有新阵亡排队：继续开面板补齐（补完走非挂起恢复），否则正式入场
-		if _pending_player_subs > 0 and _my_roster().size() > 0:
-			state = State.IDLE
-			_try_begin_next_sub()
-			return
-		turn_time_left = TURN_TIME_LIMIT
-		peer_turn_time_left = 0.0
-		_time_sync_acc = 0.0
+		# 联机：行动方补位全部完成,此刻才广播"回合开始技开始"让等待端同步执行
+		# (两端同一时点触发技能,避免 rng 分叉导致金矿/道具落点错位)
 		if GameState.is_online:
-			_send_turn_time_left()
-		state = State.PLAYER_INPUT
-		action_info.emit("你的回合（第 %d 回合）：点击一名己方英雄。" % GameState.round_number)
-		turn_banner.emit("你的回合")
+			if GameState.is_host:
+				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": _my_side(), "round": GameState.round_number }))
+			else:
+				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": _my_side(), "round": GameState.round_number }))
+		# 技能演出 + 正式入场(计时/横幅/新阵亡再开面板)由 _run_side_skills 统一完成
+		await _run_side_skills(_my_side())
+		# _run_side_skills 行动方分支尾部已处理"技能期间新阵亡再开面板"；
+		# 若它因还有待补而提前 return(开新面板),这里不再重复弹。
 		_notify_team()   # 先补位再技能流程全部完成：此刻才刷新常驻"替补队伍"（避免与替补面板叠层/吞点击）
 		return
 	# 恢复流程（回合中途换人）：本轮是否我方行动。是我方回合 -> 回到我方输入；否则等待对AI
