@@ -979,8 +979,7 @@ func _build() -> void:
 	_enemy_deaths.text = "☠☠☠ 敌方"
 	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_enemy_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# 右端留出 96px 给右上角音量调节按钮，阵亡计数文字随之左移，避免重叠
-	_enemy_deaths.size = Vector2(maxf(0, vsize.x - 96), 32)
+	_enemy_deaths.size = Vector2(vsize.x - 12, 32)
 	_enemy_deaths.position = Vector2(0, 11)
 	root.add_child(_enemy_deaths)
 	_refresh_deaths()
@@ -1031,10 +1030,11 @@ func _build() -> void:
 	_refresh_controls()
 	_build_edge_warning(root, vsize)
 
-	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）——放在顶部回合栏(高54)下方,不叠在栏内
+	# 右下角音效音量调节（喇叭按钮 + 滑条弹层）：与左下角喊话按钮同底线对称；
+	# 按钮贴近屏底，弹层会自动向上弹出。
 	var volume := VolumeControl.new()
 	root.add_child(volume)
-	volume.place_top_right(vsize, 8.0, 60.0)
+	volume.place_bottom_right(vsize, 10.0, 22.0)
 
 	# 左下角"喊话"按钮(仅联机对战中显示)
 	_build_chat_button(root, vsize)
@@ -1158,14 +1158,20 @@ func _send_chat(txt: String) -> void:
 	_close_chat_panel()
 	if battle != null and is_instance_valid(battle):
 		battle.send_quick_chat(txt)
+		_show_chat_bubble(txt, true)   # 自己发的喊话本端也立刻回显（我方侧），不必等对端
 
 func _close_chat_panel() -> void:
 	if _chat_panel != null and is_instance_valid(_chat_panel):
 		_chat_panel.queue_free()
 	_chat_panel = null
 
-# 收到对端喊话:顶部回合栏下方弹气泡条(横幅样式,几秒后淡出),不拦截操作
+# 收到对端喊话 -> 对方气泡（顶部回合栏下方、靠敌方侧）
 func _show_peer_chat(txt: String) -> void:
+	_show_chat_bubble(txt, false)
+
+# 喊话气泡：own=true=我方发出(顶部回合栏下方靠左、我方计数一侧)；own=false=对端喊话(靠右、敌方一侧)。
+# 两端各按自己视角落位：本端看自己发的在"我方"侧、对端发的在"敌方"侧，一眼分清谁在说话。
+func _show_chat_bubble(txt: String, own: bool) -> void:
 	if txt == "":
 		return
 	if _chat_bubble_tween != null and _chat_bubble_tween.is_valid():
@@ -1175,29 +1181,38 @@ func _show_peer_chat(txt: String) -> void:
 	var vsize := get_viewport().get_visible_rect().size
 	var bubble := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.1, 0.16, 0.92)
+	sb.bg_color = Color(0.1, 0.16, 0.24, 0.94) if own else Color(0.24, 0.1, 0.12, 0.94)
 	sb.corner_radius_top_left = 12
 	sb.corner_radius_top_right = 12
 	sb.corner_radius_bottom_left = 12
 	sb.corner_radius_bottom_right = 12
-	sb.border_color = Color(1.0, 0.85, 0.4, 0.6)
-	sb.set_border_width_all(1)
+	sb.content_margin_left = 16.0
+	sb.content_margin_right = 16.0
+	sb.content_margin_top = 8.0
+	sb.content_margin_bottom = 8.0
+	sb.border_color = Color(0.5, 0.85, 1.0, 0.9) if own else Color(1.0, 0.4, 0.35, 0.9)
+	sb.set_border_width_all(2)
 	bubble.add_theme_stylebox_override("panel", sb)
 	bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var label := Label.new()
-	label.text = "对方：%s" % txt
-	label.add_theme_font_size_override("font_size", 16)
-	label.add_theme_color_override("font_color", Color(1.0, 0.93, 0.7))
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	label.add_theme_constant_override("outline_size", 3)
-	label.custom_minimum_size = Vector2(0, 30)
+	label.text = txt
+	label.add_theme_font_size_override("font_size", 26)
+	label.add_theme_color_override("font_color", Color(0.85, 0.95, 1.0) if own else Color(1.0, 0.78, 0.72))
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override("outline_size", 4)
+	label.custom_minimum_size = Vector2(0, 40)
 	bubble.add_child(label)
 	add_child(bubble)
 	_chat_bubble = bubble
 	await get_tree().process_frame
-	var bw := bubble.get_combined_minimum_size().x
-	bubble.size = Vector2(bw, 0)
-	bubble.position = Vector2((vsize.x - bw) / 2.0, 62.0)   # 顶部回合栏(54)下方
+	var bs := bubble.get_combined_minimum_size()
+	bubble.size = bs
+	# 顶部回合栏(54)下方弹气泡；我方发言贴左 12px（我方计数侧），对端发言贴右 12px，
+	# 左右对称摆放（我方气泡位置不动），一眼分清谁在说话。
+	var bx := 12.0
+	if not own:
+		bx = vsize.x - bs.x - 12.0
+	bubble.position = Vector2(maxf(6.0, bx), 62.0)
 	bubble.modulate.a = 0.0
 	var t := create_tween()
 	_chat_bubble_tween = t

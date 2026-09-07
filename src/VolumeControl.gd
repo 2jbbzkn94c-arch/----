@@ -29,6 +29,11 @@ func place_top_right(vsize: Vector2, margin_x := 8.0, margin_y := 7.0) -> void:
 	position = Vector2(vsize.x - margin_x - BTN_W, margin_y)
 	size = Vector2(BTN_W, BTN_H)
 
+# 放视口右下角（如战斗界面，与左下角喊话按钮对称）
+func place_bottom_right(vsize: Vector2, margin_x := 10.0, margin_b := 22.0) -> void:
+	position = Vector2(vsize.x - margin_x - BTN_W, vsize.y - margin_b - BTN_H)
+	size = Vector2(BTN_W, BTN_H)
+
 # ---- 自绘喇叭图标 ----
 func _draw() -> void:
 	var muted := _vol <= 0.001
@@ -148,7 +153,7 @@ func _open_panel() -> void:
 	hint.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(hint)
-	# 定位：右上角按钮正下方，右缘与按钮对齐
+	# 定位：与喇叭按钮同侧对齐；按钮贴近上/下边缘时弹层自动改向另一侧，避免出屏
 	panel.reset_size()
 	var pw: float = maxf(panel.get_combined_minimum_size().x, PANEL_W)
 	panel.custom_minimum_size = Vector2(pw, 0)
@@ -157,7 +162,11 @@ func _open_panel() -> void:
 	var gv := get_viewport().get_visible_rect().size
 	var px := gp.x + BTN_W - pw
 	px = clampf(px, 6.0, maxf(6.0, gv.x - pw - 6.0))
-	panel.position = Vector2(px, gp.y + BTN_H + 6)
+	var ph: float = panel.size.y
+	var py := gp.y + BTN_H + 6.0
+	if py + ph > gv.y - 6.0:
+		py = maxf(6.0, gp.y - ph - 6.0)   # 贴底时向上弹
+	panel.position = Vector2(px, py)
 
 func _pct_text(p: int) -> String:
 	if p <= 0:

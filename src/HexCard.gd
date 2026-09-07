@@ -157,6 +157,8 @@ func _rarity_bg() -> Color:
 func set_selected(sel: bool) -> void:
 	if selected != sel:
 		selected = sel
+		# 选中卡提到兄弟卡之上：即使与邻卡接近/接触，高亮描边也不被后画的邻居盖住
+		z_index = 2 if sel else 0
 		queue_redraw()
 
 func _draw() -> void:
