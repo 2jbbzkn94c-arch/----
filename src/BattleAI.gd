@@ -886,6 +886,14 @@ func _evaluate(sim: Sim) -> float:
 		var u: SimUnit = sim.units[i]
 		if u.alive and u.fn != DataRegistry.Faction.ENEMY and u.hurt_times >= 2:
 			score += 5.0 * (u.hurt_times - 1)
+	# 斩杀压力：玩家单位已残血(≤6)仍活着 → 补刀价值大，避免"打残一个就跑去打别人"
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn != DataRegistry.Faction.ENEMY:
+			if t.hp <= 3:
+				score += 4.0   # 濒死：谁都能补死，别放过
+			elif t.hp <= 6:
+				score += 1.8   # 残血：再挨一两刀就死，优先收
 	score += _synergy_value(sim)
 	# 黄金矿工拾取金矿的收益：站在金矿格上给予高额加分，引导 AI 走过去拾取
 	for i in sim.units.size():
