@@ -37,12 +37,14 @@ class Sim:
 	var gold_cells: Dictionary = {}   # cell -> true（黄金矿工可拾取的金矿）
 	var graves: Dictionary = {}        # cell -> true（阵亡墓碑：阻挡移动，不可落停）
 	var obstacles: Dictionary = {}     # cell -> true（障碍物：阻挡移动与攻击视线）
+	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
 
 	func clone() -> Sim:
 		var c := Sim.new()
 		c.gold_cells = gold_cells.duplicate()
 		c.graves = graves.duplicate()
 		c.obstacles = obstacles.duplicate()
+		c.killed_players = killed_players
 		for u in units:
 			var cu := SimUnit.new()
 			cu.fn = u.fn
@@ -453,6 +455,8 @@ func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool
 	for off in grid.los_mid_cells(from_cell, to_cell):
 		if sim.obstacles.has(off):
 			return true
+		if sim.graves.has(off):
+			return true   # 墓碑像障碍物一样挡攻击视线（与真实规则一致）
 		if sim.occ.has(off):
 			return true   # 单位（敌我）也阻挡攻击视线：与真实规则一致
 	return false
@@ -575,6 +579,8 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			if t.hp <= 0:
 				t.alive = false
 				sim.occ.erase(t.cell)
+				if t.fn != DataRegistry.Faction.ENEMY:
+					sim.killed_players += 1   # 本回合击杀玩家单位：记入即时奖励（驱动"先收残血"）
 			# 攻击后专属（真实顺序：先结算命中效果，再判定反击；目标死亡时部分技能仍对原位置生效）
 			if not u.silenced:
 				if u.hero_id == "hero_21":
@@ -863,6 +869,9 @@ func _evaluate(sim: Sim) -> float:
 				score -= 1.5
 	# 胜负节奏：杀到 3 个就赢 -> 击杀优先权随玩家阵亡数上升
 	score += float(player_dead) * 3.0
+	# 本回合内击杀玩家单位的即时重奖：让"能收残血就优先收"（把击杀前置），
+	# 避免搜索偏好"把另一人打残"而放过眼前能收的残血。
+	score += float(sim.killed_players) * 25.0
 	# 敌方单位死亡扣分（骷髅兵例外：其是回合结束即消失的消耗品，死亡不扣，已在上方排除）。
 	# 残局求稳：自己每多死一个，再死的代价非线性上升——
 	# 已经死 2 人（再死就输）时，AI 会避免"换命式"冒险，宁可保守保血线。
