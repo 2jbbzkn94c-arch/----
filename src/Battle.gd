@@ -4341,7 +4341,7 @@ func _drag_follow() -> void:
 		return
 	if not _dragging and get_global_mouse_position().distance_to(_drag_start_mouse) > _DRAG_THRESHOLD:
 		_dragging = true
-		action_info.emit("把英雄拖到最下方（出生点之下）松开即可撤下")
+		action_info.emit("把英雄完全拖出棋盘下边框（整个六边形出去）再松开即撤下")
 		_show_drag_highlight()
 	if _dragging:
 		_drag_unit.position = get_global_mouse_position()
@@ -4370,24 +4370,32 @@ func _finish_drag() -> void:
 	u.z_index = 2
 	_clear_drag_highlight()
 	if was_dragging:
-		# 拖到出生点下方（棋盘最下沿之外）即撤下
-		if get_global_mouse_position().y >= _player_spawn_drop_y():
+		# 整枚六边形完全越过棋盘下边框（最底行格子底边 + 单位自身半高）才撤下，
+		# 避免只拖过一半/贴边时误触撤下
+		if get_global_mouse_position().y >= _drag_release_y():
 			u.position = _drag_orig_pos
 			_withdraw_unit(u)
 		else:
 			u.position = _drag_orig_pos
-			action_info.emit("未拖到出生点下方，「撤下」已取消")
+			action_info.emit("未完全拖出棋盘，「撤下」已取消")
 	else:
 		# 没有拖动 -> 视为普通点击选中
 		_on_cell_clicked(u.cell)
 
-# 本端"我方"出生点所在行的全局 y（出生点下方即撤下区）。返回该行中心的最y
-# 用本端视角：主机=玩家行（屏幕下方），客户红方出生区（翻转后同样位于屏幕下方）
-func _player_spawn_drop_y() -> float:
-	var maxy := -INF
-	for c in _spawn_cells(_my_faction()):
-		maxy = max(maxy, board_view.cell_world_center(c).y)
-	return maxy
+# 撤下判定线 y：棋盘整体在屏幕上的最低外缘（各格子六边形底边/翻转后的最下缘）
+# 再往下加"单位自身垂直半高"，保证松手时整个单位六边形已完全越过棋盘下边框。
+# cell_world_center 已含联机 180° 翻转，故对主机/客户端两种视角都取到屏幕最低边。
+func _drag_release_y() -> float:
+	var r := hex_size
+	var bottom := -INF
+	if grid != null:
+		var half_h := 0.8660254 * r   # 平顶六边形垂直半高（底边为最下缘）
+		for c in grid.all_cells():
+			bottom = maxf(bottom, board_view.cell_world_center(c).y + half_h)
+	if bottom == -INF:
+		return INF   # 理论上不会走到（对局必有棋盘）；无棋盘时不判定撤下
+	# 单位绘制半径 = hex*0.9，其垂直半高 = 0.866 * (0.9*hex)
+	return bottom + 0.8660254 * (0.9 * r)
 
 func _cancel_drag() -> void:
 	if _drag_unit != null and is_instance_valid(_drag_unit):
