@@ -456,16 +456,15 @@ func _gcd(a: int, b: int) -> int:
 # 模拟：from->to 之间（不含两端）是否有障碍物阻挡攻击
 # 与真实规则一致：用六边形 cube 直线插值（修正旧轴向 round 插值在斜向偏格的问题）
 func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool:
-	if from_cell == to_cell:
-		return false
-	for off in grid.los_mid_cells(from_cell, to_cell):
-		if sim.obstacles.has(off):
+	# 与真实规则一致：存在一条全程无阻挡的最短路径即可打；否则被挡。
+	return grid.los_blocked(from_cell, to_cell, func(c):
+		if sim.obstacles.has(c) or sim.graves.has(c):
 			return true
-		if sim.graves.has(off):
-			return true   # 墓碑像障碍物一样挡攻击视线（与真实规则一致）
-		if sim.occ.has(off):
-			return true   # 单位（敌我）也阻挡攻击视线：与真实规则一致
-	return false
+		if sim.occ.has(c):
+			var oi: int = sim.occ[c]
+			if oi >= 0 and oi < sim.units.size():
+				return true
+		return false)
 
 # 模拟里某格是否有相邻的对立单位（用于远程被贴身判定）
 func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
@@ -780,6 +779,8 @@ func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 			return
 		if _sim_enemy_adjacent(sim, t, t.cell):
 			return   # 目标正被敌人贴身（压制中），无法远程反击
+		if dist_c > t.atk_range:
+			return   # 攻击者不在自己射程内，够不到则无法反击（与真实一致）
 	else:
 		if dist_c != 1:
 			return

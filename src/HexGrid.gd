@@ -136,16 +136,18 @@ func flip_center() -> Vector2:
 	_ensure_flip_center()
 	return _flip_center
 
-# 攻击视线：返回从 from 到 to 直线上的中间格（不含两端）。
-# 任一方向都按 cube 线性插值取途经格（含斜向）参与视线阻挡：
-# 只要视线连线上存在障碍/单位/墓碑（含斜向中间格），就被挡住。
+# 攻击视线：返回 from 到 to 的中间格（不含两端）——仅同轴直线（dq0/dr0/dq=-dr）。
+# 保留给旧调用/测试；新视线判定统一用 los_blocked（支持斜向多路最短径）。
 func los_mid_cells(from: Vector2i, to: Vector2i) -> Array:
 	var out: Array = []
 	if from == to:
 		return out
 	var fa := _offset_to_axial(from)
 	var ta := _offset_to_axial(to)
-	# cube 线性插值取中间格（任意方向）
+	var dq := ta.x - fa.x
+	var dr := ta.y - fa.y
+	if dq != 0 and dr != 0 and dq != -dr:
+		return out   # 斜向目标：中间格有歧义，不按单一格判阻挡
 	var cube_a := Vector3(float(fa.x), float(fa.y), -float(fa.x + fa.y))
 	var cube_b := Vector3(float(ta.x), float(ta.y), -float(ta.x + ta.y))
 	var n := distance(from, to)
@@ -159,6 +161,44 @@ func los_mid_cells(from: Vector2i, to: Vector2i) -> Array:
 		var rc := _cube_round(cx, cy, cz)
 		out.append(_axial_to_offset(Vector2i(int(rc.x), int(rc.y))))
 	return out
+
+# 视线是否被挡：**是否存在一条"从 from 到 to 的最短路径"，其所有中间格都未被阻挡**。
+# 同轴直线只有唯一一条路（中间任一格被挡即挡）；斜向有多条最短径，只要还留一条全程畅通就能打。
+# is_blocked(cell) 判定该格是否被单位/障碍/墓碑占据。
+func los_blocked(from: Vector2i, to: Vector2i, is_blocked: Callable) -> bool:
+	if from == to:
+		return false
+	var d := distance(from, to)
+	if d <= 1:
+		return false
+	# 所有"位于某条最短径上"的中间格
+	var cand: Dictionary = {}
+	for c in all_cells():
+		if c == from or c == to:
+			continue
+		if distance(from, c) + distance(c, to) == d:
+			cand[c] = true
+	# BFS：只允许经过"未被阻挡的候选中间格"（端点自由），能到 to 即可打
+	var reach := {from: true}
+	var frontier: Array = [from]
+	while frontier.size() > 0:
+		var cur: Vector2i = frontier.pop_front()
+		if cur == to:
+			return false   # 打通了
+		for n in neighbors(cur):
+			if reach.has(n):
+				continue
+			if n == to:
+				reach[to] = true
+				frontier.append(n)
+				continue
+			if not cand.has(n):
+				continue
+			if is_blocked.call(n):
+				continue
+			reach[n] = true
+			frontier.append(n)
+	return true   # 所有最短路都被堵死
 
 # 把浮点 cube 坐标四舍五入到最近的合法 cube（三坐标和为 0）
 func _cube_round(x: float, y: float, z: float) -> Vector3:

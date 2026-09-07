@@ -1791,6 +1791,20 @@ func _sync_echo(faction: int) -> void:
 		u.echo_bonus = sums[u]
 		u.refresh_stats()
 
+# 单个共鸣者即时补算（替补登场/变身/任意入场）：立即按当前队友取和，插队也不耽误当回合。
+func _sync_one_echo(u: Unit) -> void:
+	if u == null or not is_instance_valid(u) or not u.alive or not u.skill_allowed():
+		return
+	var total := 0
+	for v in units:
+		if v == null or not is_instance_valid(v) or not v.alive:
+			continue
+		if v == u or v.faction != u.faction:
+			continue
+		total += v.effective_atk()
+	u.echo_bonus = total
+	u.refresh_stats()
+
 # 己方回合结束时解除临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
 func _clear_statuses(faction: int) -> void:
 	for u in units:
@@ -2340,20 +2354,11 @@ func _gcd(a: int, b: int) -> int:
 		b = t
 	return max(a, 1)
 
-# 攻击视线：从 from to 之间（不含两端）是否存在 障碍物/单位/墓碑 阻挡
-# 用六边形 cube 直线插值（los_mid_cells），修正轴向各自 round 的旧插值在斜向偏格、
-# 把贴边格误判为直线途经格的问题。
+# 攻击视线：从 from 到 to 是否存在一条"全程无阻挡的最短路径"。
+# 被 障碍物/单位/墓碑 阻挡：同轴唯一路径任一被挡即挡；斜向多条最短径只要还通一条就能打。
 func _attack_path_blocked(from_cell: Vector2i, to_cell: Vector2i) -> bool:
-	if from_cell == to_cell:
-		return false
-	for off in grid.los_mid_cells(from_cell, to_cell):
-		if obstacles.has(off):
-			return true
-		if graves.has(off):
-			return true   # 墓碑像障碍物一样挡攻击视线
-		if occupancy.has(off):
-			return true   # 单位（敌我）也阻挡攻击视线：直线不可穿过他人钩目
-	return false
+	return grid.los_blocked(from_cell, to_cell, func(c):
+		return obstacles.has(c) or graves.has(c) or occupancy.has(c))
 
 # ---- 选中与高----
 func _select(u: Unit) -> void:
@@ -3147,8 +3152,9 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			can_counter = true
 		elif attacker.attack_type == DataRegistry.AttackType.RANGED \
 				and target.attack_type == DataRegistry.AttackType.RANGED \
-				and not _has_enemy_adjacent(target):
-			can_counter = true   # 远程对射：目标未被贴身，可全额反击
+				and not _has_enemy_adjacent(target) \
+				and dist_c <= target.attack_range:
+			can_counter = true   # 远程对射：目标未被贴身且攻击者在自己射程内，才可全额反击
 	if can_counter:
 		target.counter_used_this_turn = true
 	_clear_selection()
@@ -3959,6 +3965,7 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 	u.attack_range = bdef.attack_range
 	u.attack_type = bdef.attack_type
 	u.los_ignore = (hid == "hero_45")   # 回到基础英雄：清理坠炮手的无视阻挡
+	u.echo_bonus = 0   # 回到基础英雄：清空共鸣者加成
 	u.display_name = bdef.display_name
 	u.behavior = HeroRegistry.create(hid)
 	u.behavior.setup(self, u)
@@ -4012,6 +4019,12 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 		u.branch_override = true
 	# 坠炮手：变身后也获得全场射程与无视阻挡（数值已在 spawn_attack_range 覆盖为 99）
 	u.los_ignore = (u.hero_id == "hero_45")
+	# 共鸣者：变身即补算（或变回非共鸣者则清空共鸣加成）
+	if u.hero_id == "hero_47":
+		_sync_one_echo(u)
+	else:
+		u.echo_bonus = 0
+		u.refresh_stats()
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能
