@@ -1,5 +1,5 @@
 extends HeroBase
-## 涌电技师：移动后，攻击力+1，然后随机伤害HP最低的敌人之一，然后伤害自己。
+## 涌电技师：移动后，攻击力+1，然后随机伤害HP最低的敌人之一（可被圣盾格挡），然后伤害自己。
 class_name HeroSurgetech
 
 func on_move() -> void:
@@ -9,6 +9,6 @@ func on_move() -> void:
 	unit.refresh_stats()
 	var low: Unit = battle._lowest_enemy(unit)
 	if low != null:
-		low.take_damage(maxi(1, unit.effective_atk()), true)   # 电击：真实伤害，无视圣盾
+		low.take_damage(maxi(1, unit.effective_atk()), false)   # 电击：可被圣盾格挡（消耗盾、免伤）
 	var selfdmg: int = maxi(1, unit.effective_atk())
-	unit.take_damage(selfdmg, true)
+	unit.take_damage(selfdmg, false)   # 自伤同样可被自身圣盾格挡
