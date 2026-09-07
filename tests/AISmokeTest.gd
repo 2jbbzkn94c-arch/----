@@ -131,13 +131,14 @@ func _run() -> void:
 			gold_placed = true
 	print("T8 变身触发回合开始技能: 变身=%s 丢矿=%s => %s" % [is_gold, gold_placed, "PASS" if gold_placed else "FAIL"])
 
-	# 场景9：圣诞老人替补登场 -> 立即放道具（回合开始类技能登场生效）
+	# 场景9：圣诞老人替补登场 -> 不立即放道具（规则：替补登场只触发 <替补> 标签英雄，
+	# 圣诞老人的回合开始类技能等下一个己方回合开始再放）
 	clear_all()
 	spawn("hero_02", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
 	battle.buff_items.clear()
 	battle._trigger_on_enter(battle.units[-1])   # 模拟替补登场
 	var placed := battle.buff_items.size()
-	print("T9 圣诞(替补登场)立即放道具: 道具=%d => %s" % [placed, "PASS" if placed >= 2 else "FAIL"])
+	print("T9 圣诞(替补登场)不立即放道具: 道具=%d => %s" % [placed, "PASS" if placed == 0 else "FAIL"])
 
 	# 场景10：血锁（branch_override）只能打直线；近距直线目标可选、非直线目标不可选
 	clear_all()

@@ -76,7 +76,7 @@ class Sim:
 
 var grid: HexGrid
 var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
-var log_decisions := false   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
+var log_decisions := true   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
 
 const MAX_MOVE_OPTIONS := 16
 
@@ -1062,7 +1062,8 @@ func _position_score(sim: Sim) -> float:
 			# “靠近会吃多少伤害”由威胁图/落点威胁负责权衡，不会让它无脑踩雷。
 			var near_m := _nearest_enemy_dist(sim, u)
 			var engage := u.emove + u.atk_range   # 本回合全力后可够到的距离
-			if near_m > engage:
+			if near_m > engage and near_m < (1 << 29):
+				# 场上已无存活对手时 near_m=INF，此时不给激励（否则杀最后一人会被判成天文负分）
 				s -= 0.8 * float(near_m - engage)
 		# 保留移动力 = 机动性价值
 		if not u.moved:

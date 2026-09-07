@@ -209,7 +209,7 @@ var _preview_unit: Unit = null       # 当前预览描边的敌方单位（清�
 # 开局兜底阵容：取注册表前若干名可用角色（若非卡池进入对战
 const DEPLOY_COUNT := 3
 const DEFAULT_DECK_SIZE := 5
-const _CONSOLE_AI_LOG := false   # 分析日志：AI 各决策（行动/竞技场/首发/替补）输出到控制台
+const _CONSOLE_AI_LOG := true   # 分析日志：AI 各决策（行动/竞技场/首发/替补）输出到控制台
 
 func _default_deck() -> Array:
 	var ids := DataRegistry.heroes.keys()
