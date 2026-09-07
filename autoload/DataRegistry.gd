@@ -553,6 +553,7 @@ const STATUS_DESC := {
 	"沉默": "沉默：无法主动使用技能",
 	"眩晕": "眩晕：无法移动与攻击",
 	"圣盾": "圣盾：抵挡一次受到的伤害",
+	"附体": "附体（负面）：与施加者伤害绑定。施加者受到伤害时，目标受到同等伤害；目标方回合结束时解除（负墟免疫）",
 }
 
 # 从技能原文提取方括号状态词的解释行（按出现顺序、去重；未收录的词忽略）。
@@ -587,6 +588,8 @@ func spawn_attack_range(def: HeroDef) -> int:
 	var r := def.attack_range
 	if def.id == "hero_41":
 		r += 2
+	if def.id == "hero_45":
+		r = 99   # 坠炮手：全场任意目标（弹道无视阻挡由 Unit/Battle 处理）
 	return r
 
 # 属性表内容分“显示区”：①名字+近/远程+词条标签 ②基础属性 ③“技能”+技能描述 ④词条解释。
@@ -603,8 +606,11 @@ func hero_info_zones(def: HeroDef) -> Array[String]:
 	var move_txt := "移动 %d" % spawn_move(def)
 	if def.id == "hero_24":
 		move_txt = "移动 ∞"
-	zones.append("HP %d　攻击 %d　%s　射程 %d" % [
-		def.max_hp, def.atk, move_txt, spawn_attack_range(def)])
+	# 坠炮手射程=全场，按"∞"展示
+	var range_n := spawn_attack_range(def)
+	var range_txt := "射程 ∞" if def.id == "hero_45" else "射程 %d" % range_n
+	zones.append("HP %d　攻击 %d　%s　%s" % [
+		def.max_hp, def.atk, move_txt, range_txt])
 	var desc := clean_skill_desc(def.desc)
 	if desc != "":
 		zones.append("技能\n%s" % desc)

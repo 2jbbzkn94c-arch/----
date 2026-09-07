@@ -204,6 +204,10 @@ var bombs: Dictionary = {}        # cell -> true（炸弹陷阱）
 var obstacles: Dictionary = {}    # cell -> 耐久（障碍物，阻挡移动，可被破坏
 var buff_items: Dictionary = {}   # cell -> "atk"/"move"（圣诞老人等放置的增益道具
 var graves: Dictionary = {}       # cell -> hero_id（阵亡单位的墓碑：替补可在此落位，落位后消失
+var _possess_links: Dictionary = {}   # [附体] 绑定: target(Unit) -> 施加者 caster(Unit)
+var _possess_depth := 0               # [附体] 镜像递归深度（多宿魂互附时防死循环）
+var gold_left: Dictionary = {}        # cell -> 金矿剩余回合数（3→0 消失；每完整回合减1）
+var _gold_tick_round := -1            # 已执行过金矿倒计时的回合号（每轮只减一次，两端同步）
 
 # 开局增益道具：开局(第一个行动方回合开始技时)在候选 4 格放 2 个随机道具。
 # 坐标由玩家编号(左下角=[1,1],x 右起,y 上起)换算为代码坐标(y0=顶行)：
@@ -262,6 +266,7 @@ func _ready() -> void:
 	board_view.obstacles = obstacles
 	board_view.buff_items = buff_items
 	board_view.graves = graves
+	board_view.gold_left = gold_left
 	# 酒馆木地板背景（垫在棋盘下层；必须忽略鼠标，否则会吃掉棋盘点击）
 	var wood := WoodFloor.new()
 	var wsize := get_viewport().get_visible_rect().size
@@ -792,6 +797,10 @@ func reset_match() -> void:
 	buff_items.clear()
 	obstacles.clear()
 	graves.clear()
+	gold_left.clear()
+	_gold_tick_round = -1   # 重开新局：金矿倒计时重新从放置起算
+	_possess_links.clear()
+	_possess_depth = 0
 	_preview_cells = {}
 	_refresh_board()   # 同步棋盘显示：清空上一局的墓障碍/道具残留（board_view 缓存需要重绘）
 	player_roster = []
@@ -1446,7 +1455,7 @@ func item_desc(type: String) -> String:
 		"shield":
 			return "获得[圣盾]：抵挡一次受到的伤害"
 		"gold":
-			return "攻击+1、血量上3"
+			return "攻击+1（永久）、生命上限+3，并回复 3 点血（仅黄金矿工可拾取）"
 	return "增益道具"
 
 # 开局增益道具：开局时（首个行动方回合开始技执行点，两端同步同种子）在候选 4 格
@@ -1496,8 +1505,28 @@ func _place_gold(u: Unit) -> void:
 		return
 	var c: Vector2i = spots[rng.randi() % spots.size()]
 	buff_items[c] = "gold"
-	log_message.emit("%s 在 %s 丢下一块金矿。" % [u.display_name, str(c)])
+	gold_left[c] = 3   # 金矿存在 3 个完整回合，每轮结束减 1，到 0 消失
+	log_message.emit("%s 在 %s 丢下一块金矿（3 回合后消失）。" % [u.display_name, str(c)])
 	_refresh_board()
+
+# 金矿到期：每完整回合开始减 1；到 0 移除（只清理仍存在格上的金矿，防止与测试手清不一致）
+func _tick_gold_age() -> void:
+	if gold_left.size() == 0:
+		return
+	var changed := false
+	for c in gold_left.keys():
+		var left: int = gold_left[c] - 1
+		if left <= 0:
+			if buff_items.get(c, "") == "gold":
+				buff_items.erase(c)
+				log_message.emit("一块金矿风化消失了。")
+			gold_left.erase(c)
+			changed = true
+		else:
+			gold_left[c] = left
+			changed = true
+	if changed:
+		_refresh_board()
 
 func _refresh_board() -> void:
 	if board_view:
@@ -1613,7 +1642,14 @@ func _begin_side(side: int) -> void:
 # 两端在同一触发点执行:行动方补位完成后(或无需补位时)由行动端广播 side_skills,两端同跑,
 # 保证金矿/道具等 rng 落点与单位集合一致。单机/等待端均经由本函数统一收尾。
 func _run_side_skills(side: int) -> void:
+	# 金矿倒计时：每个完整回合（回合号变化）只减一次，两端同一时点同步执行
+	if GameState.round_number != _gold_tick_round:
+		_gold_tick_round = GameState.round_number
+		_tick_gold_age()
 	await _trigger_turn_start_all(side)   # 回合开始的角色技能（逐个触发+边框闪烁
+	# 共鸣者：在回合开始技**之后**结算——死灵法师等召唤物、烈焰加攻等在技能阶段入场/生效，
+	# 结算晚了会把它们算进"所有队友攻击之和"。
+	_sync_echo(side_faction(side))
 	# 让回合开始增益在牌面上可
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
@@ -1730,7 +1766,32 @@ func _trigger_turn_end_all(faction: int) -> void:
 					return   # 场景已释放：安全退出
 				await get_tree().create_timer(0.35).timeout
 
-# 己方回合结束时解除临时状
+# 共鸣者（hero_47）：己方回合开始时，"攻击力增加所有队友攻击力之和"直到我方回合结束。
+# 先统一取样所有共鸣者的总和再逐个赋值（若有多名共鸣者，避免后者把前者的新加成又算进去）。
+func _sync_echo(faction: int) -> void:
+	var list: Array = []
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction == faction and u.hero_id == "hero_47" and u.skill_allowed():
+			list.append(u)
+	if list.size() == 0:
+		return
+	var sums := {}
+	for u in list:
+		var total := 0
+		for v in units:
+			if v == null or not is_instance_valid(v) or not v.alive:
+				continue
+			if v == u or v.faction != faction:
+				continue
+			total += v.effective_atk()
+		sums[u] = total
+	for u in list:
+		u.echo_bonus = sums[u]
+		u.refresh_stats()
+
+# 己方回合结束时解除临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
 func _clear_statuses(faction: int) -> void:
 	for u in units:
 		if u == null or not is_instance_valid(u):
@@ -1739,9 +1800,16 @@ func _clear_statuses(faction: int) -> void:
 			u.clear_temp_statuses()
 			u.atk_buff = 0
 			u.move_buff = 0
+			u.echo_bonus = 0
 			u.ramble_bonus = 0
 			u.branch_override = false
 			u.refresh_stats()
+	# 附体：目标方（该阵营）回合结束时解除其身上的绑定
+	if _possess_links.size() > 0:
+		var keys := _possess_links.keys()
+		for t in keys:
+			if t == null or not is_instance_valid(t) or t.faction == faction:
+				_possess_links.erase(t)
 
 # 联机客户端：收到主机 turn_end 广播时补跑"刚结束方"的回合末结算
 # （骷髅兵随回合结束消散、德鲁伊回合末治疗等），与主机 _end_side 里执行的一致。
@@ -2112,8 +2180,9 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 	# 血锁：只能沿直线攻击（6 条轴向方向），此处统一拦截直线外的目标
 	if a.branch_override and not _is_straight_line_cells(a.cell, b.cell):
 		return false
-	# 障碍物阻挡攻击视线（血远程不能隔墙打；贴身攻击无中间格不受影响
-	if _attack_path_blocked(a.cell, b.cell):
+	# 障碍物阻挡攻击视线（血远程不能隔墙打；贴身攻击无中间格不受影响）
+	# 坠炮手(hero_45)无视阻挡：弹道穿过障碍/单位/墓碑
+	if not a.los_ignore and _attack_path_blocked(a.cell, b.cell):
 		return false
 	return true
 
@@ -2123,16 +2192,18 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 # 否则被墙挡住的嘲讽会把本可攻击的目标从高亮里误滤掉（"能打到的没标红"）。
 func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 	var range_at := _effective_range_at(u, from_cell)
+	# 坠炮手无视嘲讽：不收集嘲讽、不受"只能打嘲讽"限制
 	var taunts: Array = []
-	for v in units:
-		if v.alive and v.faction != u.faction and v.skills.has(DataRegistry.Skill.TAUNT):
-			var d := grid.distance(from_cell, v.cell)
-			if d >= 1 and d <= range_at:
-				if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):
-					continue
-				if _attack_path_blocked(from_cell, v.cell):
-					continue
-				taunts.append(v)
+	if not u.los_ignore:
+		for v in units:
+			if v.alive and v.faction != u.faction and v.skills.has(DataRegistry.Skill.TAUNT):
+				var d := grid.distance(from_cell, v.cell)
+				if d >= 1 and d <= range_at:
+					if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):
+						continue
+					if not u.los_ignore and _attack_path_blocked(from_cell, v.cell):
+						continue
+					taunts.append(v)
 	var out: Array = []
 	for v in units:
 		if v.alive and v.faction != u.faction:
@@ -2142,7 +2213,7 @@ func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 					continue
 				if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):   # 血锁：只能直线攻击
 					continue
-				if _attack_path_blocked(from_cell, v.cell):   # 障碍物阻挡视线
+				if not u.los_ignore and _attack_path_blocked(from_cell, v.cell):   # 障碍物阻挡视线（坠炮手无视）
 					continue
 				out.append(v)
 	return out
@@ -2230,7 +2301,7 @@ func _taunters_in_range(a: Unit) -> Array:
 	return out
 
 func _valid_targets(a: Unit) -> Dictionary:  # Unit -> true
-	var taunts := _taunters_in_range(a)
+	var taunts := _taunters_in_range(a) if not a.los_ignore else []   # 坠炮手无视嘲讽
 	var out := {}
 	for v in units:
 		if v.alive and v.faction != a.faction and _in_attack_range(a, v):
@@ -2363,8 +2434,8 @@ func _compute_ranges(u: Unit) -> void:
 				# 血锁：攻击障碍同样只能6 方向直线（与攻击敌方单位一致）
 				if u.branch_override and not _is_straight_line_cells(u.cell, oc):
 					continue
-				if _attack_path_blocked(u.cell, oc):
-					continue   # 与攻击单位一致：中间有单位/障碍挡视线时打不到
+				if not u.los_ignore and _attack_path_blocked(u.cell, oc):
+					continue   # 与攻击单位一致：中间有单位/障碍挡视线时打不到（坠炮手无视）
 				enemy_cells[oc] = true
 
 func _is_logistics(u: Unit) -> bool:
@@ -2465,8 +2536,8 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i) -> void:
 	# 血锁：攻击障碍同样只能6 方向直线（权威执行处也校验，防绕UI 高亮
 	if u.branch_override and not _is_straight_line_cells(u.cell, cell):
 		return   # 非法目标直接忽略，不消耗行动（UI 高亮已过滤，此处为兜底）
-	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮）
-	if _attack_path_blocked(u.cell, cell):
+	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮；坠炮手无视）
+	if not u.los_ignore and _attack_path_blocked(u.cell, cell):
 		return
 	state = State.ANIMATING   # 演出期间锁定输入
 	u.attacked_this_turn = true
@@ -2906,6 +2977,8 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 	if btype == "gold" and u.hero_id != "hero_42":
 		return   # 金矿只有黄金矿工可拾取：其他单位踩到不消费、金矿保留在格上
 	buff_items.erase(u.cell)
+	if btype == "gold":
+		gold_left.erase(u.cell)   # 被拾取后不再倒计时
 	if btype == "atk":
 		u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
 		u.refresh_stats()
@@ -2927,7 +3000,7 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 		u.max_hp += 3
 		u.hp = min(u.hp + 3, u.max_hp)
 		u.refresh_stats()
-		log_message.emit("%s 拾取金矿！攻击 +1、血量上限 +3。" % u.display_name)
+		log_message.emit("%s 拾取金矿！攻击 +1（永久）、生命上限 +3 并回复 3 血。" % u.display_name)
 	_refresh_board()
 
 # 先移动到指定格、再攻击同一目标（合并的"移动+攻击"
@@ -3363,6 +3436,35 @@ func _add_status_msg(u: Unit, status: String, label: String) -> void:
 	u.add_status(status)
 	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
 	log_message.emit("%s 获得[%s]。" % [u.display_name, label])
+
+# [附体]：宿魂攻击后令敌人绑定。属负面标记（负墟免疫，命中计数攻+1）。
+# 不叠加（后附覆盖先附）；目标方回合结束时由 _clear_statuses 解除（含单位状态与绑定表）。
+func _possess_attach(caster: Unit, target: Unit) -> void:
+	if caster == null or target == null or not is_instance_valid(caster) or not is_instance_valid(target):
+		return
+	if not target.alive or target.faction == caster.faction or target == caster:
+		return
+	target.add_status("possess")   # 负墟免疫时此处不会挂上状态（add_status 拦截并返回）
+	if not target.has_status("possess"):
+		return   # 免疫成功（负墟等）：不建立绑定
+	_possess_links[target] = caster
+	log_message.emit("%s 令 %s 获得[附体]。" % [caster.display_name, target.display_name])
+
+# [附体] 镜像：施加者受伤 dmg>0 时，其所有被附体存活目标同受同等伤害。
+# 目标侧圣盾/重伤按其自身规则结算；递归深度上限防两宿魂互附死循环。
+func _possess_mirror(caster: Unit, dmg: int) -> void:
+	if caster == null or dmg <= 0 or _possess_depth >= 8:
+		return
+	_possess_depth += 1
+	var keys := _possess_links.keys()
+	for t in keys:
+		if _possess_links.get(t) != caster:
+			continue
+		if t == null or not is_instance_valid(t) or not t.alive:
+			_possess_links.erase(t)   # 目标已死/失效：清除绑定
+			continue
+		t.take_damage(dmg, false, false, "附体")
+	_possess_depth -= 1
 
 # 某格相邻的对立阵营单
 func _enemies_adjacent_to(cell: Vector2i, faction: int) -> Array:
@@ -3856,6 +3958,7 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 		u.move_range += 1
 	u.attack_range = bdef.attack_range
 	u.attack_type = bdef.attack_type
+	u.los_ignore = (hid == "hero_45")   # 回到基础英雄：清理坠炮手的无视阻挡
 	u.display_name = bdef.display_name
 	u.behavior = HeroRegistry.create(hid)
 	u.behavior.setup(self, u)
@@ -3907,6 +4010,8 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	# 直接调会重复叠加（大骑士/血锁会双倍）。
 	if u.hero_id == "hero_41":
 		u.branch_override = true
+	# 坠炮手：变身后也获得全场射程与无视阻挡（数值已在 spawn_attack_range 覆盖为 99）
+	u.los_ignore = (u.hero_id == "hero_45")
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能

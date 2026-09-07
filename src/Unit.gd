@@ -34,6 +34,7 @@ var statuses: Dictionary = {}
 # 本回合临时增益/减益（攻击、移动力增减，回合结束时重置）
 var atk_buff := 0
 var move_buff := 0
+var echo_bonus := 0            # 共鸣者：本回合攻击力=所有队友攻击力之和（己方回合结束重置）
 var branch_override := false   # 血锁：射程+2 且只能直线攻击
 var ramble_bonus := 0          # 大大骑士冲锋后攻击上升量
 var sun_bonus := 0             # 太阳斩：登场攻击+3，每次攻击/反击后-1，直到恢复正常
@@ -45,6 +46,7 @@ var transform_base_id := ""    # 古灵精怪：变身后回溯本源（hero_28�
 var last_transform_id := ""    # 古灵精怪：上一次变身后为了不重复变成同一对象
 var summon_owner := ""         # 召唤者的单位 id（死灵法师召唤的骷髅兵：主人阵亡时随之消散）
 var behavior: HeroBase = null  # 该单位所属英雄的行为脚本（HeroRegistry 创建），技能逻辑分发用
+var los_ignore := false    # 坠炮手(hero_45)：攻击弹道无视障碍/单位/墓碑阻挡
 var _neg_immune_frame := -1    # 负墟：免疫负面时记录处理帧，同一帧（同一次攻击的多个负面）只计一次
 
 var hex_radius := 44.0
@@ -74,6 +76,10 @@ func _init(def: DataRegistry.HeroDef, faction_ := 0, cell_ := Vector2i.ZERO, rad
 	move_range = def.move_range
 	attack_range = def.attack_range
 	skills = def.skills.duplicate()
+	# 坠炮手：射程=全场(99)、弹道无视阻挡（无视阻挡判定由 Battle 各视线入口读 los_ignore）
+	if def.id == "hero_45":
+		attack_range = 99
+		los_ignore = true
 	hp = max_hp
 	cell = cell_
 	hex_radius = radius
@@ -234,13 +240,19 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	else:
 		_float_text("-%d" % dmg, Color(1.0, 0.45, 0.4), -24, -46)
 	AudioManager.play("hit")
+	# [附体]镜像：宿魂受到的伤害 >0 时，其被附体目标同受同等伤害（Battle 统一结算）
+	if dmg > 0:
+		var bnode := get_parent()
+		if bnode != null and bnode.has_method("_possess_mirror"):
+			bnode._possess_mirror(self, dmg)
 	if hp <= 0:
 		die()
 
 # ---- 状态效果 ----
 # 负墟：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
+# [附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
 func _is_negative_status(s: String) -> bool:
-	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison"
+	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison" or s == "possess"
 
 func add_status(s: String) -> void:
 	# 负墟（hero_44）：免疫负面效果——不挂状态，改为"被负面攻击命中"计数 +1 攻击
@@ -316,7 +328,7 @@ func _ensure_tags_label() -> void:
 	_tags_label = tag_label
 
 func clear_temp_statuses() -> void:
-	for s in ["heavy", "atkdown", "freeze", "silence", "stun"]:
+	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess"]:
 		statuses.erase(s)
 	_update_status_label()
 
@@ -328,7 +340,7 @@ func effective_atk() -> int:
 	var base := atk
 	if attack_type == DataRegistry.AttackType.RANGED and ranged_adjacent:
 		base = 1   # 远程被贴身：默认攻击力变为 1（buff 不受影响）
-	var a := base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff
+	var a := base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff + echo_bonus
 	if has_status("atkdown"):
 		a -= 1
 	return max(a, 0)
@@ -382,6 +394,9 @@ func _update_status_label() -> void:
 		has_debuff = true
 	if has_status("shield"):
 		txt += "盾"
+	if has_status("possess"):
+		txt += "附"
+		has_debuff = true
 	if _status_label:
 		_status_label.text = txt
 		# 配色：减益=紫色（勿与敌方红色卡面混淆）；仅剩圣盾(增益)=金黄（勿用蓝，与本方蓝卡面接近）

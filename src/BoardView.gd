@@ -9,6 +9,7 @@ var _highlights: Dictionary = {}  # cell -> Color
 var bombs: Dictionary = {}        # cell -> true（炸弹人的陷阱）
 var obstacles: Dictionary = {}     # cell -> 耐久（障碍物）
 var buff_items: Dictionary = {}    # cell -> "atk"/"move"（增益道具）
+var gold_left: Dictionary = {}     # cell -> 金矿剩余回合数（右下角小字展示，3→0消失）
 var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可选择在此落位）
 var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 较实底色，避免透出灰木导致棋子/文字看不清
 var _cell_line := Color(0, 0, 0, 0.85)   # 六边形格线：黑色，清楚显示格子边界
@@ -74,6 +75,12 @@ func _draw() -> void:
 				color = Color(1.0, 0.9, 0.15)    # 金矿：亮黄
 		draw_circle(center, grid.hex_size * 0.26, Color(0.25, 0.2, 0.08, 0.9))
 		draw_circle(center, grid.hex_size * 0.16, color)
+		# 金矿：右下角显示剩余回合数（3→2→1，到0消失）
+		if st == "gold" and gold_left.has(cell):
+			var n := str(gold_left[cell])
+			var tp := center + Vector2(grid.hex_size * 0.20, grid.hex_size * 0.27)
+			draw_string(ThemeDB.fallback_font, tp + Vector2(1, 1), n, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0, 0, 0, 0.9))
+			draw_string(ThemeDB.fallback_font, tp, n, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1.0, 0.95, 0.6))
 	# 墓碑（灰色十字石碣）：替补可选择在其上方/周围落位，落位后消失
 	for cell in graves.keys():
 		var center := board_origin + grid.cell_to_world(cell)

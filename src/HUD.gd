@@ -159,7 +159,11 @@ func show_unit_card(u: Unit) -> void:
 	var move_txt := "%d" % u.effective_move()
 	if u.hero_id == "hero_24":
 		move_txt = "∞"
-	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %d\n状态：%s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, u.attack_range, _status_text(u)]
+	# 坠炮手射程=全场，按 ∞ 展示
+	var range_txt := "%d" % u.attack_range
+	if u.hero_id == "hero_45":
+		range_txt = "∞"
+	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s\n状态：%s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt, _status_text(u)]
 	stats.add_theme_font_size_override("font_size", 17)
 	stats.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -303,6 +307,7 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("freeze"): s += "冰冻 "
 	if u.has_status("silence"): s += "沉默 "
 	if u.has_status("stun"): s += "眩晕 "
+	if u.has_status("possess"): s += "附体 "
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
 

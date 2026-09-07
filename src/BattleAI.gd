@@ -30,6 +30,7 @@ class SimUnit:
 	var frozen := false     # 冰冻（移动-1）
 	var hurt_times := 0     # 本回合被攻击次数（集火评估）
 	var aura_used := false   # 本回合已触发过的光环/次数技（圣光护盾等每回合限一次）
+	var ignore_los := false   # 坠炮手(hero_45)：攻击弹道无视障碍/单位/墓碑阻挡
 
 class Sim:
 	var units: Array = []
@@ -72,6 +73,7 @@ class Sim:
 			cu.frozen = u.frozen
 			cu.hurt_times = u.hurt_times
 			cu.aura_used = u.aura_used
+			cu.ignore_los = u.ignore_los
 			c.units.append(cu)
 		c.occ = occ.duplicate()
 		return c
@@ -112,6 +114,10 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 		u.heavy = d.get("heavy", false)
 		u.poisoned = d.get("poisoned", false)
 		u.frozen = d.get("frozen", false)
+		# 坠炮手：全场射程 + 无视阻挡（与真实规则一致；atk_range 已由出生方置为 99）
+		if u.hero_id == "hero_45":
+			u.atk_range = 99
+			u.ignore_los = true
 		s.units.append(u)
 	s.occ = occ.duplicate()
 	return s
@@ -418,8 +424,8 @@ func _in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, t: SimUnit) -> bool:
 	# 血锁：只能沿直线攻击（6 条轴向方向之一），与真实规则一致
 	if u.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, t.cell):
 		return false
-	# 障碍物阻挡攻击视线（与真实规则一致）
-	if _sim_path_blocked(sim, from_cell, t.cell):
+	# 障碍物阻挡攻击视线（与真实规则一致）；坠炮手(ignore_los)无视阻挡
+	if not u.ignore_los and _sim_path_blocked(sim, from_cell, t.cell):
 		return false
 	return true
 
@@ -472,13 +478,14 @@ func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
 			return true
 	return false
 
-# 返回某落点可攻击的目标 idx（含嘲讽规则）
+# 返回某落点可攻击的目标 idx（含嘲讽规则；坠炮手 ignore_los 无视嘲讽）
 func _valid_targets(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
 	var taunts: Array = []
-	for i in sim.units.size():
-		var t: SimUnit = sim.units[i]
-		if t.alive and t.fn != u.fn and t.skills.has(DataRegistry.Skill.TAUNT) and _in_range(sim, u, from_cell, t):
-			taunts.append(i)
+	if not u.ignore_los:
+		for i in sim.units.size():
+			var t: SimUnit = sim.units[i]
+			if t.alive and t.fn != u.fn and t.skills.has(DataRegistry.Skill.TAUNT) and _in_range(sim, u, from_cell, t):
+				taunts.append(i)
 	var out: Array = []
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]
