@@ -2806,7 +2806,13 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 		u.refresh_stats()
 	_clear_selection()
 	if for_enemy:
-		action_finished.emit()   # 敌方移动动画+结算结束，通知回放继续
+		# 单机：action_finished 通知敌方 AI 回放循环继续下一招；
+		# 联机：本端在回放"对端真人"的行动，没有 AI 回放循环——结束后回到"等待对方"状态，
+		# 否则 state 会卡在 ANIMATING，随后对端发来的 end_turn 会被 state==ANIMATING 拦截而永远结束不了回合。
+		if GameState.is_online:
+			state = State.ENEMY_TURN
+		else:
+			action_finished.emit()   # 敌方移动动画+结算结束，通知回放继续
 		return
 	# 炸弹人：待选格放炸
 	if _pending_bomb_unit == u:
@@ -2877,7 +2883,11 @@ func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	if attacker == null or not is_instance_valid(attacker) or target == null or not is_instance_valid(target):
 		if for_enemy:
-			action_finished.emit()   # 捕获单位已释放：敌方回放仍须放行，避免卡
+			# 单机：通知敌方 AI 回放继续；联机对端真人行动后回到等待状态，避免 state 卡 ANIMATING
+			if GameState.is_online:
+				state = State.ENEMY_TURN
+			else:
+				action_finished.emit()   # 捕获单位已释放：敌方回放仍须放行，避免卡
 			return   # 捕获单位已释放（tween 回调期间free）：安全退
 	var dmg := _attack_damage(attacker) * _bonus_damage(attacker, target)
 	_attack_hp_before = target.hp   # 记录攻击前血量，供攻击后技能判定（古拉吸血等）
@@ -2993,7 +3003,11 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 	if _check_win():
 		return
 	if for_enemy:
-		action_finished.emit()   # 敌方攻击（含反击）演出结束，通知回放继续
+		# 单机：action_finished 通知敌方 AI 回放循环继续；联机对端真人行动后回到等待状态
+		if GameState.is_online:
+			state = State.ENEMY_TURN
+		else:
+			action_finished.emit()   # 敌方攻击（含反击）演出结束，通知回放继续
 		return
 	# 还能移动 -> 继续选中该单
 	if alive_attacker and not attacker.moved_this_turn:
