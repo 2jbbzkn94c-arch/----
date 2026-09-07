@@ -4116,7 +4116,15 @@ func _grant_sub_aura(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
 	if u.hero_id == "hero_43":
-		return   # 风语者本人不吃自己光环
+		# 替补登场的是风语者本人：他的光环是"在场时所有其他队友移动力+1"。
+		# 回合中途替补会错过回合开始的 on_turn_start，须在此给在场队友补发（风语者本人不吃）。
+		for v in units:
+			if v == null or not is_instance_valid(v) or not v.alive:
+				continue
+			if v.faction == u.faction and v.hero_id != "hero_43":
+				v.move_buff += 1
+				v.refresh_stats()
+		return
 	for v in units:
 		if v == null or not is_instance_valid(v) or not v.alive:
 			continue
