@@ -164,7 +164,7 @@ func _rng_shuffle(arr: Array) -> void:
 
 var units: Array[Unit] = []
 var occupancy: Dictionary = {}   # cell(Vector2i) -> Unit
-var board_size := Vector2i(7, 7)  # 7 × 6 满行 + 顶部 3 格顶帽（总高 7 行；相对旧版减少 2 行）
+var board_size := Vector2i(5, 7)  # 5 × 6 满行 + 顶部 2 格顶帽(总高 7 行;相对旧版删左右各 1 列)
 var hex_size := 60.0   # 六边形外接半径（像素）：整体放大棋盘改这里（480 放大25%
 var state := State.IDLE
 var selected: Unit = null
@@ -237,7 +237,7 @@ func _ready() -> void:
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
 	grid = HexGrid.new(board_size.x, board_size.y, hex_size)
-	grid.top_cap_cols = [1, 3, 5]   # 从左数第 2/4/6 列（0-based 1/3/5）各一
+	grid.top_cap_cols = [0, 2, 4]   # 删左右各一列后:顶帽行保留原 1,3,5 → 左移为 0,2,4
 	# 联机访客：把棋盘绕中心旋180°，让"我方阵营"始终落在屏幕下方
 	# 只影响渲鼠标回查，不改任何逻辑阵营，故两端确定性不受影响
 	grid.view_flip = GameState.is_online and not GameState.is_host
@@ -711,10 +711,9 @@ const DEPLOY_COUNT_BATTLE := 3
 const DEPLOY_BUDGET_SECONDS := 30.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
 var deploy_budget_left := DEPLOY_BUDGET_SECONDS   # 剩余总时间（随时间流逝减少，不按轮重置）
 var deploy_budget_active := false                 # 当前是否正处本端真人选人/放位（此时才倒计时）
-# 敌方出生区整片（顶帽3 + 第一满行 4 格）；用于出生区底色/高亮（不受占用过滤影响）
+# 敌方出生区整片（顶帽 row0 的 0,2,4 + 第一满行 row1 的 1,3 交错皇冠，共 5 格）
 const ENEMY_ZONE_CELLS: Array = [
-	Vector2i(0, 1), Vector2i(1, 0), Vector2i(2, 1), Vector2i(3, 0),
-	Vector2i(4, 1), Vector2i(5, 0), Vector2i(6, 1),
+	Vector2i(0, 0), Vector2i(1, 1), Vector2i(2, 0), Vector2i(3, 1), Vector2i(4, 0),
 ]
 var player_pool: Array = []
 var enemy_pool: Array = []
@@ -1313,7 +1312,7 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 	player_roster = []
 	enemy_roster = []
 	# 玩家在下方最后一行；敌方在顶部出生区（顶帽行 + 最上面一排满行）
-	var player_cells := [Vector2i(1, grid.height - 1), Vector2i(3, grid.height - 1), Vector2i(5, grid.height - 1)]
+	var player_cells := [Vector2i(0, grid.height - 1), Vector2i(2, grid.height - 1), Vector2i(4, grid.height - 1)]
 	# 3 名上阵（敌方_free_spawn_cell 在完整出生区依次落位
 	for i in range(DEPLOY_COUNT):
 		if i < p_deck.size():
@@ -1332,10 +1331,10 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
-	# 只在指定坐标生成（列从左col-1，行从下height-行，height=10
+	# 只在指定坐标生成（删左右两列后按 5 列中段重排：行 3/4 交错候选）
 	var spots := [
-		Vector2i(0, 4), Vector2i(1, 4), Vector2i(1, 3), Vector2i(2, 4), Vector2i(3, 4),
-		Vector2i(3, 3), Vector2i(4, 4), Vector2i(5, 4), Vector2i(5, 3), Vector2i(6, 4),
+		Vector2i(0, 4), Vector2i(0, 3), Vector2i(1, 4), Vector2i(2, 4),
+		Vector2i(2, 3), Vector2i(3, 4), Vector2i(4, 4), Vector2i(4, 3),
 	]
 	_rng_shuffle(spots)
 	var count := rng.randi_range(2, 4)
@@ -4341,10 +4340,9 @@ func _spawn_cells(faction: int) -> Array:
 			if grid.in_bounds(cell):
 				out.append(cell)
 	else:
-		# 敌方出生区（顶部：row 0 = 顶帽行，row 1 = 第一满行），列跨 0..6
+		# 敌方出生区（顶部：row 0 = 顶帽行，row 1 = 第一满行），列跨 0..4（删左右两列后的 5 格皇冠）
 		var ecells: Array = [
-			Vector2i(0, 1), Vector2i(1, 0), Vector2i(2, 1), Vector2i(3, 0),
-			Vector2i(4, 1), Vector2i(5, 0), Vector2i(6, 1),
+			Vector2i(0, 1), Vector2i(1, 0), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1),
 		]
 		for c in ecells:
 			if grid.in_bounds(c) and not occupancy.has(c):

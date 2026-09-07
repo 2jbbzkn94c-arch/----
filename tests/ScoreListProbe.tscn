@@ -1,6 +1,0 @@
-[gd_scene format=3 uid="uid://dn72bk3iujbec"]
-
-[ext_resource type="Script" path="res://tests/ScoreListProbe.gd" id="1_script"]
-
-[node name="ScoreListProbe" type="Node"]
-script = ExtResource("1_script")
