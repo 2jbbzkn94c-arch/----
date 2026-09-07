@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 百变精灵变身触发验证：
 ## 古灵精怪(hero_28)在其他英雄/自身回合开始时变身，变身后应立即触发新英雄的"己方回合开始"技能。
 ## 运行：godot --headless --scene res://tests/GremVerify.tscn
@@ -31,8 +31,8 @@ func _run() -> void:
 	# T1: 古灵精怪变身为黄金矿工 -> 立即触发"回合开始"放金块
 	clear_all()
 	battle.player_roster = []
-	var g := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var bandit := spawn("hero_42", DataRegistry.Faction.PLAYER, Vector2i(2, 8))   # 队友黄金矿工作为候选
+	var g := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var bandit := spawn("hero_42", DataRegistry.Faction.PLAYER, Vector2i(2, 6))   # 队友黄金矿工作为候选
 	battle._transform(g, "hero_42")   # 强制变身为黄金矿工
 	var gold_placed := battle.buff_items.size()   # 黄金矿工应放金块到 buff_items
 	print("T1 变身为黄金矿工立即放金块: hero_id=%s gold=%d => %s" % [g.hero_id, gold_placed, "PASS" if g.hero_id == "hero_42" and gold_placed >= 1 else "FAIL"])
@@ -40,8 +40,8 @@ func _run() -> void:
 	# T2: 古灵精怪变身为圣诞老人(放道具) -> 立即触发
 	clear_all()
 	battle.player_roster = []
-	var g2 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var santa := spawn("hero_02", DataRegistry.Faction.PLAYER, Vector2i(2, 8))
+	var g2 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var santa := spawn("hero_02", DataRegistry.Faction.PLAYER, Vector2i(2, 6))
 	battle._transform(g2, "hero_02")
 	var items := battle.buff_items.size()
 	print("T2 变身为圣诞老人立即放道具: hero_id=%s items=%d => %s" % [g2.hero_id, items, "PASS" if g2.hero_id == "hero_02" and items >= 1 else "FAIL"])
@@ -49,8 +49,8 @@ func _run() -> void:
 	# T3: 走真实"己方回合开始"流程: _begin_side 还原本源 -> _trigger_turn_start_all -> 古灵精怪变身 -> 触发新英雄回合开始
 	clear_all()
 	battle.player_roster = []
-	var g3 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var santa3 := spawn("hero_02", DataRegistry.Faction.PLAYER, Vector2i(2, 8))
+	var g3 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var santa3 := spawn("hero_02", DataRegistry.Faction.PLAYER, Vector2i(2, 6))
 	battle._transform(g3, "hero_02")   # 上一回合已变身为圣诞老人
 	var before_items := battle.buff_items.size()
 	# 模拟己方回合开始：还原本源，然后触发回合开始技能
@@ -64,8 +64,8 @@ func _run() -> void:
 	# T4: 变身为死灵法师 -> 应召唤骷髅兵
 	clear_all()
 	battle.player_roster = []
-	var g4 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var necro := spawn("hero_33", DataRegistry.Faction.PLAYER, Vector2i(2, 8))
+	var g4 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var necro := spawn("hero_33", DataRegistry.Faction.PLAYER, Vector2i(2, 6))
 	var skel_before := 0
 	for u in battle.units:
 		if u.hero_id == "summon_skeleton":
@@ -80,8 +80,8 @@ func _run() -> void:
 	# T5: 真实"回合开始"流程: _trigger_turn_start_all 里古灵精怪变身为死灵法师 -> 召唤骷髅
 	clear_all()
 	battle.player_roster = []
-	var g5 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var necro5 := spawn("hero_33", DataRegistry.Faction.PLAYER, Vector2i(2, 8))
+	var g5 := spawn("hero_28", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var necro5 := spawn("hero_33", DataRegistry.Faction.PLAYER, Vector2i(2, 6))
 	var skel5_before := 0
 	for u in battle.units:
 		if u.hero_id == "summon_skeleton":

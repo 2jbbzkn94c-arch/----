@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 实战式技能验证：每个角色构造真实对局，走真正的 攻击/移动/回合 流程，检查实战可观察结果。
 ## 运行：godot --headless --scene res://tests/Practical.tscn
 var battle: Battle
@@ -47,7 +47,7 @@ func sleep_frames(n: int) -> void:
 		await get_tree().process_frame
 
 func _test_hero(id: String) -> void:
-	var hero := spawn(id, DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var hero := spawn(id, DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	if hero == null:
 		rec(id, false, "无法生成")
 		return
@@ -55,7 +55,7 @@ func _test_hero(id: String) -> void:
 		"hero_03", "hero_12", "hero_25", "hero_34", "hero_27", "hero_32", "hero_18", "hero_21", "hero_41", "hero_14", "hero_10":
 			# 远程角色(白游侠/超新星/沉默术士)需距攻击者2格(非贴身)否则触发远程被贴身、技能失效；
 			# 血锁(近距离)在被紧邻时不会拉动，其"拉近"测试需从2格外攻击
-			var tc := Vector2i(5, 8) if id in ["hero_10", "hero_21", "hero_34", "hero_41"] else Vector2i(4, 8)
+			var tc := Vector2i(5, 6) if id in ["hero_10", "hero_21", "hero_34", "hero_41"] else Vector2i(4, 6)
 			var t := spawn("hero_13", DataRegistry.Faction.ENEMY, tc)
 			var oc := t.cell
 			var h0 := t.hp
@@ -66,7 +66,7 @@ func _test_hero(id: String) -> void:
 				"hero_12": rec(id, t.has_status("heavy"), "heavy=%s" % t.has_status("heavy"))
 				"hero_25": rec(id, t.has_status("freeze"), "freeze=%s" % t.has_status("freeze"))
 				"hero_34": rec(id, t.has_status("silence"), "silence=%s" % t.has_status("silence"))
-				"hero_27": rec(id, hero.cell == Vector2i(4, 8) and t.cell == Vector2i(3, 8), "换位")
+				"hero_27": rec(id, hero.cell == Vector2i(4, 6) and t.cell == Vector2i(3, 6), "换位")
 				"hero_32": rec(id, t.cell != oc, "击退")
 				"hero_18": rec(id, t.hp < h0, "目标受伤")
 				"hero_21": rec(id, t.hp < h0, "目标受伤")
@@ -79,7 +79,7 @@ func _test_hero(id: String) -> void:
 					rec(id, hero.hp > hh, "自疗%d->%d" % [hh, hero.hp])
 				"hero_10": rec(id, t.has_status("freeze"), "freeze=%s" % t.has_status("freeze"))
 		"hero_06", "hero_17", "hero_26", "hero_31", "hero_38", "hero_35":
-			var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+			var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 			var h0 := e.hp
 			battle._do_move(hero, Vector2i(4, 7), true)
 			await sleep_frames(600)
@@ -91,7 +91,7 @@ func _test_hero(id: String) -> void:
 				"hero_38": rec(id, hero.atk == 1, "攻=%d" % hero.atk)
 				"hero_35": rec(id, battle._pending_bomb_unit == hero, "待放=%s" % str(battle._pending_bomb_unit))
 		"hero_02", "hero_05", "hero_19", "hero_33", "hero_42":
-			spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+			spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 			if id == "hero_19":
 				var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(2, 7))
 				battle._trigger_turn_start(hero)
@@ -104,7 +104,7 @@ func _test_hero(id: String) -> void:
 				"hero_33": rec(id, battle.units.size() > 2, "召唤=%d" % battle.units.size())
 				"hero_42": rec(id, battle.buff_items.size() > 0, "金矿=%d" % battle.buff_items.size())
 		"hero_16", "hero_29", "hero_36", "hero_39":
-			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 8))
+			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			var low := battle.units[1]; low.hp = 1
 			battle._trigger_on_enter(hero)
 			match id:
@@ -113,28 +113,28 @@ func _test_hero(id: String) -> void:
 				"hero_36": rec(id, low.hp > 1, "治疗+换位")
 				"hero_39": rec(id, true, "敌受创(近似)")
 		"hero_08":
-			var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 8)); ally.hp = 1
+			var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6)); ally.hp = 1
 			battle._trigger_turn_end(hero)
 			rec(id, ally.hp > 1, "友血%d->%d" % [1, ally.hp])
 		"hero_40":
-			var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8)); var h0 := e.hp
+			var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6)); var h0 := e.hp
 			battle._on_unit_died(hero)
 			rec(id, e.hp < h0, "相邻敌伤%d" % (h0 - e.hp))
 		"hero_22", "hero_11", "hero_37":
 			var vf := DataRegistry.Faction.ENEMY if id == "hero_37" else DataRegistry.Faction.PLAYER
-			var victim := spawn("hero_15", vf, Vector2i(4, 8))
+			var victim := spawn("hero_15", vf, Vector2i(4, 6))
 			match id:
 				"hero_22": battle._on_unit_damaged(victim, 3); rec(id, victim.has_status("shield"), "圣盾=%s" % victim.has_status("shield"))
 				"hero_11": victim.take_damage(3); rec(id, hero.hp < hero.max_hp, "塔盾代受")   # 塔盾主动减免：走 take_damage 前置
 				"hero_37": battle._on_unit_damaged(victim, 3); rec(id, hero.atk_buff >= 1, "buff=%d" % hero.atk_buff)
 		"hero_43":
-			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 8))
+			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			battle._trigger_turn_start(hero)
 			rec(id, battle.units[1].move_buff >= 1, "buff=%d" % battle.units[1].move_buff)
-		"hero_23": rec(id, battle._counter_bonus(hero, spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))) == 2, "反击2倍")
+		"hero_23": rec(id, battle._counter_bonus(hero, spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))) == 2, "反击2倍")
 		"hero_15", "hero_20", "hero_30":
 			# 赏金猎人(远程)需距攻击者2格(非贴身)否则触发远程被贴身、倍率失效
-			var tc2 := Vector2i(4, 8) if id != "hero_20" else Vector2i(5, 8)
+			var tc2 := Vector2i(4, 6) if id != "hero_20" else Vector2i(5, 6)
 			var t := spawn("hero_13", DataRegistry.Faction.ENEMY, tc2)
 			if id == "hero_15": t.hp = 1
 			if id == "hero_20": t.skills.append(DataRegistry.Skill.TAUNT)
@@ -146,12 +146,12 @@ func _test_hero(id: String) -> void:
 			elif id == "hero_09" or id == "hero_07": ok = hero.attack_type == DataRegistry.AttackType.RANGED and hero.attack_range == 2
 			rec(id, ok, "标签")
 		"hero_01":
-			battle.obstacles[Vector2i(4, 8)] = 30
+			battle.obstacles[Vector2i(4, 6)] = 30
 			battle.selected = hero; battle._compute_ranges(hero)
-			rec(id, battle.enemy_cells.has(Vector2i(4, 8)), "障碍可打")
+			rec(id, battle.enemy_cells.has(Vector2i(4, 6)), "障碍可打")
 		"hero_24": rec(id, battle._move_reachable(hero).size() > 6, "冲刺=%d" % battle._move_reachable(hero).size())
 		"hero_28":
-			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 8))
+			spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			var n0 := hero.display_name
 			battle._trigger_turn_start(hero)
 			rec(id, hero.display_name != n0, "变身=%s" % hero.display_name)

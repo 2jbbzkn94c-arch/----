@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 全英雄联机回归：对每个英雄（DataRegistry.heroes 全部 43 名）在两台"联机 Battle"上跑同一脚本，
 ## 校验：
 ##   1) 镜像一致性：主机/客户端两端对应单位的关键状态在每一步后完全一致；
@@ -42,10 +42,10 @@ func _spawn_pair(hid: String) -> void:
 	host.set_random_seed(GameState.online_seed)
 	client.set_random_seed(GameState.online_seed)
 	host._spawn_unit(hid, DataRegistry.Faction.PLAYER, Vector2i(2, 7))
-	host._spawn_unit("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	host._spawn_unit("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	host._spawn_unit("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 7))
 	client._spawn_unit(hid, DataRegistry.Faction.PLAYER, Vector2i(2, 7))
-	client._spawn_unit("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	client._spawn_unit("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	client._spawn_unit("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 7))
 
 const _TEMP_FIELDS := ["atk_buff", "move_buff", "ramble_bonus", "sun_bonus", "atk_use_buff", "move_use_buff", "branch_override"]

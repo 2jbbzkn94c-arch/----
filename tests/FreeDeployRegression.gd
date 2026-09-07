@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 自由部署残留 验证：
 ## 玩过"自由部署"后 placement 残留；普通/竞技场入口应清空它，使 Battle 走正常部署。
 ## 运行：godot --headless --scene res://tests/FreeDeployRegression.tscn
@@ -31,7 +31,7 @@ func _run() -> void:
 
 	# 对照：不清空 placement（残留）时走自由放置
 	GameState.clear_placement()
-	GameState.player_placement[Vector2i(1, 8)] = "hero_06"
+	GameState.player_placement[Vector2i(1, 6)] = "hero_06"
 	GameState.enemy_placement[Vector2i(0, 1)] = "hero_13"
 	for u in battle.units:
 		if is_instance_valid(u):

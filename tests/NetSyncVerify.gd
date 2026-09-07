@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 主机广播重演一致性验证：同种子 + 同一条指令，主机与客户端各自 apply_command 结果完全一致。
 ## 运行：godot --headless --scene res://tests/NetSyncVerify.tscn
 var host: Battle
@@ -42,10 +42,10 @@ func _run() -> void:
 	seed_battle(client, 42)
 	clear_all(host)
 	clear_all(client)
-	var hp := spawn(host, "hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var he := spawn(host, "hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
-	var cp := spawn(client, "hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var ce := spawn(client, "hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var hp := spawn(host, "hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var he := spawn(host, "hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
+	var cp := spawn(client, "hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var ce := spawn(client, "hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	var hpi := host.units.find(hp)
 	var hei := host.units.find(he)
 	var cpi := client.units.find(cp)

@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 复仇者无限反击验证：
 ## 在同一回合"已反击过一次"后再次被贴身攻击，复仇者仍能反击（无限）；普通单位不能。
 ## 运行：godot --headless --scene res://tests/RevengeVerify.tscn
@@ -35,8 +35,8 @@ func _run() -> void:
 	# T1: 复仇者已反击过一次，仍可再次反击（无限）
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var av := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var atk := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var av := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var atk := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	atk.atk = 1
 	atk.hp = 30
 	atk.max_hp = 30
@@ -50,8 +50,8 @@ func _run() -> void:
 	# T2: 普通单位已反击过一次，不再反击（对照）
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var normal := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var atk2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var normal := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var atk2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	atk2.atk = 1
 	atk2.hp = 30
 	atk2.max_hp = 30

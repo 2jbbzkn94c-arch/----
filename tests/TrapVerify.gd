@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 敌人 AI「逃不掉则攻击」验证：
 ## 当敌方单位无论怎么移动都会被玩家攻击到（逃不掉）时，AI 应选择攻击而非无意义逃跑。
 ## 运行：godot --headless --scene res://tests/TrapVerify.tscn
@@ -41,12 +41,12 @@ func _run() -> void:
 	# 敌方近战英雄被玩家远程(射程覆盖全场)盯上：它无论怎么移动都逃不出玩家攻击范围
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var enemy := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var enemy := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	enemy.atk = 3
 	enemy.hp = 20; enemy.max_hp = 20
 	enemy.refresh_stats()
 	# 玩家远程单位：射程大、攻高，紧挨敌方（敌方贴脸能打到它）
-	var pl := spawn("hero_04", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var pl := spawn("hero_04", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	pl.attack_range = 5   # 覆盖敌方所有可达格 -> 逃不掉
 	pl.atk = 3
 	pl.hp = 30; pl.max_hp = 30

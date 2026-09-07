@@ -164,7 +164,7 @@ func _rng_shuffle(arr: Array) -> void:
 
 var units: Array[Unit] = []
 var occupancy: Dictionary = {}   # cell(Vector2i) -> Unit
-var board_size := Vector2i(7, 9)  # 7 × 8 满行 + 顶部 3 格顶帽（总高 9 行）
+var board_size := Vector2i(7, 7)  # 7 × 6 满行 + 顶部 3 格顶帽（总高 7 行；相对旧版减少 2 行）
 var hex_size := 60.0   # 六边形外接半径（像素）：整体放大棋盘改这里（480 放大25%
 var state := State.IDLE
 var selected: Unit = null
@@ -1333,8 +1333,8 @@ const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
 	# 只在指定坐标生成（列从左col-1，行从下height-行，height=10
 	var spots := [
-		Vector2i(0, 5), Vector2i(1, 5), Vector2i(1, 4), Vector2i(2, 5), Vector2i(3, 5),
-		Vector2i(3, 4), Vector2i(4, 5), Vector2i(5, 5), Vector2i(5, 4), Vector2i(6, 5),
+		Vector2i(0, 4), Vector2i(1, 4), Vector2i(1, 3), Vector2i(2, 4), Vector2i(3, 4),
+		Vector2i(3, 3), Vector2i(4, 4), Vector2i(5, 4), Vector2i(5, 3), Vector2i(6, 4),
 	]
 	_rng_shuffle(spots)
 	var count := rng.randi_range(2, 4)

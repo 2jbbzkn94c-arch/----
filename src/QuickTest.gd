@@ -18,7 +18,7 @@ var _side_label: Label
 var _start_btn: Button
 
 # 测试场里各队可上场的格子（底部行我方 / 顶部敌方），只放首发 3 个
-const PLAYER_CELLS := [Vector2i(2, 8), Vector2i(4, 8), Vector2i(1, 8)]
+const PLAYER_CELLS := [Vector2i(2, 6), Vector2i(4, 6), Vector2i(1, 6)]
 const ENEMY_CELLS := [Vector2i(1, 0), Vector2i(3, 0), Vector2i(5, 0)]
 
 func _ready() -> void:

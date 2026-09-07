@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 血锁「只能打直线」AI 侧验证：
 ## 敌方血锁在模拟（_in_range / _valid_targets）里，直线上的玩家目标可选、非直线不可选。
 ## 运行：godot --headless --scene res://tests/BloodAiVerify.tscn
@@ -41,11 +41,11 @@ func _run() -> void:
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
 	# 敌方血锁（hero_41），射程已含 +2（默认 attack_range，build 时 hero_41 射程+2）
-	var blood := spawn("hero_41", DataRegistry.Faction.ENEMY, Vector2i(3, 8))
+	var blood := spawn("hero_41", DataRegistry.Faction.ENEMY, Vector2i(3, 6))
 	# 直线上的玩家目标（同轴向：同列）
 	var line_t := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 5))
 	# 非直线玩家目标（斜向偏离）
-	var off_t := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(5, 8))
+	var off_t := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(5, 6))
 
 	var descs: Array = []
 	var occ := {}
@@ -64,7 +64,7 @@ func _run() -> void:
 			blood_idx = i
 		elif sim.units[i].fn == DataRegistry.Faction.PLAYER and sim.units[i].cell == Vector2i(3, 5):
 			line_idx = i
-		elif sim.units[i].fn == DataRegistry.Faction.PLAYER and sim.units[i].cell == Vector2i(5, 8):
+		elif sim.units[i].fn == DataRegistry.Faction.PLAYER and sim.units[i].cell == Vector2i(5, 6):
 			off_idx = i
 	var targets: Array = ai._valid_targets(sim, sim.units[blood_idx], sim.units[blood_idx].cell)
 	var has_line := targets.has(line_idx)

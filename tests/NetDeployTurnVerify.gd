@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 联机轮流部署推进：两端同种子，按先后轮交替各 deploy 1 个，每步两端同步放置并校验部署计数/位置一致。
 ## 运行：godot --headless --scene res://tests/NetDeployTurnVerify.tscn
 var host: Battle
@@ -44,7 +44,7 @@ func _run() -> void:
 	clear_all(host); clear_all(client)
 	_setup(host); _setup(client)
 	# 双方各 3 个担任首发（交替一对一对：先玩家侧1个、再敌侧1个）
-	var p_plan := [["hero_06", Vector2i(1, 8)], ["hero_17", Vector2i(3, 8)], ["hero_26", Vector2i(5, 8)]]
+	var p_plan := [["hero_06", Vector2i(1, 6)], ["hero_17", Vector2i(3, 6)], ["hero_26", Vector2i(5, 6)]]
 	var e_plan := [["hero_13", Vector2i(0, 1)], ["hero_12", Vector2i(6, 1)], ["hero_23", Vector2i(3, 0)]]
 	var ok := true
 	for i in 3:

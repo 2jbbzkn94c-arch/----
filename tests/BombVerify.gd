@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 炸弹触发验证：
 ## 1) 普通英雄"经过"炸弹格（非终点）也会爆炸；
 ## 2) 炸弹人经过/触碰炸弹安全。
@@ -36,31 +36,31 @@ func _run() -> void:
 	# T1: 普通英雄经过中途炸弹格 -> 爆炸
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var u := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var u := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	u.hp = 10; u.move_range = 3; u.refresh_stats()
 	# 占用 (4,9)，迫使 (3,8)->(5,8) 只能经 (4,8)（炸弹格）
 	var occupy := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 9))
 	u.faction = DataRegistry.Faction.PLAYER
-	battle.bombs[Vector2i(4, 8)] = true   # 路径必经格
+	battle.bombs[Vector2i(4, 6)] = true   # 路径必经格
 	if battle.board_view:
 		battle.board_view.bombs = battle.bombs
-	var bp := battle.grid.find_path(Vector2i(3, 8), Vector2i(5, 8), battle._current_path_blockers(u))
+	var bp := battle.grid.find_path(Vector2i(3, 6), Vector2i(5, 6), battle._current_path_blockers(u))
 	print("  PATH=", bp)
-	battle._do_move(u, Vector2i(5, 8), true)
+	battle._do_move(u, Vector2i(5, 6), true)
 	await sleep_frames(300)
-	var onbomb := battle.bombs.has(Vector2i(4, 8))
+	var onbomb := battle.bombs.has(Vector2i(4, 6))
 	print("T1 普通英雄经过炸弹爆炸: hp=%d(原10) 炸后消失=%s 终格=%s => %s" % [u.hp, str(not onbomb), str(u.cell), "PASS" if u.hp < 10 and not onbomb else "FAIL"])
 
 	# T2: 炸弹人经过炸弹安全
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var b := spawn("hero_35", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var b := spawn("hero_35", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	b.hp = 10; b.move_range = 3; b.refresh_stats()
-	battle.bombs[Vector2i(4, 8)] = true
+	battle.bombs[Vector2i(4, 6)] = true
 	if battle.board_view:
 		battle.board_view.bombs = battle.bombs
-	battle._do_move(b, Vector2i(5, 8), true)
+	battle._do_move(b, Vector2i(5, 6), true)
 	await sleep_frames(300)
-	print("T2 炸弹人经过安全: hp=%d(原10) 炸保留=%s => %s" % [b.hp, str(battle.bombs.has(Vector2i(4, 8))), "PASS" if b.hp == 10 else "FAIL"])
+	print("T2 炸弹人经过安全: hp=%d(原10) 炸保留=%s => %s" % [b.hp, str(battle.bombs.has(Vector2i(4, 6))), "PASS" if b.hp == 10 else "FAIL"])
 
 	get_tree().quit()

@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 快速测试场放置验证：用合法玩家格(行8)放置，确认进对局后我方能正常生成。
 ## 运行：godot --headless --scene res://tests/QuickDeployVerify.tscn
 var battle: Battle
@@ -11,7 +11,7 @@ func _ready() -> void:
 func _run() -> void:
 	GameState.clear_placement()
 	# 模拟 QuickTest._on_start 放置（用合法格行8）
-	var cells := [Vector2i(2, 8), Vector2i(4, 8), Vector2i(1, 8)]
+	var cells := [Vector2i(2, 6), Vector2i(4, 6), Vector2i(1, 6)]
 	var picks := ["hero_06", "hero_17", "hero_26"]
 	for i in cells.size():
 		GameState.player_placement[cells[i]] = picks[i]

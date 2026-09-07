@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 联机整局同步回放：主机 Battle 走完整一回合（移动+攻击+结回），客户端重演同指令序列。
 ## 每一步后比较两端 units/cell/hp/回合，必须完全一致。
 ## 运行：godot --headless --scene res://tests/NetFullMatchVerify.tscn
@@ -65,7 +65,7 @@ func _run() -> void:
 	var ehero := _find_hero(host, "hero_13")
 	var ei := host.units.find(ehero)
 	# host move
-	host.submit_move(hi, Vector2i(2, 8))
+	host.submit_move(hi, Vector2i(2, 6))
 	client.apply_command({ "type": "move", "u": hi, "to": [2, 8] })
 	await sleep_frames(350)
 	step += 1

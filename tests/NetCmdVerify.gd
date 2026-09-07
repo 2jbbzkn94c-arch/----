@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## apply_command 主机权威执行验证：一条 move / attack 指令应正确驱动 Battle 执行。
 ## 运行：godot --headless --scene res://tests/NetCmdVerify.tscn
 var battle: Battle
@@ -33,8 +33,8 @@ func spawn(hid: String, f: int, c: Vector2i) -> Unit:
 func _run() -> void:
 	clear_all()
 	# 我方单位 hero_06 在 (3,8)，敌方 hero_13 在 (4,8)
-	var p := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
-	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var p := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
+	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	var pi := battle.units.find(p)
 	var ei := battle.units.find(e)
 

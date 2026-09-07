@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 玩家反应前瞻验证：预测"玩家下一步能反制敌方"的威胁值。
 ## 玩家贴脸高攻能击杀敌方 -> 反制风险更负（对敌方不利）；敌方远离 -> 接近0。
 ## 运行：godot --headless --scene res://tests/PlayerLookaheadVerify.tscn
@@ -54,9 +54,9 @@ func _run() -> void:
 	# 场景A：玩家近战高攻贴脸敌方，能一击击杀 -> 反制风险高（更负）
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var pl := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var pl := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	pl.atk = 10; pl.hp = 20; pl.max_hp = 20; pl.refresh_stats()
-	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	foe.hp = 5; foe.max_hp = 20; foe.refresh_stats()   # 低血，玩家可击杀
 	var dA = _make_sim()
 	var ai := BattleAI.new(battle.grid); ai.difficulty = 2
@@ -69,7 +69,7 @@ func _run() -> void:
 	# 场景B：敌方远离玩家（玩家打不到）-> 反制风险接近0
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var pl2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var pl2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	pl2.atk = 10; pl2.hp = 20; pl2.max_hp = 20; pl2.refresh_stats()
 	var foe2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(0, 1))
 	foe2.hp = 5; foe2.max_hp = 20; foe2.refresh_stats()   # 远处打不到

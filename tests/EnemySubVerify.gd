@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 敌方替补验证：敌人被玩家反击/击杀后，应在敌方回合开始时自动补位。
 ## 运行：godot --headless --scene res://tests/EnemySubVerify.tscn
 var battle: Battle
@@ -38,11 +38,11 @@ func _run() -> void:
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
 	battle.enemy_roster = ["hero_40", "hero_41", "hero_42"]   # 敌方有替补
-	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	e.atk = 1
 	e.hp = 1   # 先手攻击者=敌方，低血
 	e.refresh_stats()
-	var p := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 8))   # 复仇者
+	var p := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 6))   # 复仇者
 	p.atk = 3   # 反击 2 倍 = 6，一击杀敌
 	p.hp = 10
 	p.refresh_stats()
@@ -56,9 +56,9 @@ func _run() -> void:
 	GameState.active_side = GameState.SIDE_ENEMY
 	battle.state = Battle.State.ENEMY_TURN
 	battle.enemy_roster = ["hero_40", "hero_41", "hero_42"]
-	var e2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var e2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	e2.atk = 1; e2.hp = 1; e2.refresh_stats()
-	var p2 := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var p2 := spawn("hero_23", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	p2.atk = 3; p2.hp = 10; p2.refresh_stats()
 	battle._do_attack(e2, p2, true)   # 敌方回合：敌方攻击 -> 被反击死
 	await sleep_frames(300)

@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 临时探针：敌方回合致死但死亡事件落入我方"回合开始演出期"→ 先排队，演出后弹1次面板，不叠层。
 var battle: Battle
 
@@ -20,8 +20,8 @@ func _run() -> void:
 	battle.units.clear()
 	battle.occupancy.clear()
 	GameState.clear_placement()
-	GameState.player_placement[Vector2i(2, 8)] = "hero_43"   # 回合开始技(风语者)保证演出期有 await 窗口
-	GameState.player_placement[Vector2i(4, 8)] = "hero_32"
+	GameState.player_placement[Vector2i(2, 6)] = "hero_43"   # 回合开始技(风语者)保证演出期有 await 窗口
+	GameState.player_placement[Vector2i(4, 6)] = "hero_32"
 	GameState.enemy_placement[Vector2i(1, 0)] = "hero_13"
 	battle._place_units()
 	battle.player_roster = ["hero_16"]
@@ -41,7 +41,7 @@ func _run() -> void:
 	await get_tree().create_timer(0.3).timeout
 	print(">> 演出结束后: 面板=%s 待补=%d" % [battle.state == Battle.State.SUBSTITUTING, battle._pending_player_subs])
 	var panel_once: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 0
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 6))
 	await get_tree().create_timer(0.7).timeout
 	var ok_end: bool = battle._pending_player_subs == 0 and battle.state != Battle.State.SUBSTITUTING \
 			and battle.state != Battle.State.PLACE_SUB

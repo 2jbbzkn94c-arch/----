@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 临时探针：同时阵亡2人（待补2）→ 应依次替补2次。
 var battle: Battle
 
@@ -17,8 +17,8 @@ func _run() -> void:
 	battle.units.clear()
 	battle.occupancy.clear()
 	GameState.clear_placement()
-	GameState.player_placement[Vector2i(2, 8)] = "hero_32"
-	GameState.player_placement[Vector2i(4, 8)] = "hero_33"
+	GameState.player_placement[Vector2i(2, 6)] = "hero_32"
+	GameState.player_placement[Vector2i(4, 6)] = "hero_33"
 	GameState.enemy_placement[Vector2i(1, 0)] = "hero_13"
 	battle._place_units()
 	# 待补2，替补hero_16/hero_29
@@ -29,11 +29,11 @@ func _run() -> void:
 	await battle._begin_side(GameState.SIDE_PLAYER)
 	# 第一次替补
 	var first: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 1
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 6))
 	await get_tree().create_timer(0.4).timeout
 	# 应自动再弹第二次
 	var second: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 0
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_29", Vector2i(3, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_29", Vector2i(3, 6))
 	await get_tree().create_timer(0.6).timeout
 	var done: bool = battle._pending_player_subs == 0 and battle.player_roster.size() == 0 and battle.state != Battle.State.SUBSTITUTING
 	var cnt := 0

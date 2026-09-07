@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 塔盾主动减免验证：
 ## 塔盾站队友旁边，队友受 >1 伤害时，队友实际伤害-1、塔盾扣1血（代替承受）。
 ## 运行：godot --headless --scene res://tests/BulwarkVerify.tscn
@@ -35,12 +35,12 @@ func _run() -> void:
 	# T1: 塔盾紧邻队友，队友被反击受 >1 伤害 -> 队友少受1、塔盾扣1
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var bul := spawn("hero_11", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var bul := spawn("hero_11", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	bul.hp = 20; bul.max_hp = 20; bul.refresh_stats()
-	var ally := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(4, 8))
+	var ally := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 	ally.hp = 20; ally.max_hp = 20; ally.refresh_stats()
 	# 敌方远程/近战攻击队友（距离2用远程，能让队友受伤≥3验证>1）
-	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(6, 8))
+	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(6, 6))
 	foe.atk = 4; foe.hp = 20; foe.max_hp = 20; foe.refresh_stats()
 	var ally0 := ally.hp
 	var bul0 := bul.hp
@@ -54,9 +54,9 @@ func _run() -> void:
 	# T2: 伤害为1时不减免（塔盾只对>1生效）
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var bul2 := spawn("hero_11", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var bul2 := spawn("hero_11", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	bul2.hp = 20; bul2.max_hp = 20; bul2.refresh_stats()
-	var ally2 := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(4, 8))
+	var ally2 := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 	ally2.hp = 20; ally2.max_hp = 20; ally2.refresh_stats()
 	var ally20 := ally2.hp
 	var bul20 := bul2.hp

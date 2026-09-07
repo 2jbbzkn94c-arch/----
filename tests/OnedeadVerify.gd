@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 1血逃不掉敌人是否进攻 验证：
 ## 敌人只剩1血、逃的位置仍会被打（逃不掉）、且能攻击玩家时，应选择攻击换血而非逃跑。
 ## 运行：godot --headless --scene res://tests/OnedeadVerify.tscn
@@ -41,11 +41,11 @@ func _run() -> void:
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
 	# 敌方近战 1 血、高攻，能贴脸打玩家；玩家远程射程覆盖敌方所有可达格 -> 敌方逃不掉
-	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var foe := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	foe.hp = 1; foe.max_hp = 1
 	foe.atk = 6   # 打玩家能大量换血（甚至击杀）
 	foe.refresh_stats()
-	var pl := spawn("hero_04", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var pl := spawn("hero_04", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	pl.attack_range = 5   # 覆盖敌方所有可达格 -> 逃不掉
 	pl.atk = 3
 	pl.hp = 8; pl.max_hp = 8   # 敌方高攻能打掉大半

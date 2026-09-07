@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 战斗增援验证：敌方有人被攻击受伤时，_siege_bonus 应 >0 驱动其余英雄逼近参战；
 ## 未爆发战斗时为 0（不额外推进）。
 ## 运行：godot --headless --scene res://tests/SiegeVerify.tscn
@@ -54,9 +54,9 @@ func _run() -> void:
 	# 场景A：未爆发战斗——敌方都满血、无相邻交战
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var far := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(3, 8))
+	var far := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(3, 6))
 	far.hp = 20; far.max_hp = 20; far.refresh_stats()
-	var pl := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(6, 8))
+	var pl := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(6, 6))
 	pl.hp = 20; pl.max_hp = 20; pl.refresh_stats()
 	var sim_no = _make_sim()
 	var ai_no := BattleAI.new(battle.grid); ai_no.difficulty = 2
@@ -65,11 +65,11 @@ func _run() -> void:
 	# 场景B：战斗爆发——敌方有单位受伤（hp<max_hp）
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var wounded := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(5, 8))
+	var wounded := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(5, 6))
 	wounded.hp = 5; wounded.max_hp = 20; wounded.refresh_stats()   # 受伤
-	var far2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(3, 8))
+	var far2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(3, 6))
 	far2.hp = 20; far2.max_hp = 20; far2.refresh_stats()
-	var pl2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(6, 8))
+	var pl2 := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(6, 6))
 	pl2.hp = 20; pl2.max_hp = 20; pl2.refresh_stats()
 	var sim_yes = _make_sim()
 	var ai_yes := BattleAI.new(battle.grid); ai_yes.difficulty = 2

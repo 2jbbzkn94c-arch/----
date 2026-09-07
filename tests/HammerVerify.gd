@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 锤头鲨 AI 验证：
 ## 1) AI 模拟攻击玩家时，同阵营锤头鲨的攻击力应累积 +1（敌方受伤即触发）；
 ## 2) search 应将锤头鲨排在行动序列末尾（先队友攻击累积，锤头鲨后打）。
@@ -32,11 +32,11 @@ func _run() -> void:
 	# T1: AI 模拟里同阵营锤头鲨吃敌方受伤 buff
 	clear_all()
 	battle.state = Battle.State.ENEMY_TURN
-	var hammer := spawn("hero_37", DataRegistry.Faction.ENEMY, Vector2i(3, 8))
-	var attacker := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var hammer := spawn("hero_37", DataRegistry.Faction.ENEMY, Vector2i(3, 6))
+	var attacker := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	attacker.atk = 3
 	attacker.refresh_stats()
-	var player := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(5, 8))
+	var player := spawn("hero_13", DataRegistry.Faction.PLAYER, Vector2i(5, 6))
 	player.hp = 30; player.max_hp = 30; player.refresh_stats()
 	# 构建 sim
 	var descs: Array = []

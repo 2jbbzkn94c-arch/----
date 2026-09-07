@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 替补回归矩阵：三种模式 × 三个场景，一键验证。
 ## 模式：0=普通(单机) 1=竞技场 2=自由部署沙箱
 ## 场景：A=死1补1 B=死2补2 C=回合超时自动补
@@ -29,8 +29,8 @@ func _reset(mode: int) -> void:
 	battle.occupancy.clear()
 	battle.graves.clear()
 	GameState.clear_placement()
-	GameState.player_placement[Vector2i(2, 8)] = "hero_32"
-	GameState.player_placement[Vector2i(4, 8)] = "hero_33"
+	GameState.player_placement[Vector2i(2, 6)] = "hero_32"
+	GameState.player_placement[Vector2i(4, 6)] = "hero_33"
 	GameState.enemy_placement[Vector2i(1, 0)] = "hero_13"
 	battle._place_units()
 	battle.player_roster = ["hero_16", "hero_29", "hero_36"]
@@ -51,7 +51,7 @@ func _scene_a(mode: int) -> void:
 	GameState.active_side = GameState.SIDE_PLAYER
 	await battle._begin_side(GameState.SIDE_PLAYER)
 	var panel: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 0
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 6))
 	await get_tree().create_timer(0.6).timeout
 	var ok: bool = panel and battle._pending_player_subs == 0 \
 			and battle.state != Battle.State.SUBSTITUTING and battle.state != Battle.State.PLACE_SUB
@@ -64,10 +64,10 @@ func _scene_b(mode: int) -> void:
 	GameState.active_side = GameState.SIDE_PLAYER
 	await battle._begin_side(GameState.SIDE_PLAYER)
 	var p1: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 1
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_16", Vector2i(1, 6))
 	await get_tree().process_frame
 	var p2: bool = battle.state == Battle.State.SUBSTITUTING and battle._pending_player_subs == 0
-	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_29", Vector2i(3, 8))
+	battle._place_sub(DataRegistry.Faction.PLAYER, "hero_29", Vector2i(3, 6))
 	await get_tree().create_timer(0.6).timeout
 	var cnt := 0
 	for u in battle.units:

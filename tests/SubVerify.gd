@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 替补触发验证：玩家英雄在自己回合被反击击杀后，应立即进入替补选择（不等下一回合）。
 ## 运行：godot --headless --scene res://tests/SubVerify.tscn
 var battle: Battle
@@ -36,9 +36,9 @@ func _run() -> void:
 	# 玩家英雄(无被动) 1血 紧邻敌方高攻英雄；玩家攻击 -> 敌方反击致死
 	battle.player_roster = ["hero_42", "hero_43"]   # 有替补可用
 	battle.state = Battle.State.PLAYER_INPUT
-	var p := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var p := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	p.hp = 1
-	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var e := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	e.atk = 5
 	e.refresh_stats()
 	battle._do_attack(p, e, false)
@@ -52,9 +52,9 @@ func _run() -> void:
 	clear_all()
 	battle.player_roster = []
 	battle.state = Battle.State.PLAYER_INPUT
-	var p2 := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var p2 := spawn("hero_06", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	p2.hp = 1
-	var e2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var e2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	e2.atk = 5
 	e2.refresh_stats()
 	battle._do_attack(p2, e2, false)

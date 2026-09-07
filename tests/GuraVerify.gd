@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## 古拉博士吸血判定验证：
 ## 用目标**被攻击前**的 HP 判定是否吸血，而非受伤后的 HP。
 ## 运行：godot --headless --scene res://tests/GuraVerify.tscn
@@ -35,9 +35,9 @@ func _run() -> void:
 	# T1: 攻击前 HP 大于自己 -> 吸血；攻击后 HP 降到不大于自己，仍应吸血（用攻击前判定）
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var gura := spawn("hero_14", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var gura := spawn("hero_14", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	gura.hp = 8; gura.atk = 7; gura.refresh_stats()   # 攻击力 7
-	var tgt := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var tgt := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	tgt.hp = 10; tgt.max_hp = 30; tgt.refresh_stats()   # 攻击前 10 > 8
 	var g0 := gura.hp
 	battle._do_attack(gura, tgt, false)
@@ -49,9 +49,9 @@ func _run() -> void:
 	# T2: 攻击前 HP 不大于自己 -> 不吸血（对照）
 	clear_all()
 	battle.state = Battle.State.PLAYER_INPUT
-	var g2 := spawn("hero_14", DataRegistry.Faction.PLAYER, Vector2i(3, 8))
+	var g2 := spawn("hero_14", DataRegistry.Faction.PLAYER, Vector2i(3, 6))
 	g2.hp = 8; g2.atk = 7; g2.refresh_stats()
-	var t2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 8))
+	var t2 := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 	t2.hp = 4; t2.max_hp = 30; t2.refresh_stats()   # 攻击前 4 < 8
 	var g20 := g2.hp
 	battle._do_attack(g2, t2, false)
