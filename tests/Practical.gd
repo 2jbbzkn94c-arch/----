@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## 实战式技能验证：每个角色构造真实对局，走真正的 攻击/移动/回合 流程，检查实战可观察结果。
 ## 运行：godot --headless --scene res://tests/Practical.tscn
 var battle: Battle
@@ -55,7 +55,8 @@ func _test_hero(id: String) -> void:
 		"hero_03", "hero_12", "hero_25", "hero_34", "hero_27", "hero_32", "hero_18", "hero_21", "hero_41", "hero_14", "hero_10":
 			# 远程角色(白游侠/超新星/沉默术士)需距攻击者2格(非贴身)否则触发远程被贴身、技能失效；
 			# 血锁(近距离)在被紧邻时不会拉动，其"拉近"测试需从2格外攻击
-			var tc := Vector2i(5, 6) if id in ["hero_10", "hero_21", "hero_34", "hero_41"] else Vector2i(4, 6)
+			# 5列棋盘 x∈0..4：hero_32击退方向朝x变小落点才不出界
+			var tc := Vector2i(5, 6) if id in ["hero_10", "hero_21", "hero_34", "hero_41"] else (Vector2i(2, 6) if id == "hero_32" else Vector2i(4, 6))
 			var t := spawn("hero_13", DataRegistry.Faction.ENEMY, tc)
 			var oc := t.cell
 			var h0 := t.hp

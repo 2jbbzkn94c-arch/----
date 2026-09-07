@@ -4340,9 +4340,9 @@ func _spawn_cells(faction: int) -> Array:
 			if grid.in_bounds(cell):
 				out.append(cell)
 	else:
-		# 敌方出生区（顶部：row 0 = 顶帽行，row 1 = 第一满行），列跨 0..4（删左右两列后的 5 格皇冠）
+		# 敌方出生区（顶部：row 0 = 顶帽行 0,2,4，row 1 交错 1,3）——删左右两列后的 5 格皇冠
 		var ecells: Array = [
-			Vector2i(0, 1), Vector2i(1, 0), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1),
+			Vector2i(0, 0), Vector2i(1, 1), Vector2i(2, 0), Vector2i(3, 1), Vector2i(4, 0),
 		]
 		for c in ecells:
 			if grid.in_bounds(c) and not occupancy.has(c):
