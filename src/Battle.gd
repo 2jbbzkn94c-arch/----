@@ -2601,7 +2601,8 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			return
 		if t == "sub":
 			# 替补落位：两端重演同一"放置替补"逻辑。主机：本地执行 + 广播；客户端收到后重演
-			_place_sub(int(cmd.get("faction", DataRegistry.Faction.PLAYER)), String(cmd.get("hero", "")), _v2(cmd.get("cell")))
+			# clear_side 由负责端判定（本次补完是否清该阵营墓碑），两端统一执行避免视角不同步
+			_place_sub(int(cmd.get("faction", DataRegistry.Faction.PLAYER)), String(cmd.get("hero", "")), _v2(cmd.get("cell")), int(cmd.get("clear_side", -1)))
 			if GameState.is_host:
 				NetBus.send_all(text)
 			return
@@ -4072,13 +4073,24 @@ func _try_place_sub(cell: Vector2i) -> bool:
 	# 联机：主机权威。客户端只发指令（不本地执行），主机执行+广播，客户端收到再重演
 	if GameState.is_online and not GameState.is_host:
 		_apply_sub_ui_cleanup(fn)
-		NetBus.send_to(1, JSON.stringify({ "type": "sub", "faction": fn, "hero": hid, "cell": [cell.x, cell.y] }))
+		var cs := 1 if _sub_clear_side(fn, hid) else 0   # 负责端判定：本次补完是否应清该阵营墓碑
+		NetBus.send_to(1, JSON.stringify({ "type": "sub", "faction": fn, "hero": hid, "cell": [cell.x, cell.y], "clear_side": cs }))
 		return true
 	# 主机/单机：本地落
-	_place_sub(fn, hid, cell)
+	var clear_side := -1
 	if GameState.is_online:
-		NetBus.send_all(JSON.stringify({ "type": "sub", "faction": fn, "hero": hid, "cell": [cell.x, cell.y] }))
+		clear_side = 1 if _sub_clear_side(fn, hid) else 0   # 主机同为负责端：结果随广播带给客户端
+	_place_sub(fn, hid, cell, clear_side)
+	if GameState.is_online:
+		NetBus.send_all(JSON.stringify({ "type": "sub", "faction": fn, "hero": hid, "cell": [cell.x, cell.y], "clear_side": clear_side }))
 	return true
+
+# 本次替补落位后，该阵营是否应清空剩余墓碑（= 无更多待补名额 或 替补席已空）。
+# 只由"负责端"（操作该阵营的那端）调用：其 _pending_player_subs 才是本阵营的真实待补计数。
+func _sub_clear_side(fn: int, hid: String) -> bool:
+	var r: Array = _roster_of(fn).duplicate()
+	r.erase(hid)   # 本次即将上场的从替补席剔除后看还剩谁
+	return r.size() == 0 or _pending_player_subs <= 0
 
 # 客户端点"放置"后先清理本地选中/高亮/关闭面板（等待主机广播重演，不在本地真正落位）
 func _apply_sub_ui_cleanup(fn: int) -> void:
@@ -4113,7 +4125,7 @@ func _grant_sub_aura(u: Unit) -> void:
 			u.refresh_stats()
 			return
 
-func _place_sub(fn: int, hero_id: String, cell: Vector2i) -> void:
+func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) -> void:
 	var roster := _roster_of(fn)
 	roster.erase(hero_id)
 	var nu := _spawn_unit(hero_id, fn, cell)
@@ -4141,12 +4153,18 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i) -> void:
 	else:
 		_resume_after_sub()   # 恢复回合状（内部完成后刷新常驻队伍面板，避免与替补面板叠层）
 	# 只有"确实没有下一个替时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
+	# 联机：clear_side>=0 时用负责端广播的结论（两端一致执行，避免墓碑只在本端视角消失）；
+	# clear_side<0（单机/直接调用）才按本端视角推断。
 	if not more_subs:
-		var fn_done := _roster_of(fn).size() == 0
-		if fn == _my_faction():
-			if fn_done:
-				_pending_player_subs = 0   # 替补耗尽：清空剩余名额，避免残留
-			fn_done = fn_done or _pending_player_subs <= 0
+		var fn_done: bool
+		if clear_side >= 0:
+			fn_done = clear_side == 1
+		else:
+			fn_done = _roster_of(fn).size() == 0
+			if fn == _my_faction():
+				if fn_done:
+					_pending_player_subs = 0   # 替补耗尽：清空剩余名额，避免残留
+				fn_done = fn_done or _pending_player_subs <= 0
 		if fn_done:
 			_clear_side_graves(fn)
 
