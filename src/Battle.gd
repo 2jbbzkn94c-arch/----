@@ -204,6 +204,13 @@ var bombs: Dictionary = {}        # cell -> true（炸弹陷阱）
 var obstacles: Dictionary = {}    # cell -> 耐久（障碍物，阻挡移动，可被破坏
 var buff_items: Dictionary = {}   # cell -> "atk"/"move"（圣诞老人等放置的增益道具
 var graves: Dictionary = {}       # cell -> hero_id（阵亡单位的墓碑：替补可在此落位，落位后消失
+
+# 开局增益道具：开局(第一个行动方回合开始技时)在候选 4 格放 2 个随机道具。
+# 坐标由玩家编号(左下角=[1,1],x 右起,y 上起)换算为代码坐标(y0=顶行)：
+# 玩家 [2,4][3,3][3,4][4,4] -> 代码 (1,3)(2,4)(2,3)(3,3)。
+var _opening_items_spawned := false
+const OPENING_ITEM_CELLS: Array = [Vector2i(1, 3), Vector2i(2, 4), Vector2i(2, 3), Vector2i(3, 3)]
+const OPENING_ITEM_TYPES: Array = ["atk", "shield", "heal"]   # 攻击+1 / 圣盾 / 回复3血
 var reachable_map: Dictionary = {}   # cell -> true (可移
 var enemy_cells: Dictionary = {}     # cell -> true (可攻击高
 var _preview_cells: Dictionary = {}  # cell -> Color（敌方预览范围）
@@ -265,6 +272,7 @@ func _ready() -> void:
 		# 竞技场联机：先由主机发牌双人 2 1 构建双方卡组（各 8 名），再进入同样的部署流程
 		set_random_seed(GameState.online_seed)
 		_place_obstacles()
+		_spawn_opening_items()   # 进入战斗即刷新开局道具（障碍已定、单位未上，两端同种子同步）
 		_setup_hud()
 		if GameState.arena_mode:
 			_begin_online_arena_draft()
@@ -281,6 +289,7 @@ func _ready() -> void:
 		_start_match()
 	else:
 		_place_obstacles()
+		_spawn_opening_items()   # 进入战斗即刷新开局道具（障碍已定、单位未上）
 		_setup_hud()
 		if GameState.arena_mode:
 			_begin_arena_draft()   # 竞技场：先随构建双方卡组，再部署
@@ -794,6 +803,7 @@ func reset_match() -> void:
 	_pending_sub = ""
 	_defer_side_skills = false   # 重开清除补位延标志（新局回合开始重走流程）
 	_waiting_side_skills_round = -1   # 重开清除等待技能广播标记
+	_opening_items_spawned = false   # 重开新局开局道具重新刷一次
 	selected = null
 	# 重置 GameState（按当前模式；重置后重新部署/竞技场选人
 	if GameState.arena_mode:
@@ -819,11 +829,13 @@ func reset_match() -> void:
 		# 单机竞技场重开：重新随机生成障碍并回到 2 1 选人（与 _ready 竞技场分支一致）
 		# _begin_arena_draft 内部会清空卡组并刷新 HUD（旧队伍面板随之收起）
 		_place_obstacles()
+		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
 		arena_pick_time_left = -1.0
 		_begin_arena_draft()
 	else:
 		# 普通模式重开：重新随机生成障碍再进入部署（与 _ready 普通分支一致：先放障碍再部署）
 		_place_obstacles()
+		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
 		_begin_deployment()
 
 # 单机开局先手：每局随机一次并弹框告知后再选人/上首发
@@ -1314,6 +1326,7 @@ func _place_units() -> void:
 			if grid.in_bounds(cell):
 				_spawn_unit(GameState.enemy_placement[cell], DataRegistry.Faction.ENEMY, cell)
 		_place_obstacles()
+		_spawn_opening_items()   # 进入战斗即刷新开局道具（自由放置同样生效）
 		log_message.emit("已按自由部署放置双方单位")
 		if GameState.no_death_limit:
 			# 自由部署沙箱：替补 = "该方队伍卡组里没上场的人"（我方为 8 人里未首发的 5 人）
@@ -1350,6 +1363,7 @@ func _place_units() -> void:
 	for i in range(DEPLOY_COUNT, e_deck.size()):
 		enemy_roster.append(e_deck[i])
 	_place_obstacles()
+	_spawn_opening_items()   # 进入战斗即刷新开局道具（默认部署路径也刷一次；全局标志保证只放一次）
 	log_message.emit("双方各上 %d 名英雄，另有 %d / %d 名替补待命。" % [DEPLOY_COUNT, player_roster.size(), enemy_roster.size()])
 
 # 沙箱替补池：队伍里未上场的先进替补；若没给队伍卡组（兼容旧测试），退回"全英雄池减已上场"
@@ -1430,6 +1444,42 @@ func item_desc(type: String) -> String:
 		"gold":
 			return "攻击+1、血量上3"
 	return "增益道具"
+
+# 开局增益道具：开局时（首个行动方回合开始技执行点，两端同步同种子）在候选 4 格
+# 放 2 个随机道具，类型为 攻击+1 / 圣盾 / 回复3血。跳过障碍/单位/炸弹/墓碑格，
+# 保证不与障碍冲突；候选格被占不足 2 个时从其它空地补足（仍保证恰好 2 个且无冲突）。
+func _spawn_opening_items() -> void:
+	if _opening_items_spawned:
+		return
+	_opening_items_spawned = true
+	var spots: Array = []
+	for c in OPENING_ITEM_CELLS:
+		if _opening_item_placeable(c):
+			spots.append(c)
+	_rng_shuffle(spots)
+	var placed := 0
+	while placed < 2 and spots.size() > 0:
+		var c: Vector2i = spots.pop_back()
+		buff_items[c] = OPENING_ITEM_TYPES[rng.randi() % OPENING_ITEM_TYPES.size()]
+		placed += 1
+	if placed < 2:
+		# 候选格不够空（被障碍/单位挤占，少见）：从棋盘其它空地补足到 2 个
+		var extra: Array = []
+		for cell in grid.all_cells():
+			if not OPENING_ITEM_CELLS.has(cell) and _opening_item_placeable(cell):
+				extra.append(cell)
+		_rng_shuffle(extra)
+		while placed < 2 and extra.size() > 0:
+			var c: Vector2i = extra.pop_back()
+			buff_items[c] = OPENING_ITEM_TYPES[rng.randi() % OPENING_ITEM_TYPES.size()]
+			placed += 1
+	if placed > 0:
+		log_message.emit("开局放置了 %d 个增益道具（攻击+1/圣盾/回复3血），走过即可拾取。" % placed)
+		_refresh_board()
+
+func _opening_item_placeable(c: Vector2i) -> bool:
+	return grid != null and grid.in_bounds(c) and not occupancy.has(c) \
+			and not obstacles.has(c) and not bombs.has(c) and not graves.has(c) and not buff_items.has(c)
 
 # 黄金矿工：在随机空地放置一枚金矿（buff_items "gold" 类型
 func _place_gold(u: Unit) -> void:
