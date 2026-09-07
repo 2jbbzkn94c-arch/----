@@ -1332,9 +1332,10 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
-	# 只在固定四个候选点随机生成 0-2 个障碍物：[2,4][3,3][3,4][4,4]
+	# 只在固定候选点随机生成 0-2 个障碍物：[1,3][1,4][2,4][3,3][3,4][4,4][5,3][5,4]
 	var spots := [
-		Vector2i(2, 4), Vector2i(3, 3), Vector2i(3, 4), Vector2i(4, 4),
+		Vector2i(1, 3), Vector2i(1, 4), Vector2i(2, 4), Vector2i(3, 3),
+		Vector2i(3, 4), Vector2i(4, 4), Vector2i(5, 3), Vector2i(5, 4),
 	]
 	_rng_shuffle(spots)
 	var count := rng.randi_range(0, 2)
