@@ -3706,15 +3706,23 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	var def := DataRegistry.get_hero(picked_id)
 	if def == null:
 		return
-	# 只继承技能：复制目标英雄的词条、远近战类型与射程、专属行为（hero_id），数atk/move)保持古灵精怪自
+	# 继承目标英雄的"词条+出生调整属性"：词条（嘲讽/疾行/渗透/后勤…）已复制进 skills；
+	# 移动/射程按出生规则取值（血锁射程+2、大骑士冲锋+6、疾行+1 等），否则变身后面板对不上、
+	# 血锁这类"射程加成型"会因只有 1 格射程而拉不到敌人。atk 数值仍保持古灵精怪自身。
 	u.skills = def.skills.duplicate()
 	u.attack_type = def.attack_type   # 继承远程/近战（影响能否打远处
-	u.attack_range = def.attack_range # 继承射程（远2，近1
+	u.move_range = DataRegistry.spawn_move(def)          # 出生调整后的移动力
+	u.attack_range = DataRegistry.spawn_attack_range(def)  # 出生调整后的射程（血锁=3）
 	u.hero_id = def.id   # 关键：让英雄专属行为（换穿渗嘲讽等）按新英雄结算
 	u.last_transform_id = def.id   # 记录本次变身的对象，避免下次重复
 	# 变身：重新挂接对应英雄的行为脚本，使其后续技能按新英雄分
 	u.behavior = HeroRegistry.create(u.hero_id)
 	u.behavior.setup(self, u)
+	# 血锁的直线限制状态位补上（数值加成已含在 spawn_attack_range；状态位在变身瞬间补，
+	# 之后每回合由血锁 on_turn_start 维持）。不调用目标 on_spawn：其数值加成都已由 spawn_* 覆盖，
+	# 直接调会重复叠加（大骑士/血锁会双倍）。
+	if u.hero_id == "hero_41":
+		u.branch_override = true
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能

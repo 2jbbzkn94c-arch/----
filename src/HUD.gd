@@ -12,10 +12,9 @@ var _flame_icon: Control = null   # 扣血提醒火焰（第11回合起常驻脉
 var _round_fire_tween: Tween = null   # 回合标签的"燃烧"颜色脉动 tween（第11回合起）
 var _turn_timer_label: Label   # 本端回合剩余时间（对局中我方回合显示）
 var _result_overlay: Control = null
-var _sub_panel: PanelContainer = null   # 替补面板（棋盘下方一行，不遮罩）
+var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）——替补阶段复用为"选人面板"
 var _arena_panel: PanelContainer = null   # 竞技场选人面板（2选1）
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
-var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）
 var _player_deaths: Label
 var _enemy_deaths: Label
 var _last_pd := -1
@@ -37,7 +36,7 @@ func _ready() -> void:
 func bind(b: Battle) -> void:
 	battle = b
 	battle.match_result.connect(show_result)
-	battle.sub_select_requested.connect(_show_sub_select)
+	battle.sub_select_requested.connect(_refresh_team_panel)   # 替补阶段：同一队伍面板切换为可点选
 	battle.sub_placed.connect(_on_sub_placed)
 	battle.arena_draft_requested.connect(_show_arena_pair)
 	battle.arena_draft_done.connect(_close_arena_panel)
@@ -607,74 +606,9 @@ func _set_score_tooltip_visible(v: bool) -> void:
 	if _score_tooltip_wrap and is_instance_valid(_score_tooltip_wrap):
 		_score_tooltip_wrap.visible = v
 
-# 替补选择：在棋盘下方一行展示替补英雄（不遮罩），点击英雄高亮选中，
-# 再点击棋盘格子完成落位（由 Battle._try_place_sub 处理，落位后关闭面板）。
-func _show_sub_select() -> void:
-	_refresh_round()   # 替补选人阶段顶部标签显示"替补"
-	_close_sub_panel()
-	_close_team_panel()   # 替补选人时隐藏常驻队伍面板，避免与替补选人界面重叠
-	var vsize := get_viewport().get_visible_rect().size
-	var panel := PanelContainer.new()
-	# 无背景（透明面板）：只显示一行替补卡牌，不遮挡界面
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0, 0, 0, 0)
-	sb.content_margin_left = 6.0
-	sb.content_margin_right = 6.0
-	sb.content_margin_top = 4.0
-	sb.content_margin_bottom = 4.0
-	panel.add_theme_stylebox_override("panel", sb)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 透明面板：不拦截鼠标，仅卡牌自身响应
-	add_child(panel)
-	_sub_panel = panel
-
-	var wrapbox := VBoxContainer.new()
-	wrapbox.add_theme_constant_override("separation", 4)
-	wrapbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.add_child(wrapbox)
-	var title := Label.new()
-	title.text = "选择替补上阵（点击英雄选中，再点击棋盘绿格落位）"
-	title.add_theme_font_size_override("font_size", 15)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	wrapbox.add_child(title)
-	var sub_roster: Array = battle._sub_roster() if battle._sub_faction >= 0 else battle.player_roster
-	if sub_roster.size() == 0:
-		var lbl := Label.new()
-		lbl.text = "没有替补了。"
-		wrapbox.add_child(lbl)
-		panel.custom_minimum_size = Vector2(320, 64)
-	else:
-		var hover_cb := func(hid: String):
-			if hid == "":
-				_set_score_tooltip_visible(false)
-				return
-			_set_score_tooltip_hero(hid)   # 位置由 _process 实时跟随鼠标并越界收敛
-		var click_cb := func(hid: String):
-			# 点击英雄：选中并进入落位阶段；再点其他英雄可切换
-			print("[subclick-hud] 点击了 %s" % hid)
-			battle._on_sub_pick(hid)
-			# 刷新面板选中态（battle._pending_sub 为当前选中者）
-			for c in _sub_panel.find_children("*", "HexCard", true, false):
-				c.set_selected(c.hero_id == battle._pending_sub)
-		var pool := _make_hex_pool(sub_roster, hover_cb, click_cb, false, battle._pending_sub, true, 48.0)
-		wrapbox.add_child(pool)
-		# 面板宽度 = 一行卡牌宽度 + 内边距；高度 = 标题 + 一行卡牌
-		var pw := pool.custom_minimum_size.x + 20.0
-		var ph := pool.custom_minimum_size.y + 34.0
-		panel.custom_minimum_size = Vector2(pw, ph)
-		panel.size = Vector2(pw, ph)
-		# 放在按钮行上方（按钮行贴屏底），避免遮住棋盘
-		panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 76)
-
-# 关闭替补面板
-func _close_sub_panel() -> void:
-	if _sub_panel:
-		_sub_panel.queue_free()
-		_sub_panel = null
-
-# 替补落位成功：关闭替补选人面板（常驻队伍面板由 _notify_team 触发 _refresh_team_panel 恢复）
+# 替补落位成功：刷新队伍面板回只读态（连续替补会再次走 sub_select_requested 变回可选态）
 func _on_sub_placed() -> void:
-	_close_sub_panel()
+	_refresh_team_panel()
 
 # 关闭开局部署面板（若有残留，防止旧面板盖在新流程上）
 func _close_deploy_panel() -> void:
@@ -914,28 +848,28 @@ func _close_arena_panel() -> void:
 	_arena_touch_id = ""
 	_hide_arena_view()
 
-# 下方常驻队伍展示：整支卡组（上阵 + 替补），一字行透明卡牌。
-# 通过与替补面板相同的 HexCard 样式画出，随 team_updated 刷新。
+# 下方常驻队伍面板：整支卡组（上阵 + 替补），一字行透明卡牌，随 team_updated 刷新。
+# 同一面板双模式（避免"替补选人面板"与常驻面板重叠/互相遮盖）：
+#  - 平时：只读展示本端替补席/队伍，悬停查看属性；
+#  - SUBSTITUTING / PLACE_SUB：同一面板变"选择替补上阵"，点击英雄=选中落位（battle._on_sub_pick）。
 func _refresh_team_panel() -> void:
 	if battle == null:
 		return
-	# 部署期：只显示"开局选人"面板，不显示常驻"替补队伍"面板（避免重叠）
+	# 部署期：只显示"开局选人"面板，不显示下方常驻面板（避免重叠）
 	if battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY:
 		_close_team_panel()
 		return
-	# 替补选择进行中：只显示替补选人界面，不再显示常驻队伍面板（避免重叠）
-	if battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB:
-		_close_team_panel()
-		return
+	var picking := battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB
 	if _team_panel:
 		_team_panel.queue_free()
 		_team_panel = null
-	var ids: Array = battle._player_team_ids()
+	# 替补选中阶段展示当前替补席；平时展示整队（含替补）
+	var ids: Array = battle._sub_roster() if picking else battle._player_team_ids()
 	if ids.size() == 0:
 		return
 	var vsize := get_viewport().get_visible_rect().size
 	var panel := PanelContainer.new()
-	# 透明背景（不遮界面），仅承载卡牌；布局与替补面板一致（VBox + 标题 + 一行卡）
+	# 透明背景（不遮界面），仅承载卡牌；布局（VBox + 标题 + 一行卡）
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0, 0, 0, 0)
 	sb.content_margin_left = 6.0
@@ -951,9 +885,9 @@ func _refresh_team_panel() -> void:
 	wrapbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(wrapbox)
 	var title := Label.new()
-	title.text = "替补队伍"
+	title.text = "选择替补上阵（点击英雄选中，再点击棋盘绿格落位）" if picking else "替补队伍"
 	title.add_theme_font_size_override("font_size", 15)
-	title.add_theme_color_override("font_color", Color(0.6, 0.85, 1.0))
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5) if picking else Color(0.6, 0.85, 1.0))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrapbox.add_child(title)
 	# 悬停显示英雄属性（带背景浮层，位置由 _process 收敛)
@@ -962,13 +896,19 @@ func _refresh_team_panel() -> void:
 			_set_score_tooltip_visible(false)
 			return
 		_set_score_tooltip_hero(hid)
-	var pool := _make_hex_pool(ids, hover_cb, func(_h): pass, false, "", true, 48.0)
+	var click_cb := func(_h: String):
+		pass
+	if picking:
+		click_cb = func(hid: String):
+			battle._on_sub_pick(hid)   # 点击替补英雄：选中并进入落位阶段
+			_refresh_team_panel()      # 立即刷新高亮（_pending_sub），后续动作仍可再点其他英雄
+	var pool := _make_hex_pool(ids, hover_cb, click_cb, false, battle._pending_sub if picking else "", true, 48.0)
 	wrapbox.add_child(pool)
 	var pw := pool.custom_minimum_size.x + 20.0
 	var ph := pool.custom_minimum_size.y + 34.0
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
-	# 放在按钮行上方（按钮行贴屏底），避免遮住棋盘（与替补面板同一位置口径）
+	# 放在按钮行上方（按钮行贴屏底），避免遮住棋盘
 	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 76)
 
 # 关闭常驻队伍面板
@@ -1372,10 +1312,9 @@ func _on_restart() -> void:
 		# 关闭结算浮层（场景不卸载，需手动收起，否则遮住重开的选人/部署界面）
 		_result_overlay.queue_free()
 		_result_overlay = null
-	# 重开前收起棋盘下方的全部临时面板：替补选人行 / 常驻"替补队伍" / 开局部署面板。
+	# 重开前收起棋盘下方的全部临时面板：常驻"替补队伍/替补选人"与开局部署面板。
 	# 否则在替补阶段（SUBSTITUTING/PLACE_SUB）点重开时，reset_match 只重置战斗数据，
-	# 已打开的替补面板/队伍面板不会随 deploy_refresh 收起，上一局的英雄行会残留在屏底。
-	_close_sub_panel()
+	# 已打开的面板不会随 deploy_refresh 收起，上一局的英雄行会残留在屏底。
 	_close_team_panel()
 	_close_deploy_panel()
 	if battle != null and is_instance_valid(battle):
