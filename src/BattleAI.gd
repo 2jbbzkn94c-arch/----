@@ -356,12 +356,14 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		for mc in move_cells:
 			if mc != u.cell:
 				combos.append({ "move": mc, "atk": -1 })
-	# 攻击障碍：射程内、视线无阻挡的障碍纳入攻击候选(打通/输出障碍物)
+	# 攻击障碍：仅当"当前无任何可攻击目标"时才清障(攻击/击杀永远优先)；
+	# 射程内、视线无阻挡的障碍纳入候选,配合小幅清障激励
 	if can_attack and not u.attacked:
-		for oc in sim.obstacles.keys():
-			var oc2: Vector2i = oc
-			if grid.distance(u.cell, oc2) <= u.atk_range and not _sim_path_blocked(sim, u.cell, oc2):
-				combos.append({ "move": null, "atk": -2, "atk_obs": oc2 })
+		if _valid_targets(sim, u, u.cell).size() == 0:
+			for oc in sim.obstacles.keys():
+				var oc2: Vector2i = oc
+				if grid.distance(u.cell, oc2) <= u.atk_range and not _sim_path_blocked(sim, u.cell, oc2):
+					combos.append({ "move": null, "atk": -2, "atk_obs": oc2 })
 	# 撤退克制：只有“移动且本步不打”的拉远走位才可能被去掉。
 	# ① 当前格不疼（受威胁伤害 ≤1.5）→ 玩家下回合也碰不到/伤害可接受，站着占主动，没必要后撤；
 	# ② 就算现在疼，退到“下回合移动力+射程也够不着敌人”的范围外 → 白白丢下一轮主动，也不退。
@@ -931,8 +933,8 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 #   6. 走位定位：坦克前压、奶妈/后勤缩后、远程贴边缘、AOE 不扎堆
 func _evaluate(sim: Sim) -> float:
 	var score := 0.0
-	# 障碍清理激励：剩余障碍每格扣一点分,鼓励 AI 清打通路/障碍
-	score -= float(sim.obstacles.size()) * 0.3
+	# 障碍清理轻微激励(远低于攻击/击杀收益,仅在无目标可打时才有清障动作)
+	score -= float(sim.obstacles.size()) * 0.08
 	var enemy_dead := 0
 	var player_dead := 0
 	for i in sim.units.size():
