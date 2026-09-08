@@ -1,7 +1,6 @@
 @echo off
-chcp 65001>nul
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0瑙掕壊鍒楄〃杞琂son.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0角色列表转Json.ps1"
 echo.
-echo done: 瑙掕壊鍒楄〃.json
+echo done: 角色列表.json
 pause
