@@ -469,6 +469,10 @@ func _update_hp_label() -> void:
 func _update_atk_label() -> void:
 	if _atk_label:
 		_atk_label.text = str(effective_atk())
+		# 增益状态(攻击加成/共鸣/太阳斩等临时增益)下数字用黄色突出
+		var boosted := atk_buff > 0 or echo_bonus > 0 or sun_bonus > 0
+		_atk_label.add_theme_color_override("font_color",
+				Color(1.0, 0.9, 0.25) if boosted else Color(1.0, 1.0, 1.0))
 
 func _flash() -> void:
 	var t := create_tween()
