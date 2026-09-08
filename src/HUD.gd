@@ -242,7 +242,7 @@ func show_unit_card(u: Unit) -> void:
 	var range_txt := "%d" % u.attack_range
 	if u.hero_id == "hero_45":
 		range_txt = "∞"
-	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s\n状态：%s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt, _status_text(u)]
+	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt]
 	stats.add_theme_font_size_override("font_size", 17)
 	stats.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
