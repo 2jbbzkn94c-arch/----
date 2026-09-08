@@ -48,6 +48,9 @@ func synergy_bonus(a: String, b: String) -> float:
 	var bd: HeroDef = heroes.get(b, null)
 	if (ad != null and ad.explicit_pairs.has(b)) or (bd != null and bd.explicit_pairs.has(a)):
 		s += 2.0
+	# "配合"列语义展开的候选伙伴：任一方的展开结果包含对方,记低一档协同(语义较宽,宽松加分)
+	if (ad != null and ad.sy_partners.has(b)) or (bd != null and bd.sy_partners.has(a)):
+		s += 1.0
 	return s
 
 # 克制分：a 是否克制 b（依据角色列表"被克制/有效行为"列的明确关系）。a 提供分，a 克制 b 时返回正值。
@@ -134,6 +137,13 @@ func role_balance_bonus(deck: Array, cand: String) -> float:
 	return b
 
 # 从一段中文文本里抽取出现的英雄 id（用 NAME_ALIAS 简称 + 英雄显示名全名匹配）。
+func _without_self(arr: Array, self_id: String) -> Array:
+	var out: Array = []
+	for x in arr:
+		if x != self_id and not out.has(x):
+			out.append(x)
+	return out
+
 func _extract_ids(text: String) -> Array:
 	var out: Array = []
 	if text == "":
@@ -369,9 +379,9 @@ func _load_heroes() -> void:
 		h.synergy_note = cell_at.call(col_syn)
 		h.effective_behavior = cell_at.call(col_eff)
 		h.countered_by_note = cell_at.call(col_counter)
-		h.sy_partners = _extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)
-		h.counters = _extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)
-		h.explicit_pairs = _extract_ids(cell_at.call(col_pairs))   # "协同英雄"列：直接点名的搭档
+		h.sy_partners = _without_self((_extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)), h.id)
+		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)), h.id)
+		h.explicit_pairs = _without_self(_extract_ids(cell_at.call(col_pairs)), h.id)   # "协同英雄"列：直接点名的搭档
 
 		# 影响 AI 行为的手动评分列
 		h.ai_attr_score = cell_at.call(col_attr_score).to_float()
