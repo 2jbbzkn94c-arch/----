@@ -707,8 +707,75 @@ func _build_deck_preview(ids: Array) -> void:
 func _go_test_deploy() -> void:
 	get_tree().change_scene_to_file("res://scenes/QuickTest.tscn")
 
-# 竞技场模式：无需预选队伍，进入对战后随机2选1构建双方卡组
+# 竞技场模式：先选 AI 难度，再进入对局（随机2选1构建双方卡组）
 func _go_arena() -> void:
+	_ask_arena_difficulty()
+
+var _arena_dif_overlay: Control = null   # 竞技场难度选择弹层
+
+func _ask_arena_difficulty() -> void:
+	if _arena_dif_overlay != null and is_instance_valid(_arena_dif_overlay):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_arena_dif_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.12, 0.18, 0.98)
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.content_margin_left = 26.0
+	sb.content_margin_right = 26.0
+	sb.content_margin_top = 24.0
+	sb.content_margin_bottom = 24.0
+	panel.add_theme_stylebox_override("panel", sb)
+	ov.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	box.custom_minimum_size = Vector2(430, 0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "竞技场模式 · 选择 AI 难度"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	var add := func(txt: String, val: int) -> void:
+		var b := Button.new()
+		b.text = txt
+		b.custom_minimum_size = Vector2(0, 60)
+		b.add_theme_font_size_override("font_size", 22)
+		b.pressed.connect(_start_arena.bind(val))
+		box.add_child(b)
+	add.call("简单", 0)
+	add.call("普通", 1)
+	add.call("困难", 2)
+	var cancel := Button.new()
+	cancel.text = "返回"
+	cancel.custom_minimum_size = Vector2(0, 48)
+	cancel.add_theme_font_size_override("font_size", 18)
+	cancel.pressed.connect(func():
+		if _arena_dif_overlay != null:
+			_arena_dif_overlay.queue_free()
+			_arena_dif_overlay = null)
+	box.add_child(cancel)
+	panel.reset_size()
+	panel.position = Vector2((vsize.x - panel.size.x) / 2.0, (vsize.y - panel.size.y) / 2.0)
+
+func _start_arena(dif: int) -> void:
+	if _arena_dif_overlay != null:
+		_arena_dif_overlay.queue_free()
+		_arena_dif_overlay = null
+	GameState.ai_difficulty = dif
 	GameState.arena_mode = true
 	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
 	GameState.clear_placement()   # 竞技场用随机2选1构建卡组，不沿用"自由部署"放置
