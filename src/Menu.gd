@@ -11,7 +11,10 @@ var _desc_label: Label
 var _detail_label: Label
 var _tooltip: PanelContainer
 var _tooltip_box: VBoxContainer
-var _deck_slot_labels: Dictionary = {}   # slot -> Label
+var _deck_tab_buttons: Dictionary = {}   # slot -> Button（卡组1/2/3 选择钮）
+var _deck_host: Control = null           # 当前槽预览卡池宿主（整块重建）
+var _deck_info: Label = null             # 当前槽状态提示行
+var _deck_current_slot := 1              # 当前选中的卡组槽
 
 # —— 主菜单/普通模式 两屏切换 ——
 var _main_view: Control = null   # 模式选择主菜单页
@@ -92,34 +95,58 @@ func _build() -> void:
 	hex_host.add_child(_detail_label)
 	_detail_label.position = Vector2(10, _hex_pool_size.y + 6)
 
-	# 3) 卡组槽（3 组保存/读取），位于英雄池下方
-	var deck_row := Label.new()
-	deck_row.text = "自备卡组（可存 3 组，关游戏不丢）："
-	deck_row.add_theme_font_size_override("font_size", 14)
-	deck_row.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	vbox.add_child(deck_row)
+	# 3) 卡组区：上部 = 卡组1/2/3 切换 + 右侧 读取/保存/清空；
+	#    下部 = 所选卡组队伍预览（与替补队伍同款：一行六边形小卡，悬停看属性）
+	var deck_cap := Label.new()
+	deck_cap.text = "自备卡组（可存 3 组，关游戏不丢）："
+	deck_cap.add_theme_font_size_override("font_size", 14)
+	deck_cap.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	vbox.add_child(deck_cap)
+
+	var deck_bar := HBoxContainer.new()
+	deck_bar.add_theme_constant_override("separation", 8)
+	deck_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(deck_bar)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_bar.add_child(tabs)
 	for slot in [1, 2, 3]:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		vbox.add_child(row)
-		var nl := Label.new()
-		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nl.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nl.custom_minimum_size = Vector2(40, 28)
-		row.add_child(nl)
-		_deck_slot_labels[slot] = nl
-		var save_b := Button.new()
-		save_b.text = "保存"
-		save_b.custom_minimum_size = Vector2(64, 30)
-		save_b.pressed.connect(_save_current_deck.bind(slot))
-		row.add_child(save_b)
-		var load_b := Button.new()
-		load_b.text = "读取"
-		load_b.custom_minimum_size = Vector2(64, 30)
-		load_b.pressed.connect(_load_deck.bind(slot))
-		row.add_child(load_b)
+		var tab := Button.new()
+		tab.text = "卡组 %d" % slot
+		tab.toggle_mode = true
+		tab.custom_minimum_size = Vector2(0, 34)
+		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tab.pressed.connect(_on_deck_tab.bind(slot))
+		tabs.add_child(tab)
+		_deck_tab_buttons[slot] = tab
+	var acts := HBoxContainer.new()
+	acts.add_theme_constant_override("separation", 6)
+	deck_bar.add_child(acts)
+	var load_b := Button.new()
+	load_b.text = "读取"
+	load_b.custom_minimum_size = Vector2(76, 34)
+	load_b.pressed.connect(_on_deck_load)
+	acts.add_child(load_b)
+	var save_b := Button.new()
+	save_b.text = "保存"
+	save_b.custom_minimum_size = Vector2(76, 34)
+	save_b.pressed.connect(_on_deck_save)
+	acts.add_child(save_b)
+	var clear_b := Button.new()
+	clear_b.text = "清空"
+	clear_b.custom_minimum_size = Vector2(76, 34)
+	clear_b.pressed.connect(_on_deck_clear)
+	acts.add_child(clear_b)
+
+	_deck_info = Label.new()
+	_deck_info.add_theme_font_size_override("font_size", 13)
+	_deck_info.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	_deck_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_deck_info)
+	_deck_host = Control.new()
+	_deck_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_deck_host)
 
 	# 4) AI 难度 与 随机派遣 并列一排
 	var option_row := HBoxContainer.new()
@@ -535,6 +562,25 @@ func _synergy_pick(want: int) -> Array:
 	return chosen
 
 # ---- 卡组缓存 ----
+# 切换卡组槽：仅切换查看目标并刷新预览（不自动载入当前阵容）
+func _on_deck_tab(slot: int) -> void:
+	if _deck_current_slot == slot:
+		(_deck_tab_buttons[slot] as Button).set_pressed_no_signal(true)   # 再点当前槽：保持选中高亮
+		return
+	_deck_current_slot = slot
+	_refresh_deck_slots()
+
+func _on_deck_load() -> void:
+	_load_deck(_deck_current_slot)
+
+func _on_deck_save() -> void:
+	_save_current_deck(_deck_current_slot)
+
+func _on_deck_clear() -> void:
+	DeckStore.save_deck(_deck_current_slot, [])
+	_desc_label.text = "已清空卡组 %d。" % _deck_current_slot
+	_refresh_deck_slots()
+
 func _save_current_deck(slot: int) -> void:
 	if _selected.size() < MIN_PICK:
 		_desc_label.text = "最少选择 %d 名英雄再保存卡组。" % MIN_PICK
@@ -559,18 +605,51 @@ func _load_deck(slot: int) -> void:
 	_desc_label.text = "已读取卡组 %d。" % slot
 
 func _refresh_deck_slots() -> void:
-	for slot in _deck_slot_labels.keys():
-		var lbl: Label = _deck_slot_labels[slot]
-		var names: Array = DeckStore.load_deck(slot)
-		var txt := "卡组 %d：" % slot
-		if names.size() == 0:
-			txt += " 空"
-		else:
-			var ds: Array[String] = []
-			for id in names:
-				ds.append(DataRegistry.heroes[id].display_name)
-			txt += "、" .join(ds)
-		lbl.text = txt
+	for slot in _deck_tab_buttons.keys():
+		var tab: Button = _deck_tab_buttons[slot]
+		tab.set_pressed_no_signal(slot == _deck_current_slot)
+	# 清空旧预览后按当前槽重建
+	if _deck_host:
+		for c in _deck_host.get_children():
+			_deck_host.remove_child(c)
+			c.queue_free()
+	var ids: Array = DeckStore.load_deck(_deck_current_slot)
+	if ids.size() == 0:
+		_deck_host.custom_minimum_size = Vector2.ZERO
+		_deck_host.size = Vector2.ZERO
+		_deck_info.text = "卡组 %d：空 —— 点「保存」把当前阵容存入本槽，点「读取」会用卡组内容。" % _deck_current_slot
+		return
+	var names: Array[String] = []
+	for id in ids:
+		var h := DataRegistry.get_hero(id)
+		if h != null:
+			names.append(h.display_name)
+	_deck_info.text = "卡组 %d：%d 名（%s）" % [_deck_current_slot, names.size(), "、".join(names)]
+	_build_deck_preview(ids)
+
+# 与替补队伍面板同款布局：所选卡组一行平顶蜂窝小卡（悬停看属性）
+func _build_deck_preview(ids: Array) -> void:
+	var avail: float = get_viewport().get_visible_rect().size.x - 80.0
+	var n := maxi(ids.size(), 1)
+	var r: float = minf(34.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
+	var sq3 := sqrt(3.0)
+	var col_step := 1.5 * r
+	var row_step := sq3 * r
+	var total_w := 2.0 * r + float(n - 1) * col_step
+	var total_h := 2.0 * row_step
+	_deck_host.custom_minimum_size = Vector2(total_w, total_h)
+	_deck_host.size = Vector2(total_w, total_h)
+	for i in ids.size():
+		var hid: String = ids[i]
+		var def := DataRegistry.get_hero(hid)
+		if def == null:
+			continue
+		var cx := r + float(i) * col_step
+		var cy := r + (row_step / 2.0 if i % 2 == 1 else 0.0)
+		var card := HexCard.new(def, hid, r)
+		card.position = Vector2(cx - r, cy - row_step / 2.0)
+		card.hovered.connect(_on_hex_hovered)
+		_deck_host.add_child(card)
 
 func _go_test_deploy() -> void:
 	get_tree().change_scene_to_file("res://scenes/QuickTest.tscn")
