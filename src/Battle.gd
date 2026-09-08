@@ -110,6 +110,37 @@ class ScytheBlade:
 				return false
 		return Geometry2D.triangulate_polygon(poly).size() > 0
 
+# 长剑剑光：一道银蓝月弯型剑气(与镰刀同构但为剑光配色)，扫过直线并淡出
+class SwordCrescent:
+	extends Node2D
+
+	func _draw() -> void:
+		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
+			return
+		# 弯月刃体（+X），银蓝剑光
+		var blade := PackedVector2Array([
+			Vector2(0, 3), Vector2(34, -24), Vector2(70, -18), Vector2(92, 0),
+			Vector2(70, 18), Vector2(34, 24), Vector2(0, -3),
+		])
+		if _poly_ok(blade):
+			draw_colored_polygon(blade, Color(0.72, 0.88, 1.0, 0.95))
+		# 白亮刃口
+		draw_polyline(PackedVector2Array([Vector2(6, 0), Vector2(88, 0)]), Color(1.0, 1.0, 1.0, 1.0), 3.0, true)
+		# 青色拖尾刃气
+		var wisp := PackedVector2Array([
+			Vector2(12, 0), Vector2(52, -16), Vector2(84, -8), Vector2(52, 16),
+		])
+		if _poly_ok(wisp):
+			draw_colored_polygon(wisp, Color(0.55, 0.85, 1.0, 0.35))
+		# 光晕
+		draw_circle(Vector2(44, 0), 36, Color(0.6, 0.85, 1.0, 0.15))
+
+	func _poly_ok(poly: PackedVector2Array) -> bool:
+		for v in poly:
+			if not (is_finite(v.x) and is_finite(v.y)):
+				return false
+		return Geometry2D.triangulate_polygon(poly).size() > 0
+
 # 血锁的链子：一长串鲜红链环，从血锁射向目标并被勾拉收拢
 class BloodChain:
 	extends Node2D
@@ -3869,13 +3900,13 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name)
 		cur += step
 
-# 剑气演出：从攻击者沿目标直线方向飞到尽头后消
+# 剑气演出：一道银蓝月弯沿攻击者朝向直线扫到尽头后消失(月弯型)
 func _spawn_sword_qi(u: Unit, step: Vector2i) -> void:
 	var start := board_view.cell_world_center(u.cell)
 	var end_axial := grid.axial_of(u.cell) + step * 8
 	var end := board_view.cell_world_center(grid.offset_of(end_axial))
 	var dir := end - start
-	var qi := SwordQi.new()
+	var qi := SwordCrescent.new()
 	qi.position = start
 	qi.rotation = dir.angle()
 	add_child(qi)
