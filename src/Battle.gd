@@ -117,15 +117,24 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 多层嵌套亮弧组成的月牙刃(+X朝右为飞行方向)：左侧一重重弧层、右端收成细尖光尾
+		# 多层嵌套亮弧组成的月牙刃(+X朝右为飞行方向)，每层两端渐细收成尖
+		_crescent_band(84.0, Color(0.40, 0.66, 1.0, 0.72), 6.0)
+		_crescent_band(70.0, Color(0.55, 0.82, 1.0, 0.85), 7.0)
+		_crescent_band(55.0, Color(0.80, 0.95, 1.0, 0.95), 8.0)
+		_crescent_band(40.0, Color(1.0, 1.0, 1.0, 1.0), 8.0)
+
+	func _crescent_band(radius: float, color: Color, base_w: float) -> void:
+		# 沿弧线分 30 段,两端宽度递减到接近尖点,中间最宽
 		var a0 := deg_to_rad(-104.0)
 		var a1 := deg_to_rad(104.0)
-		# 外层蓝弧、中层青弧、内层白弧逐层往里更亮
-		draw_arc(Vector2.ZERO, 84.0, a0, a1, 48, Color(0.40, 0.66, 1.0, 0.72), 5.0, true)
-		draw_arc(Vector2.ZERO, 70.0, a0, a1, 48, Color(0.55, 0.82, 1.0, 0.85), 6.0, true)
-		draw_arc(Vector2.ZERO, 55.0, a0, a1, 48, Color(0.80, 0.95, 1.0, 0.95), 7.0, true)
-		draw_arc(Vector2.ZERO, 40.0, a0, a1, 48, Color(1.0, 1.0, 1.0, 1.0), 7.0, true)
-		# 右端自然收尖：弧带在 +X 处已是外层最右点，不再加直光尾(避免像子弹轨迹)
+		var seg := 30
+		var prev := a0
+		for i in seg + 1:
+			var ang := lerpf(a0, a1, float(i) / float(seg))
+			var u := absf(lerpf(-1.0, 1.0, float(i) / float(seg)))
+			var w := maxf(0.8, base_w * (1.0 - 0.88 * u * u))   # 两端收敛到 ~0.12 宽度
+			draw_arc(Vector2.ZERO, radius, prev, ang, 2, color, w, true)
+			prev = ang
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
