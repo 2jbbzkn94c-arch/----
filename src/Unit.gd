@@ -454,9 +454,10 @@ func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, b
 	t.tween_property(lbl, "modulate:a", 0.0, fade)
 	t.tween_callback(lbl.queue_free)
 
-# 治疗飘字（供 Battle 后勤调用）
+# 治疗飘字（供 Battle 后勤调用）：血量 +N + 上方机制文字"治疗"
 func float_heal(amount: int) -> void:
 	_float_text("+%d" % amount, Color(0.45, 0.95, 0.5))
+	_float_text("治疗", Color(0.45, 0.9, 0.6), -32, -88)
 
 func _update_hp_label() -> void:
 	if _hp_label:
