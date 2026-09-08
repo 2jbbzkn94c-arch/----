@@ -13,6 +13,12 @@ var _tooltip: PanelContainer
 var _tooltip_box: VBoxContainer
 var _deck_slot_labels: Dictionary = {}   # slot -> Label
 
+# —— 主菜单/普通模式 两屏切换 ——
+var _main_view: Control = null   # 模式选择主菜单页
+var _team_view: Control = null   # 普通模式（组队选人）页
+var _main_msg: Label = null      # 主菜单页反馈文案（复制诊断等）
+var _team_back_btn: Button = null
+
 const PICK_COUNT := 8   # 整支队伍人数上限（前 3 名上阵，其余为替补）
 const MIN_PICK := 5     # 至少选择 5 名英雄
 const DEPLOY_COUNT := 3
@@ -37,39 +43,56 @@ func _build() -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
 
+	# —— 两屏容器：主菜单（模式选择） / 普通模式（组队选人） ——
+	_main_view = Control.new()
+	_main_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_main_view)
+	_team_view = Control.new()
+	_team_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_team_view.visible = false
+	add_child(_team_view)
+	_build_main_menu()
+
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_top", 40)
 	margin.add_theme_constant_override("margin_bottom", 40)
 	margin.add_theme_constant_override("margin_left", 24)
 	margin.add_theme_constant_override("margin_right", 24)
-	add_child(margin)
+	_team_view.add_child(margin)
 	var vbox := VBoxContainer.new()
 	margin.add_child(vbox)
 
+	# 1) 标题
 	var title := Label.new()
-	title.text = "组建你的阵容"
+	title.text = "普通模式"
 	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 
-	_pick_label = Label.new()
-	_pick_label.add_theme_font_size_override("font_size", 18)
-	_pick_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	_pick_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(_pick_label)
+	# 2) 英雄池：固定 7 列放大卡面，放入滚动容器（桌面滚轮 / 安卓触摸滑动），占弹性空间
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.follow_focus = true
+	scroll.gui_input.connect(_on_pool_scroll_input)
+	_pool_scroll = scroll
+	vbox.add_child(scroll)
+	var hex_host := Control.new()
+	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(hex_host)
+	_build_hex_pool(hex_host)
 
-	_desc_label = Label.new()
-	_desc_label.add_theme_font_size_override("font_size", 14)
-	_desc_label.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
-	_desc_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	_desc_label.add_theme_constant_override("outline_size", 4)
-	_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(_desc_label)
+	_detail_label = Label.new()
+	_detail_label.custom_minimum_size = Vector2(0, 96)
+	_detail_label.add_theme_font_size_override("font_size", 13)
+	_detail_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hex_host.add_child(_detail_label)
+	_detail_label.position = Vector2(10, _hex_pool_size.y + 6)
 
-	# 卡组缓存：3 个卡组槽（保存/读取），放顶部始终可见
+	# 3) 卡组槽（3 组保存/读取），位于英雄池下方
 	var deck_row := Label.new()
 	deck_row.text = "自备卡组（可存 3 组，关游戏不丢）："
 	deck_row.add_theme_font_size_override("font_size", 14)
@@ -84,135 +107,165 @@ func _build() -> void:
 		nl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		nl.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		nl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		nl.custom_minimum_size = Vector2(40, 30)
+		nl.custom_minimum_size = Vector2(40, 28)
 		row.add_child(nl)
 		_deck_slot_labels[slot] = nl
 		var save_b := Button.new()
 		save_b.text = "保存"
-		save_b.custom_minimum_size = Vector2(70, 32)
+		save_b.custom_minimum_size = Vector2(64, 30)
 		save_b.pressed.connect(_save_current_deck.bind(slot))
 		row.add_child(save_b)
 		var load_b := Button.new()
 		load_b.text = "读取"
-		load_b.custom_minimum_size = Vector2(70, 32)
+		load_b.custom_minimum_size = Vector2(64, 30)
 		load_b.pressed.connect(_load_deck.bind(slot))
 		row.add_child(load_b)
 
-	vbox.add_child(_spacer(10))
-
-	# 卡池：固定 7 列放大卡面，放入滚动容器（桌面滚轮 / 安卓触摸滑动）
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.follow_focus = true
-	scroll.gui_input.connect(_on_pool_scroll_input)
-	_pool_scroll = scroll
-	vbox.add_child(scroll)
-	var hex_host := Control.new()
-	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(hex_host)
-	_build_hex_pool(hex_host)
-
-	_detail_label = Label.new()
-	_detail_label.custom_minimum_size = Vector2(0, 118)
-	_detail_label.add_theme_font_size_override("font_size", 13)
-	_detail_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hex_host.add_child(_detail_label)
-	_detail_label.position = Vector2(10, _hex_pool_size.y + 6)
-
-	vbox.add_child(_spacer(16))
-
-	# AI 难度选择
-	var diff_box := HBoxContainer.new()
+	# 4) AI 难度 与 随机派遣 并列一排
+	var option_row := HBoxContainer.new()
+	option_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	option_row.add_theme_constant_override("separation", 12)
+	vbox.add_child(option_row)
+	var diff_box := VBoxContainer.new()
 	diff_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	diff_box.add_theme_constant_override("separation", 10)
-	vbox.add_child(diff_box)
+	diff_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	diff_box.add_theme_constant_override("separation", 0)
+	option_row.add_child(diff_box)
 	var diff_label := Label.new()
-	diff_label.text = "AI 难度："
-	diff_label.add_theme_font_size_override("font_size", 16)
+	diff_label.text = "AI 难度"
+	diff_label.add_theme_font_size_override("font_size", 13)
 	diff_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	diff_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	diff_box.add_child(diff_label)
 	var diff := OptionButton.new()
 	diff.add_item("简单")
 	diff.add_item("普通")
 	diff.add_item("困难")
 	diff.select(GameState.ai_difficulty)
-	diff.custom_minimum_size = Vector2(160, 42)
+	diff.custom_minimum_size = Vector2(0, 36)
 	diff.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	diff.item_selected.connect(func(i: int): GameState.ai_difficulty = i)
 	diff_box.add_child(diff)
 
+	# 随机派遣
+	var rand_btn := Button.new()
+	rand_btn.text = "随机派遣"
+	rand_btn.add_theme_font_size_override("font_size", 15)
+	rand_btn.custom_minimum_size = Vector2(150, 36)
+	rand_btn.pressed.connect(_on_random)
+	rand_btn.size_flags_vertical = Control.SIZE_SHRINK_END
+	option_row.add_child(rand_btn)
+
+	# 5) 开始对战
 	_start_btn = Button.new()
 	_start_btn.text = "开始对战"
 	_start_btn.add_theme_font_size_override("font_size", 20)
-	_start_btn.custom_minimum_size = Vector2(0, 52)
+	_start_btn.custom_minimum_size = Vector2(0, 50)
 	_start_btn.pressed.connect(_on_start)
 	_start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_start_btn)
 
-	# 底部按钮并排，节省纵向
-	var btn_row := HBoxContainer.new()
-	btn_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_theme_constant_override("separation", 12)
-	vbox.add_child(btn_row)
-	var rand_btn := Button.new()
-	rand_btn.text = "随机派遣"
-	rand_btn.add_theme_font_size_override("font_size", 15)
-	rand_btn.custom_minimum_size = Vector2(0, 44)
-	rand_btn.pressed.connect(_on_random)
-	rand_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(rand_btn)
-	var test_btn := Button.new()
-	test_btn.text = "自由部署（测试）"
-	test_btn.add_theme_font_size_override("font_size", 15)
-	test_btn.custom_minimum_size = Vector2(0, 44)
-	test_btn.pressed.connect(_go_test_deploy)
-	test_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(test_btn)
-	var arena_btn := Button.new()
-	arena_btn.text = "竞技场模式"
-	arena_btn.add_theme_font_size_override("font_size", 15)
-	arena_btn.custom_minimum_size = Vector2(0, 44)
-	arena_btn.pressed.connect(_go_arena)
-	arena_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(arena_btn)
-	var net_btn := Button.new()
-	net_btn.text = "联机对战"
-	net_btn.add_theme_font_size_override("font_size", 15)
-	net_btn.custom_minimum_size = Vector2(0, 44)
-	net_btn.pressed.connect(_go_net)
-	net_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn_row.add_child(net_btn)
+	# 6) 返回主菜单（整行大按钮）
+	var back_btn := Button.new()
+	back_btn.text = "返回主菜单"
+	back_btn.add_theme_font_size_override("font_size", 18)
+	back_btn.custom_minimum_size = Vector2(0, 46)
+	back_btn.pressed.connect(_show_main_menu)
+	back_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(back_btn)
+	_team_back_btn = back_btn
 
-	# 底部小按钮并排：游戏说明 / 复制诊断信息
-	var help_row := HBoxContainer.new()
-	help_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	help_row.add_theme_constant_override("separation", 12)
-	vbox.add_child(help_row)
-	var help_btn := Button.new()
-	help_btn.text = "游戏说明"
-	help_btn.add_theme_font_size_override("font_size", 15)
-	help_btn.custom_minimum_size = Vector2(0, 40)
-	help_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	help_btn.pressed.connect(_open_help)
-	help_row.add_child(help_btn)
-	var diag_btn := Button.new()
-	diag_btn.text = "复制诊断信息"
-	diag_btn.add_theme_font_size_override("font_size", 15)
-	diag_btn.custom_minimum_size = Vector2(0, 40)
-	diag_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	diag_btn.pressed.connect(_copy_diagnostics)
-	help_row.add_child(diag_btn)
+	# 底部两行状态小字（已选卡 / 阵容提示），不影响上方操作区顺序
+	_pick_label = Label.new()
+	_pick_label.add_theme_font_size_override("font_size", 14)
+	_pick_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	_pick_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_pick_label)
+
+	_desc_label = Label.new()
+	_desc_label.add_theme_font_size_override("font_size", 13)
+	_desc_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_desc_label)
 
 	_build_tooltip()
 	_update_ui()
 
-	# 右上角音效音量调节（喇叭按钮 + 滑条弹层）
+	# 右上角音效音量调节（喇叭按钮 + 滑条弹层，两页共用）
 	var volume := VolumeControl.new()
 	add_child(volume)
 	volume.place_top_right(get_viewport().get_visible_rect().size, 8.0, 6.0)
+	_show_main_menu()
+
+# —— 主菜单（模式选择页）——
+func _build_main_menu() -> void:
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_top", 60)
+	margin.add_theme_constant_override("margin_bottom", 80)
+	margin.add_theme_constant_override("margin_left", 90)
+	margin.add_theme_constant_override("margin_right", 90)
+	_main_view.add_child(margin)
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 16)
+	margin.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "酒馆纷争"
+	title.add_theme_font_size_override("font_size", 48)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	title.add_theme_constant_override("outline_size", 6)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+	var sub := Label.new()
+	sub.text = "六边形回合制对战"
+	sub.add_theme_font_size_override("font_size", 16)
+	sub.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(sub)
+	vbox.add_child(_spacer(8))
+
+	var add_mode_btn := func(txt: String, cb: Callable) -> void:
+		var b := Button.new()
+		b.text = txt
+		b.add_theme_font_size_override("font_size", 22)
+		b.custom_minimum_size = Vector2(0, 58)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.pressed.connect(cb)
+		vbox.add_child(b)
+	add_mode_btn.call("普通模式", _show_team_view)
+	add_mode_btn.call("竞技场模式", _go_arena)
+	add_mode_btn.call("联机模式", _go_net)
+	add_mode_btn.call("自由部署（测试）", _go_test_deploy)
+	add_mode_btn.call("游戏说明", _open_help)
+	add_mode_btn.call("复制诊断信息", _copy_diagnostics)
+	var quit_btn := Button.new()
+	quit_btn.text = "退出游戏"
+	quit_btn.add_theme_font_size_override("font_size", 18)
+	quit_btn.custom_minimum_size = Vector2(0, 46)
+	quit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit_btn.pressed.connect(func(): get_tree().quit())
+	vbox.add_child(quit_btn)
+	_main_msg = Label.new()
+	_main_msg.add_theme_font_size_override("font_size", 14)
+	_main_msg.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	_main_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_main_msg.custom_minimum_size = Vector2(0, 30)
+	vbox.add_child(_main_msg)
+
+func _show_main_menu() -> void:
+	_main_view.visible = true
+	_team_view.visible = false
+	if _team_back_btn:
+		_team_back_btn.grab_focus()
+
+func _show_team_view() -> void:
+	_main_view.visible = false
+	_team_view.visible = true
+	_update_ui()
+	_refresh_deck_slots()
 
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸滑动用）
@@ -650,4 +703,8 @@ func _copy_diagnostics() -> void:
 				htail = htail.slice(htail.size() - 120)
 			lines.append_array(htail)
 	DisplayServer.clipboard_set("\n".join(lines))
-	_desc_label.text = "诊断信息已复制到剪贴板（含引擎日志末尾 200 行 + 最近 %d 份历史会话日志）。请粘贴发给开发者。" % mini(recent.size(), 4)
+	var note := "诊断信息已复制到剪贴板（含引擎日志末尾 200 行 + 最近 %d 份历史会话日志）。请粘贴发给开发者。" % mini(recent.size(), 4)
+	if _main_msg != null and is_instance_valid(_main_msg) and _main_msg.is_visible_in_tree():
+		_main_msg.text = note
+	else:
+		_desc_label.text = note
