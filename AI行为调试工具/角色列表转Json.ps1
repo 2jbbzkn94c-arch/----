@@ -1,8 +1,8 @@
 ﻿# 角色列表.xlsx -> 角色列表.json（供 Godot 运行时读取）
 # Godot(此构建)无 ZipReader/Compression,无法直接解 xlsx,故在本机把数据转成 JSON 副产物。
 param(
-  [string]$Src = "D:\Game creating\战旗\角色列表.xlsx",
-  [string]$Out = "D:\Game creating\战旗\角色列表.json"
+  [string]$Src = "D:\Game creating\战旗\英雄相关\角色列表.xlsx",
+  [string]$Out = "D:\Game creating\战旗\英雄相关\角色列表.json"
 )
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Excel 打开时会持有写锁,ZipFile.OpenRead(仅共享读)会失败;

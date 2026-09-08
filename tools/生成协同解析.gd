@@ -40,9 +40,9 @@ func _run() -> void:
 	lines.append("===== 协同分高的组合(前20) =====")
 	for i in mini(20, pairs.size()):
 		lines.append("  " + pairs[i]["t"])
-	var f := FileAccess.open("res://角色协同解析.txt", FileAccess.WRITE)
+	var f := FileAccess.open("res://英雄相关/角色协同解析.txt", FileAccess.WRITE)
 	if f:
 		f.store_string("\n".join(lines))
 		f.close()
-		print("written res://角色协同解析.txt heroes=%d pairs=%d" % [ids.size(), pairs.size()])
+		print("written res://英雄相关/角色协同解析.txt heroes=%d pairs=%d" % [ids.size(), pairs.size()])
 	quit(0)

@@ -390,9 +390,9 @@ func _ready() -> void:
 func _load_heroes() -> void:
 	heroes.clear()
 	summons.clear()
-	var rows := _read_json_rows("res://角色列表.json")
+	var rows := _read_json_rows("res://英雄相关/角色列表.json")
 	if rows.is_empty():
-		push_error("无法读取 res://角色列表.json")
+		push_error("无法读取 res://英雄相关/角色列表.json")
 		return
 
 	# 表头列名 -> 下标（表格列可增改，按列名取值，避免列位置写死错位）
@@ -528,12 +528,12 @@ func _load_heroes() -> void:
 			heroes[h.id] = h
 
 
-# 从 res://角色列表.json 读取全部行（由本机 PowerShell 脚本从 角色列表.xlsx 转换生成；
+# 从 res://英雄相关/角色列表.json 读取全部行（由本机 PowerShell 脚本从 角色列表.xlsx 转换生成；
 # 本引擎构建未包含 ZipReader/Compression,无法直接解 xlsx,故改为读 JSON 副产物）
 func _read_json_rows(path: String) -> Array:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("无法读取 res://角色列表.json")
+		push_error("无法读取 res://英雄相关/角色列表.json")
 		return []
 	var txt: String = f.get_as_text()
 	f.close()

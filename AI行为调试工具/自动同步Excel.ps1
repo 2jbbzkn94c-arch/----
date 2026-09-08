@@ -1,9 +1,10 @@
-﻿# 自动同步：监听 角色列表.xlsx 变化 -> 自动生成 角色列表.json
+# 自动同步：监听 角色列表.xlsx 变化 -> 自动生成 角色列表.json
 # Excel 打开时也允许共享读取,XLSX 一保存即转换(即使 Excel 还开着)。
-param([string]$ProjectRoot = "D:\Game creating\战旗")
+param([string]$ProjectRoot = "D:\Game creating\战旗\英雄相关")
 
 $src = Join-Path $ProjectRoot "角色列表.xlsx"
-$conv = Join-Path $ProjectRoot "tools\角色列表转Json.ps1"
+# 转换脚本与自动同步脚本同目录（本脚本所在文件目录），不再写死 tools\
+$conv = Join-Path $PSScriptRoot "角色列表转Json.ps1"
 $last = [datetime]::MinValue
 
 Write-Host "自动同步已启动：修改并保存 角色列表.xlsx 即自动生成 角色列表.json"
