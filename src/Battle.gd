@@ -4774,6 +4774,10 @@ func _run_enemy_turn() -> void:
 	var obstacle_snap := {}
 	for c in obstacles.keys():
 		obstacle_snap[c] = true
+	# 炸弹供 AI 参考：非炸弹人不要停在炸弹格(经过不炸,落停会引爆)
+	var bomb_snap := {}
+	for c in bombs.keys():
+		bomb_snap[c] = true
 	# 后台线程搜索：AI 计算期间主线程保持响应（可点英雄查看属性），算完再回放。
 	# BattleAI 只读 grid 几何与 DataRegistry 静态数据，不触碰场景节点，线程安全。
 	_ai_plan = []
@@ -4782,7 +4786,7 @@ func _run_enemy_turn() -> void:
 	if _ai_thread != null and _ai_thread.is_started():
 		_ai_thread.wait_to_finish()   # 保险：不应有残留线程
 	_ai_thread = Thread.new()
-	_ai_thread.start(_enemy_ai_worker.bind(ai, descs, occ_snap, gold_snap, grave_snap, obstacle_snap))
+	_ai_thread.start(_enemy_ai_worker.bind(ai, descs, occ_snap, gold_snap, grave_snap, obstacle_snap, bomb_snap))
 	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
 	while true:
 		if get_tree() == null or my_session != _session_id:
@@ -4819,8 +4823,8 @@ func _run_enemy_turn() -> void:
 			_begin_side(GameState.SIDE_PLAYER)
 
 # 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
-func _enemy_ai_worker(ai: BattleAI, descs: Array, occ_snap: Dictionary, gold_snap: Dictionary, grave_snap: Dictionary, obstacle_snap: Dictionary) -> void:
-	var sim := ai.build_state(descs, occ_snap, gold_snap, grave_snap, obstacle_snap)
+func _enemy_ai_worker(ai: BattleAI, descs: Array, occ_snap: Dictionary, gold_snap: Dictionary, grave_snap: Dictionary, obstacle_snap: Dictionary, bomb_snap: Dictionary) -> void:
+	var sim := ai.build_state(descs, occ_snap, gold_snap, grave_snap, obstacle_snap, bomb_snap)
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()
 	_ai_plan = result

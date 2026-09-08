@@ -40,6 +40,7 @@ class Sim:
 	var gold_cells: Dictionary = {}   # cell -> true（黄金矿工可拾取的金矿）
 	var graves: Dictionary = {}        # cell -> true（阵亡墓碑：阻挡移动，不可落停）
 	var obstacles: Dictionary = {}     # cell -> true（障碍物：阻挡移动与攻击视线）
+	var bombs: Dictionary = {}         # cell -> true（炸弹：经过不炸，落停引爆，非炸弹人应避免停在上面）
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
 	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
 	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
@@ -49,6 +50,7 @@ class Sim:
 		c.gold_cells = gold_cells.duplicate()
 		c.graves = graves.duplicate()
 		c.obstacles = obstacles.duplicate()
+		c.bombs = bombs.duplicate()
 		c.killed_players = killed_players
 		c._neg_gained = _neg_gained.duplicate()
 		c._pos_mirror_depth = 0   # 镜像深度每次搜索步重置（防跨步累计误限）
@@ -97,11 +99,12 @@ func _init(g: HexGrid) -> void:
 	grid = g
 
 # 由 Battle 提供的数据构建模拟状态（units 顺序与 Battle.units 一致）
-func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}) -> Sim:
+func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}) -> Sim:
 	var s := Sim.new()
 	s.gold_cells = gold_cells.duplicate()
 	s.graves = graves.duplicate()
 	s.obstacles = obstacles.duplicate()
+	s.bombs = bombs.duplicate()
 	for d in unit_descs:
 		var u := SimUnit.new()
 		u.fn = d["fn"]
@@ -405,6 +408,10 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 					break
 				if sim.occ.has(off) or sim.graves.has(off) or sim.obstacles.has(off):
 					break
+				if sim.bombs.has(off) and u.hero_id != "hero_35":
+					# 冲锋经过炸弹格可以穿过(不停不炸)，但不停在该格当终点
+					ax += d
+					continue
 				out[off] = true
 				ax += d
 		return out
@@ -424,7 +431,15 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 		for o in sim.obstacles.keys():
 			stop[o] = true   # 普通单位：障碍既不能穿过也不能停留
 			blockers[o] = true
-	return grid.reachable(u.cell, u.emove, stop, blockers)
+	var res := grid.reachable(u.cell, u.emove, stop, blockers)
+	# 炸弹：经过不炸但落停引爆 → 非炸弹人不把炸弹格作为移动终点(炸弹人可以站上去)
+	if sim.bombs.size() > 0 and u.hero_id != "hero_35":
+		var safe := {}
+		for c in res.keys():
+			if not sim.bombs.has(c):
+				safe[c] = true
+		return safe
+	return res
 
 func _in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, t: SimUnit) -> bool:
 	var d := grid.distance(from_cell, t.cell)
