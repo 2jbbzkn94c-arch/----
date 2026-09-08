@@ -137,7 +137,7 @@ func _build_hex_pool(host: Control) -> void:
 	for i in ids.size():
 		var id: String = ids[i]
 		var col := i % 5
-		var row := int(i / 5)
+		var row := int(i / float(5))
 		var cx := r + float(col) * 1.5 * r
 		var cy := r + sq3 * r * (float(row) + (0.5 if col % 2 == 1 else 0.0))
 		var card := HexCard.new(DataRegistry.get_hero(id), id, card_r)
