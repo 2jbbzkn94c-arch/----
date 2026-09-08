@@ -5,7 +5,14 @@ param(
   [string]$Out = "D:\Game creating\战旗\角色列表.json"
 )
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zip = [System.IO.Compression.ZipFile]::OpenRead($Src)
+# Excel 打开时会持有写锁,ZipFile.OpenRead(仅共享读)会失败;
+# 改用"共享读写"打开源文件->复制到临时文件->再解包临时文件,即可在 Excel 打开时转换。
+$tmp = [System.IO.Path]::GetTempFileName() + '.xlsx'
+$fsrc = [System.IO.File]::Open($Src, 'Open', 'Read', [System.IO.FileShare]::ReadWrite)
+$fdst = [System.IO.File]::Create($tmp)
+$fsrc.CopyTo($fdst)
+$fdst.Close(); $fsrc.Close()
+$zip = [System.IO.Compression.ZipFile]::OpenRead($tmp)
 function Read-Entry([string]$name) {
   $e = $zip.GetEntry($name)
   if (-not $e) { return $null }
@@ -15,6 +22,7 @@ function Read-Entry([string]$name) {
 $sharedXml = Read-Entry 'xl/sharedStrings.xml'
 $sheetXml  = Read-Entry 'xl/worksheets/sheet1.xml'
 $zip.Dispose()
+Remove-Item $tmp -ErrorAction SilentlyContinue
 
 $shared = @()
 if ($sharedXml) {
