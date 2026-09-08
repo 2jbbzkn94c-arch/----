@@ -1694,11 +1694,12 @@ func _run_side_skills(side: int) -> void:
 		turn_banner.emit("敌方回合")
 
 # 回合开始时结算永久/持续状
-func _tick_statuses(faction: int) -> void:
+# 猛毒：无论哪一方回合开始，场上所有中毒单位都结算 1 点伤害（参数保留仅为兼容调用点）
+func _tick_statuses(_faction: int) -> void:
 	for u in units:
 		if u == null or not is_instance_valid(u):
 			continue
-		if u.alive and u.faction == faction and u.has_status("poison"):
+		if u.alive and u.has_status("poison"):
 			var hp_before := u.hp
 			u.take_damage(1, false, false, "猛毒")   # [猛毒]：圣盾可抵挡一次（抵挡则消耗圣盾不掉血）
 			if u.hp < hp_before:
