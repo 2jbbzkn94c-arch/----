@@ -91,6 +91,8 @@ func _build() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
+	# 禁用横向滚动：池宽按容器内宽排布不会超宽，杜绝左右滑动；纵向交给引擎原生（触屏拖动/滚轮均内置）
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_pool_scroll = scroll
 	vbox.add_child(scroll)
 	var hex_host := Control.new()
@@ -298,8 +300,7 @@ func _show_team_view() -> void:
 	_refresh_deck_slots()
 
 var _hex_pool_size := Vector2.ZERO
-var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸滑动用）
-var _pool_drag_touch := false              # 触摸拖动卡池中（起点在池内、未松手）
+var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（纵向原生滚动）
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
 # 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
@@ -317,7 +318,8 @@ func _build_hex_pool(host: Control) -> void:
 			return ra < rb
 		return a < b)
 	var cols := 5
-	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 40.0, 340.0)
+	# 可用宽按滚动容器内宽计(视口宽 - 左右边距 24*2 - 少量余量)，保证池宽 ≤ 容器宽，横向永不出滚动条
+	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 64.0, 320.0)
 	# 半径：让 5 列蜂窝（总宽 = 2r + 4*1.5r = 8r）尽量宽大
 	var r: float = clampf(avail_w / 8.0, 30.0, 96.0)
 	var sq3 := sqrt(3.0)
@@ -351,25 +353,8 @@ func _build_hex_pool(host: Control) -> void:
 	host.custom_minimum_size = Vector2(max_x, max_y + _DETAIL_H)
 	host.size = Vector2(max_x, max_y + _DETAIL_H)
 
-# 安卓/触屏：手指上下滑动滚动卡池（放在 Menu._input 全局层处理——
-# 拖动起点常落在卡片上，若只挂 ScrollContainer.gui_input 会被卡片截断事件导致滑不动）；
-# 桌面鼠标滚轮由 ScrollContainer 原生处理。
-func _input(ev: InputEvent) -> void:
-	if _pool_scroll == null or not _pool_scroll.is_visible_in_tree():
-		return
-	if not _team_view.visible:
-		return
-	if ev is InputEventScreenTouch:
-		var st := ev as InputEventScreenTouch
-		if st.pressed:
-			# 只在池区域内开始拖动才接管；离开页面/松手即复位
-			_pool_drag_touch = _pool_scroll.get_global_rect().has_point(st.position)
-		else:
-			_pool_drag_touch = false
-	elif _pool_drag_touch and ev is InputEventScreenDrag:
-		var sd := ev as InputEventScreenDrag
-		# scroll_vertical 赋值自带 0..max 截断：手指上滑(relative.y<0)→ 内容下滚
-		_pool_scroll.scroll_vertical = int(_pool_scroll.scroll_vertical - sd.relative.y)
+# 触屏/滚轮纵向滚动交给 ScrollContainer 引擎原生处理（4.x 自带触屏拖动与惯性，
+# 且事件不会因起点在卡片上而失效）；本页只禁用了横向滚动避免左右滑。
 
 func _on_hex_hovered(id: String) -> void:
 	if id == "":
