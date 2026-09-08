@@ -2704,6 +2704,11 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 	var cmd: Variant = JSON.parse_string(text)
 	if cmd is Dictionary:
 		var t := String(cmd.get("type", ""))
+		if t == "leave":
+			# 对方主动离开本局（回大厅）：立即触发断线提示，不再干等心跳超时
+			if state != State.ENDED:
+				NetBus.disconnected.emit()
+			return
 		if t == "restart_req":
 			# 客户端请再来一局" -> 主机权威重启（广播新种子；send_all 不回环，主机本地也重启）
 			if GameState.is_host:

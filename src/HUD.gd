@@ -1632,7 +1632,10 @@ func _vspacer(h: float) -> Control:
 
 func _on_back_to_menu() -> void:
 	if GameState.is_online:
-		# 联机（含联机竞技场）：返回联机大厅（断开连接、清联机状态，可重新开房/加入）
+		# 联机（含联机竞技场）：先通知对方"本端离开本局"，再断开并回联机大厅
+		if NetBus.is_online:
+			NetBus.send_all(JSON.stringify({ "type": "leave" }))
+			await get_tree().create_timer(0.2).timeout   # 给对方一点时间收包
 		GameState.reset_online()
 		NetBus.stop()
 		get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
