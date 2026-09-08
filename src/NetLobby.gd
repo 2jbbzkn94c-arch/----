@@ -18,6 +18,8 @@ var _peer_ready := false   # 竞技场：对端是否已准备（主机判断能
 var _deck_info: Label = null   # 所选卡组状态展示行
 var _slot_head: HBoxContainer = null   # "选择你的卡组槽"标题行（含右侧"编辑卡组"按钮；竞技场整行隐藏）
 var _preview_host: Control = null      # 所选卡组队伍小卡预览（与普通模式同款）
+var _hover_tooltip: PanelContainer = null   # 悬停英雄属性浮层
+var _hover_box: VBoxContainer = null        # 浮层内容
 var _btn_edit: Button = null           # "编辑卡组"按钮（跳普通模式选人页编辑）
 var _slot_label: Label = null  # 卡组槽区域标题（竞技场模式整体隐藏）
 var _btn_host: Button
@@ -91,6 +93,13 @@ func _process(dt: float) -> void:
 		_connecting_sec = 0.0
 	elif not NetBus.is_online:
 		_connecting_sec = 0.0
+	# 悬停属性浮层跟随鼠标（有内容时）
+	if _hover_tooltip != null and _hover_tooltip.visible:
+		var vsize := get_viewport().get_visible_rect().size
+		var pos := get_viewport().get_mouse_position() + Vector2(16, 16)
+		pos.x = minf(pos.x, vsize.x - _hover_tooltip.size.x - 6.0)
+		pos.y = minf(pos.y, vsize.y - _hover_tooltip.size.y - 6.0)
+		_hover_tooltip.position = pos
 
 # ---- 网络回调 ----
 func _on_connected() -> void:
@@ -352,6 +361,7 @@ func _build() -> void:
 	btn_back.pressed.connect(_back_to_menu)
 	vbox.add_child(btn_back)
 
+	_build_hover_tooltip()
 	_refresh_ui()
 
 func _choose_slot(s: int) -> void:
@@ -451,7 +461,67 @@ func _refresh_slot_preview() -> void:
 		var cy := r + (row_step / 2.0 if i % 2 == 1 else 0.0)
 		var card := HexCard.new(def, hid, r)
 		card.position = Vector2(cx - r, cy - row_step / 2.0)
+		card.hovered.connect(_on_hero_hovered)
 		_preview_host.add_child(card)
+
+# 悬停属性浮层（与选人页同款：大字、限宽、自动换行）
+func _build_hover_tooltip() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 60
+	add_child(layer)
+	_hover_tooltip = PanelContainer.new()
+	_hover_tooltip.visible = false
+	_hover_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.07, 0.11, 0.96)
+	sb.corner_radius_top_left = 8
+	sb.corner_radius_top_right = 8
+	sb.corner_radius_bottom_left = 8
+	sb.corner_radius_bottom_right = 8
+	sb.content_margin_left = 16.0
+	sb.content_margin_right = 16.0
+	sb.content_margin_top = 14.0
+	sb.content_margin_bottom = 14.0
+	_hover_tooltip.add_theme_stylebox_override("panel", sb)
+	layer.add_child(_hover_tooltip)
+	_hover_box = VBoxContainer.new()
+	_hover_box.add_theme_constant_override("separation", 8)
+	_hover_tooltip.add_child(_hover_box)
+
+func _on_hero_hovered(hid: String) -> void:
+	if _hover_tooltip == null or not is_instance_valid(_hover_tooltip):
+		return
+	if hid == "":
+		_hover_tooltip.visible = false
+		return
+	var def := DataRegistry.get_hero(hid)
+	if def == null:
+		return
+	for c in _hover_box.get_children():
+		_hover_box.remove_child(c)
+		c.queue_free()
+	var zones := DataRegistry.hero_info_zones(def)
+	for i in zones.size():
+		if i > 0:
+			var sep := HSeparator.new()
+			sep.custom_minimum_size = Vector2(260, 6)
+			sep.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			var lnsb := StyleBoxLine.new()
+			lnsb.color = Color(1.0, 0.85, 0.5, 0.3)
+			lnsb.thickness = 1
+			sep.add_theme_stylebox_override("separator", lnsb)
+			_hover_box.add_child(sep)
+		var lb := Label.new()
+		lb.text = zones[i]
+		lb.add_theme_font_size_override("font_size", 20)
+		lb.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+		lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lb.custom_minimum_size = Vector2(380, 0)
+		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_hover_box.add_child(lb)
+	_hover_tooltip.reset_size()
+	_hover_tooltip.visible = true
 
 # "编辑卡组"：叠层打开普通模式选人页（网络连接不断、大厅状态保留）。
 # 编辑目标 = 当前已选槽（未选则沿用上次槽位），Menu 会自动载入并自动保存。
