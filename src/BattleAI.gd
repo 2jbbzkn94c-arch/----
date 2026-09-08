@@ -557,7 +557,7 @@ func _nearest_player(sim: Sim, cell: Vector2i) -> SimUnit:
 
 # 吃某 buff 对单位 u 的收益(0=无收益)。粗略但避免"见 buff 就吃":
 # 攻击道具=下次攻击+1(常正);移动+1(常正);圣盾=无盾时正/有盾≈0;回血=受伤才正/满血0;金矿交黄金矿工(gold_snap单独)
-func _buff_value(sim: Sim, u: SimUnit, btype: String) -> float:
+func _buff_value(_sim: Sim, u: SimUnit, btype: String) -> float:
 	match btype:
 		"atk":
 			return 1.0
