@@ -76,6 +76,11 @@ func on_attack_obstacle(_oc: Vector2i) -> void:
 func damage_mult(_target: Unit) -> int:
 	return 1
 
+## 本次攻击命中后会附加负面状态(毒/冻/重伤/麻痹/沉默…)。
+## 带盾目标被此类攻击命中时：圣盾优先保留给异常(伤害不吃盾),使目标不吃状态。
+func applies_status_on_hit() -> bool:
+	return false
+
 ## 反击倍率。默认 1。
 func counter_mult() -> int:
 	return 1

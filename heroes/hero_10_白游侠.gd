@@ -3,6 +3,9 @@ extends HeroBase
 ## 目标死亡时同样波及（AOE 于死亡目标上结算）。技能不再作用于障碍物。
 class_name HeroRanger
 
+func applies_status_on_hit() -> bool:
+	return true
+
 func on_attack(target: Unit) -> void:
 	fx()
 	fx_on_target(target)

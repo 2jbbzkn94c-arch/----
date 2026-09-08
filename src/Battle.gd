@@ -3150,7 +3150,10 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 长角未沉默：on_attack 统一结算基础伤害（击退倍，不能倍单次）
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
-			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name)
+			# 会附加负面状态的攻击：目标带圣盾时伤害不吃盾(盾保留给本次异常,挡掉状态)
+			var keep_shield := target.has_status("shield") \
+					and attacker.alive and _hero(attacker).applies_status_on_hit()
+			target.take_damage(dmg, keep_shield, false, "被%s攻击" % attacker.display_name)
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
