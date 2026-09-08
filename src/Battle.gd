@@ -3940,17 +3940,28 @@ func _summon_skeletons(u: Unit) -> void:
 		st.tween_property(s, "modulate:a", 1.0, 0.3)
 		log_message.emit("召唤了骷髅兵")
 
+# 梅林登场：优先治疗血量最低的受伤队友 8HP 并换位；
+# 若全队都满血则跳过治疗、仍与一名队友换位（技能始终发动，只是没有治疗目标）。
 func _heal_lowest_and_swap(u: Unit) -> bool:
-	var best: Unit = null
+	var wounded: Unit = null   # 血量最低的受伤队友
+	var any_ally: Unit = null  # 任一同阵营存活队友（满血兜底换位目标）
 	for v in units:
-		if v.alive and v.faction == u.faction and v != u and v.hp < v.max_hp:
-			if best == null or v.hp < best.hp:
-				best = v
-	if best != null:
-		_heal(best, 8)
-		_swap_units(u, best)
+		if v.alive and v.faction == u.faction and v != u:
+			if any_ally == null:
+				any_ally = v
+			if v.hp < v.max_hp:
+				if wounded == null or v.hp < wounded.hp:
+					wounded = v
+	if wounded != null:
+		_heal(wounded, 8)
+		_swap_units(u, wounded)
 		return true
-	return false   # 无可治疗的受伤队友：技能未生效
+	if any_ally != null:
+		# 无受伤队友：跳过治疗，仅换位（技能仍发动）
+		_swap_units(u, any_ally)
+		log_message.emit("梅林登场：全队状态良好，仅与 %s 换位。" % any_ally.display_name)
+		return true
+	return false   # 场上没有可换位的存活队友：技能无法发动
 
 func _hurt_lowest_enemy_stun(u: Unit) -> bool:
 	var best: Unit = null
