@@ -276,6 +276,18 @@ func show_unit_card(u: Unit) -> void:
 			kw_label.custom_minimum_size = Vector2(270, 0)
 			kw_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			v.add_child(kw_label)
+		# 显示区⑤：当前已挂状态的具体解释（名字只是状态行里的提示，这里补完整说明）
+		var st_ex := _status_explain_lines(u)
+		if st_ex.size() > 0:
+			v.add_child(_make_zone_sep())
+			var stl := Label.new()
+			stl.text = "当前状态\n" + "\n".join(st_ex)
+			stl.add_theme_font_size_override("font_size", 16)
+			stl.add_theme_color_override("font_color", Color(1.0, 0.8, 0.7))
+			stl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			stl.custom_minimum_size = Vector2(270, 0)
+			stl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			v.add_child(stl)
 	var close := Button.new()
 	close.text = "关闭"
 	close.custom_minimum_size = Vector2(0, 40)
@@ -389,6 +401,20 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("possess"): s += "附体 "
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
+
+# 当前每个状态的解释(属性框用)：取 DataRegistry.STATUS_DESC 的中文说明
+func _status_explain_lines(u: Unit) -> Array:
+	var code_label := {
+		"poison": "猛毒", "heavy": "重伤", "atkdown": "麻痹", "freeze": "冰冻",
+		"silence": "沉默", "stun": "眩晕", "possess": "附体", "shield": "圣盾",
+	}
+	var out: Array = []
+	for code in code_label.keys():
+		if u.has_status(code):
+			var label: String = code_label[code]
+			var desc: String = DataRegistry.STATUS_DESC.get(label, "")
+			out.append("%s：%s" % [label, desc] if desc != "" else label)
+	return out
 
 # 开局"谁先手"提示：常驻悬浮，直到"部署选人面板出现"（部署选人阶段开始）才淡出收起。
 # 点一下提示框也可提前关闭；浮框不拦截棋盘操作。
