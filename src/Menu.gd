@@ -14,6 +14,7 @@ var _deck_tab_buttons: Dictionary = {}   # slot -> Button（卡组1/2/3 选择�
 var _deck_host: Control = null           # 当前槽预览卡池宿主（整块重建）
 var _deck_info: Label = null             # 当前槽状态提示行
 var _deck_current_slot := 1              # 当前选中的卡组槽
+var _sel_count: Label = null             # 卡组标题行右侧的"已选 N/8"计数
 
 # —— 主菜单/普通模式 两屏切换 ——
 var _main_view: Control = null   # 模式选择主菜单页
@@ -94,13 +95,24 @@ func _build() -> void:
 	hex_host.add_child(_detail_label)
 	_detail_label.position = Vector2(10, _hex_pool_size.y + 6)
 
-	# 3) 卡组区：上部 = 卡组1/2/3 切换 + 右侧 读取/保存/清空；
-	#    下部 = 所选卡组队伍预览（与替补队伍同款：一行六边形小卡，悬停看属性）
-	var deck_cap := Label.new()
-	deck_cap.text = "自备卡组（可存 3 组，关游戏不丢）："
-	deck_cap.add_theme_font_size_override("font_size", 14)
-	deck_cap.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	# 3) 卡组区：上部 = 标题行（右端显示"已选 N/8"）+ 卡组1/2/3 切换 + 右侧 清空；
+	#    下部 = 当前卡组队伍预览（自动保存，与替补队伍同款一行小卡）。点卡组槽即切换编辑目标并载入。
+	var deck_cap := HBoxContainer.new()
+	deck_cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(deck_cap)
+	var cap_lb := Label.new()
+	cap_lb.text = "自备卡组（自动保存，3 组）："
+	cap_lb.add_theme_font_size_override("font_size", 14)
+	cap_lb.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	deck_cap.add_child(cap_lb)
+	var cap_space := Control.new()
+	cap_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_cap.add_child(cap_space)
+	_sel_count = Label.new()
+	_sel_count.add_theme_font_size_override("font_size", 14)
+	_sel_count.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+	_sel_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	deck_cap.add_child(_sel_count)
 
 	var deck_bar := HBoxContainer.new()
 	deck_bar.add_theme_constant_override("separation", 8)
@@ -119,19 +131,11 @@ func _build() -> void:
 		tab.pressed.connect(_on_deck_tab.bind(slot))
 		tabs.add_child(tab)
 		_deck_tab_buttons[slot] = tab
-	var acts := HBoxContainer.new()
-	acts.add_theme_constant_override("separation", 6)
-	deck_bar.add_child(acts)
-	var save_b := Button.new()
-	save_b.text = "保存"
-	save_b.custom_minimum_size = Vector2(76, 34)
-	save_b.pressed.connect(_on_deck_save)
-	acts.add_child(save_b)
 	var clear_b := Button.new()
 	clear_b.text = "清空"
 	clear_b.custom_minimum_size = Vector2(76, 34)
 	clear_b.pressed.connect(_on_deck_clear)
-	acts.add_child(clear_b)
+	deck_bar.add_child(clear_b)
 
 	_deck_info = Label.new()
 	_deck_info.add_theme_font_size_override("font_size", 13)
@@ -271,7 +275,11 @@ func _show_main_menu() -> void:
 func _show_team_view() -> void:
 	_main_view.visible = false
 	_team_view.visible = true
-	_update_ui()
+	_deck_current_slot = GameState.last_deck_slot
+	if _selected.size() == 0:
+		_load_deck(_deck_current_slot)   # 进入自动载入上次编辑的卡组（含空槽提示）
+	else:
+		_update_ui()
 	_refresh_deck_slots()
 
 var _hex_pool_size := Vector2.ZERO
@@ -446,20 +454,29 @@ func _update_ui() -> void:
 	_start_btn.disabled = _selected.size() < MIN_PICK
 	for id in _card_buttons.keys():
 		_card_buttons[id].set_selected(_selected.has(id))
+	if _sel_count != null:
+		_sel_count.text = "已选 %d / %d" % [_selected.size(), PICK_COUNT]
+	_auto_sync()
 	_refresh_deck_slots()
 	_refresh_banner()
 
-# 即时反馈（保存/清空/读取/上限等）：写入提示条
+# 阵容任一变化 → 自动写回当前卡组槽（内容相同则不重复写盘）
+func _auto_sync() -> void:
+	var stored: Array = DeckStore.load_deck(_deck_current_slot)
+	var cur: Array = _selected.duplicate()
+	if stored != cur:
+		DeckStore.save_deck(_deck_current_slot, cur)
+
+# 即时反馈（清空/读取/上限等）：写入英雄池底部提示条
 func _flash(msg: String) -> void:
 	_msg = msg
 	_refresh_banner()
 
-# 英雄池底部提示条：固定"已选 N/8"行 + 最近一条反馈；空选且无反馈时显示引导
+# 英雄池底部提示条：最近一条反馈；空选且无反馈时显示引导
 func _refresh_banner() -> void:
 	if _detail_label == null or not is_instance_valid(_detail_label):
 		return
 	var parts: Array[String] = []
-	parts.append("已选 %d / %d（最少 %d）" % [_selected.size(), PICK_COUNT, MIN_PICK])
 	if _msg != "":
 		parts.append(_msg)
 	elif _selected.size() == 0:
@@ -551,38 +568,27 @@ func _synergy_pick(want: int) -> Array:
 		cand.erase(best_id)
 	return chosen
 
-# ---- 卡组缓存 ----
-# 切换卡组槽 = 直接读取该卡组为当前阵容（不足 5 人自动随机补满，槽内数据不变）
+# ---- 卡组（自动保存）----
+# 点卡组槽 = 切换编辑目标并载入（不足 5 人的旧档自动随机补满后一并写回）
 func _on_deck_tab(slot: int) -> void:
 	_deck_current_slot = slot
+	GameState.last_deck_slot = slot
 	_load_deck(slot)
 	_refresh_deck_slots()   # 统一刷新 tab 高亮与该槽预览（随机补满分支不走 _load_deck 内的刷新）
 
-func _on_deck_save() -> void:
-	_save_current_deck(_deck_current_slot)
-
 func _on_deck_clear() -> void:
-	DeckStore.save_deck(_deck_current_slot, [])
 	_selected.clear()
-	_update_ui()   # 同步取消英雄池高亮、禁用开始、刷新槽预览为空
-	_flash("已清空卡组 %d 与当前阵容，请重新挑选。" % _deck_current_slot)
-
-func _save_current_deck(slot: int) -> void:
-	if _selected.size() < MIN_PICK:
-		_flash("最少选择 %d 名英雄再保存卡组。" % MIN_PICK)
-		return
-	DeckStore.save_deck(slot, _selected)
-	_flash("已保存到卡组 %d。" % slot)
-	_refresh_deck_slots()
+	_update_ui()   # 同步取消英雄池高亮、清空槽（自动保存）、刷新预览
+	_flash("已清空卡组 %d 与当前阵容（此后改动阵容会自动保存）。" % _deck_current_slot)
 
 func _load_deck(slot: int) -> void:
 	var ids: Array = DeckStore.load_deck(slot)
 	if ids.size() == 0:
-		# 空槽：不覆盖当前阵容，提示先保存
-		_flash("卡组 %d 是空的：先选好阵容，点「保存」存入本槽。" % slot)
+		# 空槽：不覆盖当前阵容；在卡池改选即会自动保存到本槽
+		_flash("卡组 %d 是空的：直接在卡池改选，阵容会自动保存到本槽。" % slot)
 		return
 	if ids.size() < MIN_PICK:
-		# 普通模式：卡组槽不足 5 人（旧档/半存卡组）→ 自动随机选 8 名英雄顶上，不再拒绝读取
+		# 旧档/半存卡组不足 5 人：自动随机选 8 名顶上并写回
 		_selected = _random_full_deck()
 		_update_ui()
 		_flash("卡组 %d 不足 %d 人，已自动随机选满 %d 名英雄。" % [slot, MIN_PICK, PICK_COUNT])
@@ -608,7 +614,7 @@ func _refresh_deck_slots() -> void:
 		_deck_host.custom_minimum_size = Vector2.ZERO
 		_deck_host.size = Vector2.ZERO
 		_deck_info.visible = true
-		_deck_info.text = "卡组 %d：空 —— 点击「保存」把当前阵容存入本槽。" % _deck_current_slot
+		_deck_info.text = "卡组 %d：空 —— 改动卡池阵容会自动保存到本槽。" % _deck_current_slot
 		return
 	# 有内容：只显示队伍小卡预览，不显示文字行
 	_deck_info.visible = false

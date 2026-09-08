@@ -36,6 +36,9 @@ var no_death_limit := false
 # AI 难度：0=简单 1=普通 2=困难
 var ai_difficulty := 1
 
+# 普通模式选人页：上次编辑的卡组槽（1/2/3），再次进入时自动载入
+var last_deck_slot := 1
+
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
 
