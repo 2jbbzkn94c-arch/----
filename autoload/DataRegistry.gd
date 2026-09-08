@@ -67,6 +67,10 @@ func hero_strength(id: String) -> float:
 	var def: HeroDef = heroes.get(id, null)
 	if def == null:
 		return 0.0
+	# 若角色列表配置了"总评分"(影响AI行为的手动列),以它作为单体评分;
+	# 否则回退到原有的数值/词条加权公式。
+	if def.ai_total > 0.0:
+		return def.ai_total
 	var s := float(def.atk) * 2.2 + float(def.max_hp) * 0.45
 	if def.attack_type == AttackType.RANGED:
 		s += 2.5
@@ -184,6 +188,13 @@ class HeroDef:
 	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
 	var counters: Array = []            # 被克制/有效行为里抽出的克制己方(id)
 	var explicit_pairs: Array = []      # "协同英雄"列直接点名的搭配英雄 id（AI 协同用）
+	# 影响 AI 行为的手动评分列（角色列表 属性评分/特性评分/技能量化/技能评分/补强/总评分）
+	var ai_attr_score := 0.0
+	var ai_trait_score := 0.0
+	var ai_skill_quant := 0.0
+	var ai_skill_score := 0.0
+	var ai_boost := 0.0
+	var ai_total := 0.0
 
 	func _init(id_: String = "") -> void:
 		id = id_
@@ -317,6 +328,12 @@ func _load_heroes() -> void:
 	var col_eff: int = col.get("克制", col.get("有效行为", 8))   # 表头曾用"克制"，旧称"有效行为"
 	var col_counter: int = col.get("被克制", 9)
 	var col_pairs: int = col.get("协同英雄", 10)
+	var col_attr_score: int = col.get("属性评分", -1)
+	var col_trait_score: int = col.get("特性评分", -1)
+	var col_skill_quant: int = col.get("技能量化", -1)
+	var col_skill_score: int = col.get("技能评分", -1)
+	var col_boost: int = col.get("补强", -1)
+	var col_total: int = col.get("总评分", -1)
 
 	for ri in range(hdr_idx + 1, rows.size()):
 		var cells: Array = rows[ri]
@@ -355,6 +372,14 @@ func _load_heroes() -> void:
 		h.sy_partners = _extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)
 		h.counters = _extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)
 		h.explicit_pairs = _extract_ids(cell_at.call(col_pairs))   # "协同英雄"列：直接点名的搭档
+
+		# 影响 AI 行为的手动评分列
+		h.ai_attr_score = cell_at.call(col_attr_score).to_float()
+		h.ai_trait_score = cell_at.call(col_trait_score).to_float()
+		h.ai_skill_quant = cell_at.call(col_skill_quant).to_float()
+		h.ai_skill_score = cell_at.call(col_skill_score).to_float()
+		h.ai_boost = cell_at.call(col_boost).to_float()
+		h.ai_total = cell_at.call(col_total).to_float()
 
 		var has_tag := func(tag: String) -> bool:
 			return trait_txt.contains(tag) or _tail_has(skill_raw, tag)
