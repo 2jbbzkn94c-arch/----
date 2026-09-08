@@ -3212,6 +3212,8 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+			if attacker.alive:
+				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
 		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
 			counterer.atk_use_buff = 0
@@ -3243,6 +3245,8 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+			if attacker.alive:
+				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
 		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
 			counterer.atk_use_buff = 0

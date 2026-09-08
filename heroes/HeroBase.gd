@@ -85,6 +85,10 @@ func applies_status_on_hit() -> bool:
 func counter_mult() -> int:
 	return 1
 
+## 反击命中目标(原攻击者)时的受击演出回调(默认无)。
+func on_counter_landed(_target: Unit) -> void:
+	pass
+
 ## 反击次数是否不受"每回合一次"限制（复仇者：反击次数无限）。默认 false。
 func infinite_counter() -> bool:
 	return false

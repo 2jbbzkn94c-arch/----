@@ -7,3 +7,7 @@ func damage_mult(target: Unit) -> int:
 			and target.skills.has(DataRegistry.Skill.TAUNT):
 		return 2
 	return 1
+
+func on_attack(target: Unit) -> void:
+	if target != null and is_instance_valid(target) and target.alive and damage_mult(target) == 2:
+		fx_on_target(target)   # 对嘲讽目标2倍：命中目标处主色粒子
