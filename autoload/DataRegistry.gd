@@ -53,16 +53,17 @@ func synergy_bonus(a: String, b: String) -> float:
 		s += 1.0
 	return s
 
-# 克制分：a 是否克制 b（依据角色列表"被克制/有效行为"列的明确关系）。a 提供分，a 克制 b 时返回正值。
+# 克制分：a 是否克制 b（依据角色列表「克制」与「被克制」两列的明确关系）。
+# 单向判定：b 的"被克制"列点名 a (b.counters 含 a)，或 a 的"克制"列点名 b (a.beats 含 b)。
+# 两列可能重复指向同一关系（如战锤克毒蛇两列都有），此处只记一次+2，避免重复加分。
 func counter_bonus(a: String, b: String) -> float:
-	var s := 0.0
+	var ad: HeroDef = heroes.get(a, null)
 	var bd: HeroDef = heroes.get(b, null)
 	if bd != null and bd.counters.has(a):
-		s += 2.0   # b 被 a 克制
-	var ad: HeroDef = heroes.get(a, null)
-	if ad != null and ad.counters.has(b):
-		s += 2.0
-	return s
+		return 2.0   # b 被克制列点名 a → a 克制 b
+	if ad != null and ad.beats.has(b):
+		return 2.0   # a 克制列点名 b → a 克制 b
+	return 0.0
 
 # 英雄单体评分（唯一实现）：竞技场选人/普通敌方组队/首发部署共用。
 # 权重：重攻击、轻血量——避免高血坦克把输出全挤出高分池（导致敌方全肉盾）。
@@ -152,10 +153,10 @@ func _extract_ids(text: String) -> Array:
 		if text.contains(alias) and not out.has(NAME_ALIAS[alias]):
 			out.append(NAME_ALIAS[alias])
 	# 全名匹配（若文本里直接写了某英雄显示名）
-	for id in heroes.keys():
-		var nm: String = heroes[id].display_name
-		if nm != "" and text.contains(nm) and not out.has(id):
-			out.append(id)
+	# 用 _full_name_map（预扫建立的 name->id），不依赖 heroes 的加载顺序。
+	for nm in _full_name_map.keys():
+		if nm != "" and text.contains(nm) and not out.has(_full_name_map[nm]):
+			out.append(_full_name_map[nm])
 	return out
 
 # 从文本的"语义关键词"(如 坦克/位移/攻击力收益)展开出对应机制标签下的英雄 id——
@@ -196,7 +197,8 @@ class HeroDef:
 	var effective_behavior: String = "" # 有效行为（文本备注）
 	var countered_by_note: String = ""  # 被克制（文本备注）
 	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
-	var counters: Array = []            # 被克制/有效行为里抽出的克制己方(id)
+	var counters: Array = []            # "被克制"列抽出：**克制我的**英雄(我的天敌)
+	var beats: Array = []               # "克制/有效行为"列抽出：**我能克制**的英雄
 	var explicit_pairs: Array = []      # "协同英雄"列直接点名的搭配英雄 id（AI 协同用）
 	# 影响 AI 行为的手动评分列（角色列表 属性评分/特性评分/技能量化/技能评分/补强/总评分）
 	var ai_attr_score := 0.0
@@ -309,6 +311,8 @@ func hero_fx(id: String) -> Dictionary:
 var heroes: Dictionary = {}
 # id -> HeroDef（衍生物/召唤单位）
 var summons: Dictionary = {}
+# 显示名 -> id（预扫建立，供 _extract_ids 全名匹配），独立于加载顺序。
+var _full_name_map: Dictionary = {}
 
 func _ready() -> void:
 	_load_heroes()
@@ -356,6 +360,24 @@ func _load_heroes() -> void:
 	var col_boost: int = col.get("补强", -1)
 	var col_total: int = col.get("总评分", -1)
 
+	# 预扫一次：先建立 "显示名 -> id" 映射，供 _extract_ids 全名匹配使用。
+	# 不依赖 heroes 的加载顺序，也避免"排在后面英雄被前面英雄列点名时匹配不到"。
+	for ri in range(hdr_idx + 1, rows.size()):
+		var cells: Array = rows[ri]
+		if cells.size() < 7:
+			continue
+		var grade: String = str(cells[col_grade]).strip_edges() if (col_grade >= 0 and col_grade < cells.size()) else ""
+		if grade == "":
+			continue
+		var no_text: String = str(cells[col_no]).strip_edges() if (col_no >= 0 and col_no < cells.size()) else ""
+		var is_summon := (grade == "衍生物")
+		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
+			continue
+		var pid: String = "summon_skeleton" if is_summon else ("hero_%02d" % no_text.to_int())
+		var pname: String = str(cells[col_name]).strip_edges()
+		if pname != "" and not _full_name_map.has(pname):
+			_full_name_map[pname] = pid
+
 	for ri in range(hdr_idx + 1, rows.size()):
 		var cells: Array = rows[ri]
 		if cells.size() < 7:
@@ -391,7 +413,8 @@ func _load_heroes() -> void:
 		h.effective_behavior = cell_at.call(col_eff)
 		h.countered_by_note = cell_at.call(col_counter)
 		h.sy_partners = _without_self((_extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)), h.id)
-		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)), h.id)
+		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)), h.id)   # 被克制列->克制我的英雄
+		h.beats = _without_self((_extract_ids(h.effective_behavior) + _semantic_heroes(h.effective_behavior)), h.id)    # 克制/有效行为列->我能克制的英雄
 		h.explicit_pairs = _without_self(_extract_ids(cell_at.call(col_pairs)), h.id)   # "协同英雄"列：直接点名的搭档
 
 		# 影响 AI 行为的手动评分列
