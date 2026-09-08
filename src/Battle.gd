@@ -3565,6 +3565,8 @@ func _heal_adjacent_lowest(u: Unit) -> bool:
 	if best != null:
 		var heal := maxi(1, u.effective_atk())
 		_heal(best, heal)
+		if is_instance_valid(u):
+			u.float_tag_text("治疗", Color(0.45, 0.9, 0.6))   # 施加回复方弹"治疗"，被治只弹数值
 		return true
 	return false   # 没有可治疗的受伤队友
 
@@ -3967,6 +3969,7 @@ func _heal_lowest_and_swap(u: Unit) -> bool:
 					wounded = v
 	if wounded != null:
 		_heal(wounded, 8)
+		u.float_tag_text("治疗", Color(0.45, 0.9, 0.6))   # 施加方(梅林)弹"治疗"，被治只弹数值
 		_swap_units(u, wounded)
 		return true
 	if any_ally != null:
