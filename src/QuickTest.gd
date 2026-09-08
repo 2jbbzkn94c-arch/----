@@ -35,14 +35,14 @@ func _build() -> void:
 	add_child(bg)
 
 	var vbox := VBoxContainer.new()
-	vbox.position = Vector2(24, 30)
+	vbox.position = Vector2(24, 26)
 	vbox.size = Vector2(vsize.x - 48, vsize.y - 60)
-	vbox.add_theme_constant_override("separation", 8)
+	vbox.add_theme_constant_override("separation", 12)
 	add_child(vbox)
 
 	var title := Label.new()
 	title.text = "自由部署（测试）"
-	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_font_size_override("font_size", 36)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
@@ -50,27 +50,28 @@ func _build() -> void:
 	# 队伍切换：我方 / 敌方
 	var side_row := HBoxContainer.new()
 	side_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	side_row.add_theme_constant_override("separation", 14)
+	side_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(side_row)
 	_side_label = Label.new()
-	_side_label.add_theme_font_size_override("font_size", 17)
+	_side_label.add_theme_font_size_override("font_size", 22)
 	_side_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
 	side_row.add_child(_side_label)
 	for i in 2:
 		var sb := Button.new()
 		sb.text = "编辑敌方" if i == 1 else "编辑我方"
-		sb.custom_minimum_size = Vector2(120, 40)
+		sb.custom_minimum_size = Vector2(150, 54)
+		sb.add_theme_font_size_override("font_size", 20)
 		sb.pressed.connect(_pick_side.bind(i))
 		side_row.add_child(sb)
 
 	_count_label = Label.new()
-	_count_label.add_theme_font_size_override("font_size", 17)
+	_count_label.add_theme_font_size_override("font_size", 22)
 	_count_label.add_theme_color_override("font_color", Color(0.9, 1.0, 0.75))
 	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_count_label)
 
 	_status_label = Label.new()
-	_status_label.add_theme_font_size_override("font_size", 14)
+	_status_label.add_theme_font_size_override("font_size", 19)
 	_status_label.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -82,17 +83,17 @@ func _build() -> void:
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(scroll)
 	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 14)
+	grid.add_theme_constant_override("v_separation", 14)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(grid)
 	for id in DataRegistry.heroes.keys():
 		var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
 		var b := Button.new()
 		b.text = def.display_name
-		b.add_theme_font_size_override("font_size", 14)
-		b.custom_minimum_size = Vector2(0, 42)
+		b.add_theme_font_size_override("font_size", 21)
+		b.custom_minimum_size = Vector2(0, 66)
 		b.toggle_mode = true
 		b.pressed.connect(_toggle.bind(id))
 		_btns[id] = b
@@ -104,19 +105,20 @@ func _build() -> void:
 	vbox.add_child(btn_row)
 	_start_btn = Button.new()
 	_start_btn.text = "开始对局"
-	_start_btn.custom_minimum_size = Vector2(180, 52)
-	_start_btn.add_theme_font_size_override("font_size", 19)
+	_start_btn.custom_minimum_size = Vector2(200, 66)
+	_start_btn.add_theme_font_size_override("font_size", 25)
 	_start_btn.pressed.connect(_on_start)
 	btn_row.add_child(_start_btn)
 	var clear_btn := Button.new()
 	clear_btn.text = "清空当前队伍"
-	clear_btn.custom_minimum_size = Vector2(150, 52)
-	clear_btn.add_theme_font_size_override("font_size", 15)
+	clear_btn.custom_minimum_size = Vector2(180, 66)
+	clear_btn.add_theme_font_size_override("font_size", 21)
 	clear_btn.pressed.connect(_on_clear)
 	btn_row.add_child(clear_btn)
 	var menu_btn := Button.new()
 	menu_btn.text = "返回选卡"
-	menu_btn.custom_minimum_size = Vector2(110, 52)
+	menu_btn.custom_minimum_size = Vector2(140, 66)
+	menu_btn.add_theme_font_size_override("font_size", 21)
 	menu_btn.pressed.connect(_on_menu)
 	btn_row.add_child(menu_btn)
 
