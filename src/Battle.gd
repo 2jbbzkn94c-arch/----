@@ -2905,13 +2905,14 @@ func _animate_step_path(u: Unit, path: Array, idx: int, for_enemy: bool) -> void
 	var t := create_tween()
 	t.tween_property(u, "position", board_view.cell_world_center(cell), 0.2)   # 每格移动略放
 	t.tween_callback(func():
-		# 炸弹：经过或踏上炸弹格即爆炸（炸弹人除外）；爆炸致死则停止前进但仍完成移动收
-		if _bomb_enter_check(u, cell, for_enemy):
+		# 炸弹：只有移动到路径终点(停下)才引爆；单纯经过中间的炸弹格不再爆炸
+		var is_last := idx == path.size() - 1
+		if not is_last or _bomb_enter_check(u, cell, for_enemy):
 			_animate_step_path(u, path, idx + 1, for_enemy)
 		else:
 			_finish_move(u, for_enemy))
 
-# 进入一格时检测炸弹：非炸弹人经过/踏上即引爆。返true 表示单位仍可继续前进
+# 停在终点格时检测炸弹：非炸弹人停在炸弹格即引爆(经过不炸)。返回true表示单位仍可继续前进
 func _bomb_enter_check(u: Unit, cell: Vector2i, _for_enemy: bool) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true   # 单位已释放：不再继续判炸弹，安全退
