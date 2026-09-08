@@ -568,8 +568,9 @@ func _on_deck_save() -> void:
 
 func _on_deck_clear() -> void:
 	DeckStore.save_deck(_deck_current_slot, [])
-	_desc_label.text = "已清空卡组 %d。" % _deck_current_slot
-	_refresh_deck_slots()
+	_selected.clear()
+	_update_ui()   # 同步取消英雄池高亮、禁用开始、刷新槽预览为空
+	_desc_label.text = "已清空卡组 %d 与当前阵容，请重新挑选。" % _deck_current_slot
 
 func _save_current_deck(slot: int) -> void:
 	if _selected.size() < MIN_PICK:
