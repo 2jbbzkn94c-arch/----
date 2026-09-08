@@ -16,7 +16,9 @@ var active_port := -1   # 主机实际监听端口（自动避让被占用端口
 
 const DEFAULT_PORT := 18861
 const HB_INTERVAL := 0.5      # 心跳发送间隔（秒）
-const HB_TIMEOUT := 3.0       # 超过该时长未收到对端任何包 -> 判定对端离开
+const HB_TIMEOUT := 60.0      # 超过该时长未收到对端任何包 -> 判定对端离开。
+# 放宽到 60s：手机退后台时主循环暂停、心跳发不出去，若仍用 3s 会被对端秒判掉线；
+# 短暂回后台（切应用/锁屏）不至于断线，回前台立即补心跳恢复。
 
 var _peer: ENetMultiplayerPeer = null
 var _peers: Array[int] = []   # 已连接的对等方 id（主机侧记录客户端）
@@ -25,6 +27,13 @@ var _hb_acc := 0.0            # 心跳发送累加器
 var _hb_text := "%shb" % char(1)   # 心跳包文本（带控制符前缀，与业务 JSON 区分）
 var _last_recv_ms := 0        # 最近一次收到对端包的时间（Time.get_ticks_msec）；0=尚未收到过
 var _peer_gone_emitted := false   # 已发出"对端离开"断线（防重复触发）
+
+# 应用从后台回到前台：立即补发一次心跳（主循环暂停期间没发出去），并重置心跳累计，
+# 让对端尽快刷新"仍在线"；避免 3s（现 60s）超时判掉。
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED and is_online and _peer_active():
+		_hb_acc = 0.0
+		send_all(_hb_text)
 
 func _process(dt: float) -> void:
 	if not is_online or _peer == null:
