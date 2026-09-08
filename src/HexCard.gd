@@ -172,8 +172,9 @@ func _draw() -> void:
 	if disabled_draw:
 		bg = bg.darkened(0.45)
 	draw_colored_polygon(pts, bg)
-	var border := Color(0.30, 1.0, 0.45) if selected else (_rarity_color().darkened(0.2) if disabled_draw else _rarity_color())
-	draw_polyline(_closed(pts), border, 3.0 if selected else 2.0, true)
+	# 选中高亮：粗黑描边（比绿色边框更醒目；宽度随卡片尺寸稍放大）
+	var border := Color(0.04, 0.04, 0.06, 1.0) if selected else (_rarity_color().darkened(0.2) if disabled_draw else _rarity_color())
+	draw_polyline(_closed(pts), border, (6.0 + radius * 0.05) if selected else 2.0, true)
 
 func _closed(pts: PackedVector2Array) -> PackedVector2Array:
 	var o := pts.duplicate()
