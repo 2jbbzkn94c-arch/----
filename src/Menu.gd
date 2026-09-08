@@ -123,11 +123,6 @@ func _build() -> void:
 	var acts := HBoxContainer.new()
 	acts.add_theme_constant_override("separation", 6)
 	deck_bar.add_child(acts)
-	var load_b := Button.new()
-	load_b.text = "读取"
-	load_b.custom_minimum_size = Vector2(76, 34)
-	load_b.pressed.connect(_on_deck_load)
-	acts.add_child(load_b)
 	var save_b := Button.new()
 	save_b.text = "保存"
 	save_b.custom_minimum_size = Vector2(76, 34)
@@ -562,16 +557,11 @@ func _synergy_pick(want: int) -> Array:
 	return chosen
 
 # ---- 卡组缓存 ----
-# 切换卡组槽：仅切换查看目标并刷新预览（不自动载入当前阵容）
+# 切换卡组槽 = 直接读取该卡组为当前阵容（不足 5 人自动随机补满，槽内数据不变）
 func _on_deck_tab(slot: int) -> void:
-	if _deck_current_slot == slot:
-		(_deck_tab_buttons[slot] as Button).set_pressed_no_signal(true)   # 再点当前槽：保持选中高亮
-		return
 	_deck_current_slot = slot
-	_refresh_deck_slots()
-
-func _on_deck_load() -> void:
-	_load_deck(_deck_current_slot)
+	_load_deck(slot)
+	_refresh_deck_slots()   # 统一刷新 tab 高亮与该槽预览（随机补满分支不走 _load_deck 内的刷新）
 
 func _on_deck_save() -> void:
 	_save_current_deck(_deck_current_slot)
@@ -591,6 +581,10 @@ func _save_current_deck(slot: int) -> void:
 
 func _load_deck(slot: int) -> void:
 	var ids: Array = DeckStore.load_deck(slot)
+	if ids.size() == 0:
+		# 空槽：不覆盖当前阵容，提示先保存
+		_desc_label.text = "卡组 %d 是空的：先选好阵容，点「保存」存入本槽。" % slot
+		return
 	if ids.size() < MIN_PICK:
 		# 普通模式：卡组槽不足 5 人（旧档/半存卡组）→ 自动随机选 8 名英雄顶上，不再拒绝读取
 		_selected = _random_full_deck()
@@ -617,7 +611,7 @@ func _refresh_deck_slots() -> void:
 	if ids.size() == 0:
 		_deck_host.custom_minimum_size = Vector2.ZERO
 		_deck_host.size = Vector2.ZERO
-		_deck_info.text = "卡组 %d：空 —— 点「保存」把当前阵容存入本槽，点「读取」会用卡组内容。" % _deck_current_slot
+		_deck_info.text = "卡组 %d：空 —— 点击「保存」把当前阵容存入本槽。" % _deck_current_slot
 		return
 	var names: Array[String] = []
 	for id in ids:
