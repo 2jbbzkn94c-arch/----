@@ -3727,6 +3727,7 @@ func _knockback(target: Unit, from_cell: Vector2i) -> bool:
 	target.cell = best
 	occupancy[best] = target
 	_trigger_bomb(target)   # 被击退到炸弹格：炸弹人以外即引
+	_pickup_buff_at_cell(target)   # 被击退到增益/金矿格：同样拾取
 	var t := create_tween()
 	t.tween_property(target, "position", board_view.cell_world_center(best), 0.18)
 	return true
@@ -3742,6 +3743,8 @@ func _swap_units(a: Unit, b: Unit) -> void:
 	occupancy[ca] = b
 	_trigger_bomb(a)
 	_trigger_bomb(b)
+	_pickup_buff_at_cell(a)   # 换位落点同样拾取增益/金矿
+	_pickup_buff_at_cell(b)
 	var t := create_tween()
 	t.tween_property(a, "position", board_view.cell_world_center(cb), 0.2)
 	t.parallel().tween_property(b, "position", board_view.cell_world_center(ca), 0.2)
@@ -3828,6 +3831,7 @@ func _pull_to(u: Unit, target: Unit) -> void:
 	target.cell = best
 	occupancy[best] = target
 	_trigger_bomb(target)   # 被拉近到炸弹格：炸弹人以外即引爆
+	_pickup_buff_at_cell(target)   # 被拉近到增益/金矿格：同样拾取
 	var t := create_tween()
 	t.tween_property(target, "position", board_view.cell_world_center(best), 0.2)
 	log_message.emit("血锁把 %s 拉到面前（%s）。" % [target.display_name, str(best)])
