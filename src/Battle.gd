@@ -4822,6 +4822,8 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 			break
 		if my_session != _session_id:
 			return   # 已重开：安全退出，避免访问已释放单位
+		if not is_instance_valid(self):
+			return   # 自身已被释放：协程恢复后立即退出，不再触碰任何引擎调用
 		if get_tree() == null:
 			return
 		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
@@ -4856,6 +4858,8 @@ func _wait_sub_done() -> void:
 	while state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		if my_session != _session_id:
 			return   # 已重开：安全退出
+		if not is_instance_valid(self):
+			return   # 自身已释放：直接结束轮询
 		if get_tree() == null:
 			return   # 已脱离场景树：停止轮询，避免访问 null get_tree()
 		await get_tree().process_frame
@@ -4873,6 +4877,8 @@ func _wait_action_done() -> void:
 	while not done[0] and not limit.time_left <= 0.0:
 		if my_session != _session_id:
 			return   # 已重开：安全退出
+		if not is_instance_valid(self):
+			return   # 自身已释放：停止等待
 		if get_tree() == null:
 			return   # 已脱离场景树：停止轮询
 		await get_tree().process_frame
