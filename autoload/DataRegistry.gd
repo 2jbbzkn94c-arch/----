@@ -1,6 +1,6 @@
 extends Node
 ## 卡牌/英雄数据注册表（全局自动加载）。
-## 从 res://角色列表.md 解析全部角色，生成数值、品级、类型与关键词标签。
+## 从 res://角色列表.json 解析全部角色(该 json 由 角色列表.xlsx 经 tools\角色列表转Json.ps1 生成)，生成数值、品级、类型与关键词标签。
 ## 复杂/角色专属技能全文存入 desc（暂未实现），引擎已支持：近战/远程、嘲讽、疾行、渗透。
 
 # 攻击类型
@@ -284,29 +284,28 @@ func _ready() -> void:
 func _load_heroes() -> void:
 	heroes.clear()
 	summons.clear()
-	var lines: PackedStringArray = []
-	var f := FileAccess.open("res://角色列表.md", FileAccess.READ)
-	if f == null:
-		push_error("无法读取 res://角色列表.md")
+	var rows := _read_json_rows("res://角色列表.json")
+	if rows.is_empty():
+		push_error("无法读取 res://角色列表.json")
 		return
-	lines = f.get_as_text().split("\n")
-	f.close()
 
 	# 表头列名 -> 下标（表格列可增改，按列名取值，避免列位置写死错位）
 	var col := {}   # "名称"/"攻击力"/"HP"/"技能"/"等级"... -> 下标
-	for line in lines:
-		var t := line.strip_edges()
-		if not t.begins_with("|"):
-			continue
-		var cells := t.split("|")
-		if cells.size() < 2:
-			continue
-		if cells[1].strip_edges() == "No." or cells[1].strip_edges() == "No":
-			for i in range(1, cells.size() - 1):
-				var col_name_cell := cells[i].strip_edges()
-				if col_name_cell != "":
-					col[col_name_cell] = i
-			break   # 表头行找到即停
+	var hdr_idx := -1
+	for ri in rows.size():
+		var r0: Array = rows[ri]
+		var first := (str(r0[0]).strip_edges() if r0.size() > 0 else "")
+		if first == "No." or first == "No":
+			hdr_idx = ri
+			break
+	if hdr_idx < 0:
+		push_error("xlsx 中未找到表头(No. 行)")
+		return
+	var header: Array = rows[hdr_idx]
+	for i in header.size():
+		var col_name_cell := str(header[i]).strip_edges()
+		if col_name_cell != "":
+			col[col_name_cell] = i
 	var col_grade: int = col.get("等级", 2)
 	var col_no: int = col.get("No.", 1)
 	var col_name: int = col.get("名称", 3)
@@ -319,18 +318,15 @@ func _load_heroes() -> void:
 	var col_counter: int = col.get("被克制", 9)
 	var col_pairs: int = col.get("协同英雄", 10)
 
-	for line in lines:
-		var t := line.strip_edges()
-		if not t.begins_with("|"):
-			continue
-		var cells := t.split("|")
+	for ri in range(hdr_idx + 1, rows.size()):
+		var cells: Array = rows[ri]
 		if cells.size() < 7:
 			continue
-		var grade: String = cells[col_grade].strip_edges()
+		var grade: String = str(cells[col_grade]).strip_edges() if (col_grade >= 0 and col_grade < cells.size()) else ""
 		if grade == "":
 			continue
 		# 跳过表头/分隔行（No 列非整数且非"-"）
-		var no_text: String = cells[col_no].strip_edges()
+		var no_text: String = str(cells[col_no]).strip_edges() if (col_no >= 0 and col_no < cells.size()) else ""
 		var is_summon := (grade == "衍生物")
 		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
 			continue
@@ -340,11 +336,11 @@ func _load_heroes() -> void:
 			h.id = "summon_skeleton"
 		else:
 			h.id = "hero_%02d" % no_text.to_int()
-		h.display_name = cells[col_name].strip_edges()
-		h.atk = cells[col_atk].strip_edges().to_int()
-		h.max_hp = cells[col_hp].strip_edges().to_int()
+		h.display_name = str(cells[col_name]).strip_edges()
+		h.atk = str(cells[col_atk]).strip_edges().to_int()
+		h.max_hp = str(cells[col_hp]).strip_edges().to_int()
 		var cell_at := func(i: int) -> String:
-			return cells[i].strip_edges() if (i >= 0 and i < cells.size()) else ""
+			return str(cells[i]).strip_edges() if (i >= 0 and i < cells.size()) else ""
 		# 词条检测：新表"特性"列是独立词条区(在句号前)，直接查 contains；
 		# 旧表词条嵌在技能正文尾部，用 _tail_has(最后'。'之后) 兼容。
 		var trait_txt: String = (cell_at.call(col_trait)).replace("\\", "")
@@ -390,6 +386,27 @@ func _load_heroes() -> void:
 			summons[h.id] = h
 		else:
 			heroes[h.id] = h
+
+
+# 从 res://角色列表.json 读取全部行（由本机 PowerShell 脚本从 角色列表.xlsx 转换生成；
+# 本引擎构建未包含 ZipReader/Compression,无法直接解 xlsx,故改为读 JSON 副产物）
+func _read_json_rows(path: String) -> Array:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		push_error("无法读取 res://角色列表.json")
+		return []
+	var txt: String = f.get_as_text()
+	f.close()
+	var data = JSON.parse_string(txt)
+	if data is Array:
+		var rows: Array = []
+		for r in data:
+			var row: Array = []
+			for c in r:
+				row.append(str(c))
+			rows.append(row)
+		return rows
+	return []
 
 # 判断某关键词是否出现在技能文本"尾部标签区"（最后一个'。'之后）
 # 正文中引用他人关键词（如"目标有<嘲讽>"）属于正文，不计为自身关键词。
