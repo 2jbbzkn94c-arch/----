@@ -197,8 +197,22 @@ func _point_in_hex(p: Vector2) -> bool:
 		j = i
 	return inside
 
+# 触屏/鼠标：按下记起点，松开才算点击；若按下后发生拖动（滚动英雄池等）则不视为点击。
+var _press_pos := Vector2(-1e6, -1e6)
+var _press_moved := false
+const _CLICK_DRAG_TOL := 16.0   # 按下后移动超过该距离视为拖动
+
 func _gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if _point_in_hex(event.position):
-			clicked.emit(hero_id)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_press_pos = event.position
+			_press_moved = false
+		else:
+			# 松开才算点击：要求按住期间基本没移动、且松开点仍在本卡内
+			if not _press_moved and _point_in_hex(event.position):
+				clicked.emit(hero_id)
+			_press_moved = false
 			accept_event()
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		if _press_pos.distance_to(event.position) > _CLICK_DRAG_TOL:
+			_press_moved = true

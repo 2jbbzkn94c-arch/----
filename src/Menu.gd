@@ -32,6 +32,7 @@ var _help_overlay: Control = null   # 游戏说明弹窗
 
 func _ready() -> void:
 	_build()
+	set_process_input(true)   # 触摸跟踪（轻点 vs 按住拖动池）
 	if GameState.net_edit_mode:
 		_show_team_view()   # 联机大厅叠层打开：直接进选人页
 
@@ -301,6 +302,7 @@ func _show_team_view() -> void:
 
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（纵向原生滚动）
+var _pool_touch_down := false              # 触屏在卡池区域内按着（拖动池 / 未松手时不跟随 hover 弹框）
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
 # 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
@@ -356,7 +358,23 @@ func _build_hex_pool(host: Control) -> void:
 # 触屏/滚轮纵向滚动交给 ScrollContainer 引擎原生处理（4.x 自带触屏拖动与惯性，
 # 且事件不会因起点在卡片上而失效）；本页只禁用了横向滚动避免左右滑。
 
+# 触屏按下/松手跟踪：按着拖动英雄池时抑制 hover 弹框；轻点松开由卡片发 clicked(选人+弹属性)
+func _input(ev: InputEvent) -> void:
+	if _pool_scroll == null or not _pool_scroll.is_visible_in_tree() or not _team_view.visible:
+		return
+	if ev is InputEventScreenTouch:
+		var st := ev as InputEventScreenTouch
+		if st.pressed:
+			_pool_touch_down = _pool_scroll.get_global_rect().has_point(st.position)
+			_hide_tooltip()   # 手指按下立即收起（待轻点松开后由点击重新弹出）
+		else:
+			_pool_touch_down = false
+
 func _on_hex_hovered(id: String) -> void:
+	if _pool_touch_down:
+		# 触屏按住（拖动英雄池）期间：不跟随手指位置弹属性框
+		_hide_tooltip()
+		return
 	if id == "":
 		_hide_tooltip()
 	else:
@@ -374,14 +392,14 @@ func _build_tooltip() -> void:
 	_tooltip.visible = false
 	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var tpn := _make_panel(Color(0.08, 0.1, 0.16, 0.97))
-	tpn.content_margin_left = 12.0
-	tpn.content_margin_right = 12.0
-	tpn.content_margin_top = 10.0
-	tpn.content_margin_bottom = 10.0
+	tpn.content_margin_left = 16.0
+	tpn.content_margin_right = 16.0
+	tpn.content_margin_top = 14.0
+	tpn.content_margin_bottom = 14.0
 	_tooltip.add_theme_stylebox_override("panel", tpn)
 	layer.add_child(_tooltip)
 	_tooltip_box = VBoxContainer.new()
-	_tooltip_box.add_theme_constant_override("separation", 5)
+	_tooltip_box.add_theme_constant_override("separation", 8)
 	_tooltip.add_child(_tooltip_box)
 
 # 属性表按“显示区”分行：名字/基础属性/技能描述/词条解释，区之间插一条居中短线。
@@ -394,7 +412,7 @@ func _set_tooltip_zones(zones: Array) -> void:
 		if i > 0:
 			# 短线直接放 VBox：不撑满时靠左对齐，即“贴左边”的短分行线
 			var sep := HSeparator.new()
-			sep.custom_minimum_size = Vector2(140, 4)
+			sep.custom_minimum_size = Vector2(260, 6)
 			sep.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			var lnsb := StyleBoxLine.new()
 			lnsb.color = Color(1.0, 0.85, 0.5, 0.3)
@@ -403,10 +421,10 @@ func _set_tooltip_zones(zones: Array) -> void:
 			_tooltip_box.add_child(sep)
 		var lb := Label.new()
 		lb.text = zones[i]
-		lb.add_theme_font_size_override("font_size", 16)
+		lb.add_theme_font_size_override("font_size", 20)
 		lb.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 		lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		lb.custom_minimum_size = Vector2(240, 0)
+		lb.custom_minimum_size = Vector2(380, 0)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_tooltip_box.add_child(lb)
 
