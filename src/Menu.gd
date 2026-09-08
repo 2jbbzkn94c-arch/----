@@ -91,7 +91,6 @@ func _build() -> void:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
-	scroll.gui_input.connect(_on_pool_scroll_input)
 	_pool_scroll = scroll
 	vbox.add_child(scroll)
 	var hex_host := Control.new()
@@ -300,6 +299,7 @@ func _show_team_view() -> void:
 
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸滑动用）
+var _pool_drag_touch := false              # 触摸拖动卡池中（起点在池内、未松手）
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
 # 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
@@ -351,11 +351,25 @@ func _build_hex_pool(host: Control) -> void:
 	host.custom_minimum_size = Vector2(max_x, max_y + _DETAIL_H)
 	host.size = Vector2(max_x, max_y + _DETAIL_H)
 
-# 安卓/触屏：手指上下滑动滚动卡池；桌面鼠标滚轮由 ScrollContainer 原生处理。
-func _on_pool_scroll_input(ev: InputEvent) -> void:
-	if ev is InputEventScreenDrag and _pool_scroll != null:
+# 安卓/触屏：手指上下滑动滚动卡池（放在 Menu._input 全局层处理——
+# 拖动起点常落在卡片上，若只挂 ScrollContainer.gui_input 会被卡片截断事件导致滑不动）；
+# 桌面鼠标滚轮由 ScrollContainer 原生处理。
+func _input(ev: InputEvent) -> void:
+	if _pool_scroll == null or not _pool_scroll.is_visible_in_tree():
+		return
+	if not _team_view.visible:
+		return
+	if ev is InputEventScreenTouch:
+		var st := ev as InputEventScreenTouch
+		if st.pressed:
+			# 只在池区域内开始拖动才接管；离开页面/松手即复位
+			_pool_drag_touch = _pool_scroll.get_global_rect().has_point(st.position)
+		else:
+			_pool_drag_touch = false
+	elif _pool_drag_touch and ev is InputEventScreenDrag:
 		var sd := ev as InputEventScreenDrag
-		_pool_scroll.scroll_vertical = maxi(_pool_scroll.scroll_vertical - int(sd.relative.y), 0)
+		# scroll_vertical 赋值自带 0..max 截断：手指上滑(relative.y<0)→ 内容下滚
+		_pool_scroll.scroll_vertical = int(_pool_scroll.scroll_vertical - sd.relative.y)
 
 func _on_hex_hovered(id: String) -> void:
 	if id == "":
