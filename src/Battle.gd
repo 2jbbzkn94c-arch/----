@@ -3146,7 +3146,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，
 	# 才以全额攻击力反击（被贴身=压制中：攻击降为1/技能失效，反击不了）
 	var can_counter := false
-	if target.alive and target.can_attack() and (not target.counter_used_this_turn or _hero(target).infinite_counter()):
+	if target.alive and target.can_attack() and (not target.counter_used_this_turn or (target.skill_allowed() and _hero(target).infinite_counter())):
 		var dist_c := grid.distance(attacker.cell, target.cell)
 		if dist_c <= 1:
 			can_counter = true
