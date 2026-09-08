@@ -217,7 +217,8 @@ func set_big_hit_style() -> void:
 func is_shield_hit_blocked() -> bool:
 	return _shield_block_status
 
-func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "") -> void:	if not alive:
+func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "") -> void:
+	if not alive:
 		return
 	_was_counter_damage = counter   # 记录本次是否为反击伤害
 	# 圣盾：防止一次受到的伤害，消费后解除
