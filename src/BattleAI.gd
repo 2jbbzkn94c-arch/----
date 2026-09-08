@@ -1039,11 +1039,18 @@ func _evaluate(sim: Sim) -> float:
 			elif t.hp <= 6:
 				score += 1.8   # 残血：再挨一两刀就死，优先收
 	score += _synergy_value(sim)
-	# 黄金矿工拾取金矿的收益：站在金矿格上给予高额加分，引导 AI 走过去拾取
+	# 黄金矿工吃矿：金矿每枚=攻击+1、HP上限+HP+3(永久成长),是滚雪球核心。
+	# 只要敌方矿工存活且场上还有金矿,就给一个"期望吃矿"的长线价值,引导它优先赶去拾取
+	# (而不是在有攻击目标时弃矿去打人);已站上金矿格则给更高的即时加成。
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
-		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.hero_id == "hero_42" and sim.gold_cells.has(u.cell):
-			score += 12.0
+		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.hero_id == "hero_42":
+			if sim.gold_cells.has(u.cell):
+				score += 20.0   # 正站在金矿格:本回合结算即成 +4.6 分/枚以上,拉满优先
+			elif sim.gold_cells.size() > 0:
+				score += 8.0    # 场上还有金矿且矿工待命:吃矿是持续成长收益,避免被攻击目标挤掉
+	# 走位候选(见 _actions_for):矿工把可达金矿格排最前(d=-1),这里额外把"能走到金矿"纳入评分,
+	# 让"绕路去吃矿"也值得,而不只盯着当前占格。
 	# 搏命攻击激励：敌方单位本回合攻击过（即使之后被反死也保留 attacked 标记），且其所在格逃不掉。
 	# 这种单位注定会被玩家揍/击杀，死前攻击换血是划算的；给一个足够大的激励，
 	# 抵消"玩家反击/单位死亡"等扰动对攻击方案的压制。仅攻击过且逃不掉才加，避免激励错加到逃跑方案。
