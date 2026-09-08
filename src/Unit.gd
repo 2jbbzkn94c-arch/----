@@ -241,12 +241,14 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	_shake()
 	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分；
 	# 重击（_dmg_style=2，如嬉皮死神双倍）用紫粉色并放大，更醒目又不挡后读
+	# 伤害数字统一弹出在卡面中心线的左侧、字号放大不遮挡图标：
+	# 反击用蓝、重击(_dmg_style=2)用紫粉放大、普通用纯红
 	if counter:
-		_float_text("-%d" % dmg, Color(0.35, 0.8, 1.0), -22, -44, true)
+		_float_text("-%d" % dmg, Color(0.35, 0.8, 1.0), -58, -44, true)
 	elif _dmg_style == 2:
-		_float_text("-%d" % dmg, Color(1.0, 0.5, 1.0), -30, -52, true)
+		_float_text("-%d" % dmg, Color(1.0, 0.5, 1.0), -64, -52, true)
 	else:
-		_float_text("-%d" % dmg, Color(1.0, 0.45, 0.4), -24, -46)
+		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -58, -42, true)
 	_dmg_style = 0   # 一次伤害只套用一种样式
 	AudioManager.play("hit")
 	# [附体]镜像：宿魂受到的伤害 >0 时，其被附体目标同受同等伤害（Battle 统一结算）
@@ -437,7 +439,7 @@ func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46, b
 	var k := hex_radius / 54.0   # 视觉反馈随棋盘放大(基准:旧 hex60 → radius54)
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", maxi(14, int((20.0 if big else 18.0) * k)))
+	lbl.add_theme_font_size_override("font_size", maxi(14, int((26.0 if big else 21.0) * k)))
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k)))
