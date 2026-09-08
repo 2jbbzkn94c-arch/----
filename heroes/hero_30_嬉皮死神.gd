@@ -12,8 +12,8 @@ func damage_mult(target: Unit) -> int:
 func _double_hit_fx(target: Unit) -> void:
 	if target == null or not is_instance_valid(target):
 		return
-	# 受击方重击反馈：目标格爆出扩散环 + 六向紫粉粒子 + 白闪 + 大号飘字
-	target.burst_fx(_FX_COLOR, "暴击x2")
+	# 受击方重击反馈：目标格爆出扩散环 + 六向紫粉粒子 + 白闪（不飘字，避免盖住伤害数字）
+	target.burst_fx(_FX_COLOR, "")
 	# 棋盘层再来一道更醒目的冲击环(色光粒子感更强)
 	if battle.has_method("_boom_ring_fx"):
 		battle._boom_ring_fx(target.cell, _FX_COLOR, 2.0, 0.55)

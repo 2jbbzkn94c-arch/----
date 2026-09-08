@@ -65,6 +65,7 @@ var _move_dot: Label      # 可移动标识（绿色）
 var _attack_dot: Label    # 可攻击标识（红色）
 var _marker_host: Control # 红绿标识容器（整体居中）
 var _was_counter_damage := false   # 本次受伤是否为反击伤害
+var _dmg_style := 0                # 本次受击伤害数字样式：0=普通 2=重击(紫/放大), Battle 施加前标记
 
 func _init(def: DataRegistry.HeroDef, faction_ := 0, cell_ := Vector2i.ZERO, radius: float = 44.0) -> void:
 	hero_id = def.id
@@ -208,6 +209,10 @@ func _faction_color(f: int) -> Color:
 		return Color(0.25, 0.55, 0.9, 1.0)
 	return Color(0.85, 0.32, 0.28, 1.0)
 
+# Battle 在造成重击(如嬉皮死神双倍)前调用：本次受击的伤害数字用紫粉放大样式
+func set_big_hit_style() -> void:
+	_dmg_style = 2
+
 func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "") -> void:
 	if not alive:
 		return
@@ -234,11 +239,15 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	_update_hp_label()
 	_flash()
 	_shake()
-	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分
+	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分；
+	# 重击（_dmg_style=2，如嬉皮死神双倍）用紫粉色并放大，更醒目又不挡后读
 	if counter:
-		_float_text("-%d" % dmg, Color(0.35, 0.8, 1.0), -22, -44)
+		_float_text("-%d" % dmg, Color(0.35, 0.8, 1.0), -22, -44, true)
+	elif _dmg_style == 2:
+		_float_text("-%d" % dmg, Color(1.0, 0.5, 1.0), -30, -52, true)
 	else:
 		_float_text("-%d" % dmg, Color(1.0, 0.45, 0.4), -24, -46)
+	_dmg_style = 0   # 一次伤害只套用一种样式
 	AudioManager.play("hit")
 	# [附体]镜像：宿魂受到的伤害 >0 时，其被附体目标同受同等伤害（Battle 统一结算）
 	if dmg > 0:
@@ -421,17 +430,17 @@ func _shake() -> void:
 	t.tween_property(_hex, "position", Vector2.ZERO, 0.12)
 
 # 伤害/治疗飘字（挂在父节点以固定在棋盘坐标，上浮并淡出）
-func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46) -> void:
+func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46, big := false) -> void:
 	var parent := get_parent()
 	if parent == null or not is_inside_tree():
 		return
 	var k := hex_radius / 54.0   # 视觉反馈随棋盘放大(基准:旧 hex60 → radius54)
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", maxi(12, int(18.0 * k)))
+	lbl.add_theme_font_size_override("font_size", maxi(14, int((20.0 if big else 18.0) * k)))
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	lbl.add_theme_constant_override("outline_size", maxi(2, int(4.0 * k)))
+	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k)))
 	lbl.z_index = 120
 	lbl.position = global_position + Vector2(xoff * k, yoff * k)
 	lbl.size = Vector2(48.0 * k, 24.0 * k)
