@@ -1613,6 +1613,8 @@ func _begin_side(side: int) -> void:
 		_time_sync_acc = 0.0
 		if GameState.is_online:
 			_send_turn_time_left()
+		turn_banner.emit("你的回合")   # 即便要先进替补，也先弹回合切换提醒（否则只弹替补面板无回合提示）
+		action_info.emit("你的回合（第 %d 回合）：先为阵亡队友补位。" % GameState.round_number)
 		_defer_side_skills = true
 		_try_begin_next_sub()
 		return
