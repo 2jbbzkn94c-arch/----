@@ -125,13 +125,7 @@ class SwordCrescent:
 		draw_arc(Vector2.ZERO, 70.0, a0, a1, 48, Color(0.55, 0.82, 1.0, 0.85), 6.0, true)
 		draw_arc(Vector2.ZERO, 55.0, a0, a1, 48, Color(0.80, 0.95, 1.0, 0.95), 7.0, true)
 		draw_arc(Vector2.ZERO, 40.0, a0, a1, 48, Color(1.0, 1.0, 1.0, 1.0), 7.0, true)
-		# 右端细尖光尾（沿着 +X 方向的一束光刺，尖端渐收）
-		draw_polyline(PackedVector2Array([Vector2(18, 0), Vector2(46, 0), Vector2(70, 0)]),
-				Color(0.95, 0.95, 1.0, 1.0), 4.0, true)
-		draw_polyline(PackedVector2Array([Vector2(34, 0), Vector2(86, 0)]),
-				Color(0.85, 0.9, 1.0, 0.7), 2.0, true)
-		# 右端光尾与弧层交接处的亮芯
-		draw_circle(Vector2(22, 0), 8.0, Color(1.0, 1.0, 1.0, 0.9))
+		# 右端自然收尖：弧带在 +X 处已是外层最右点，不再加直光尾(避免像子弹轨迹)
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
