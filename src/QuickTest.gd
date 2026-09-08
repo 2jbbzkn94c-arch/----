@@ -175,7 +175,7 @@ func _toggle(id: String) -> void:
 	else:
 		if arr.size() >= TEAM_SIZE:
 			_status_label.text = "每队上限 %d 人（前 %d 首发、其余替补）。" % [TEAM_SIZE, STARTERS]
-			(_btns[id] as HexCard).selected = false
+			(_btns[id] as HexCard).set_selected(false)
 			return
 		arr.append(id)
 	_refresh()
@@ -188,7 +188,7 @@ func _refresh() -> void:
 	var enemy_ok := _sel_e.size() == 0 or _sel_e.size() <= TEAM_SIZE
 	_start_btn.disabled = not (player_ok and enemy_ok)
 	for id in _btns.keys():
-		(_btns[id] as HexCard).selected = _cur().has(id)
+		(_btns[id] as HexCard).set_selected(_cur().has(id))
 	if not player_ok or not enemy_ok:
 		var hint := "请组建我方队伍：最少 %d 名（上限 %d，前 %d 名首发，其余替补）。当前先编辑%s。" % [MIN_PLAYER, TEAM_SIZE, STARTERS, "敌方" if _side == 1 else "我方"]
 		if _sel_p.size() >= MIN_PLAYER and _sel_e.size() == 0:
