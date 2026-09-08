@@ -1,21 +1,19 @@
-# Godot 引擎缓存与导入产物（自动生成，不入库）
-.godot/
+# Godot 引擎缓存与导入产物（自动生成，不入库�?.godot/
 
-# 导出成品（体积大）
-export/
+# 导出成品（体积大�?export/
 
-# 编辑器/系统临时文件
+# 编辑�?系统临时文件
 *.tmp
 Thumbs.db
 .DS_Store
 
-# Excel 打开时的临时锁文件（~$ 前缀）
-~$*
+# Excel 打开时的临时锁文件（~$ 前缀�?~$*
 
-# 本地快照库不在工程内（位于 战旗_snapshots/），无需在此忽略
+# 本地快照库不在工程内（位�?战旗_snapshots/），无需在此忽略
 
 # 调试临时产物
 /.godot_*.log
 /.cap_probe_out/
 /tests/CapProbe.*
-
+# 生成�ߥ志文件导出目录
+/log/
