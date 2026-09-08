@@ -219,6 +219,7 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	_was_counter_damage = counter   # 记录本次是否为反击伤害
 	# 圣盾：防止一次受到的伤害，消费后解除
 	if not ignore_shield and has_status("shield"):
+		_dmg_style = 0
 		remove_status("shield")
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
 		return

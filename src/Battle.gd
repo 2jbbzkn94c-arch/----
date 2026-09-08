@@ -3901,6 +3901,7 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 			break
 		var v = occupancy.get(off, null)
 		if v != null and v.alive and v.faction != u.faction:
+			v.set_big_hit_style()
 			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name)
 		cur += step
 
@@ -4027,6 +4028,7 @@ func _hurt_lowest_enemy_stun(u: Unit) -> bool:
 			if best == null or v.hp < best.hp:
 				best = v
 	if best != null:
+		best.set_big_hit_style()
 		best.take_damage(3, false, false, "被%s锁定重创" % u.display_name)
 		_add_status_msg(best, "stun", "眩晕")
 		return true

@@ -13,6 +13,7 @@ func on_attack(target: Unit) -> void:
 		return
 	var kb: bool = battle._knockback(target, unit.cell)
 	var hdmg: int = battle._attack_damage(unit) * _bonus_damage(target)
+	target.set_big_hit_style()   # 撞击/重击均为技能伤害数字,大号突出
 	target.take_damage(hdmg if kb else hdmg * 2, false, false,
 			("被%s撞飞" % unit.display_name) if kb else ("被%s的重击重创" % unit.display_name))
 

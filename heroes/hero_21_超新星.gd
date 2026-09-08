@@ -10,6 +10,7 @@ func on_attack(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
+			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)
 
 func on_attack_dead(target: Unit) -> void:
@@ -18,4 +19,5 @@ func on_attack_dead(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
+			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)

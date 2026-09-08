@@ -15,4 +15,5 @@ func on_move() -> void:
 	fx()   # 确实烫到目标时才呈现专属特效
 	for v in enemies:
 		fx_on_target(v)
+		v.set_big_hit_style()
 		v.take_damage(unit.effective_atk(), false, false, "被%s的烛火灼烧" % unit.display_name)
