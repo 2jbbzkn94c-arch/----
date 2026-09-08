@@ -224,15 +224,17 @@ func _build() -> void:
 	var volume := VolumeControl.new()
 	add_child(volume)
 	volume.place_top_right(get_viewport().get_visible_rect().size, 8.0, 6.0)
-	# 右上角版本号（音量按钮左侧）
+	# 左上角版本号（发布日期）
 	var ver := Label.new()
 	var ver_str := str(ProjectSettings.get_setting("application/config/version", ""))
 	ver.text = ver_str
-	ver.add_theme_font_size_override("font_size", 13)
+	ver.add_theme_font_size_override("font_size", 14)
 	ver.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
+	ver.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	ver.add_theme_constant_override("outline_size", 3)
 	ver.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(ver)
-	ver.position = Vector2(volume.position.x - ver_str.length() * 14.0 - 10.0, volume.position.y + 8.0)
+	ver.position = Vector2(18, 16)
 	_show_main_menu()
 
 # —— 主菜单（模式选择页）——
