@@ -26,6 +26,8 @@ class SimUnit:
 	var stunned := false    # 眩晕：不能移动/攻击/反击
 	var silenced := false   # 沉默：非关键词技能失效
 	var shield := false     # 圣盾：抵挡一次伤害
+	var atk_use_buff := 0   # 攻击道具:下一次攻击+1
+	var move_use_buff := 0  # 移动道具:下一次移动+1
 	var heavy := false      # 重伤：受到的伤害+1
 	var poisoned := false   # 猛毒（每回合开始1点，供评估用）
 	var frozen := false     # 冰冻（移动-1）
@@ -41,6 +43,7 @@ class Sim:
 	var graves: Dictionary = {}        # cell -> true（阵亡墓碑：阻挡移动，不可落停）
 	var obstacles: Dictionary = {}     # cell -> true（障碍物：阻挡移动与攻击视线）
 	var bombs: Dictionary = {}         # cell -> true（炸弹：经过不炸，落停引爆，非炸弹人应避免停在上面）
+	var buff_cells: Dictionary = {}    # cell -> "atk"/"move"/"shield"/"heal"（普通增益道具，AI可评估收益去吃）
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
 	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
 	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
@@ -51,6 +54,7 @@ class Sim:
 		c.graves = graves.duplicate()
 		c.obstacles = obstacles.duplicate()
 		c.bombs = bombs.duplicate()
+		c.buff_cells = buff_cells.duplicate()
 		c.killed_players = killed_players
 		c._neg_gained = _neg_gained.duplicate()
 		c._pos_mirror_depth = 0   # 镜像深度每次搜索步重置（防跨步累计误限）
@@ -78,6 +82,8 @@ class Sim:
 			cu.stunned = u.stunned
 			cu.silenced = u.silenced
 			cu.shield = u.shield
+			cu.atk_use_buff = u.atk_use_buff
+			cu.move_use_buff = u.move_use_buff
 			cu.heavy = u.heavy
 			cu.poisoned = u.poisoned
 			cu.frozen = u.frozen
@@ -99,12 +105,13 @@ func _init(g: HexGrid) -> void:
 	grid = g
 
 # 由 Battle 提供的数据构建模拟状态（units 顺序与 Battle.units 一致）
-func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}) -> Sim:
+func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}, buff_cells: Dictionary = {}) -> Sim:
 	var s := Sim.new()
 	s.gold_cells = gold_cells.duplicate()
 	s.graves = graves.duplicate()
 	s.obstacles = obstacles.duplicate()
 	s.bombs = bombs.duplicate()
+	s.buff_cells = buff_cells.duplicate()
 	for d in unit_descs:
 		var u := SimUnit.new()
 		u.fn = d["fn"]
@@ -305,6 +312,11 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 					dkey = 2.0 + absf(float(d - u.atk_range))
 			# 走位质量：落点被玩家威胁越强，排序越靠后（同时保留近战贴脸候选）
 			var threat := _incoming_damage(sim, c, u.fn)
+			# 吃 buff 收益：落点有增益道具且对己有收益时显著加优先（但不算无脑,收益低/已有则不加)
+			if sim.buff_cells.has(c):
+				var bv := _buff_value(sim, u, String(sim.buff_cells[c]))
+				if bv > 0.0:
+					dkey -= bv * 2.0
 			ranked.append({ "cell": c, "d": d, "dkey": dkey, "threat": threat })
 		# 主排序：dkey（近战=距离、远程=射程边缘优先）；同键威胁小的格优先
 		ranked.sort_custom(func(a, b):
@@ -439,7 +451,8 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 		for o in sim.obstacles.keys():
 			stop[o] = true   # 普通单位：障碍既不能穿过也不能停留
 			blockers[o] = true
-	var res := grid.reachable(u.cell, u.emove, stop, blockers)
+	var emv: int = u.emove + (1 if u.move_use_buff > 0 else 0)   # 移动道具:本次移动+1
+	var res := grid.reachable(u.cell, emv, stop, blockers)
 	# 炸弹：经过不炸但落停引爆 → 非炸弹人不把炸弹格作为移动终点(炸弹人可以站上去)
 	if sim.bombs.size() > 0 and u.hero_id != "hero_35":
 		var safe := {}
@@ -542,6 +555,20 @@ func _nearest_player(sim: Sim, cell: Vector2i) -> SimUnit:
 				best = t
 	return best
 
+# 吃某 buff 对单位 u 的收益(0=无收益)。粗略但避免"见 buff 就吃":
+# 攻击道具=下次攻击+1(常正);移动+1(常正);圣盾=无盾时正/有盾≈0;回血=受伤才正/满血0;金矿交黄金矿工(gold_snap单独)
+func _buff_value(sim: Sim, u: SimUnit, btype: String) -> float:
+	match btype:
+		"atk":
+			return 1.0
+		"move":
+			return 0.7
+		"shield":
+			return 1.2 if not u.shield else 0.0
+		"heal":
+			return 1.2 if u.hp < u.max_hp else 0.0
+	return 0.0
+
 # ---- 应用一个行动到模拟状态 ----
 func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 	var u: SimUnit = sim.units[idx]
@@ -553,6 +580,19 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			u.cell = mc
 			sim.occ[mc] = idx
 			u.moved = true
+			u.move_use_buff = 0   # 移动道具在本次移动中消耗
+			# 移动后拾取普通增益道具(收益已在走位排序中权衡)
+			if sim.buff_cells.has(mc):
+				var bt: String = String(sim.buff_cells[mc])
+				sim.buff_cells.erase(mc)
+				if bt == "atk":
+					u.atk_use_buff += 1
+				elif bt == "move":
+					u.move_use_buff += 1
+				elif bt == "shield":
+					u.shield = true
+				elif bt == "heal":
+					u.hp += 3
 			# 大骑士：冲锋移动距离加成攻击力（与真实规则一致，冲越远攻越高）
 			if u.hero_id == "hero_24":
 				u.eatk += grid.distance(prev_cell, mc)
@@ -585,7 +625,11 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				_sim_do_longhorn(sim, u, t)
 				u.attacked = true
 				return
-			var dmg := u.eatk * _sim_mult(sim, u, t)
+			var ab := 0
+			if u.atk_use_buff > 0:
+				ab = u.atk_use_buff
+				u.atk_use_buff = 0
+			var dmg := (u.eatk + ab) * _sim_mult(sim, u, t)
 			# 远程被贴身：基础攻击压为1，buff 照常（与真实规则一致）
 			if u.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, u, u.cell):
 				var buff: int = maxi(u.eatk - u.atk, 0)
