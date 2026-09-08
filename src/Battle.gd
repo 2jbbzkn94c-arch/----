@@ -3922,7 +3922,7 @@ func _spawn_sword_qi(u: Unit, step: Vector2i) -> void:
 	qi.scale = Vector2(1.5, 1.5)   # 放大便于看清
 	qi.z_index = 40
 	add_child(qi)
-	var dur := clampf(dir.length() * 0.016, 0.35, 0.8)   # 速度适中偏快
+	var dur := clampf(dir.length() * 0.022, 0.55, 1.2)   # 适中偏慢
 	var t := create_tween()
 	t.tween_property(qi, "position", end, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	t.tween_callback(qi.queue_free)
