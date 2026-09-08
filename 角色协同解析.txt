@@ -1,0 +1,304 @@
+【hero_01】伐木工
+  配合: 无
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_02】圣诞老人
+  配合: 对攻击力收益大的角色，比如多倍伤害，AOE等
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_03】毒蛇淑女
+  配合: 
+  被克制: 能麻痹的英雄   克制备注: 圣光   协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_04】鼠队长
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_05】傀儡师
+  配合: 需要敌人位移的角色，比如死神，烛火，炸弹人
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_30", "hero_21", "hero_27", "hero_32", "hero_35", "hero_31"]
+  克制/被克(counters): []
+
+【hero_06】医护兵
+  配合: 能提供攻击力加成的角色，最好搭配一个坦克
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_11", "hero_12", "hero_13", "hero_22", "hero_23", "hero_24", "hero_25", "hero_26", "hero_36", "hero_19", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_07】影丸
+  配合: 最好搭配一个坦克
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_11", "hero_12", "hero_13", "hero_22", "hero_23", "hero_24", "hero_25", "hero_26", "hero_36"]
+  克制/被克(counters): []
+
+【hero_08】德鲁伊
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_09】火枪手
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_10】白游侠
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_11】塔盾
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_12】巨剑
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_13】独脚龟
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_14】古拉博士
+  配合: 最好搭配一个坦克，能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_11", "hero_12", "hero_13", "hero_22", "hero_23", "hero_24", "hero_25", "hero_26", "hero_36", "hero_19", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_15】小阴影
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_16】波盾
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_17】烛火
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_18】长剑
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_19】烈焰祭司
+  配合: 需要攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_20】赏金猎人
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注: 嘲讽   协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_21】超新星
+  配合: 需要敌人位移的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_27", "hero_05", "hero_32", "hero_35", "hero_31"]
+  克制/被克(counters): []
+
+【hero_22】圣光
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_23】复仇者
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_24】大骑士
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_25】战锤
+  配合: 
+  被克制:    克制备注: 毒蛇   协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_26】雪拳
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_27】暗域
+  配合: 需要敌人位移的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_21", "hero_05", "hero_32", "hero_35", "hero_31"]
+  克制/被克(counters): []
+
+【hero_28】古灵精怪
+  配合: 技能评分+补强>3的非替补角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_29】太阳斩
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_30】嬉皮死神
+  配合: 能提供攻击力加成的角色
+能使敌人位移的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_21", "hero_27", "hero_05", "hero_32", "hero_35", "hero_31", "hero_19", "hero_23", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40"]
+  克制/被克(counters): []
+
+【hero_31】末日
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_32】长角
+  配合: 能提供攻击力加成的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+【hero_33】死灵法师
+  配合: 烈焰祭祀
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19"]
+  克制/被克(counters): []
+
+【hero_34】沉默术士
+  配合: 需搭配坦克
+  被克制:    克制备注: 技能评分+补强>3的非替补角色   协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_11", "hero_12", "hero_13", "hero_22", "hero_23", "hero_24", "hero_25", "hero_26", "hero_36"]
+  克制/被克(counters): []
+
+【hero_35】炸弹人
+  配合: 能使敌人位移的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_21", "hero_27", "hero_05", "hero_32", "hero_31"]
+  克制/被克(counters): []
+
+【hero_36】梅林
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_37】锤头鲨
+  配合: 死灵法师
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_33"]
+  克制/被克(counters): []
+
+【hero_38】涌电技师
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_39】猎颅者
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_40】红帽
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_41】血锁
+  配合: 需要敌人位移的角色
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_21", "hero_27", "hero_05", "hero_32", "hero_35", "hero_31"]
+  克制/被克(counters): []
+
+【hero_42】黄金矿工
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_43】风语者
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_44】负墟
+  配合: 
+  被克制:    克制备注: 能施加异常状态的英雄   协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_45】坠炮手
+  配合: 
+  被克制:    克制备注: 害怕被贴身   协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_46】宿魂
+  配合: 
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): []
+  克制/被克(counters): []
+
+【hero_47】共鸣者
+  配合: 面板攻击力可以大于4的
+  被克制:    克制备注:    协同英雄: []
+  语义协同伙伴(sy_partners): ["hero_19", "hero_23", "hero_30", "hero_32", "hero_15", "hero_29", "hero_37", "hero_02", "hero_14", "hero_10", "hero_17", "hero_18", "hero_40", "hero_31"]
+  克制/被克(counters): []
+
+===== 协同分高的组合(前20) =====
+  小阴影+锤头鲨=1.0
+  小阴影+猎颅者=1.0
+  小阴影+红帽=1.0
+  小阴影+共鸣者=1.0
+  烛火+长剑=1.0
+  烛火+烈焰祭司=1.0
+  烛火+赏金猎人=1.0
+  烛火+复仇者=1.0
+  烛火+太阳斩=1.0
+  烛火+嬉皮死神=1.0
+  烛火+末日=1.0
+  烛火+长角=1.0
+  烛火+红帽=1.0
+  烛火+共鸣者=1.0
+  长剑+烈焰祭司=1.0
+  长剑+赏金猎人=1.0
+  长剑+复仇者=1.0
+  长剑+太阳斩=1.0
+  长剑+嬉皮死神=1.0
+  长剑+末日=1.0
