@@ -209,6 +209,15 @@ func _numeric_filter_heroes(text: String) -> Array:
 			out.append(id)
 	return out
 
+# 公开调试方法：把一列文本用与角色解析完全相同的三路逻辑展开成 hero_id 列表。
+# 供 tools/生成解析体检.gd 与运行时诊断复用之，确保体检结果与真实协同/克制一致。
+func parse_column(text: String) -> Array:
+	var out: Array = []
+	out.append_array(_extract_ids(text))
+	out.append_array(_semantic_heroes(text))
+	out.append_array(_numeric_filter_heroes(text))
+	return out
+
 # 品级
 enum Rarity { SILVER, GOLD, MASTER, LEGEND }
 
@@ -232,6 +241,7 @@ class HeroDef:
 	var synergy_note: String = ""       # 配合（文本备注）
 	var effective_behavior: String = "" # 有效行为（文本备注）
 	var countered_by_note: String = ""  # 被克制（文本备注）
+	var pairs_note: String = ""         # 协同英雄列原文备注
 	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
 	var counters: Array = []            # "被克制"列抽出：**克制我的**英雄(我的天敌)
 	var beats: Array = []               # "克制/有效行为"列抽出：**我能克制**的英雄
@@ -468,6 +478,7 @@ func _load_heroes() -> void:
 		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note) + _numeric_filter_heroes(h.countered_by_note)), h.id)   # 被克制列->克制我的英雄
 		h.beats = _without_self((_extract_ids(h.effective_behavior) + _semantic_heroes(h.effective_behavior) + _numeric_filter_heroes(h.effective_behavior)), h.id)    # 克制/有效行为列->我能克制的英雄
 		h.explicit_pairs = _without_self(_extract_ids(cell_at.call(col_pairs)), h.id)   # "协同英雄"列：直接点名的搭档
+		h.pairs_note = cell_at.call(col_pairs)
 
 		# 影响 AI 行为的手动评分列
 		h.ai_attr_score = cell_at.call(col_attr_score).to_float()
