@@ -607,14 +607,11 @@ func _refresh_deck_slots() -> void:
 	if ids.size() == 0:
 		_deck_host.custom_minimum_size = Vector2.ZERO
 		_deck_host.size = Vector2.ZERO
+		_deck_info.visible = true
 		_deck_info.text = "卡组 %d：空 —— 点击「保存」把当前阵容存入本槽。" % _deck_current_slot
 		return
-	var names: Array[String] = []
-	for id in ids:
-		var h := DataRegistry.get_hero(id)
-		if h != null:
-			names.append(h.display_name)
-	_deck_info.text = "卡组 %d：%d 名（%s）" % [_deck_current_slot, names.size(), "、".join(names)]
+	# 有内容：只显示队伍小卡预览，不显示文字行
+	_deck_info.visible = false
 	_build_deck_preview(ids)
 
 # 与替补队伍面板同款布局：所选卡组一行平顶蜂窝小卡（悬停看属性）
