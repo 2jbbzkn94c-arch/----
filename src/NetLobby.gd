@@ -5,7 +5,7 @@ extends Control
 const PORT := 18861
 const NET_VERSION := 2   # 联机协议版本：凡协议不兼容的改动（如卡组上传）都 +1；双方必须一致才能开战
 const SLOTS := [1, 2, 3]
-const MIN_PICK := 5   # 与选人界面一致：普通模式卡组最少人数（不足则自动随机选满）
+const MIN_PICK := 5   # 与选人界面一致：普通模式卡组最少人数（不足 5 人也保存，开战时拦下提示）
 const PICK_COUNT := 8   # 与选人界面一致：整队人数上限
 
 var _status: Label
@@ -140,9 +140,9 @@ func _on_packet(_from: int, text: String) -> void:
 				_peer_online = true
 				# 不暴露对方卡组信息（数量/名单都不显示），只提示已确认状态。
 				if d.size() == 0:
-					_status.text = "对方已确认卡组（其卡组为空，将自动随机选 %d 名英雄）" % PICK_COUNT
+					_status.text = "对方已确认卡组（其卡组为空，无法开始对局）"
 				elif d.size() < MIN_PICK:
-					_status.text = "对方已确认卡组（其卡组不足 %d 人，将自动随机选满 %d 名）" % [MIN_PICK, PICK_COUNT]
+					_status.text = "对方已确认卡组（其卡组不足 %d 人，无法开始对局）" % MIN_PICK
 				else:
 					_status.text = "对方已确认卡组"
 				_refresh_ui()
@@ -343,9 +343,9 @@ func _choose_slot(s: int) -> void:
 	_my_confirmed = false   # 换了槽位需重新确认
 	var deck := DeckStore.load_deck(s)
 	if deck.size() == 0:
-		_status.text = "你选了槽 %d，但该槽未保存卡组（开局将自动随机选 %d 名英雄）。" % [s, PICK_COUNT]
+		_status.text = "你选了槽 %d，但该槽未保存卡组（空槽无法开战：先点「编辑卡组」选够 %d 名）。" % [s, MIN_PICK]
 	elif deck.size() < MIN_PICK:
-		_status.text = "你选了槽 %d，但该卡组仅 %d 人（不足 %d），开局将自动随机选满 %d 名。" % [s, deck.size(), MIN_PICK, PICK_COUNT]
+		_status.text = "你选了槽 %d，但该卡组仅 %d 人（不足 %d）：请点「编辑卡组」补足后再确认。" % [s, deck.size(), MIN_PICK]
 	# 有卡组时不再在顶部状态栏重复"你已选择…"（名单已显示在下方卡组展示里）
 	_refresh_ui()
 
@@ -361,6 +361,11 @@ func _on_confirm_slot() -> void:
 		NetBus.send_all(JSON.stringify({ "type": "choseslot_cancel" }))
 		_status.text = "已取消确认，可重新选择卡组"
 		_refresh_ui()
+		return
+	# 确认前校验人数：少于 MIN_PICK 不发送（避免把不合法卡组发给对方）
+	var my_deck := DeckStore.load_deck(_my_slot)
+	if my_deck.size() < MIN_PICK:
+		_status.text = "卡组（槽 %d）不足 %d 名英雄，无法确认：请点「编辑卡组」补足。" % [_my_slot, MIN_PICK]
 		return
 	_my_confirmed = true
 	_send_my_confirmation()
@@ -553,8 +558,17 @@ func _maybe_start() -> void:
 				_btn_start.disabled = false
 				_status.text = "对方已准备完毕，可以开始（竞技场选卡）"
 		elif _my_confirmed and _peer_slot > 0:
-			_btn_start.disabled = false
-			_status.text = "双方已确认卡组，可以开始"
+			# 双方都已确认：各自卡组应已 ≥5（确认前各自校验），此处再兜底一次
+			var my_d := DeckStore.load_deck(_my_slot)
+			if my_d.size() < MIN_PICK:
+				_btn_start.disabled = true
+				_status.text = "你的卡组（槽 %d）不足 %d 名英雄：点「编辑卡组」补足后再开始。" % [_my_slot, MIN_PICK]
+			elif _peer_deck.size() < MIN_PICK:
+				_btn_start.disabled = true
+				_status.text = "对方卡组不足 %d 名英雄，无法开始。" % MIN_PICK
+			else:
+				_btn_start.disabled = false
+				_status.text = "双方已确认卡组，可以开始"
 
 # 返回主菜单：停止网络连接并重置联机状态（避免残留连接/标志影响下次进入）。
 func _back_to_menu() -> void:
@@ -562,23 +576,7 @@ func _back_to_menu() -> void:
 	GameState.reset_online()
 	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
-# 随机挑一整队 PICK_COUNT 名不重复英雄：普通模式卡组不足 MIN_PICK 人时自动顶上
-func _random_full_deck() -> Array:
-	var pool: Array = DataRegistry.heroes.keys()
-	pool.shuffle()
-	var out: Array = []
-	for i in PICK_COUNT:
-		out.append(pool[i])
-	return out
-
-# 普通模式卡组规范化：不足 MIN_PICK 人的卡组（旧档残留/半存卡组）自动换成随机整队，
-# 保证任何槽位开局都是合法人数。返回新阵容。
-func _normalized_deck(deck: Array) -> Array:
-	if deck.size() < MIN_PICK:
-		return _random_full_deck()
-	return deck
-
-# 主机开战：双方卡组分别规范化（本机槽位 + 对端发来的卡组），保证各自 ≥ MIN_PICK 人
+# 主机开战：普通模式双方卡组（本机槽位 + 对端发来的卡组）不足 MIN_PICK 人则拒绝开始并提示
 func _on_start() -> void:
 	if not NetBus.is_host:
 		_status.text = "等待主机开始…"
@@ -594,10 +592,14 @@ func _on_start() -> void:
 	GameState.online_seed = sd
 	var pdeck := _deck_of(_my_slot)
 	var edeck := _peer_deck
-	# 普通模式：卡组不足 5 人（空槽/旧档不足）→ 自动随机选 8 名，两端看到的是同一份规范化结果。
+	# 普通模式：任一方卡组不足 5 人不自动随机，拒绝开始并提示补足。
 	if _mode == "normal":
-		pdeck = _normalized_deck(pdeck)
-		edeck = _normalized_deck(edeck)
+		if pdeck.size() < MIN_PICK:
+			_status.text = "你的卡组（槽 %d）不足 %d 名英雄，无法开始。请点「编辑卡组」补足。" % [_my_slot, MIN_PICK]
+			return
+		if edeck.size() < MIN_PICK:
+			_status.text = "对方卡组不足 %d 名英雄，无法开始。" % MIN_PICK
+			return
 	else:
 		if pdeck.size() == 0:
 			pdeck = ["hero_06", "hero_17", "hero_26"]
@@ -672,20 +674,20 @@ func _refresh_ui() -> void:
 			b.text = "槽%d ✓" % s
 		elif _my_slot == s:
 			b.text = "槽%d\n▲" % s   # 待确认：向上的三角形位于槽号下方
-	# 卡组英雄组成：状态文案（阵容以预览小卡展示，这里不重复名单）
+	# 卡组状态文案（阵容以预览小卡展示，这里不重复名单）
 	var can_confirm := false
 	if _deck_info != null:
 		if _mode == "normal" and NetBus.is_online and _my_slot > 0:
 			var deck := DeckStore.load_deck(_my_slot)
 			if deck.size() == 0:
-				_deck_info.text = "卡组（槽 %d）：该槽未保存卡组，开局将自动随机选 %d 名英雄。" % [_my_slot, PICK_COUNT]
+				_deck_info.text = "卡组（槽 %d）：空 —— 点「编辑卡组」选够 %d 名英雄后才能确认。" % [_my_slot, MIN_PICK]
 			elif deck.size() < MIN_PICK:
-				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d），开局将自动随机选满 %d 名英雄。" % [_my_slot, deck.size(), MIN_PICK, PICK_COUNT]
+				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d）—— 点「编辑卡组」补足后才能确认。" % [_my_slot, deck.size(), MIN_PICK]
 			elif _my_confirmed:
 				_deck_info.text = "卡组（槽 %d）已确认。" % _my_slot
 			else:
 				_deck_info.text = "卡组（槽 %d）：共 %d 名 —— 点「确认卡组」发给对方。" % [_my_slot, deck.size()]
-			can_confirm = not _my_confirmed
+			can_confirm = not _my_confirmed and deck.size() >= MIN_PICK
 		else:
 			_deck_info.text = "卡组：未选择"
 	# 确认按钮：仅普通模式、已选中槽位且尚未确认时可点；可点时高亮提醒

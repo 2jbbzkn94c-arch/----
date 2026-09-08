@@ -7,7 +7,6 @@ var _selected: Array[String] = []
 var _card_buttons: Dictionary = {}   # hero_id -> Button
 var _start_btn: Button
 var _detail_label: Label
-var _msg := ""   # 状态条里的即时反馈文案（与"已选 N/8"行一起显示在英雄池底部提示条）
 var _tooltip: PanelContainer
 var _tooltip_box: VBoxContainer
 var _deck_tab_buttons: Dictionary = {}   # slot -> Button（卡组1/2/3 选择钮）
@@ -468,14 +467,13 @@ func _show_detail(id: String) -> void:
 		_detail_label.text = "\n".join(zones)
 
 func _update_ui() -> void:
-	_start_btn.disabled = _selected.size() < MIN_PICK
+	_start_btn.disabled = false   # 人数不足时仍可点开始，由 _on_start 弹框说明
 	for id in _card_buttons.keys():
 		_card_buttons[id].set_selected(_selected.has(id))
 	if _sel_count != null:
 		_sel_count.text = "已选 %d / %d" % [_selected.size(), PICK_COUNT]
 	_auto_sync()
 	_refresh_deck_slots()
-	_refresh_banner()
 
 # 阵容任一变化 → 自动写回当前卡组槽（内容相同则不重复写盘）
 func _auto_sync() -> void:
@@ -484,27 +482,19 @@ func _auto_sync() -> void:
 	if stored != cur:
 		DeckStore.save_deck(_deck_current_slot, cur)
 
-# 即时反馈（清空/读取/上限等）：写入英雄池底部提示条
-func _flash(msg: String) -> void:
-	_msg = msg
-	_refresh_banner()
+# 底部提示已按需求移除（不再显示"已读取卡组/引导"等字样），保留空实现以便调用点不动。
+func _flash(_msg: String) -> void:
+	pass
 
-# 英雄池底部提示条：最近一条反馈；空选且无反馈时显示引导
 func _refresh_banner() -> void:
-	if _detail_label == null or not is_instance_valid(_detail_label):
-		return
-	var parts: Array[String] = []
-	if _msg != "":
-		parts.append(_msg)
-	elif _selected.size() == 0:
-		parts.append("点击卡牌，挑选 %d-%d 名英雄组成阵容（前 %d 名上阵，其余替补）。" % [MIN_PICK, PICK_COUNT, DEPLOY_COUNT])
-	_detail_label.text = "\n".join(parts)
+	if _detail_label != null and is_instance_valid(_detail_label):
+		_detail_label.text = ""
 
 func _on_random() -> void:
 	_selected = _random_full_deck()
 	_update_ui()
 
-# 随机挑一整队 PICK_COUNT 名不重复英雄 —— 「随机选人」与"卡组不足 5 人时兜底"共用
+# 随机挑一整队 PICK_COUNT 名不重复英雄（随机派遣用）
 func _random_full_deck() -> Array[String]:
 	var pool: Array = DataRegistry.heroes.keys()
 	pool.shuffle()
@@ -515,6 +505,7 @@ func _random_full_deck() -> Array[String]:
 
 func _on_start() -> void:
 	if _selected.size() < MIN_PICK:
+		_show_need_more_dialog()
 		return
 	# 敌方卡组人数独立于玩家：随机 5-8 人
 	var want := randi_range(MIN_PICK, PICK_COUNT)
@@ -535,6 +526,16 @@ func _on_start() -> void:
 	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
 	GameState.arena_mode = false
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
+
+# 开始对战但人数不足：弹框说明（不自动随机补足）
+func _show_need_more_dialog() -> void:
+	var d := AcceptDialog.new()
+	d.title = "阵容不足"
+	d.dialog_text = "至少需要 %d 名英雄才能开始对战（当前 %d 名）。\n请回到卡池继续挑选，或点「随机派遣」。" % [MIN_PICK, _selected.size()]
+	d.ok_button_text = "知道了"
+	d.confirmed.connect(d.queue_free)
+	add_child(d)
+	d.popup_centered()
 
 # 英雄强度打分（单体基准，协同另行加分）
 func _hero_strength(id: String) -> float:
@@ -586,36 +587,24 @@ func _synergy_pick(want: int) -> Array:
 	return chosen
 
 # ---- 卡组（自动保存）----
-# 点卡组槽 = 切换编辑目标并载入（不足 5 人的旧档自动随机补满后一并写回）
+# 点卡组槽 = 切换编辑目标并原样载入（少于 5 人也按保存的队伍载入，开战时再校验）
 func _on_deck_tab(slot: int) -> void:
 	_deck_current_slot = slot
 	GameState.last_deck_slot = slot
 	_load_deck(slot)
-	_refresh_deck_slots()   # 统一刷新 tab 高亮与该槽预览（随机补满分支不走 _load_deck 内的刷新）
+	_refresh_deck_slots()   # 统一刷新 tab 高亮与该槽预览
 
 func _on_deck_clear() -> void:
 	_selected.clear()
 	_update_ui()   # 同步取消英雄池高亮、清空槽（自动保存）、刷新预览
-	_flash("已清空卡组 %d 与当前阵容（此后改动阵容会自动保存）。" % _deck_current_slot)
 
 func _load_deck(slot: int) -> void:
 	var ids: Array = DeckStore.load_deck(slot)
-	if ids.size() == 0:
-		# 空槽：不覆盖当前阵容；在卡池改选即会自动保存到本槽
-		_flash("卡组 %d 是空的：直接在卡池改选，阵容会自动保存到本槽。" % slot)
-		return
-	if ids.size() < MIN_PICK:
-		# 旧档/半存卡组不足 5 人：自动随机选 8 名顶上并写回
-		_selected = _random_full_deck()
-		_update_ui()
-		_flash("卡组 %d 不足 %d 人，已自动随机选满 %d 名英雄。" % [slot, MIN_PICK, PICK_COUNT])
-		return
 	_selected.clear()
 	for id in ids:
-		_selected.append(id)
+		_selected.append(String(id))
 	_update_ui()
 	_refresh_deck_slots()
-	_flash("已读取卡组 %d。" % slot)
 
 func _refresh_deck_slots() -> void:
 	for slot in _deck_tab_buttons.keys():
