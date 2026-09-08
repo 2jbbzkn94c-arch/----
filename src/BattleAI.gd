@@ -962,9 +962,11 @@ func _sim_lowest_hp(sim: Sim, t: SimUnit) -> bool:
 	return true
 
 func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
+	# 与真实 Battle._is_isolated 一致：目标"孤立"= 1 格内**没有与其同阵营的队友**相邻。
+	# 排除 attacker 与 target 自身；只看与 target 同阵营(fn==target.fn)的其他单位。
 	for u in sim.units:
-		if u.alive and u != attacker and u.fn != target.fn and grid.distance(target.cell, u.cell) == 1:
-			return false
+		if u.alive and u != target and u != attacker and u.fn == target.fn and grid.distance(target.cell, u.cell) == 1:
+			return false   # 有同阵营队友相邻 → 目标不孤
 	return true
 
 # ---- 启发式评估（敌方视角，越高对敌方越有利）----
