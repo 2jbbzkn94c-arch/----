@@ -3174,9 +3174,9 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 嬉皮死神：专属镰刀弧形收割（唯一特效，不叠加通用光环，突死神镰刀"
 		_spawn_scythe(attacker, target)
 	if target.alive:
-		# 嬉皮死神双倍命中：本次受击伤害数字用"重击"紫粉放大样式
-		if attacker.alive and attacker.hero_id == "hero_30" and is_instance_valid(target) \
-				and _hero(attacker).damage_mult(target) == 2:
+		# 倍率型技能(嬉皮死神/小阴影/赏金猎人等 damage_mult>1)命中：本次伤害数字用大号样式
+		if attacker.alive and attacker.skill_allowed() and is_instance_valid(target) \
+				and _hero(attacker).damage_mult(target) > 1:
 			target.set_big_hit_style()
 		# 长角未沉默：on_attack 统一结算基础伤害（击退倍，不能倍单次）
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）

@@ -19,7 +19,10 @@ func _double_hit_fx(target: Unit) -> void:
 		battle._boom_ring_fx(target.cell, _FX_COLOR, 2.0, 0.55)
 
 func on_attack(target: Unit) -> void:
-	if damage_mult(target) == 2:
+	# 仅当这次伤害真的打到(目标掉血/死亡)才播双倍演出；被圣盾完全挡下则无效果无演出
+	if target == null or not is_instance_valid(target):
+		return
+	if damage_mult(target) == 2 and (not target.alive or target.hp < battle._attack_hp_before):
 		_double_hit_fx(target)
 
 func on_attack_dead(target: Unit) -> void:
