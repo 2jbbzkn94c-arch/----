@@ -4710,8 +4710,9 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	occupancy[grave] = u
 	t.tween_property(u, "modulate:a", 1.0, 0.3)
 	log_message.emit("%s 替补登场（%s）。" % [def.display_name, "我方" if side == _my_faction() else "敌方"])
-	# 替补登场效果
-	_trigger_on_enter.call_deferred(u)
+	# 替补登场效果：当场同步结算（避免 call_deferred 落到下一帧、晚于"回合开始技/共鸣取和"执行，
+	# 造成登场技明明先发生却算不进当回合的问题）
+	_trigger_on_enter(u)
 
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
