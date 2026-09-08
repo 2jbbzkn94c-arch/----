@@ -478,14 +478,15 @@ func _load_heroes() -> void:
 		h.desc = skill_raw
 		h.is_summon = is_summon
 
-		# 解析三列（配合/克制/被克制）：文本存备注，并抽取其中的英雄名 -> 协同/克制 id
+		# 存原文备注(真正解析在全部英雄加载完后统一跑，避免依赖加载顺序——见函数末尾 _resolve_notes)
 		h.synergy_note = cell_at.call(col_syn)
 		h.effective_behavior = cell_at.call(col_eff)
 		h.countered_by_note = cell_at.call(col_counter)
-		h.sy_partners = _without_self((_extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note) + _numeric_filter_heroes(h.synergy_note)), h.id)
-		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note) + _numeric_filter_heroes(h.countered_by_note)), h.id)   # 被克制列->克制我的英雄
-		h.beats = _without_self((_extract_ids(h.effective_behavior) + _semantic_heroes(h.effective_behavior) + _numeric_filter_heroes(h.effective_behavior)), h.id)    # 克制/有效行为列->我能克制的英雄
-		h.explicit_pairs = _without_self(_extract_ids(cell_at.call(col_pairs)), h.id)   # "协同英雄"列：直接点名的搭档
+		h.pairs_note = cell_at.call(col_pairs)
+		h.sy_partners = []
+		h.counters = []
+		h.beats = []
+		h.explicit_pairs = []
 		h.pairs_note = cell_at.call(col_pairs)
 
 		# 影响 AI 行为的手动评分列
@@ -526,6 +527,15 @@ func _load_heroes() -> void:
 			summons[h.id] = h
 		else:
 			heroes[h.id] = h
+
+	# 全部英雄加载完毕后再统一解析三列：此时 heroes 已含所有 id，
+	# 数值筛选/语义解析遍历全量，不再受"处理靠前英雄时排在后面的还没加载"的顺序影响。
+	for hid in heroes.keys():
+		var hd: HeroDef = heroes[hid]
+		hd.sy_partners = _without_self((_extract_ids(hd.synergy_note) + _semantic_heroes(hd.synergy_note) + _numeric_filter_heroes(hd.synergy_note)), hd.id)
+		hd.counters = _without_self((_extract_ids(hd.countered_by_note) + _semantic_heroes(hd.countered_by_note) + _numeric_filter_heroes(hd.countered_by_note)), hd.id)   # 被克制列->克制我的英雄
+		hd.beats = _without_self((_extract_ids(hd.effective_behavior) + _semantic_heroes(hd.effective_behavior) + _numeric_filter_heroes(hd.effective_behavior)), hd.id)    # 克制/有效行为列->我能克制的英雄
+		hd.explicit_pairs = _without_self(_extract_ids(hd.pairs_note), hd.id)   # "协同英雄"列：直接点名的搭档
 
 
 # 从 res://英雄相关/角色列表.json 读取全部行（由本机 PowerShell 脚本从 角色列表.xlsx 转换生成；
