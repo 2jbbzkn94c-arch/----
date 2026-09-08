@@ -117,23 +117,23 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 弯月刃体（+X），银蓝剑光
+		# 与嬉皮死神同构的弯月镰刃造型（+X），配色为银蓝剑光
 		var blade := PackedVector2Array([
-			Vector2(0, 3), Vector2(34, -24), Vector2(70, -18), Vector2(92, 0),
-			Vector2(70, 18), Vector2(34, 24), Vector2(0, -3),
+			Vector2(0, 3), Vector2(30, -22), Vector2(64, -16), Vector2(84, 0),
+			Vector2(64, 16), Vector2(30, 22), Vector2(0, -3),
 		])
 		if _poly_ok(blade):
-			draw_colored_polygon(blade, Color(0.72, 0.88, 1.0, 0.95))
+			draw_colored_polygon(blade, Color(0.72, 0.9, 1.0, 0.96))
 		# 白亮刃口
-		draw_polyline(PackedVector2Array([Vector2(6, 0), Vector2(88, 0)]), Color(1.0, 1.0, 1.0, 1.0), 3.0, true)
+		draw_polyline(PackedVector2Array([Vector2(4, 0), Vector2(80, 0)]), Color(1.0, 1.0, 1.0, 1.0), 3.0, true)
 		# 青色拖尾刃气
 		var wisp := PackedVector2Array([
-			Vector2(12, 0), Vector2(52, -16), Vector2(84, -8), Vector2(52, 16),
+			Vector2(10, 0), Vector2(46, -14), Vector2(76, -6), Vector2(46, 14),
 		])
 		if _poly_ok(wisp):
-			draw_colored_polygon(wisp, Color(0.55, 0.85, 1.0, 0.35))
+			draw_colored_polygon(wisp, Color(0.6, 0.9, 1.0, 0.35))
 		# 光晕
-		draw_circle(Vector2(44, 0), 36, Color(0.6, 0.85, 1.0, 0.15))
+		draw_circle(Vector2(40, 0), 34, Color(0.65, 0.88, 1.0, 0.16))
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
