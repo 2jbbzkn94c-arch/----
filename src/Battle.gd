@@ -117,23 +117,17 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 与嬉皮死神同构的弯月镰刃造型（+X），配色为银蓝剑光
-		var blade := PackedVector2Array([
-			Vector2(0, 3), Vector2(30, -22), Vector2(64, -16), Vector2(84, 0),
-			Vector2(64, 16), Vector2(30, 22), Vector2(0, -3),
-		])
-		if _poly_ok(blade):
-			draw_colored_polygon(blade, Color(0.72, 0.9, 1.0, 0.96))
-		# 白亮刃口
-		draw_polyline(PackedVector2Array([Vector2(4, 0), Vector2(80, 0)]), Color(1.0, 1.0, 1.0, 1.0), 3.0, true)
-		# 青色拖尾刃气
-		var wisp := PackedVector2Array([
-			Vector2(10, 0), Vector2(46, -14), Vector2(76, -6), Vector2(46, 14),
-		])
-		if _poly_ok(wisp):
-			draw_colored_polygon(wisp, Color(0.6, 0.9, 1.0, 0.35))
-		# 光晕
-		draw_circle(Vector2(40, 0), 34, Color(0.65, 0.88, 1.0, 0.16))
+		# 真正内凹的弯月：以(+X方向)为一根厚度弧线带，弧口朝后，呈 C 形月牙
+		var a0 := deg_to_rad(-108.0)
+		var a1 := deg_to_rad(108.0)
+		# 外弧白亮刃口
+		draw_arc(Vector2.ZERO, 56.0, a0, a1, 40, Color(1.0, 1.0, 1.0, 1.0), 4.0, true)
+		# 主体银蓝弧带(宽厚月牙刃)
+		draw_arc(Vector2.ZERO, 62.0, a0, a1, 40, Color(0.72, 0.9, 1.0, 0.92), 20.0, true)
+		# 内侧青光渐隐弧带
+		draw_arc(Vector2.ZERO, 40.0, a0, a1, 40, Color(0.55, 0.85, 1.0, 0.5), 10.0, true)
+		# 外圈柔光
+		draw_arc(Vector2.ZERO, 74.0, a0, a1, 40, Color(0.6, 0.88, 1.0, 0.22), 8.0, true)
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
