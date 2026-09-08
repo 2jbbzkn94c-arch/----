@@ -514,8 +514,12 @@ func _update_ui() -> void:
 	_auto_sync()
 	_refresh_deck_slots()
 
-# 阵容任一变化 → 自动写回当前卡组槽（内容相同则不重复写盘）
+# 阵容任一变化 → 自动写回当前卡组槽（内容相同则不重复写盘）。
+# 仅在普通模式页可见(用户进入选人/编辑)时生效：
+# 页面构建阶段(尚未显示)当前阵容为空，若盲目同步会把槽位存档覆盖成空。
 func _auto_sync() -> void:
+	if _team_view == null or not _team_view.visible:
+		return
 	var stored: Array = DeckStore.load_deck(_deck_current_slot)
 	var cur: Array = _selected.duplicate()
 	if stored != cur:

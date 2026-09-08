@@ -205,61 +205,72 @@ func _build() -> void:
 	add_child(dim)
 
 	var vbox := VBoxContainer.new()
-	vbox.position = Vector2(24, 100)
-	vbox.size = Vector2(get_viewport().get_visible_rect().size.x - 48, 520)
-	vbox.add_theme_constant_override("separation", 12)
+	vbox.position = Vector2(28, 44)
+	vbox.size = Vector2(get_viewport().get_visible_rect().size.x - 56, get_viewport().get_visible_rect().size.y - 96)
+	vbox.add_theme_constant_override("separation", 18)
 	add_child(vbox)
 
 	var title := Label.new()
 	title.text = "联机对战"
-	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_font_size_override("font_size", 38)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 
 	_status = Label.new()
 	_status.text = "未连接"
-	_status.add_theme_font_size_override("font_size", 15)
+	_status.add_theme_font_size_override("font_size", 20)
 	_status.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_status)
 
 	# 模式选择（仅主机可选；客户端跟随主机）
 	var mode_row := HBoxContainer.new()
-	mode_row.add_theme_constant_override("separation", 10)
+	mode_row.add_theme_constant_override("separation", 14)
 	vbox.add_child(mode_row)
 	var btn_normal := Button.new()
 	btn_normal.text = "普通模式"
+	btn_normal.custom_minimum_size = Vector2(0, 58)
+	btn_normal.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_normal.add_theme_font_size_override("font_size", 24)
 	btn_normal.pressed.connect(func(): _pick_mode("normal"))
 	mode_row.add_child(btn_normal)
 	var btn_arena := Button.new()
 	btn_arena.text = "竞技场模式"
+	btn_arena.custom_minimum_size = Vector2(0, 58)
+	btn_arena.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn_arena.add_theme_font_size_override("font_size", 24)
 	btn_arena.pressed.connect(func(): _pick_mode("arena"))
 	mode_row.add_child(btn_arena)
 	_mode_btn = [btn_normal, btn_arena]
 	_mode_label = Label.new()
+	_mode_label.add_theme_font_size_override("font_size", 20)
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_mode_label)
 
 	_btn_host = Button.new()
 	_btn_host.text = "开房（作为主机）"
-	_btn_host.custom_minimum_size = Vector2(0, 44)
+	_btn_host.custom_minimum_size = Vector2(0, 62)
+	_btn_host.add_theme_font_size_override("font_size", 24)
 	_btn_host.pressed.connect(_on_host)
 	vbox.add_child(_btn_host)
 
 	var ip_label := Label.new()
 	ip_label.text = "主机地址（客户端填写）:"
-	ip_label.add_theme_font_size_override("font_size", 13)
+	ip_label.add_theme_font_size_override("font_size", 18)
+	ip_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
 	vbox.add_child(ip_label)
 
 	_ip = LineEdit.new()
 	_ip.text = "127.0.0.1"
-	_ip.custom_minimum_size = Vector2(0, 38)
+	_ip.custom_minimum_size = Vector2(0, 54)
+	_ip.add_theme_font_size_override("font_size", 22)
 	vbox.add_child(_ip)
 
 	_btn_join = Button.new()
 	_btn_join.text = "加入（作为客户端）"
-	_btn_join.custom_minimum_size = Vector2(0, 44)
+	_btn_join.custom_minimum_size = Vector2(0, 62)
+	_btn_join.add_theme_font_size_override("font_size", 24)
 	_btn_join.pressed.connect(_on_join)
 	vbox.add_child(_btn_join)
 
@@ -270,7 +281,7 @@ func _build() -> void:
 	_slot_head = slot_head
 	var slot_label := Label.new()
 	slot_label.text = "选择你的卡组槽（普通模式）："
-	slot_label.add_theme_font_size_override("font_size", 14)
+	slot_label.add_theme_font_size_override("font_size", 20)
 	slot_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	slot_head.add_child(slot_label)
 	_slot_label = slot_label
@@ -279,17 +290,20 @@ func _build() -> void:
 	slot_head.add_child(head_space)
 	var edit_btn := Button.new()
 	edit_btn.text = "编辑卡组"
-	edit_btn.custom_minimum_size = Vector2(0, 34)
+	edit_btn.custom_minimum_size = Vector2(0, 48)
+	edit_btn.add_theme_font_size_override("font_size", 20)
 	edit_btn.pressed.connect(_open_deck_editor)
 	slot_head.add_child(edit_btn)
 	_btn_edit = edit_btn
 	var slot_row := HBoxContainer.new()
-	slot_row.add_theme_constant_override("separation", 8)
+	slot_row.add_theme_constant_override("separation", 10)
 	vbox.add_child(slot_row)
 	for s in SLOTS:
 		var b := Button.new()
 		b.text = "槽%d" % s
-		b.custom_minimum_size = Vector2(0, 40)
+		b.custom_minimum_size = Vector2(0, 58)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.add_theme_font_size_override("font_size", 24)
 		b.pressed.connect(_choose_slot.bind(s))
 		_slot_btn.append(b)
 		slot_row.add_child(b)
@@ -300,7 +314,7 @@ func _build() -> void:
 	# 卡组状态文案（阵容以卡面队列显示，这里只放状态）
 	_deck_info = Label.new()
 	_deck_info.text = "卡组：未选择"
-	_deck_info.add_theme_font_size_override("font_size", 14)
+	_deck_info.add_theme_font_size_override("font_size", 18)
 	_deck_info.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
 	_deck_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_deck_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -308,7 +322,8 @@ func _build() -> void:
 	# 确认卡组：点了槽位后还需"确认"才会把选择发给对方（避免误点/反悔时暴露选择）
 	_btn_confirm = Button.new()
 	_btn_confirm.text = "确认卡组"
-	_btn_confirm.custom_minimum_size = Vector2(0, 40)
+	_btn_confirm.custom_minimum_size = Vector2(0, 56)
+	_btn_confirm.add_theme_font_size_override("font_size", 22)
 	_btn_confirm.disabled = true
 	_btn_confirm.pressed.connect(_on_confirm_slot)
 	vbox.add_child(_btn_confirm)
@@ -316,21 +331,24 @@ func _build() -> void:
 	# 竞技场模式：加入方点击"准备完毕"后，主机才能开始对局
 	_btn_ready = Button.new()
 	_btn_ready.text = "准备完毕"
-	_btn_ready.custom_minimum_size = Vector2(0, 44)
+	_btn_ready.custom_minimum_size = Vector2(0, 60)
+	_btn_ready.add_theme_font_size_override("font_size", 22)
 	_btn_ready.disabled = true
 	_btn_ready.pressed.connect(_on_ready_toggle)
 	vbox.add_child(_btn_ready)
 
 	_btn_start = Button.new()
 	_btn_start.text = "开始对局"
-	_btn_start.custom_minimum_size = Vector2(0, 46)
+	_btn_start.custom_minimum_size = Vector2(0, 62)
+	_btn_start.add_theme_font_size_override("font_size", 24)
 	_btn_start.disabled = true
 	_btn_start.pressed.connect(_on_start)
 	vbox.add_child(_btn_start)
 
 	var btn_back := Button.new()
 	btn_back.text = "返回"
-	btn_back.custom_minimum_size = Vector2(0, 40)
+	btn_back.custom_minimum_size = Vector2(0, 56)
+	btn_back.add_theme_font_size_override("font_size", 22)
 	btn_back.pressed.connect(_back_to_menu)
 	vbox.add_child(btn_back)
 
