@@ -11,11 +11,13 @@ const MIN_PLAYER := 3   # 我方最少可选 3 名（首发三人即满）；敌
 var _side := 0              # 当前编辑的队伍：0=我方 1=敌方
 var _sel_p: Array[String] = []
 var _sel_e: Array[String] = []
-var _btns: Dictionary = {}  # hero_id -> Button
+var _btns: Dictionary = {}  # hero_id -> HexCard
 var _count_label: Label
 var _status_label: Label
 var _side_label: Label
 var _start_btn: Button
+var _pool_scroll: ScrollContainer = null   # 英雄池滚动容器（触屏拖动）
+var _pool_touch_down := false              # 触屏按住英雄池中
 
 # 测试场里各队可上场的格子（底部行我方 / 第一满行敌方），只放首发 3 个
 const PLAYER_CELLS := [Vector2i(0, 6), Vector2i(2, 6), Vector2i(4, 6)]
@@ -23,6 +25,7 @@ const ENEMY_CELLS := [Vector2i(0, 1), Vector2i(2, 1), Vector2i(4, 1)]
 
 func _ready() -> void:
 	_build()
+	set_process_input(true)   # 触屏拖动英雄池
 
 func _cur() -> Array:
 	return _sel_p if _side == 0 else _sel_e
@@ -77,28 +80,17 @@ func _build() -> void:
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_status_label)
 
-	# 卡池
+	# 英雄池：与普通模式选人页同款（5 列蜂窝 HexCard、纵向滚动、触屏拖动）
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED   # 防左右滑
+	_pool_scroll = scroll
 	vbox.add_child(scroll)
-	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 12)
-	grid.add_theme_constant_override("v_separation", 12)
-	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(grid)
-	for id in DataRegistry.heroes.keys():
-		var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
-		var b := Button.new()
-		b.text = def.display_name
-		b.add_theme_font_size_override("font_size", 20)
-		b.custom_minimum_size = Vector2(0, 62)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # 让每格横向撑满列宽
-		b.toggle_mode = true
-		b.pressed.connect(_toggle.bind(id))
-		_btns[id] = b
-		grid.add_child(b)
+	var hex_host := Control.new()
+	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(hex_host)
+	_build_hex_pool(hex_host)
 
 	var btn_row := HBoxContainer.new()
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -125,6 +117,53 @@ func _build() -> void:
 
 	_refresh()
 
+# 与普通模式英雄池同款：5 列平顶蜂窝 HexCard，按稀有度排（白→金→紫→虹），超高可滚动
+func _build_hex_pool(host: Control) -> void:
+	var ids: Array = DataRegistry.heroes.keys()
+	ids.sort_custom(func(a: String, b: String):
+		var da := DataRegistry.get_hero(a)
+		var db := DataRegistry.get_hero(b)
+		var ra := da.rarity if da != null else 0
+		var rb := db.rarity if db != null else 0
+		if ra != rb:
+			return ra < rb
+		return a < b)
+	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 64.0, 320.0)
+	var r: float = clampf(avail_w / 8.0, 30.0, 96.0)   # 5 列总宽 = 8r
+	var sq3 := sqrt(3.0)
+	var card_r: float = r * 0.96
+	var max_x := 0.0
+	var max_y := 0.0
+	for i in ids.size():
+		var id: String = ids[i]
+		var col := i % 5
+		var row := int(i / 5)
+		var cx := r + float(col) * 1.5 * r
+		var cy := r + sq3 * r * (float(row) + (0.5 if col % 2 == 1 else 0.0))
+		var card := HexCard.new(DataRegistry.get_hero(id), id, card_r)
+		card.position = Vector2(cx - card_r, cy - sq3 * card_r * 0.5)
+		card.clicked.connect(_toggle)
+		host.add_child(card)
+		_btns[id] = card
+		max_x = maxf(max_x, cx + r)
+		max_y = maxf(max_y, cy + sq3 * r * 0.5)
+	host.custom_minimum_size = Vector2(max_x, max_y)
+	host.size = Vector2(max_x, max_y)
+
+# 触屏拖动滚动英雄池（模拟器/手机上原生触摸拖动不总生效，与普通模式同处理）
+func _input(ev: InputEvent) -> void:
+	if _pool_scroll == null or not _pool_scroll.is_visible_in_tree():
+		return
+	if ev is InputEventScreenTouch:
+		var st := ev as InputEventScreenTouch
+		if st.pressed:
+			_pool_touch_down = _pool_scroll.get_global_rect().has_point(st.position)
+		else:
+			_pool_touch_down = false
+	elif _pool_touch_down and ev is InputEventScreenDrag:
+		var sd := ev as InputEventScreenDrag
+		_pool_scroll.scroll_vertical = int(_pool_scroll.scroll_vertical - sd.relative.y)
+
 func _pick_side(s: int) -> void:
 	_side = s
 	_refresh()
@@ -136,7 +175,7 @@ func _toggle(id: String) -> void:
 	else:
 		if arr.size() >= TEAM_SIZE:
 			_status_label.text = "每队上限 %d 人（前 %d 首发、其余替补）。" % [TEAM_SIZE, STARTERS]
-			_btns[id].set_pressed_no_signal(false)
+			(_btns[id] as HexCard).selected = false
 			return
 		arr.append(id)
 	_refresh()
@@ -149,7 +188,7 @@ func _refresh() -> void:
 	var enemy_ok := _sel_e.size() == 0 or _sel_e.size() <= TEAM_SIZE
 	_start_btn.disabled = not (player_ok and enemy_ok)
 	for id in _btns.keys():
-		_btns[id].set_pressed_no_signal(_cur().has(id))
+		(_btns[id] as HexCard).selected = _cur().has(id)
 	if not player_ok or not enemy_ok:
 		var hint := "请组建我方队伍：最少 %d 名（上限 %d，前 %d 名首发，其余替补）。当前先编辑%s。" % [MIN_PLAYER, TEAM_SIZE, STARTERS, "敌方" if _side == 1 else "我方"]
 		if _sel_p.size() >= MIN_PLAYER and _sel_e.size() == 0:
