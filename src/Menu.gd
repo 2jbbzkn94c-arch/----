@@ -618,7 +618,7 @@ func _refresh_deck_slots() -> void:
 func _build_deck_preview(ids: Array) -> void:
 	var avail: float = get_viewport().get_visible_rect().size.x - 80.0
 	var n := maxi(ids.size(), 1)
-	var r: float = minf(34.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
+	var r: float = minf(46.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
 	var sq3 := sqrt(3.0)
 	var col_step := 1.5 * r
 	var row_step := sq3 * r
