@@ -2688,15 +2688,14 @@ func _apply_online_rematch(seed_value: int) -> void:
 	GameState.surrender = false
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
-# 对端退断线：联机对局中任一方离开（返回大关闭），另一端也要断开并回大厅，避免卡在对局里
+# 对端断线：联机对局中任一方离开（返回大厅/断网）时，本端不再直接跳场景，
+# 而是让 HUD 弹"已断线，本局无法继续"提示；用户点「返回大厅」后统一收尾回大厅。
 func _on_net_disconnected() -> void:
 	if not GameState.is_online:
 		return
 	if state == State.ENDED:
-		return   # 已结算（胜负框在）：直接回大厅由结算按钮处理，不再额外跳
-	GameState.reset_online()
-	NetBus.stop()
-	get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
+		return   # 已结算（胜负框在）：由结算按钮处理，不再额外弹断线提示
+	# 收尾（reset_online + NetBus.stop + 回大厅）由 HUD 断线提示的按钮统一执行
 
 # 收到对端消息：若是游戏指令，apply_command 执行/重演（主机收到客户端指令 -> 执行；客户端收到主机广播 -> 重演）
 func _on_net_packet(_from_id: int, text: String) -> void:

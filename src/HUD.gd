@@ -12,6 +12,7 @@ var _flame_icon: Control = null   # 扣血提醒火焰（第11回合起常驻脉
 var _round_fire_tween: Tween = null   # 回合标签的"燃烧"颜色脉动 tween（第11回合起）
 var _turn_timer_label: Label   # 本端回合剩余时间（对局中我方回合显示）
 var _result_overlay: Control = null
+var _netdown_overlay: CanvasLayer = null   # 联机对局断线提示层
 var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）——替补阶段复用为"选人面板"
 var _arena_panel: PanelContainer = null   # 竞技场选人面板（2选1）
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
@@ -37,6 +38,71 @@ var _chat_bubble_tween: Tween = null
 func _ready() -> void:
 	layer = 50
 	_build()
+	NetBus.disconnected.connect(_on_battle_disconnected)   # 对局中断线弹提示（不再直接跳场景）
+
+# 联机对局断线：弹出"已断线，本局无法继续"提示，用户点按钮后回大厅
+func _on_battle_disconnected() -> void:
+	if not GameState.is_online or _netdown_overlay != null:
+		return
+	if battle == null or not is_instance_valid(battle):
+		return
+	if battle.state == Battle.State.ENDED:
+		return   # 已结算：结算按钮处理
+	var layer := CanvasLayer.new()
+	layer.layer = 95
+	add_child(layer)
+	_netdown_overlay = layer
+	var vsize := get_viewport().get_visible_rect().size
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.55)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(dim)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.12, 0.18, 0.98)
+	sb.corner_radius_top_left = 10
+	sb.corner_radius_top_right = 10
+	sb.corner_radius_bottom_left = 10
+	sb.corner_radius_bottom_right = 10
+	sb.content_margin_left = 24.0
+	sb.content_margin_right = 24.0
+	sb.content_margin_top = 22.0
+	sb.content_margin_bottom = 22.0
+	panel.add_theme_stylebox_override("panel", sb)
+	layer.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	box.custom_minimum_size = Vector2(520, 0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "连接已断开"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	var note := Label.new()
+	note.text = "本局无法继续，对局已结束。\n点「返回大厅」回到联机大厅，可重新开房或重新连接。"
+	note.add_theme_font_size_override("font_size", 20)
+	note.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	box.add_child(note)
+	var bt := Button.new()
+	bt.text = "返回大厅"
+	bt.custom_minimum_size = Vector2(0, 64)
+	bt.add_theme_font_size_override("font_size", 24)
+	bt.pressed.connect(_on_netdown_back)
+	box.add_child(bt)
+	panel.reset_size()
+	panel.position = Vector2((vsize.x - panel.size.x) / 2.0, (vsize.y - panel.size.y) / 2.0)
+
+func _on_netdown_back() -> void:
+	if _netdown_overlay != null:
+		_netdown_overlay.queue_free()
+		_netdown_overlay = null
+	GameState.reset_online()
+	NetBus.stop()
+	get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
 
 func bind(b: Battle) -> void:
 	battle = b
