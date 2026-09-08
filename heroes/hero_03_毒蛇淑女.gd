@@ -10,7 +10,7 @@ func on_attack(target: Unit) -> void:
 	if unit.effective_atk() <= 0:
 		return   # 攻击力为 0：未造成伤害，无法附加[猛毒]
 	if target and target.alive:
-		if not target.has_status("shield"):   # 圣盾会挡掉本次猛毒：不播命中/机制演出
+		if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
 			fx()
 			fx_on_target(target)
 		battle._add_status_msg(target, "poison", "猛毒")

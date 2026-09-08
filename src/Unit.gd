@@ -66,6 +66,7 @@ var _attack_dot: Label    # 可攻击标识（红色）
 var _marker_host: Control # 红绿标识容器（整体居中）
 var _was_counter_damage := false   # 本次受伤是否为反击伤害
 var _dmg_style := 0                # 本次受击伤害数字样式：0=普通 2=重击(紫/放大), Battle 施加前标记
+var _shield_block_status := false  # 本次"带状态攻击"被圣盾整段挡下:伤害与后续状态都不生效
 
 func _init(def: DataRegistry.HeroDef, faction_ := 0, cell_ := Vector2i.ZERO, radius: float = 44.0) -> void:
 	hero_id = def.id

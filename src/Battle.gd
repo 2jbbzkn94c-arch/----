@@ -3182,13 +3182,14 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 长角未沉默：on_attack 统一结算基础伤害（击退倍，不能倍单次）
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
-			# 会附加负面状态的攻击：目标带圣盾时伤害不吃盾(盾保留给本次异常,挡掉状态)
-			var keep_shield := target.has_status("shield") \
-					and attacker.alive and _hero(attacker).applies_status_on_hit()
-			target.take_damage(dmg, keep_shield, false, "被%s攻击" % attacker.display_name)
+			# 带状态的攻击命中带圣盾目标：圣盾挡下整次攻击——不扣血、后续状态也不生效
+			if target.has_status("shield") and attacker.alive and _hero(attacker).applies_status_on_hit():
+				target._shield_block_status = true
+			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name)
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
+	target._shield_block_status = false   # 本次攻击结算完,清除"盾挡整段"标记
 	# 太阳斩：每次攻击后攻击力-1（立即显示，不等反击
 	_hero(attacker).on_after_attack()
 	# 技能/攻击击杀：死亡格按攻击者主色补一发爆发粒子(普通平A击杀也有直观反馈)
@@ -3498,6 +3499,9 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 	_hero(u).on_attack(target)
 
 func _add_status_msg(u: Unit, status: String, label: String) -> void:
+	if u._shield_block_status:
+		# 本次攻击已被圣盾整段挡下：不再施加状态(盾的 [圣盾] 提示已由挡伤时显示)
+		return
 	u.add_status(status)
 	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
 	log_message.emit("%s 获得[%s]。" % [u.display_name, label])

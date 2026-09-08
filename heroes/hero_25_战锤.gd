@@ -7,7 +7,7 @@ func applies_status_on_hit() -> bool:
 
 func on_attack(target: Unit) -> void:
 	if target and target.alive:
-		if not target.has_status("shield"):   # 圣盾会挡掉本次麻痹/冰冻：不播命中/机制演出
+		if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
 			fx()
 			fx_on_target(target)
 		battle._add_status_msg(target, "atkdown", "麻痹")
