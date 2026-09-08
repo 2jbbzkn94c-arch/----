@@ -128,6 +128,13 @@ class SwordCrescent:
 		draw_arc(Vector2.ZERO, 40.0, a0, a1, 40, Color(0.55, 0.85, 1.0, 0.5), 10.0, true)
 		# 外圈柔光
 		draw_arc(Vector2.ZERO, 74.0, a0, a1, 40, Color(0.6, 0.88, 1.0, 0.22), 8.0, true)
+		# 两端圆帽：弧带默认平口呈方形，这里用端角圆点收圆，月牙两端是圆弧状的
+		var e0 := Vector2(cos(a0), sin(a0))
+		var e1 := Vector2(cos(a1), sin(a1))
+		draw_circle(e0 * 62.0, 10.0, Color(0.72, 0.9, 1.0, 0.92))
+		draw_circle(e1 * 62.0, 10.0, Color(0.72, 0.9, 1.0, 0.92))
+		draw_circle(e0 * 56.0, 2.5, Color(1.0, 1.0, 1.0, 1.0))
+		draw_circle(e1 * 56.0, 2.5, Color(1.0, 1.0, 1.0, 1.0))
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
