@@ -11,7 +11,8 @@ config_version=5
 [application]
 
 config/name="酒馆纷争（战棋原型）"
-config/version="2026-09-08 16:14"
+config/version="0.1.0"
+config/version_date="2026-09-08 16:14"
 run/main_scene="res://scenes/Menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"

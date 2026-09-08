@@ -224,9 +224,9 @@ func _build() -> void:
 	var volume := VolumeControl.new()
 	add_child(volume)
 	volume.place_top_right(get_viewport().get_visible_rect().size, 8.0, 6.0)
-	# 左上角版本号（发布日期）
+	# 左上角版本号（发布日期；日期存自定义键 version_date,config/version 仅供 Godot 导出用）
 	var ver := Label.new()
-	var ver_str := str(ProjectSettings.get_setting("application/config/version", ""))
+	var ver_str := str(ProjectSettings.get_setting("application/config/version_date", ""))
 	ver.text = ver_str
 	ver.add_theme_font_size_override("font_size", 14)
 	ver.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
