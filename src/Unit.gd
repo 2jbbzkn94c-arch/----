@@ -268,7 +268,7 @@ func add_status(s: String) -> void:
 	# 圣盾判定在负墟免疫之前：带盾的负墟被负面命中先被盾挡下，不算"被负面命中"，不触发 +1 攻
 	if _is_negative_status(s) and has_status("shield"):
 		remove_status("shield")
-		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
+		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -32, -92)   # 文字抬高，避免压住伤害数字
 		return
 	# 负墟（hero_44）：免疫负面效果——不挂状态，改为"被负面攻击命中"计数 +1 攻击
 	# （一次攻击内连续施加多个负面只计一次：同帧去重）

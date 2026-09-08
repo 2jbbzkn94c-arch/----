@@ -20,7 +20,8 @@ func on_someone_damaged(target: Unit, _amount: int) -> void:
 		if is_instance_valid(me) and me.alive and is_instance_valid(tgt) and tgt.alive \
 				and tgt.faction == me.faction:
 			tgt.add_status("shield")
-			# 授予演出(与盾被消耗时的 [圣盾] 提示区分开)：目标处蓝白光环+文字"圣盾"
-			tgt.burst_fx(Color(0.5, 0.85, 1.0), "圣盾")
+			# 授予演出克制不遮挡伤害数字：仅外扩细光环 + 高处小字(不做中心白闪/粒子)
+			battle._boom_ring_fx(tgt.cell, Color(0.6, 0.9, 1.0), 1.25, 0.4)
+			tgt.float_tag_text("圣盾", Color(0.65, 0.9, 1.0))
 	grant.call_deferred()
 	battle.log_message.emit("圣光为 %s 施加[圣盾]。" % target.display_name)
