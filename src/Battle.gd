@@ -4226,7 +4226,7 @@ func _skeleton_owner_gone(s: Unit) -> void:
 func _place_enemy_sub() -> void:
 	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
 		var next_id: String = enemy_roster.pop_at(_best_enemy_sub_idx())
-		var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
+		var cell := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
 		if cell.x == -99 and cell.y == -99:
 			enemy_roster.push_front(next_id)   # 出生区满了，留到下一轮再
 			_pending_enemy_sub = 0
@@ -4375,12 +4375,16 @@ func _auto_sub_on_timeout() -> void:
 # 自动落位点：本方墓碑（含旧格式墓碑）优先，其次本方出生区空格
 func _auto_sub_cell() -> Vector2i:
 	var my_fn := _my_faction()
+	return _free_sub_cell_for(my_fn)
+
+# 通用：某阵营替补落位→ 优先该阵营自己的墓碑格(阵亡原地补)，其次该阵营出生区空格
+func _free_sub_cell_for(fn: int) -> Vector2i:
 	for c in graves.keys():
 		var gd = graves[c]
-		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == my_fn
+		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == fn
 		if mine and not occupancy.has(c):
 			return c
-	for c in _spawn_cells(my_fn):
+	for c in _spawn_cells(fn):
 		if not occupancy.has(c) and not graves.has(c):
 			return c
 	return Vector2i(-99, -99)
