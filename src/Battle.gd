@@ -736,7 +736,7 @@ func _oa_finish_to_deploy() -> void:
 
 # ---- 开局部署（棋盘上进行，带演出动画----
 const DEPLOY_COUNT_BATTLE := 3
-const DEPLOY_BUDGET_SECONDS := 30.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
+const DEPLOY_BUDGET_SECONDS := 45.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
 var deploy_budget_left := DEPLOY_BUDGET_SECONDS   # 剩余总时间（随时间流逝减少，不按轮重置）
 var deploy_budget_active := false                 # 当前是否正处本端真人选人/放位（此时才倒计时）
 # 敌方出生区整片（顶帽 row0 的 1,3 + 第一满行 row1 的 0,2,4 交错皇冠，共 5 格；居中窄顶宽底）
@@ -754,7 +754,7 @@ var _pending_deploy := ""   # 已选中的部署英雄（等待点出生格放�
 var _pending_enemy_deploy := ""   # 敌轮：客户端已选中的敌方英雄（等待点敌方出生格放置
 # ---- 竞技场模式：随机2构建双方卡组（共8轮：轮玩家选、后4轮敌方选，最终双方各8名） ----
 const ARENA_PICKS_PER_SIDE := 4   # 每边各
-const ARENA_PICK_SECONDS := 10.0  # 竞技场选人每轮限时（秒），超时自动选第 1 
+const ARENA_PICK_SECONDS := 15.0  # 竞技场选人每轮限时（秒），超时自动选第 1 
 var arena_pick_time_left := -1.0  # 当前轮剩余选择秒数0=不限时，如等待对敌方AI轮）
 var _arena_pending: Array = []       # 当前轮随机的2个候选英id
 var _arena_pool: Array = []          # 剩余候选池（未被选走的英雄）
