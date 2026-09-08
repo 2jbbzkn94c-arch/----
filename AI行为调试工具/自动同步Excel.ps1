@@ -1,4 +1,4 @@
-# 自动同步：监听 角色列表.xlsx 变化 -> 自动生成 角色列表.json
+﻿# 自动同步：监听 角色列表.xlsx 变化 -> 自动生成 角色列表.json
 # Excel 打开时也允许共享读取,XLSX 一保存即转换(即使 Excel 还开着)。
 param([string]$ProjectRoot = "D:\Game creating\战旗\英雄相关")
 
