@@ -173,6 +173,42 @@ func _semantic_heroes(text: String) -> Array:
 						out.append(hid)
 	return out
 
+# 数值筛选类文本（如"技能评分+补强>3的非替补角色"）：按补强/总评分的数值条件筛选英雄。
+# 支持句式：「X+Y>N的非替补角色」——排除替补(替补登场)角色，并检查 X/Y 对应数值之和 > N。
+# 目前仅识别 补强 / 总评分 / 技能评分 三种数值列；其余句式返回空(安全)。
+func _numeric_filter_heroes(text: String) -> Array:
+	var out: Array = []
+	if text == "" or not text.contains(">"):
+		return out
+	# 正则抓取(评分列)+补强>阈值 以及"非替补"标记
+	var re := RegEx.new()
+	re.compile("([^>]+?)[+]?补强>\\s*([0-9.]+)")
+	# 拆分整体：需要"非替补"才排除替补
+	var exclude_bench := text.contains("非替补")
+	# 识别涉及的评分列关键词
+	var uses_total := text.contains("总评分")
+	var uses_score := text.contains("技能评分")
+	var threshold := 0.0
+	var m := re.search(text)
+	if m == null:
+		return out
+	threshold = m.get_string(2).to_float()
+	for id in heroes:
+		var d: HeroDef = heroes[id]
+		if d == null or d.is_summon:
+			continue
+		if exclude_bench and d.skills.has(Skill.BENCH):
+			continue
+		var v := 0.0
+		if uses_total:
+			v += d.ai_total
+		if uses_score:
+			v += d.ai_skill_score
+		v += d.ai_boost
+		if v > threshold and not out.has(id):
+			out.append(id)
+	return out
+
 # 品级
 enum Rarity { SILVER, GOLD, MASTER, LEGEND }
 
@@ -428,9 +464,9 @@ func _load_heroes() -> void:
 		h.synergy_note = cell_at.call(col_syn)
 		h.effective_behavior = cell_at.call(col_eff)
 		h.countered_by_note = cell_at.call(col_counter)
-		h.sy_partners = _without_self((_extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note)), h.id)
-		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note)), h.id)   # 被克制列->克制我的英雄
-		h.beats = _without_self((_extract_ids(h.effective_behavior) + _semantic_heroes(h.effective_behavior)), h.id)    # 克制/有效行为列->我能克制的英雄
+		h.sy_partners = _without_self((_extract_ids(h.synergy_note) + _semantic_heroes(h.synergy_note) + _numeric_filter_heroes(h.synergy_note)), h.id)
+		h.counters = _without_self((_extract_ids(h.countered_by_note) + _semantic_heroes(h.countered_by_note) + _numeric_filter_heroes(h.countered_by_note)), h.id)   # 被克制列->克制我的英雄
+		h.beats = _without_self((_extract_ids(h.effective_behavior) + _semantic_heroes(h.effective_behavior) + _numeric_filter_heroes(h.effective_behavior)), h.id)    # 克制/有效行为列->我能克制的英雄
 		h.explicit_pairs = _without_self(_extract_ids(cell_at.call(col_pairs)), h.id)   # "协同英雄"列：直接点名的搭档
 
 		# 影响 AI 行为的手动评分列
