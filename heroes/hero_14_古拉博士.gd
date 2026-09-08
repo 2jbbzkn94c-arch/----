@@ -4,8 +4,9 @@ extends HeroBase
 class_name HeroGura
 
 func on_attack(_target: Unit) -> void:
-	# 目标存活时的吸血；HP 用本次攻击结算前的值
-	if battle._attack_hp_before > unit.hp:
+	# 目标存活时的吸血；HP 用本次攻击结算前的值。
+	# 需同时满足：目标当前HP高于自己，且自己确实受伤(可被治疗)；否则不吸血也不播效果
+	if battle._attack_hp_before > unit.hp and unit.hp < unit.max_hp:
 		fx()   # 确实触发吸血才演出
 		var amt := maxi(1, unit.effective_atk())
 		battle._heal(unit, amt)
@@ -13,7 +14,7 @@ func on_attack(_target: Unit) -> void:
 
 func on_attack_dead(_target: Unit) -> void:
 	# 目标被打死时的吸血：仍按攻击前 HP 判定（攻击前 HP 大于自己则吸血）
-	if battle._attack_hp_before > unit.hp:
+	if battle._attack_hp_before > unit.hp and unit.hp < unit.max_hp:
 		fx()   # 确实触发吸血才演出
 		var amt := maxi(1, unit.effective_atk())
 		battle._heal(unit, amt)
