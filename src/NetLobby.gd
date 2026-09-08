@@ -649,8 +649,9 @@ func _refresh_ui() -> void:
 		var mb: Button = b
 		# 仅主机能选择模式；客户端按钮置灰并跟随主机
 		mb.disabled = not my_is_host
-	# 竞技场模式：整块隐藏"卡组槽选择 + 卡组展示 + 确认卡组"，避免出现无关卡槽提醒
-	var show_slots := _mode == "normal"
+	# 卡组槽区域仅在"已开房/加入（联网）且当前为普通模式"时显示：
+	# 未连接时默认隐藏，开房/加入成功、或房主已开房后点「普通模式」即显示。
+	var show_slots := _mode == "normal" and NetBus.is_online
 	if _slot_head != null:
 		_slot_head.visible = show_slots
 	for b in _slot_btn:
