@@ -173,26 +173,27 @@ func _semantic_heroes(text: String) -> Array:
 						out.append(hid)
 	return out
 
-# 数值筛选类文本（如"技能评分+补强>3的非替补角色"）：按补强/总评分的数值条件筛选英雄。
-# 支持句式：「X+Y>N的非替补角色」——排除替补(替补登场)角色，并检查 X/Y 对应数值之和 > N。
-# 目前仅识别 补强 / 总评分 / 技能评分 三种数值列；其余句式返回空(安全)。
+# 数值筛选类文本（如"技能评分+补强>3的非替补角色"、"面板攻击力可以大于4的"）：
+# 按若干数值列求和之后 > 阈值的英雄筛选。支持句式「列A(+列B...)>N」。
+# 数值列：攻击力 / 补强 / 技能评分 / 总评分。阈值支持 ">N" 与中文"大于/超过/高于 N"。
 func _numeric_filter_heroes(text: String) -> Array:
 	var out: Array = []
-	if text == "" or not text.contains(">"):
+	if text == "":
 		return out
-	# 正则抓取(评分列)+补强>阈值 以及"非替补"标记
+	# 抓取阈值：支持 ">N" 或 中文"大于N/超过N/高于N"（N 可为小数）
 	var re := RegEx.new()
-	re.compile("([^>]+?)[+]?补强>\\s*([0-9.]+)")
-	# 拆分整体：需要"非替补"才排除替补
-	var exclude_bench := text.contains("非替补")
-	# 识别涉及的评分列关键词
-	var uses_total := text.contains("总评分")
-	var uses_score := text.contains("技能评分")
-	var threshold := 0.0
+	re.compile("(?:>|大于|超过|高于)\\s*([0-9]+(?:\\.[0-9]+)?)")
 	var m := re.search(text)
 	if m == null:
 		return out
-	threshold = m.get_string(2).to_float()
+	var threshold := m.get_string(1).to_float()
+	# 是否排除替补角色
+	var exclude_bench := text.contains("非替补")
+	# 文本里涉及哪些数值列（求和）
+	var uses_atk := text.contains("攻击力")
+	var uses_boost := text.contains("补强")
+	var uses_score := text.contains("技能评分")
+	var uses_total := text.contains("总评分")
 	for id in heroes:
 		var d: HeroDef = heroes[id]
 		if d == null or d.is_summon:
@@ -200,11 +201,14 @@ func _numeric_filter_heroes(text: String) -> Array:
 		if exclude_bench and d.skills.has(Skill.BENCH):
 			continue
 		var v := 0.0
-		if uses_total:
-			v += d.ai_total
+		if uses_atk:
+			v += float(d.atk)
+		if uses_boost:
+			v += d.ai_boost
 		if uses_score:
 			v += d.ai_skill_score
-		v += d.ai_boost
+		if uses_total:
+			v += d.ai_total
 		if v > threshold and not out.has(id):
 			out.append(id)
 	return out
@@ -301,7 +305,6 @@ const SEMANTIC := {
 	"攻击力收益": ["攻击增益受益", "多倍", "AOE"],
 	"需要攻击力加成": ["攻击增益受益"],
 	"能提供攻击力加成": ["攻击增益提供"],
-	"面板攻击力": ["攻击增益受益"],
 	"多倍伤害": ["多倍"],
 	"AOE": ["AOE"],
 	"治疗": ["治疗"],
