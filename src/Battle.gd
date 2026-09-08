@@ -117,24 +117,21 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 真正内凹的弯月：以(+X方向)为一根厚度弧线带，弧口朝后，呈 C 形月牙
-		var a0 := deg_to_rad(-108.0)
-		var a1 := deg_to_rad(108.0)
-		# 外弧白亮刃口
-		draw_arc(Vector2.ZERO, 56.0, a0, a1, 40, Color(1.0, 1.0, 1.0, 1.0), 4.0, true)
-		# 主体银蓝弧带(宽厚月牙刃)
-		draw_arc(Vector2.ZERO, 62.0, a0, a1, 40, Color(0.72, 0.9, 1.0, 0.92), 20.0, true)
-		# 内侧青光渐隐弧带
-		draw_arc(Vector2.ZERO, 40.0, a0, a1, 40, Color(0.55, 0.85, 1.0, 0.5), 10.0, true)
-		# 外圈柔光
-		draw_arc(Vector2.ZERO, 74.0, a0, a1, 40, Color(0.6, 0.88, 1.0, 0.22), 8.0, true)
-		# 两端圆帽：弧带默认平口呈方形，这里用端角圆点收圆，月牙两端是圆弧状的
-		var e0 := Vector2(cos(a0), sin(a0))
-		var e1 := Vector2(cos(a1), sin(a1))
-		draw_circle(e0 * 62.0, 10.0, Color(0.72, 0.9, 1.0, 0.92))
-		draw_circle(e1 * 62.0, 10.0, Color(0.72, 0.9, 1.0, 0.92))
-		draw_circle(e0 * 56.0, 2.5, Color(1.0, 1.0, 1.0, 1.0))
-		draw_circle(e1 * 56.0, 2.5, Color(1.0, 1.0, 1.0, 1.0))
+		# 多层嵌套亮弧组成的月牙刃(+X朝右为飞行方向)：左侧一重重弧层、右端收成细尖光尾
+		var a0 := deg_to_rad(-104.0)
+		var a1 := deg_to_rad(104.0)
+		# 外层蓝弧、中层青弧、内层白弧逐层往里更亮
+		draw_arc(Vector2.ZERO, 84.0, a0, a1, 48, Color(0.40, 0.66, 1.0, 0.72), 5.0, true)
+		draw_arc(Vector2.ZERO, 70.0, a0, a1, 48, Color(0.55, 0.82, 1.0, 0.85), 6.0, true)
+		draw_arc(Vector2.ZERO, 55.0, a0, a1, 48, Color(0.80, 0.95, 1.0, 0.95), 7.0, true)
+		draw_arc(Vector2.ZERO, 40.0, a0, a1, 48, Color(1.0, 1.0, 1.0, 1.0), 7.0, true)
+		# 右端细尖光尾（沿着 +X 方向的一束光刺，尖端渐收）
+		draw_polyline(PackedVector2Array([Vector2(18, 0), Vector2(46, 0), Vector2(70, 0)]),
+				Color(0.95, 0.95, 1.0, 1.0), 4.0, true)
+		draw_polyline(PackedVector2Array([Vector2(34, 0), Vector2(86, 0)]),
+				Color(0.85, 0.9, 1.0, 0.7), 2.0, true)
+		# 右端光尾与弧层交接处的亮芯
+		draw_circle(Vector2(22, 0), 8.0, Color(1.0, 1.0, 1.0, 0.9))
 
 	func _poly_ok(poly: PackedVector2Array) -> bool:
 		for v in poly:
