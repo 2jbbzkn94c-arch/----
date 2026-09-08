@@ -4,6 +4,7 @@ class_name HeroWarhammer
 
 func on_attack(target: Unit) -> void:
 	fx()
+	fx_on_target(target)
 	if target and target.alive:
 		battle._add_status_msg(target, "atkdown", "麻痹")
 		battle._add_status_msg(target, "freeze", "冰冻")

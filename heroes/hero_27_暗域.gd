@@ -4,6 +4,7 @@ class_name HeroDarkrealm
 
 func on_attack(target: Unit) -> void:
 	fx()
+	fx_on_target(target)
 	if target and target.alive:
 		battle._swap_units(unit, target)
 

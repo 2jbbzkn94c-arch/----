@@ -33,6 +33,15 @@ func fx() -> void:
 	var d := DataRegistry.hero_fx(unit.hero_id)
 	unit.burst_fx(d.color, d.text)
 
+## 技能命中目标处的受击特效：以本英雄主色在目标格爆环+粒子+白闪，不飘字(避免盖伤害数字)。
+func fx_on_target(t: Unit) -> void:
+	if unit == null or not is_instance_valid(unit):
+		return
+	if t == null or not is_instance_valid(t) or not t.alive:
+		return
+	var d := DataRegistry.hero_fx(unit.hero_id)
+	t.burst_fx(d.color, "")
+
 ## 己方回合开始时触发。返回 true 表示有技能演出（用于被动闪烁）。
 func on_turn_start() -> bool:
 	return false

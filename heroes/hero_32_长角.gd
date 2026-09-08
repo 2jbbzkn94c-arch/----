@@ -8,6 +8,7 @@ func handles_base_damage() -> bool:
 
 func on_attack(target: Unit) -> void:
 	fx()
+	fx_on_target(target)
 	if target == null or not target.alive:
 		return
 	var kb: bool = battle._knockback(target, unit.cell)

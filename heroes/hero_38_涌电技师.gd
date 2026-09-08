@@ -9,6 +9,7 @@ func on_move() -> void:
 	unit.refresh_stats()
 	var low: Unit = battle._lowest_enemy(unit)
 	if low != null:
+		fx_on_target(low)
 		low.take_damage(maxi(1, unit.effective_atk()), false, false, "被%s电击" % unit.display_name)   # 电击：可被圣盾格挡（消耗盾、免伤）
 	var selfdmg: int = maxi(1, unit.effective_atk())
 	unit.take_damage(selfdmg, false, false, "被%s的电击反噬" % unit.display_name)   # 自伤同样可被自身圣盾格挡

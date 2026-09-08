@@ -8,4 +8,5 @@ func on_move() -> void:
 		return   # 无相邻敌人：技能未生效，不演出
 	fx()
 	for v in enemies:
+		fx_on_target(v)
 		battle._add_status_msg(v, "freeze", "冰冻")

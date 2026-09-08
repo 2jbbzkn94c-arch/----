@@ -5,3 +5,4 @@ class_name HeroSkullhunter
 func on_enter() -> void:
 	if battle._hurt_lowest_enemy_stun(unit):
 		fx()   # 确实打到敌人才演出
+		fx_on_target(battle._lowest_enemy(unit))
