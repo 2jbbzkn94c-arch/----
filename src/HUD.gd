@@ -71,26 +71,39 @@ func _on_battle_disconnected() -> void:
 	panel.add_theme_stylebox_override("panel", sb)
 	layer.add_child(panel)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 16)
-	box.custom_minimum_size = Vector2(520, 0)
+	box.add_theme_constant_override("separation", 14)
+	box.custom_minimum_size = Vector2(500, 0)
 	panel.add_child(box)
 	var title := Label.new()
 	title.text = "连接已断开"
-	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color(1.0, 0.55, 0.45))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
+	var line := HSeparator.new()
+	box.add_child(line)
 	var note := Label.new()
-	note.text = "本局无法继续，对局已结束。\n点「返回大厅」回到联机大厅，可重新开房或重新连接。"
+	note.text = "对方已离开，本局无法继续。"
 	note.add_theme_font_size_override("font_size", 20)
 	note.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size = Vector2(460, 0)
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(note)
+	var hint := Label.new()
+	hint.text = "点「返回大厅」回到联机大厅，可重新开房或重新连接。"
+	hint.add_theme_font_size_override("font_size", 17)
+	hint.add_theme_color_override("font_color", Color(0.75, 0.8, 0.9))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(460, 0)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(hint)
 	var bt := Button.new()
 	bt.text = "返回大厅"
-	bt.custom_minimum_size = Vector2(0, 64)
-	bt.add_theme_font_size_override("font_size", 24)
+	bt.custom_minimum_size = Vector2(0, 60)
+	bt.add_theme_font_size_override("font_size", 22)
 	bt.pressed.connect(_on_netdown_back)
 	box.add_child(bt)
 	panel.reset_size()
