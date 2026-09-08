@@ -260,6 +260,11 @@ func add_status(s: String) -> void:
 	if hero_id == "hero_44" and _is_negative_status(s):
 		_neg_immune_on_hit()
 		return
+	# 圣盾：抵挡一次受到的伤害或异常状态——负面状态施加时也消费掉圣盾并抵消本次负面
+	if _is_negative_status(s) and has_status("shield"):
+		remove_status("shield")
+		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
+		return
 	statuses[s] = true
 	_update_status_label()
 
