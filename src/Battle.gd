@@ -117,16 +117,16 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 四层嵌套亮弧,每层两端渐细收成尖,夹角120°;由外向内更亮、更细地收敛
-		_crescent_band(84.0, Color(0.40, 0.66, 1.0, 0.45), 9.0)
-		_crescent_band(74.0, Color(0.60, 0.85, 1.0, 0.68), 7.5)
-		_crescent_band(64.0, Color(0.85, 0.96, 1.0, 0.9), 6.0)
-		_crescent_band(54.0, Color(1.0, 1.0, 1.0, 1.0), 4.0)
+		# 四层嵌套亮弧:外层张角更大(弧度更弯)、尖端在前进方向向里层靠拢,由外向内收敛变亮变细
+		_crescent_band(54.0, Color(1.0, 1.0, 1.0, 1.0), 4.0, 60.0)
+		_crescent_band(64.0, Color(0.85, 0.96, 1.0, 0.9), 6.0, 64.0)
+		_crescent_band(74.0, Color(0.60, 0.85, 1.0, 0.68), 7.5, 68.0)
+		_crescent_band(84.0, Color(0.40, 0.66, 1.0, 0.45), 9.0, 73.0)
 
-	func _crescent_band(radius: float, color: Color, base_w: float) -> void:
-		# 沿弧线分 30 段,两端宽度递减到接近尖点,中间最宽;弧张角 120°
-		var a0 := deg_to_rad(-60.0)
-		var a1 := deg_to_rad(60.0)
+	func _crescent_band(radius: float, color: Color, base_w: float, half_deg: float) -> void:
+		# 沿弧线分 30 段,两端宽度递减到接近尖点,中间最宽;张角=2*half_deg
+		var a0 := deg_to_rad(-half_deg)
+		var a1 := deg_to_rad(half_deg)
 		var seg := 30
 		var prev := a0
 		for i in seg + 1:
