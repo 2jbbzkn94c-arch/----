@@ -48,15 +48,15 @@ func _on_battle_disconnected() -> void:
 		return
 	if battle.state == Battle.State.ENDED:
 		return   # 已结算：结算按钮处理
-	var layer := CanvasLayer.new()
-	layer.layer = 95
-	add_child(layer)
-	_netdown_overlay = layer
+	var ovly := CanvasLayer.new()
+	ovly.layer = 95
+	add_child(ovly)
+	_netdown_overlay = ovly
 	var vsize := get_viewport().get_visible_rect().size
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.55)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(dim)
+	ovly.add_child(dim)
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.1, 0.12, 0.18, 0.98)
