@@ -226,7 +226,7 @@ func _build() -> void:
 	volume.place_top_right(get_viewport().get_visible_rect().size, 8.0, 6.0)
 	# 右上角版本号（音量按钮左侧）
 	var ver := Label.new()
-	var ver_str := "v%s" % ProjectSettings.get_setting("application/config/version", "0.1.0")
+	var ver_str := str(ProjectSettings.get_setting("application/config/version", ""))
 	ver.text = ver_str
 	ver.add_theme_font_size_override("font_size", 13)
 	ver.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
