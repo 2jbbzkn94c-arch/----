@@ -3,6 +3,9 @@ extends HeroBase
 class_name HeroRedhood
 
 func on_died() -> void:
+	# 被[沉默]或[眩晕]期间阵亡：非关键词技能失效，不再触发扑街自爆
+	if unit == null or unit.has_status("silence") or unit.has_status("stun"):
+		return
 	# 自爆演出：双环扩散（橙红主环 + 外扩亮环）
 	if unit != null and unit.is_inside_tree():
 		battle._boom_ring_fx(unit.cell, Color(1.0, 0.55, 0.25), 1.4, 0.3)
