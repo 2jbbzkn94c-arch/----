@@ -37,6 +37,10 @@ var _peer_online := false   # 对端是否已连上（收到 hello/选槽消息�
 var _ver_mismatch := false   # 双方版本不一致（禁止开始对局）
 var _connecting_sec := 0.0   # 客户端尝试连接已耗时（超时自动取消）
 var _connected_ok := false   # 是否已真正建立连接（连接成功后不再触发"连接超时"）
+var _last_join_addr := ""    # 最近一次以客户端身份加入的主机地址（断线自动重连用）
+var _last_join_port := NetBus.DEFAULT_PORT
+var _am_host := false        # 本次会话是否为开房主机
+var _auto_retry_done := false   # 本次会话是否已自动重连过一次（只试一次）
 
 func _ready() -> void:
 	_build()
@@ -68,6 +72,17 @@ func _on_net_disconnected() -> void:
 	_peer_slot = 0
 	_peer_deck = []
 	_refresh_ui()
+	# 容错：此前以客户端身份连上后意外断开 -> 自动重连一次（安卓退后台回来网络被系统重置的典型场景）
+	if not _am_host and _last_join_addr != "" and not _auto_retry_done:
+		_auto_retry_done = true
+		_status.text = "连接断开，正在自动重连 %s:%d…" % [_last_join_addr, _last_join_port]
+		NetBus.join_match(_last_join_addr, _last_join_port)
+		if NetBus.is_online and not NetBus.is_host:
+			_connecting_sec = 0.0
+			_connected_ok = false   # 等 _on_connected 后置 true
+			_status.text = "正在自动重连 %s:%d…" % [_last_join_addr, _last_join_port]
+		else:
+			_status.text = "自动重连失败：%s。请点击「加入」手动重试。" % NetBus.last_tick_error
 
 # 版本不匹配处理（主机在收到 hello 时调用；pv=对端版本，老版本客户端没有版本号按 0）
 func _reject_version(pv: int) -> void:
@@ -607,6 +622,8 @@ func _on_host() -> void:
 		_status.text = hint
 		_connecting_sec = 0.0
 		_connected_ok = true   # 主机开房即就绪，不参与"连接超时"
+		_am_host = true
+		_auto_retry_done = true   # 主机不做自动重连（等对方重新加入，或自己再开房）
 	else:
 		_status.text = "开房失败: %s" % NetBus.last_tick_error
 	_refresh_ui()
@@ -627,6 +644,10 @@ func _on_join() -> void:
 	# 正在开房（本地 server 监听中）-> 先停掉，避免端口占用/状态残留
 	if NetBus.is_host:
 		NetBus.stop()
+	_last_join_addr = addr
+	_last_join_port = portv
+	_am_host = false
+	_auto_retry_done = false   # 新的手动加入会话：允许之后断线自动重连一次
 	NetBus.join_match(addr, portv)
 	if NetBus.is_online and not NetBus.is_host:
 		_status.text = "正在连接 %s:%d…" % [addr, portv]
