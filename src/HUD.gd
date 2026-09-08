@@ -548,7 +548,7 @@ var _arena_gesture_layer: Control = null   # 触屏手势拦截层（竞技场�
 # 贴左短分行线（属性弹框各显示区之间的分隔短线）
 func _make_zone_sep() -> HSeparator:
 	var sep := HSeparator.new()
-	sep.custom_minimum_size = Vector2(140, 4)
+	sep.custom_minimum_size = Vector2(260, 6)
 	sep.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	var lnsb := StyleBoxLine.new()
 	lnsb.color = Color(1.0, 0.85, 0.5, 0.3)
@@ -576,16 +576,16 @@ func _ensure_score_tooltip() -> PanelContainer:
 	wrap_box.visible = false
 	wrap_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var sb := _make_panel(Color(0.07, 0.07, 0.11, 0.96))
-	sb.content_margin_left = 12.0
-	sb.content_margin_right = 12.0
-	sb.content_margin_top = 10.0
-	sb.content_margin_bottom = 10.0
+	sb.content_margin_left = 16.0
+	sb.content_margin_right = 16.0
+	sb.content_margin_top = 14.0
+	sb.content_margin_bottom = 14.0
 	wrap_box.add_theme_stylebox_override("panel", sb)
 	wrap_box.z_index = 100   # 置于最顶，避免被下方队伍面板盖住
 	add_child(wrap_box)
 	_score_tooltip_wrap = wrap_box
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 5)
+	box.add_theme_constant_override("separation", 8)
 	wrap_box.add_child(box)
 	_score_tooltip_box = box
 	return wrap_box
@@ -599,7 +599,7 @@ func _set_score_tooltip_zones(zones: Array) -> void:
 	for i in zones.size():
 		if i > 0:
 			_score_tooltip_box.add_child(_make_zone_sep())
-		var lb := _make_zone_label(zones[i], 16, Color(0.9, 0.93, 1.0), 240.0)
+		var lb := _make_zone_label(zones[i], 20, Color(0.9, 0.93, 1.0), 380.0)
 		lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_score_tooltip_box.add_child(lb)
 	wrap_box.reset_size()   # 无容器重排：显式收敛到新内容的最小尺寸
@@ -807,7 +807,7 @@ func _update_arena_touch_hold() -> void:
 		return
 	if not _arena_touch_active or _arena_touch_held:
 		return
-	if Time.get_ticks_msec() - _arena_touch_down_ms < 450:
+	if Time.get_ticks_msec() - _arena_touch_down_ms < 250:
 		return
 	_arena_touch_held = true
 	if _arena_touch_id != "":
