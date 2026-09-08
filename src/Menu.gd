@@ -355,10 +355,10 @@ func _build_hex_pool(host: Control) -> void:
 	host.custom_minimum_size = Vector2(max_x, max_y + _DETAIL_H)
 	host.size = Vector2(max_x, max_y + _DETAIL_H)
 
-# 触屏/滚轮纵向滚动交给 ScrollContainer 引擎原生处理（4.x 自带触屏拖动与惯性，
-# 且事件不会因起点在卡片上而失效）；本页只禁用了横向滚动避免左右滑。
-
-# 触屏按下/松手跟踪：按着拖动英雄池时抑制 hover 弹框；轻点松开由卡片发 clicked(选人+弹属性)
+# 触屏滚动英雄池：模拟器/手机上 ScrollContainer 的原生触摸拖动不总生效，
+# 故由本节点 _input 直接接收 ScreenTouch/ScreenDrag 自己滚动（scroll_vertical 赋值自带 0..max 截断）。
+# 纵向滚动模式保持 AUTO（Disabled 时 scroll_vertical 赋值无效），桌面滚轮仍由原生处理；
+# 按下即抑制 hover 弹框（按住拖动池不弹属性），轻点松开由卡片发 clicked(选人+弹属性)。
 func _input(ev: InputEvent) -> void:
 	if _pool_scroll == null or not _pool_scroll.is_visible_in_tree() or not _team_view.visible:
 		return
@@ -369,6 +369,10 @@ func _input(ev: InputEvent) -> void:
 			_hide_tooltip()   # 手指按下立即收起（待轻点松开后由点击重新弹出）
 		else:
 			_pool_touch_down = false
+	elif _pool_touch_down and ev is InputEventScreenDrag:
+		var sd := ev as InputEventScreenDrag
+		# 手指上滑(relative.y<0) -> 内容下滚(数值增大)
+		_pool_scroll.scroll_vertical = int(_pool_scroll.scroll_vertical - sd.relative.y)
 
 func _on_hex_hovered(id: String) -> void:
 	if _pool_touch_down:
