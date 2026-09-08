@@ -41,6 +41,8 @@ var _last_join_addr := ""    # 最近一次以客户端身份加入的主机地�
 var _last_join_port := NetBus.DEFAULT_PORT
 var _am_host := false        # 本次会话是否为开房主机
 var _auto_retry_done := false   # 本次会话是否已自动重连过一次（只试一次）
+var _session_started := false    # 本次会话是否已成功开房或连上（用于点亮"重新连接"）
+var _btn_reconnect: Button = null   # 手动重新连接按钮
 
 func _ready() -> void:
 	_build()
@@ -120,6 +122,7 @@ func _process(dt: float) -> void:
 func _on_connected() -> void:
 	_status.text = "✅ 已连接（%s）" % ("主机" if NetBus.is_host else "客户端")
 	_connected_ok = true
+	_session_started = true
 	_connecting_sec = 0.0
 	if not NetBus.is_host:
 		NetBus.send_to(1, JSON.stringify({ "type": "hello", "ver": NET_VERSION }))
@@ -297,6 +300,15 @@ func _build() -> void:
 	_btn_join.add_theme_font_size_override("font_size", 24)
 	_btn_join.pressed.connect(_on_join)
 	vbox.add_child(_btn_join)
+
+	# 重新连接：有本次会话记录后可点（客户端重连上次主机地址；主机重新开房）
+	_btn_reconnect = Button.new()
+	_btn_reconnect.text = "重新连接"
+	_btn_reconnect.custom_minimum_size = Vector2(0, 50)
+	_btn_reconnect.add_theme_font_size_override("font_size", 20)
+	_btn_reconnect.disabled = true
+	_btn_reconnect.pressed.connect(_on_reconnect)
+	vbox.add_child(_btn_reconnect)
 
 	# 卡组槽选择（普通模式；竞技场模式整块隐藏）
 	var slot_head := HBoxContainer.new()
@@ -606,6 +618,8 @@ func _on_host() -> void:
 	if NetBus.is_host:
 		NetBus.stop()
 		_connected_ok = false
+		_am_host = false
+		_session_started = false   # 主动取消：会话结束，"重新连接"不再可用
 		_status.text = "已取消开房。"
 		_refresh_ui()
 		return
@@ -623,6 +637,7 @@ func _on_host() -> void:
 		_connecting_sec = 0.0
 		_connected_ok = true   # 主机开房即就绪，不参与"连接超时"
 		_am_host = true
+		_session_started = true
 		_auto_retry_done = true   # 主机不做自动重连（等对方重新加入，或自己再开房）
 	else:
 		_status.text = "开房失败: %s" % NetBus.last_tick_error
@@ -655,6 +670,32 @@ func _on_join() -> void:
 		_connected_ok = false   # 等真正连上（_on_connected）后置 true，期间 8s 超时兜底
 	else:
 		_status.text = "加入失败: %s" % NetBus.last_tick_error
+	_refresh_ui()
+
+# 手动"重新连接"：客户端重连上次主机地址；主机则重新开房等待对方
+func _on_reconnect() -> void:
+	if not _session_started:
+		_status.text = "还没有可重连的会话：请先「开房」或「加入」。"
+		return
+	if NetBus.is_online:
+		NetBus.stop()   # 若仍在尝试中，先彻底停掉再重来
+		_connected_ok = false
+	if _am_host:
+		_on_host()   # 主机：重新开房（等对方再加入）
+		return
+	if _last_join_addr == "":
+		_status.text = "没有可重连的主机地址：请手动填写地址后点「加入」。"
+		_refresh_ui()
+		return
+	_ver_mismatch = false
+	_auto_retry_done = false   # 手动重连后，若再意外断开仍可自动重连一次
+	NetBus.join_match(_last_join_addr, _last_join_port)
+	if NetBus.is_online and not NetBus.is_host:
+		_status.text = "正在重新连接 %s:%d…" % [_last_join_addr, _last_join_port]
+		_connecting_sec = 0.0
+		_connected_ok = false
+	else:
+		_status.text = "重连失败：%s" % NetBus.last_tick_error
 	_refresh_ui()
 
 func _maybe_start() -> void:
@@ -753,6 +794,9 @@ func _refresh_ui() -> void:
 	else:
 		_btn_host.disabled = false
 		_btn_join.disabled = false
+	# 重新连接：仅本次会话已建立过(开房/连上)才可用；连接中禁用防重复
+	if _btn_reconnect != null:
+		_btn_reconnect.disabled = not _session_started or NetBus.is_online
 	_mode_label.text = "当前模式: %s%s" % ["普通" if _mode == "normal" else "竞技场", "" if my_is_host else "（主机选择）"]
 	for b in _mode_btn:
 		var mb: Button = b
