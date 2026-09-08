@@ -5,10 +5,9 @@ extends Control
 
 var _selected: Array[String] = []
 var _card_buttons: Dictionary = {}   # hero_id -> Button
-var _pick_label: Label
 var _start_btn: Button
-var _desc_label: Label
 var _detail_label: Label
+var _msg := ""   # 状态条里的即时反馈文案（与"已选 N/8"行一起显示在英雄池底部提示条）
 var _tooltip: PanelContainer
 var _tooltip_box: VBoxContainer
 var _deck_tab_buttons: Dictionary = {}   # slot -> Button（卡组1/2/3 选择钮）
@@ -195,20 +194,6 @@ func _build() -> void:
 	back_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(back_btn)
 	_team_back_btn = back_btn
-
-	# 底部两行状态小字（已选卡 / 阵容提示），不影响上方操作区顺序
-	_pick_label = Label.new()
-	_pick_label.add_theme_font_size_override("font_size", 14)
-	_pick_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	_pick_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(_pick_label)
-
-	_desc_label = Label.new()
-	_desc_label.add_theme_font_size_override("font_size", 13)
-	_desc_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
-	_desc_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(_desc_label)
 
 	_build_tooltip()
 	_update_ui()
@@ -437,7 +422,7 @@ func _on_card_toggled(id: String) -> void:
 	else:
 		if _selected.size() >= PICK_COUNT:
 			# 达到上限：提示并忽略
-			_desc_label.text = "最多选择 %d 名英雄。" % PICK_COUNT
+			_flash("最多选择 %d 名英雄。" % PICK_COUNT)
 			_card_buttons[id].set_selected(false)
 			_update_ui()
 			return
@@ -458,18 +443,28 @@ func _show_detail(id: String) -> void:
 		_detail_label.text = "\n".join(zones)
 
 func _update_ui() -> void:
-	_pick_label.text = "已选 %d / %d（最少 %d）" % [_selected.size(), PICK_COUNT, MIN_PICK]
 	_start_btn.disabled = _selected.size() < MIN_PICK
 	for id in _card_buttons.keys():
 		_card_buttons[id].set_selected(_selected.has(id))
 	_refresh_deck_slots()
-	if _selected.size() == 0:
-		_desc_label.text = "点击卡牌，挑选 %d-%d 名英雄组成阵容（前 %d 名上阵，其余替补）。" % [MIN_PICK, PICK_COUNT, DEPLOY_COUNT]
-	else:
-		var names: Array[String] = []
-		for id in _selected:
-			names.append(DataRegistry.heroes[id].display_name)
-		_desc_label.text = "阵容： " + "、 ".join(names)
+	_refresh_banner()
+
+# 即时反馈（保存/清空/读取/上限等）：写入提示条
+func _flash(msg: String) -> void:
+	_msg = msg
+	_refresh_banner()
+
+# 英雄池底部提示条：固定"已选 N/8"行 + 最近一条反馈；空选且无反馈时显示引导
+func _refresh_banner() -> void:
+	if _detail_label == null or not is_instance_valid(_detail_label):
+		return
+	var parts: Array[String] = []
+	parts.append("已选 %d / %d（最少 %d）" % [_selected.size(), PICK_COUNT, MIN_PICK])
+	if _msg != "":
+		parts.append(_msg)
+	elif _selected.size() == 0:
+		parts.append("点击卡牌，挑选 %d-%d 名英雄组成阵容（前 %d 名上阵，其余替补）。" % [MIN_PICK, PICK_COUNT, DEPLOY_COUNT])
+	_detail_label.text = "\n".join(parts)
 
 func _on_random() -> void:
 	_selected = _random_full_deck()
@@ -570,34 +565,34 @@ func _on_deck_clear() -> void:
 	DeckStore.save_deck(_deck_current_slot, [])
 	_selected.clear()
 	_update_ui()   # 同步取消英雄池高亮、禁用开始、刷新槽预览为空
-	_desc_label.text = "已清空卡组 %d 与当前阵容，请重新挑选。" % _deck_current_slot
+	_flash("已清空卡组 %d 与当前阵容，请重新挑选。" % _deck_current_slot)
 
 func _save_current_deck(slot: int) -> void:
 	if _selected.size() < MIN_PICK:
-		_desc_label.text = "最少选择 %d 名英雄再保存卡组。" % MIN_PICK
+		_flash("最少选择 %d 名英雄再保存卡组。" % MIN_PICK)
 		return
 	DeckStore.save_deck(slot, _selected)
-	_desc_label.text = "已保存到卡组 %d。" % slot
+	_flash("已保存到卡组 %d。" % slot)
 	_refresh_deck_slots()
 
 func _load_deck(slot: int) -> void:
 	var ids: Array = DeckStore.load_deck(slot)
 	if ids.size() == 0:
 		# 空槽：不覆盖当前阵容，提示先保存
-		_desc_label.text = "卡组 %d 是空的：先选好阵容，点「保存」存入本槽。" % slot
+		_flash("卡组 %d 是空的：先选好阵容，点「保存」存入本槽。" % slot)
 		return
 	if ids.size() < MIN_PICK:
 		# 普通模式：卡组槽不足 5 人（旧档/半存卡组）→ 自动随机选 8 名英雄顶上，不再拒绝读取
 		_selected = _random_full_deck()
 		_update_ui()
-		_desc_label.text = "卡组 %d 不足 %d 人，已自动随机选满 %d 名英雄。" % [slot, MIN_PICK, PICK_COUNT]
+		_flash("卡组 %d 不足 %d 人，已自动随机选满 %d 名英雄。" % [slot, MIN_PICK, PICK_COUNT])
 		return
 	_selected.clear()
 	for id in ids:
 		_selected.append(id)
 	_update_ui()
 	_refresh_deck_slots()
-	_desc_label.text = "已读取卡组 %d。" % slot
+	_flash("已读取卡组 %d。" % slot)
 
 func _refresh_deck_slots() -> void:
 	for slot in _deck_tab_buttons.keys():
@@ -781,4 +776,4 @@ func _copy_diagnostics() -> void:
 	if _main_msg != null and is_instance_valid(_main_msg) and _main_msg.is_visible_in_tree():
 		_main_msg.text = note
 	else:
-		_desc_label.text = note
+		_flash(note)
