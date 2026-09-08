@@ -3190,6 +3190,10 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
 	# 太阳斩：每次攻击后攻击力-1（立即显示，不等反击
 	_hero(attacker).on_after_attack()
+	# 技能/攻击击杀：死亡格按攻击者主色补一发爆发粒子(普通平A击杀也有直观反馈)
+	if not target.alive and attacker.alive and is_instance_valid(target):
+		var kd := DataRegistry.hero_fx(attacker.hero_id)
+		target.burst_fx(kd.color, "")
 	# 反击：后勤单位也会反击（后勤不能主动攻击，但被近战攻击后会还手）
 	# 普通单位默认每回合只能反击一次；复仇者（无限反击）不已用过一限制
 	# 距离=1（近战互搏 / 贴身）：维持原规则，攻击范围内即可反击
