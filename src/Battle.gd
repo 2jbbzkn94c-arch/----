@@ -117,11 +117,11 @@ class SwordCrescent:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		# 四层嵌套亮弧,每层两端渐细收成尖,夹角120°,层间隔收窄
-		_crescent_band(84.0, Color(0.40, 0.66, 1.0, 0.72), 6.0)
-		_crescent_band(74.0, Color(0.55, 0.82, 1.0, 0.85), 7.0)
-		_crescent_band(64.0, Color(0.80, 0.95, 1.0, 0.95), 8.0)
-		_crescent_band(54.0, Color(1.0, 1.0, 1.0, 1.0), 8.0)
+		# 四层嵌套亮弧,每层两端渐细收成尖,夹角120°;由外向内更亮、更细地收敛
+		_crescent_band(84.0, Color(0.40, 0.66, 1.0, 0.45), 9.0)
+		_crescent_band(74.0, Color(0.60, 0.85, 1.0, 0.68), 7.5)
+		_crescent_band(64.0, Color(0.85, 0.96, 1.0, 0.9), 6.0)
+		_crescent_band(54.0, Color(1.0, 1.0, 1.0, 1.0), 4.0)
 
 	func _crescent_band(radius: float, color: Color, base_w: float) -> void:
 		# 沿弧线分 30 段,两端宽度递减到接近尖点,中间最宽;弧张角 120°
