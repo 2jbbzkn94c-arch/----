@@ -241,14 +241,11 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	_shake()
 	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分；
 	# 重击（_dmg_style=2，如嬉皮死神双倍）用紫粉色并放大，更醒目又不挡后读
-	# 伤害数字统一弹出在卡面中心线的左侧、字号放大不遮挡图标：
-	# 反击用蓝、重击(_dmg_style=2)用紫粉放大、普通用纯红
-	if counter:
-		_float_text("-%d" % dmg, Color(0.35, 0.8, 1.0), -58, -44, true)
-	elif _dmg_style == 2:
-		_float_text("-%d" % dmg, Color(1.0, 0.5, 1.0), -64, -52, true)
+	# 伤害数字统一红色、水平居中在卡面中心；重击(_dmg_style=2)只靠字号放大区分
+	if counter or _dmg_style == 2:
+		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -52, true)
 	else:
-		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -58, -42, true)
+		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -46)
 	_dmg_style = 0   # 一次伤害只套用一种样式
 	AudioManager.play("hit")
 	# [附体]镜像：宿魂受到的伤害 >0 时，其被附体目标同受同等伤害（Battle 统一结算）
@@ -432,7 +429,7 @@ func _shake() -> void:
 	t.tween_property(_hex, "position", Vector2.ZERO, 0.12)
 
 # 伤害/治疗飘字（挂在父节点以固定在棋盘坐标，上浮并淡出）
-func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46, big := false) -> void:
+func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, big := false) -> void:
 	var parent := get_parent()
 	if parent == null or not is_inside_tree():
 		return
@@ -445,7 +442,7 @@ func _float_text(text: String, color: Color, xoff: int = -24, yoff: int = -46, b
 	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k)))
 	lbl.z_index = 120
 	lbl.position = global_position + Vector2(xoff * k, yoff * k)
-	lbl.size = Vector2(48.0 * k, 24.0 * k)
+	lbl.size = Vector2(64.0 * k, 28.0 * k)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(lbl)
 	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。
