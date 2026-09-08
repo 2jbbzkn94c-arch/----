@@ -33,6 +33,19 @@ var _help_overlay: Control = null   # 游戏说明弹窗
 
 func _ready() -> void:
 	_build()
+	if GameState.net_edit_mode:
+		_show_team_view()   # 联机大厅叠层打开：直接进选人页
+
+# 联机大厅"编辑卡组"完成：复位标志、通知大厅刷新、销毁本叠层
+func _on_edit_done() -> void:
+	var lobby := get_parent()
+	GameState.end_deck_edit()
+	if lobby != null and is_instance_valid(lobby) and lobby.has_method("_on_editor_closed"):
+		lobby.call("_on_editor_closed")
+		queue_free()
+	else:
+		# 非叠层（异常残留标志）：回主菜单重新进入
+		get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
 func _build() -> void:
 	# 背景：酒馆木地板 + 轻微压暗增强卡片对比（两层都不接收鼠标）
@@ -68,7 +81,7 @@ func _build() -> void:
 
 	# 1) 标题
 	var title := Label.new()
-	title.text = "普通模式"
+	title.text = "编辑卡组（联机）" if GameState.net_edit_mode else "普通模式"
 	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -180,21 +193,25 @@ func _build() -> void:
 	rand_btn.size_flags_vertical = Control.SIZE_SHRINK_END
 	option_row.add_child(rand_btn)
 
-	# 5) 开始对战
+	# 5) 开始对战（联机大厅编辑模式 = "完成编辑"）
 	_start_btn = Button.new()
-	_start_btn.text = "开始对战"
+	if GameState.net_edit_mode:
+		_start_btn.text = "完成编辑"
+		_start_btn.pressed.connect(_on_edit_done)
+	else:
+		_start_btn.text = "开始对战"
+		_start_btn.pressed.connect(_on_start)
 	_start_btn.add_theme_font_size_override("font_size", 20)
 	_start_btn.custom_minimum_size = Vector2(0, 50)
-	_start_btn.pressed.connect(_on_start)
 	_start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_start_btn)
 
-	# 6) 返回主菜单（整行大按钮）
+	# 6) 返回（整行大按钮）：单机=回主菜单；联机编辑=回联机大厅
 	var back_btn := Button.new()
-	back_btn.text = "返回主菜单"
+	back_btn.text = "返回联机大厅" if GameState.net_edit_mode else "返回主菜单"
 	back_btn.add_theme_font_size_override("font_size", 18)
 	back_btn.custom_minimum_size = Vector2(0, 46)
-	back_btn.pressed.connect(_show_main_menu)
+	back_btn.pressed.connect(_on_edit_done if GameState.net_edit_mode else _show_main_menu)
 	back_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(back_btn)
 	_team_back_btn = back_btn

@@ -15,7 +15,10 @@ var _btn_confirm: Button   # 确认卡组后才把选择发给对方
 var _btn_ready: Button = null   # 竞技场：加入方"准备完毕"
 var _my_ready := false     # 竞技场：本端是否已准备（加入方）
 var _peer_ready := false   # 竞技场：对端是否已准备（主机判断能否开始）
-var _deck_info: Label = null   # 所选卡组英雄组成展示
+var _deck_info: Label = null   # 所选卡组状态展示行
+var _slot_head: HBoxContainer = null   # "选择你的卡组槽"标题行（含右侧"编辑卡组"按钮；竞技场整行隐藏）
+var _preview_host: Control = null      # 所选卡组队伍小卡预览（与普通模式同款）
+var _btn_edit: Button = null           # "编辑卡组"按钮（跳普通模式选人页编辑）
 var _slot_label: Label = null  # 卡组槽区域标题（竞技场模式整体隐藏）
 var _btn_host: Button
 var _btn_join: Button
@@ -261,11 +264,25 @@ func _build() -> void:
 	vbox.add_child(_btn_join)
 
 	# 卡组槽选择（普通模式；竞技场模式整块隐藏）
+	var slot_head := HBoxContainer.new()
+	slot_head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(slot_head)
+	_slot_head = slot_head
 	var slot_label := Label.new()
-	slot_label.text = "选择你的卡组槽（普通模式）:"
-	slot_label.add_theme_font_size_override("font_size", 13)
-	vbox.add_child(slot_label)
+	slot_label.text = "选择你的卡组槽（普通模式）："
+	slot_label.add_theme_font_size_override("font_size", 14)
+	slot_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	slot_head.add_child(slot_label)
 	_slot_label = slot_label
+	var head_space := Control.new()
+	head_space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slot_head.add_child(head_space)
+	var edit_btn := Button.new()
+	edit_btn.text = "编辑卡组"
+	edit_btn.custom_minimum_size = Vector2(0, 34)
+	edit_btn.pressed.connect(_open_deck_editor)
+	slot_head.add_child(edit_btn)
+	_btn_edit = edit_btn
 	var slot_row := HBoxContainer.new()
 	slot_row.add_theme_constant_override("separation", 8)
 	vbox.add_child(slot_row)
@@ -276,7 +293,11 @@ func _build() -> void:
 		b.pressed.connect(_choose_slot.bind(s))
 		_slot_btn.append(b)
 		slot_row.add_child(b)
-	# 卡组英雄组成展示（选槽后列出本槽英雄名单，放在确认按钮上方）
+	# 所选卡组队伍预览：与普通模式卡组槽/替补队伍同款一行小卡（悬停无动作）
+	_preview_host = Control.new()
+	_preview_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(_preview_host)
+	# 卡组状态文案（阵容以卡面队列显示，这里只放状态）
 	_deck_info = Label.new()
 	_deck_info.text = "卡组：未选择"
 	_deck_info.add_theme_font_size_override("font_size", 14)
@@ -375,16 +396,61 @@ func _on_ready_toggle() -> void:
 		_status.text = "我方已准备完毕，等待主机开始…"
 	_refresh_ui()
 
-# 英雄 id 列表 -> 展示名列表（大厅核对用）
-func _deck_names(ids: Array) -> String:
-	var names: Array[String] = []
-	for hid in ids:
-		var def := DataRegistry.get_hero(String(hid))
-		if def != null:
-			names.append(def.display_name)
-	if names.size() == 0:
-		return "（无）"
-	return "、".join(names)
+# 所选卡组队伍小卡预览：与普通模式卡组槽/替补队伍同款一行蜂窝卡
+func _refresh_slot_preview() -> void:
+	if _preview_host == null or not is_instance_valid(_preview_host):
+		return
+	for c in _preview_host.get_children():
+		_preview_host.remove_child(c)
+		c.queue_free()
+	_preview_host.custom_minimum_size = Vector2.ZERO
+	_preview_host.size = Vector2.ZERO
+	if _mode != "normal" or _my_slot <= 0:
+		return
+	var ids: Array = DeckStore.load_deck(_my_slot)
+	if ids.size() == 0:
+		return
+	var avail: float = get_viewport().get_visible_rect().size.x - 60.0
+	var r: float = minf(44.0, maxf(avail / (2.0 + float(maxi(ids.size(), 1) - 1) * 1.5), 16.0))
+	var sq3 := sqrt(3.0)
+	var col_step := 1.5 * r
+	var row_step := sq3 * r
+	var total_w := 2.0 * r + float(ids.size() - 1) * col_step
+	var total_h := 2.0 * row_step
+	_preview_host.custom_minimum_size = Vector2(total_w, total_h)
+	_preview_host.size = Vector2(total_w, total_h)
+	for i in ids.size():
+		var hid := String(ids[i])
+		var def := DataRegistry.get_hero(hid)
+		if def == null:
+			continue
+		var cx := r + float(i) * col_step
+		var cy := r + (row_step / 2.0 if i % 2 == 1 else 0.0)
+		var card := HexCard.new(def, hid, r)
+		card.position = Vector2(cx - r, cy - row_step / 2.0)
+		_preview_host.add_child(card)
+
+# "编辑卡组"：叠层打开普通模式选人页（网络连接不断、大厅状态保留）。
+# 编辑目标 = 当前已选槽（未选则沿用上次槽位），Menu 会自动载入并自动保存。
+func _open_deck_editor() -> void:
+	if _mode != "normal" or _my_confirmed:
+		return
+	if _my_slot > 0:
+		GameState.last_deck_slot = _my_slot
+	GameState.net_edit_mode = true
+	var menu: Node = (load("res://scenes/Menu.tscn") as PackedScene).instantiate()
+	add_child(menu)
+
+# 选人叠层关闭回调（Menu._on_edit_done 调用）：刷新卡组状态与预览
+func _on_editor_closed() -> void:
+	if NetBus.is_online:
+		if _my_slot == 0:
+			_status.text = "编辑完成：请选择卡组槽并点「确认卡组」。"
+		else:
+			_status.text = "编辑完成：可点「确认卡组」把选择发给对方。"
+	else:
+		_status.text = "编辑完成。"
+	_refresh_ui()
 
 func _broadcast_mode() -> void:
 	if NetBus.is_online:
@@ -583,12 +649,18 @@ func _refresh_ui() -> void:
 		mb.disabled = not my_is_host
 	# 竞技场模式：整块隐藏"卡组槽选择 + 卡组展示 + 确认卡组"，避免出现无关卡槽提醒
 	var show_slots := _mode == "normal"
-	if _slot_label != null:
-		_slot_label.visible = show_slots
+	if _slot_head != null:
+		_slot_head.visible = show_slots
 	for b in _slot_btn:
 		b.visible = show_slots
 	if _deck_info != null:
 		_deck_info.visible = show_slots
+	if _preview_host != null:
+		_preview_host.visible = show_slots
+	if _btn_edit != null:
+		_btn_edit.visible = show_slots
+		_btn_edit.disabled = _my_confirmed   # 已确认的选择先「取消确认」再编辑
+	_refresh_slot_preview()
 	if _btn_confirm != null:
 		_btn_confirm.visible = show_slots
 	for i in _slot_btn.size():
@@ -600,17 +672,19 @@ func _refresh_ui() -> void:
 			b.text = "槽%d ✓" % s
 		elif _my_slot == s:
 			b.text = "槽%d\n▲" % s   # 待确认：向上的三角形位于槽号下方
-	# 卡组英雄组成：选中槽位后显示该槽卡组名单（确认后仍保持显示）
+	# 卡组英雄组成：状态文案（阵容以预览小卡展示，这里不重复名单）
 	var can_confirm := false
 	if _deck_info != null:
 		if _mode == "normal" and NetBus.is_online and _my_slot > 0:
 			var deck := DeckStore.load_deck(_my_slot)
 			if deck.size() == 0:
-				_deck_info.text = "卡组（槽 %d）：该槽未保存卡组，开局将自动随机选 %d 名英雄" % [_my_slot, PICK_COUNT]
+				_deck_info.text = "卡组（槽 %d）：该槽未保存卡组，开局将自动随机选 %d 名英雄。" % [_my_slot, PICK_COUNT]
 			elif deck.size() < MIN_PICK:
-				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d），开局将自动随机选满 %d 名英雄" % [_my_slot, deck.size(), MIN_PICK, PICK_COUNT]
+				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d），开局将自动随机选满 %d 名英雄。" % [_my_slot, deck.size(), MIN_PICK, PICK_COUNT]
+			elif _my_confirmed:
+				_deck_info.text = "卡组（槽 %d）已确认。" % _my_slot
 			else:
-				_deck_info.text = "卡组（槽 %d）：%s" % [_my_slot, _deck_names(deck)]
+				_deck_info.text = "卡组（槽 %d）：共 %d 名 —— 点「确认卡组」发给对方。" % [_my_slot, deck.size()]
 			can_confirm = not _my_confirmed
 		else:
 			_deck_info.text = "卡组：未选择"

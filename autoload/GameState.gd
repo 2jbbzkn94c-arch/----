@@ -39,6 +39,13 @@ var ai_difficulty := 1
 # 普通模式选人页：上次编辑的卡组槽（1/2/3），再次进入时自动载入
 var last_deck_slot := 1
 
+# 联机大厅"编辑卡组"：true = 大厅把 Menu 作为叠层打开，选人页改为"完成编辑返回大厅"
+var net_edit_mode := false
+
+# 选人页叠层编辑完成（或大厅直接打开时归位）：复位编辑标志
+func end_deck_edit() -> void:
+	net_edit_mode = false
+
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
 
