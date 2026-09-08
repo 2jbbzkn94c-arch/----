@@ -15,9 +15,9 @@ func on_someone_damaged(target: Unit, _amount: int) -> void:
 	# 延迟到本次攻击整体结算完成(下一帧)再给盾：否则盾会赶在同一次攻击
 	# 后续附加的状态(毒蛇的猛毒等)之前被套上，把本该中的状态也挡掉了。
 	# 用实例id捕获，避免 lambda 捕获的单位先被释放导致 "capture was freed" 报错。
-	var my_id := unit.get_instance_id()
-	var tgt_id := target.get_instance_id()
-	var btl_id := battle.get_instance_id()
+	var my_id: int = unit.get_instance_id()
+	var tgt_id: int = target.get_instance_id()
+	var btl_id: int = battle.get_instance_id()
 	var grant := func():
 		var m := instance_from_id(my_id) as Unit
 		var t := instance_from_id(tgt_id) as Unit
