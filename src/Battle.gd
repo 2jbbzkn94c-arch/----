@@ -1805,14 +1805,6 @@ func _sync_one_echo(u: Unit) -> void:
 	u.echo_bonus = total
 	u.refresh_stats()
 
-# 该阵营所有在场共鸣者即时补算（登场增益后调用；多个共鸣者各自取和互不影响）
-func _sync_faction_echoes(faction: int) -> void:
-	for u in units:
-		if u == null or not is_instance_valid(u) or not u.alive:
-			continue
-		if u.faction == faction and u.hero_id == "hero_47":
-			_sync_one_echo(u)
-
 # 己方回合结束时解除临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
 func _clear_statuses(faction: int) -> void:
 	for u in units:
@@ -3532,14 +3524,13 @@ func _trigger_turn_end(u: Unit) -> bool:
 
 # 替补登场时触
 func _trigger_on_enter(u: Unit) -> void:
-	# 共鸣者（在场时）需要跟随新上场的队友增益：登场技能结算后统一补算一次
-	if not u.skill_allowed():   # 沉默：无法触发登场技能（共鸣者同步仍照做，值不变无副作用）
-		_sync_faction_echoes(u.faction)
+	if not u.skill_allowed():   # 沉默：无法触发登场技能
 		return
 	# 只有带"<替补>"标签的英雄，替补登场时才触发技能（波盾/太阳斩/梅林/猎颅者的 on_enter 实现）。
 	# 其它回合开始技（烈焰祭司加攻/圣诞老人放道具/黄金矿工丢矿等）不因替补登场触发，等下一个己方回合开始生效。
+	# 注意：共鸣者的取和只在"己方回合开始"进行（跨回合替补的登场技此时已先于回合技完成、会被算入；
+	# 回合中场替补的增益则不再追加给在场共鸣者——不在此处即时补算）。
 	_hero(u).on_enter()
-	_sync_faction_echoes(u.faction)   # 太阳斩登场+6攻等变化立即同步给在场共鸣者
 
 # ============ 效果原语 ============
 func _heal(u: Unit, amt: int) -> void:
