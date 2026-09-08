@@ -69,7 +69,7 @@ func _on_battle_disconnected() -> void:
 	sb.content_margin_top = 22.0
 	sb.content_margin_bottom = 22.0
 	panel.add_theme_stylebox_override("panel", sb)
-	layer.add_child(panel)
+	ovly.add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
 	box.custom_minimum_size = Vector2(500, 0)
