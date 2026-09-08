@@ -284,6 +284,22 @@ func _build_main_menu() -> void:
 	_main_msg.custom_minimum_size = Vector2(0, 30)
 	vbox.add_child(_main_msg)
 
+	# 右下角宣传文字（绝对贴右下，不参与按钮布局）
+	var qq := Label.new()
+	qq.text = "来Q群：295903423联机打活人"
+	qq.add_theme_font_size_override("font_size", 18)
+	qq.add_theme_color_override("font_color", Color(1.0, 0.82, 0.4))
+	qq.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	qq.add_theme_constant_override("outline_size", 4)
+	qq.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	qq.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	qq.offset_left = -430.0
+	qq.offset_top = -72.0
+	qq.offset_right = -18.0
+	qq.offset_bottom = -20.0
+	qq.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_main_view.add_child(qq)
+
 func _show_main_menu() -> void:
 	_main_view.visible = true
 	_team_view.visible = false
