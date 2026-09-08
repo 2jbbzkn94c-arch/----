@@ -281,6 +281,8 @@ func _build_main_menu() -> void:
 	_main_msg.add_theme_font_size_override("font_size", 14)
 	_main_msg.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
 	_main_msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_main_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART   # 长提示自动换行，避免把主菜单列撑宽变形
+	_main_msg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_main_msg.custom_minimum_size = Vector2(0, 30)
 	vbox.add_child(_main_msg)
 
