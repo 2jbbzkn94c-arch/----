@@ -6,6 +6,15 @@ func _initialize() -> void:
 
 func _run() -> void:
 	var dr: Node = root.get_node("DataRegistry")
+	# 把 id 列表转成中文名列表(用显示名,便于阅读)
+	var name_of := func(id: String) -> String:
+		var d = dr.get_hero(id)
+		return d.display_name if d != null else id
+	var names := func(arr: Array) -> String:
+		var ns: Array[String] = []
+		for x in arr:
+			ns.append(name_of.call(String(x)))
+		return "、".join(ns)
 	var lines: Array[String] = []
 	for id in dr.heroes.keys():
 		var h = dr.get_hero(String(id))
@@ -13,9 +22,9 @@ func _run() -> void:
 			continue
 		lines.append("【%s】%s" % [id, h.display_name])
 		lines.append("  配合: %s" % h.synergy_note)
-		lines.append("  被克制: %s   克制备注: %s   协同英雄: %s" % [h.countered_by_note, h.effective_behavior, str(h.explicit_pairs)])
-		lines.append("  语义协同伙伴(sy_partners): %s" % str(h.sy_partners))
-		lines.append("  克制/被克(counters): %s" % str(h.counters))
+		lines.append("  被克制: %s   克制备注: %s   协同英雄: %s" % [h.countered_by_note, h.effective_behavior, names.call(h.explicit_pairs)])
+		lines.append("  语义协同伙伴(sy_partners): %s" % names.call(h.sy_partners))
+		lines.append("  克制/被克(counters): %s" % names.call(h.counters))
 		lines.append("")
 	var pairs: Array = []
 	var ids: Array = dr.heroes.keys()
