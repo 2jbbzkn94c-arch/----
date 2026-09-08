@@ -1396,22 +1396,23 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
-	# 固定候选点随机 0-2 个障碍（按左下角=[1,1] 编号换算成代码坐标 y0=顶行）：
-	# 你给的 [1,3][1,4][2,4][3,3][3,4][4,4][5,3][5,4] => (0,4)(0,3)(1,3)(2,4)(2,3)(3,3)(4,4)(4,3)
-	var spots := [
-		Vector2i(0, 4), Vector2i(0, 3), Vector2i(1, 3), Vector2i(2, 4),
-		Vector2i(2, 3), Vector2i(3, 3), Vector2i(4, 4), Vector2i(4, 3),
+	# 预设障碍布局(坐标为代码坐标:用户左下角[1,1] 对应 x=列-1, y=7-行):
+	#   1) [3,1][3,2][3,3][3,4] -> 中部整列
+	#   2) [2,4][4,4]          -> 顶部两行隔列
+	#   3) [1,3][1,4][5,3][5,4] -> 左右两翼
+	#   4) 无障碍
+	# 每局开局随机选取一种。
+	var presets: Array = [
+		[Vector2i(2, 6), Vector2i(2, 5), Vector2i(2, 4), Vector2i(2, 3)],
+		[Vector2i(1, 3), Vector2i(3, 3)],
+		[Vector2i(0, 4), Vector2i(0, 3), Vector2i(4, 4), Vector2i(4, 3)],
+		[],
 	]
-	_rng_shuffle(spots)
-	var count := rng.randi_range(0, 2)
-	var placed := 0
-	for s in spots:
-		if placed >= count:
-			break
+	var pick := rng.randi_range(0, presets.size() - 1)
+	for s in presets[pick]:
 		if grid.in_bounds(s) and not occupancy.has(s) and not bombs.has(s) and not obstacles.has(s):
 			obstacles[s] = OBSTACLE_DUR
-			placed += 1
-	_refresh_board()   # 新障碍绘制上屏（重开竞技场时旧障碍已reset 清空，此处同步显示新障碍
+	_refresh_board()   # 新障碍绘制上屏（重开竞技场时旧障碍已 reset 清空，此处同步显示新障碍
 func _damage_obstacle(cell: Vector2i, amt: int) -> void:
 	if not obstacles.has(cell):
 		return
