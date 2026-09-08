@@ -83,17 +83,18 @@ func _build() -> void:
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(scroll)
 	var grid := GridContainer.new()
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 14)
-	grid.add_theme_constant_override("v_separation", 14)
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(grid)
 	for id in DataRegistry.heroes.keys():
 		var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
 		var b := Button.new()
 		b.text = def.display_name
-		b.add_theme_font_size_override("font_size", 21)
-		b.custom_minimum_size = Vector2(0, 66)
+		b.add_theme_font_size_override("font_size", 20)
+		b.custom_minimum_size = Vector2(0, 62)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # 让每格横向撑满列宽
 		b.toggle_mode = true
 		b.pressed.connect(_toggle.bind(id))
 		_btns[id] = b
