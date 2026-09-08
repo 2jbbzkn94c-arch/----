@@ -173,20 +173,24 @@ func _semantic_heroes(text: String) -> Array:
 						out.append(hid)
 	return out
 
-# 数值筛选类文本（如"技能评分+补强>3的非替补角色"、"面板攻击力可以大于4的"）：
-# 按若干数值列求和之后 > 阈值的英雄筛选。支持句式「列A(+列B...)>N」。
-# 数值列：攻击力 / 补强 / 技能评分 / 总评分。阈值支持 ">N" 与中文"大于/超过/高于 N"。
+# 数值筛选类文本（如"技能评分+补强>3的非替补角色"、"面板攻击力可以大于等于4的"）：
+# 按若干数值列求和之后 与阈值比较 筛选英雄。支持句式「列A(+列B...)比较N」。
+# 数值列：攻击力 / 补强 / 技能评分 / 总评分。
+# 比较符：> / >= / 大于 / 大于等于 / 不少于 / 不低于 / 超过 / 高于。
 func _numeric_filter_heroes(text: String) -> Array:
 	var out: Array = []
 	if text == "":
 		return out
-	# 抓取阈值：支持 ">N" 或 中文"大于N/超过N/高于N"（N 可为小数）
+	# 抓取 比较符 + 阈值（阈值可为小数）。
+	# 注意：先匹配"大于等于/不少于/不低于"再匹配单字"大于/超过/高于"，避免"大于等于"只取到"大于"。
 	var re := RegEx.new()
-	re.compile("(?:>|大于|超过|高于)\\s*([0-9]+(?:\\.[0-9]+)?)")
+	re.compile("(?:>=|大于等于|不少于|不低于|>|大于|超过|高于)\\s*([0-9]+(?:\\.[0-9]+)?)")
 	var m := re.search(text)
 	if m == null:
 		return out
+	var op := m.get_string(0)   # 整个匹配段，用于判断是否包含等号
 	var threshold := m.get_string(1).to_float()
+	var incl_equal := (op.contains(">=") or op.contains("等于") or op.contains("少于") or op.contains("低于"))
 	# 是否排除替补角色
 	var exclude_bench := text.contains("非替补")
 	# 文本里涉及哪些数值列（求和）
@@ -209,7 +213,8 @@ func _numeric_filter_heroes(text: String) -> Array:
 			v += d.ai_skill_score
 		if uses_total:
 			v += d.ai_total
-		if v > threshold and not out.has(id):
+		var ok := (v > threshold) if not incl_equal else (v >= threshold)
+		if ok and not out.has(id):
 			out.append(id)
 	return out
 
