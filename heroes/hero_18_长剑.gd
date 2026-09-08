@@ -4,8 +4,7 @@ extends HeroBase
 class_name HeroSwordline
 
 func on_attack(target: Unit) -> void:
-	fx()
-	fx_on_target(target)
+	# 演出由月弯剑气(_spawn_sword_qi)承担,不再叠施法者环与命中粒子
 	if target and target.alive:
 		battle._pierce_back(unit, target)
 
