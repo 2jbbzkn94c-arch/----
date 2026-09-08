@@ -356,6 +356,12 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		for mc in move_cells:
 			if mc != u.cell:
 				combos.append({ "move": mc, "atk": -1 })
+	# 攻击障碍：射程内、视线无阻挡的障碍纳入攻击候选(打通/输出障碍物)
+	if can_attack and not u.attacked:
+		for oc in sim.obstacles.keys():
+			var oc2: Vector2i = oc
+			if grid.distance(u.cell, oc2) <= u.atk_range and not _sim_path_blocked(sim, u.cell, oc2):
+				combos.append({ "move": null, "atk": -2, "atk_obs": oc2 })
 	# 撤退克制：只有“移动且本步不打”的拉远走位才可能被去掉。
 	# ① 当前格不疼（受威胁伤害 ≤1.5）→ 玩家下回合也碰不到/伤害可接受，站着占主动，没必要后撤；
 	# ② 就算现在疼，退到“下回合移动力+射程也够不着敌人”的范围外 → 白白丢下一轮主动，也不退。
@@ -557,6 +563,17 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 移动后专属（与真实规则同触发点：移动落位后、攻击前；沉默时失效）
 			if not u.silenced:
 				_sim_on_move(sim, u)
+	# 攻击障碍：耐久-1，打掉则移除
+	if a.has("atk_obs"):
+		u.attacked = true
+		var oc2: Vector2i = a["atk_obs"]
+		if sim.obstacles.has(oc2):
+			var nd: int = int(sim.obstacles[oc2]) - 1
+			if nd <= 0:
+				sim.obstacles.erase(oc2)
+			else:
+				sim.obstacles[oc2] = nd
+		return
 	if a.has("atk") and a["atk"] != null and int(a["atk"]) >= 0:
 		var tidx := int(a["atk"])
 		var t: SimUnit = sim.units[tidx]
@@ -914,6 +931,8 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 #   6. 走位定位：坦克前压、奶妈/后勤缩后、远程贴边缘、AOE 不扎堆
 func _evaluate(sim: Sim) -> float:
 	var score := 0.0
+	# 障碍清理激励：剩余障碍每格扣一点分,鼓励 AI 清打通路/障碍
+	score -= float(sim.obstacles.size()) * 0.3
 	var enemy_dead := 0
 	var player_dead := 0
 	for i in sim.units.size():

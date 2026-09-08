@@ -4830,10 +4830,10 @@ func _run_enemy_turn() -> void:
 	var grave_snap := {}
 	for c in graves.keys():
 		grave_snap[c] = true
-	# 障碍物供 AI 参考：阻挡移动与攻击视
+	# 障碍物供 AI 参考：阻挡移动与攻击视线(带耐久,AI可攻击打掉)
 	var obstacle_snap := {}
 	for c in obstacles.keys():
-		obstacle_snap[c] = true
+		obstacle_snap[c] = obstacles[c]
 	# 炸弹供 AI 参考：非炸弹人不要停在炸弹格(经过不炸,落停会引爆)
 	var bomb_snap := {}
 	for c in bombs.keys():
@@ -4918,6 +4918,10 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 		if a.has("move") and a["move"] != null:
 			_do_move(u, a["move"], true)
 			await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
+		if a.has("atk_obs"):
+			if is_instance_valid(u):
+				_do_attack_obstacle(u, a["atk_obs"])
+				await _wait_action_done()
 		if a.has("atk") and int(a["atk"]) >= 0:
 			var t_idx := int(a["atk"])
 			if t_idx >= 0 and t_idx < refs.size() and is_instance_valid(refs[t_idx]):
