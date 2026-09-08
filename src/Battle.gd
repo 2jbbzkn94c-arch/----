@@ -2228,8 +2228,8 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 	if a.branch_override and not _is_straight_line_cells(a.cell, b.cell):
 		return false
 	# 障碍物阻挡攻击视线（血远程不能隔墙打；贴身攻击无中间格不受影响）
-	# 坠炮手(hero_45)无视阻挡：弹道穿过障碍/单位/墓碑
-	if not a.los_ignore and _attack_path_blocked(a.cell, b.cell):
+	# 坠炮手(hero_45)未沉默：弹道无视障碍/单位/墓碑阻挡；沉默时退化、受视线阻挡
+	if not a.mortar_active() and _attack_path_blocked(a.cell, b.cell):
 		return false
 	return true
 
@@ -2239,16 +2239,16 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 # 否则被墙挡住的嘲讽会把本可攻击的目标从高亮里误滤掉（"能打到的没标红"）。
 func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 	var range_at := _effective_range_at(u, from_cell)
-	# 坠炮手无视嘲讽：不收集嘲讽、不受"只能打嘲讽"限制
+	# 坠炮手(未沉默)无视嘲讽：不收集嘲讽、不受"只能打嘲讽"限制；沉默时受嘲讽约束
 	var taunts: Array = []
-	if not u.los_ignore:
+	if not u.mortar_active():
 		for v in units:
 			if v.alive and v.faction != u.faction and v.skills.has(DataRegistry.Skill.TAUNT):
 				var d := grid.distance(from_cell, v.cell)
 				if d >= 1 and d <= range_at:
 					if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):
 						continue
-					if not u.los_ignore and _attack_path_blocked(from_cell, v.cell):
+					if not u.mortar_active() and _attack_path_blocked(from_cell, v.cell):
 						continue
 					taunts.append(v)
 	var out: Array = []
@@ -2260,7 +2260,7 @@ func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 					continue
 				if u.branch_override and not _is_straight_line_cells(from_cell, v.cell):   # 血锁：只能直线攻击
 					continue
-				if not u.los_ignore and _attack_path_blocked(from_cell, v.cell):   # 障碍物阻挡视线（坠炮手无视）
+				if not u.mortar_active() and _attack_path_blocked(from_cell, v.cell):   # 障碍物阻挡视线（坠炮手未沉默才无视）
 					continue
 				out.append(v)
 	return out
@@ -2268,6 +2268,9 @@ func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 func _effective_range_at(u: Unit, from_cell: Vector2i) -> int:
 	if u.attack_type == DataRegistry.AttackType.RANGED and _enemy_adjacent_at(u, from_cell):
 		return 1
+	# 坠炮手沉默：全场狙击失效 -> 退化为普通远程(射程2)
+	if u.hero_id == "hero_45" and not u.mortar_active():
+		return 2
 	return u.attack_range
 
 func _enemy_adjacent_at(u: Unit, from_cell: Vector2i) -> bool:
@@ -2291,6 +2294,9 @@ func _has_enemy_adjacent(a: Unit) -> bool:
 func _effective_attack_range(a: Unit) -> int:
 	if a.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(a):
 		return 1
+	# 坠炮手沉默：全场狙击失效 -> 退化为普通远程(射程2)
+	if a.hero_id == "hero_45" and not a.mortar_active():
+		return 2
 	return a.attack_range
 
 # 同步所有单位的"远程被贴标志（移攻击/回合切换后调用，用于面板与伤害结算）
@@ -2348,7 +2354,7 @@ func _taunters_in_range(a: Unit) -> Array:
 	return out
 
 func _valid_targets(a: Unit) -> Dictionary:  # Unit -> true
-	var taunts := _taunters_in_range(a) if not a.los_ignore else []   # 坠炮手无视嘲讽
+	var taunts := _taunters_in_range(a) if not a.mortar_active() else []   # 坠炮手未沉默才无视嘲讽
 	var out := {}
 	for v in units:
 		if v.alive and v.faction != a.faction and _in_attack_range(a, v):
@@ -2472,8 +2478,8 @@ func _compute_ranges(u: Unit) -> void:
 				# 血锁：攻击障碍同样只能6 方向直线（与攻击敌方单位一致）
 				if u.branch_override and not _is_straight_line_cells(u.cell, oc):
 					continue
-				if not u.los_ignore and _attack_path_blocked(u.cell, oc):
-					continue   # 与攻击单位一致：中间有单位/障碍挡视线时打不到（坠炮手无视）
+				if not u.mortar_active() and _attack_path_blocked(u.cell, oc):
+					continue   # 与攻击单位一致：中间有单位/障碍挡视线时打不到（坠炮手未沉默才无视）
 				enemy_cells[oc] = true
 
 func _is_logistics(u: Unit) -> bool:
@@ -2574,8 +2580,8 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i) -> void:
 	# 血锁：攻击障碍同样只能6 方向直线（权威执行处也校验，防绕UI 高亮
 	if u.branch_override and not _is_straight_line_cells(u.cell, cell):
 		return   # 非法目标直接忽略，不消耗行动（UI 高亮已过滤，此处为兜底）
-	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮；坠炮手无视）
-	if not u.los_ignore and _attack_path_blocked(u.cell, cell):
+	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮；坠炮手未沉默才无视）
+	if not u.mortar_active() and _attack_path_blocked(u.cell, cell):
 		return
 	state = State.ANIMATING   # 演出期间锁定输入
 	u.attacked_this_turn = true

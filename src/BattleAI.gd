@@ -480,8 +480,8 @@ func _in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, t: SimUnit) -> bool:
 	# 血锁：只能沿直线攻击（6 条轴向方向之一），与真实规则一致
 	if u.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, t.cell):
 		return false
-	# 障碍物阻挡攻击视线（与真实规则一致）；坠炮手(ignore_los)无视阻挡
-	if not u.ignore_los and _sim_path_blocked(sim, from_cell, t.cell):
+	# 障碍物阻挡攻击视线（与真实规则一致）；坠炮手(ignore_los)未沉默才无视阻挡
+	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, t.cell):
 		return false
 	return true
 
@@ -536,7 +536,7 @@ func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
 # 返回某落点可攻击的目标 idx（含嘲讽规则；坠炮手 ignore_los 无视嘲讽）
 func _valid_targets(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
 	var taunts: Array = []
-	if not u.ignore_los:
+	if not (u.ignore_los and not u.silenced):   # 坠炮手未沉默才无视嘲讽；沉默时受嘲讽约束
 		for i in sim.units.size():
 			var t: SimUnit = sim.units[i]
 			if t.alive and t.fn != u.fn and t.skills.has(DataRegistry.Skill.TAUNT) and _in_range(sim, u, from_cell, t):

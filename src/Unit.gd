@@ -389,6 +389,11 @@ func skill_allowed() -> bool:
 	# 眩晕：不能移动/攻击，也不能触发任何技能（回合开始/结束、登场、光环等）
 	return alive and not has_status("silence") and not has_status("stun")
 
+# 坠炮手"全场狙击"被动是否生效：仅在本单位存活且未被沉默/眩晕时。
+# 被沉默时退化为普通远程(射程2/受视线阻挡/受嘲讽约束,见 Battle 各判定处)，但仍能攻击。
+func mortar_active() -> bool:
+	return alive and los_ignore and skill_allowed()
+
 func _update_status_label() -> void:
 	# 在单位牌面下加状态小字
 	var txt := ""
