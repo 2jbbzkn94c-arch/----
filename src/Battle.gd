@@ -2992,9 +2992,12 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 		u.move_use_buff += 1   # 一次性：下一次移1，移动后消失
 		log_message.emit("%s 拾取移动道具：下一次移动力 +1。" % u.display_name)
 	elif btype == "heal":
-		var g := mini(3, u.max_hp - u.hp)
-		_heal(u, 3)
-		log_message.emit("%s 拾取回血道具，恢复 %d 点生命！" % [u.display_name, g])
+		# 回复3血可突破上限（溢出血：HP 暂时高于上限，受伤时先扣溢出的部分）
+		u.hp += 3
+		u.hp_changed.emit(u)
+		u._update_hp_label()
+		u.float_heal(3)
+		log_message.emit("%s 拾取回血道具，恢复 3 点生命（可溢出上限）。" % u.display_name)
 	elif btype == "shield":
 		u.add_status("shield")   # 圣盾：抵挡一次受到的伤害（非叠加
 		u.refresh_stats()
@@ -4710,8 +4713,14 @@ func _run_enemy_turn() -> void:
 	var refs: Array = units.duplicate()
 	var descs: Array = []
 	var occ_snap := {}
+	var uidx := {}   # Unit -> idx（附体绑定传给模拟用）
+	for i in units.size():
+		uidx[units[i]] = i
 	for i in units.size():
 		var u: Unit = units[i]
+		var poss_by := -1
+		if _possess_links.has(u) and is_instance_valid(_possess_links[u]):
+			poss_by = uidx.get(_possess_links[u], -1)   # 被附体者记录施加它的宿魂
 		descs.append({
 			"fn": u.faction, "hero": u.hero_id, "cell": u.cell, "hp": u.hp, "max_hp": u.max_hp,
 			"atk": u.atk, "eatk": u.effective_atk(), "move": u.move_range, "emove": u.effective_move(),
@@ -4720,6 +4729,7 @@ func _run_enemy_turn() -> void:
 			"stunned": u.has_status("stun"), "silenced": u.has_status("silence"),
 			"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
 			"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
+			"poss_by": poss_by,
 		})
 		occ_snap[u.cell] = i
 

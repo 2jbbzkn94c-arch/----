@@ -176,4 +176,19 @@ func _test_hero(id: String) -> void:
 			var reverted := hero.behavior is HeroGremlin
 			battle._trigger_turn_start(hero)
 			rec(id, reverted and hero.hero_id != "hero_28", "再变身=%s" % hero.display_name)
+		"hero_45":
+			# 坠炮手：全场射程 99、无视阻挡（弹道不受障碍/单位/墓碑/嘲讽限制）
+			var ok45 := hero.attack_range >= 99
+			var obs := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
+			rec(id, ok45, "射程=%d" % hero.attack_range)
+		"hero_46":
+			# 宿魂：攻击命中后目标获得附体绑定；负墟免疫附体
+			var tgt := spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
+			battle._trigger_on_attack(hero, tgt, false)
+			rec(id, battle._possess_links.has(tgt) and battle._possess_links[tgt] == hero, "附体=%s" % str(battle._possess_links.has(tgt)))
+		"hero_47":
+			# 共鸣者：回合开始 echo_bonus = 队友有效攻击之和（快照含 echo_bonus）
+			var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
+			battle._sync_one_echo(hero)
+			rec(id, hero.echo_bonus >= 1, "echo=%d" % hero.echo_bonus)
 		_: rec(id, false, "未接入")

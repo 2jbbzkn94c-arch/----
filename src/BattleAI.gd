@@ -5,6 +5,7 @@ extends RefCounted
 
 # ---- 轻量模拟状态 ----
 class SimUnit:
+	var sim_index := -1      # 在 sim.units 里的下标（宿魂镜像等用）
 	var fn := 0
 	var hero_id := ""
 	var cell := Vector2i.ZERO
@@ -31,6 +32,7 @@ class SimUnit:
 	var hurt_times := 0     # 本回合被攻击次数（集火评估）
 	var aura_used := false   # 本回合已触发过的光环/次数技（圣光护盾等每回合限一次）
 	var ignore_los := false   # 坠炮手(hero_45)：攻击弹道无视障碍/单位/墓碑阻挡
+	var possessed_by := -1   # 宿魂(hero_46)附体：被附体者记录"施加它的宿魂 sim_index"（-1=无；负墟免疫）
 
 class Sim:
 	var units: Array = []
@@ -39,6 +41,8 @@ class Sim:
 	var graves: Dictionary = {}        # cell -> true（阵亡墓碑：阻挡移动，不可落停）
 	var obstacles: Dictionary = {}     # cell -> true（障碍物：阻挡移动与攻击视线）
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
+	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
+	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
 
 	func clone() -> Sim:
 		var c := Sim.new()
@@ -46,8 +50,12 @@ class Sim:
 		c.graves = graves.duplicate()
 		c.obstacles = obstacles.duplicate()
 		c.killed_players = killed_players
-		for u in units:
+		c._neg_gained = _neg_gained.duplicate()
+		c._pos_mirror_depth = 0   # 镜像深度每次搜索步重置（防跨步累计误限）
+		for i in units.size():
+			var u: SimUnit = units[i]
 			var cu := SimUnit.new()
+			cu.sim_index = i
 			cu.fn = u.fn
 			cu.hero_id = u.hero_id
 			cu.cell = u.cell
@@ -74,6 +82,7 @@ class Sim:
 			cu.hurt_times = u.hurt_times
 			cu.aura_used = u.aura_used
 			cu.ignore_los = u.ignore_los
+			cu.possessed_by = u.possessed_by
 			c.units.append(cu)
 		c.occ = occ.duplicate()
 		return c
@@ -114,12 +123,15 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 		u.heavy = d.get("heavy", false)
 		u.poisoned = d.get("poisoned", false)
 		u.frozen = d.get("frozen", false)
+		u.possessed_by = int(d.get("poss_by", -1))   # 已有宿魂附体绑定（真实残留）
 		# 坠炮手：全场射程 + 无视阻挡（与真实规则一致；atk_range 已由出生方置为 99）
 		if u.hero_id == "hero_45":
 			u.atk_range = 99
 			u.ignore_los = true
 		s.units.append(u)
 	s.occ = occ.duplicate()
+	for i in s.units.size():
+		s.units[i].sim_index = i
 	return s
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
@@ -553,25 +565,32 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				dealt = true
 			else:
 				t.shield = false
+			if dealt:
+				_sim_possess_mirror(sim, t, dmg)   # 宿魂受伤：附体目标镜像（死亡清除前）
 			# 锤头鲨：每当敌人受到一次伤害（非反击）-> 同阵营锤头鲨攻击力+1。
 			# 模拟中累积 eatk，让 AI 倾向"先队友攻击累积 buff、锤头鲨最后攻击"。
 			if dealt:
 				for v in sim.units:
 					if v.alive and v.fn == u.fn and v.hero_id == "hero_37":
 						v.eatk += 1
-			# 特技（沉默：非关键词技能失效）
+			# 特技（沉默：非关键词技能失效）——若目标为负墟则负面免疫（攻+1，见 helper）
 			if not u.silenced:
-				if u.hero_id == "hero_03":   # 毒蛇淑女：猛毒
+				if u.hero_id == "hero_03" and not _sim_neg_immunity(sim, t):   # 毒蛇淑女：猛毒
 					t.poisoned = true
-				if u.hero_id == "hero_12":   # 巨剑：重伤
+				if u.hero_id == "hero_12" and not _sim_neg_immunity(sim, t):   # 巨剑：重伤
 					t.heavy = true
 				if u.hero_id == "hero_25":   # 战锤：麻痹（近似=攻-1有效）+ 冰冻
-					t.eatk = max(t.eatk - 1, 0)
-					t.frozen = true
-				if u.hero_id == "hero_34":   # 沉默术士：沉默
+					if _sim_neg_immunity(sim, t):
+						pass   # 负墟：两个负面一并免疫，攻只 +1（helper 去重）
+					else:
+						t.eatk = max(t.eatk - 1, 0)
+						t.frozen = true
+				if u.hero_id == "hero_34" and not _sim_neg_immunity(sim, t):   # 沉默术士：沉默
 					t.silenced = true
-			# 白游侠：远程命中后，对目标相邻的敌人溅射等量伤害并冰冻（模拟，无反击）
+			# 白游侠：远程命中后，先冰冻目标本体，再对目标相邻的敌人溅射等量伤害并冰冻
 			if not u.silenced and u.hero_id == "hero_10":
+				if t.alive and not _sim_neg_immunity(sim, t):
+					t.frozen = true
 				for k in sim.units.size():
 					var w: SimUnit = sim.units[k]
 					if w == null or w == t or not w.alive or w.fn != t.fn:
@@ -579,7 +598,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					if grid.distance(t.cell, w.cell) != 1:
 						continue
 					_sim_hit_no_counter(sim, w, u.eatk)
-					if w.alive:
+					if w.alive and not _sim_neg_immunity(sim, w):
 						w.frozen = true
 			t.hurt_times += 1
 			if t.hp <= 0:
@@ -600,8 +619,22 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 						_sim_occupy_dead_cell(sim, u, t)   # 目标死亡：占据其格
 				if u.hero_id == "hero_41" and t.alive:
 					_sim_pull_target(sim, u, t)   # 血锁：拉近
+				if u.hero_id == "hero_46" and t.alive and t.fn != u.fn:
+					# 宿魂：令目标附体（负墟免疫则不绑定、攻+1）。后附覆盖先附（与真实一致）
+					if not _sim_neg_immunity(sim, t):
+						t.possessed_by = u.sim_index
 			_sim_counter_check(sim, u, t)
 		u.attacked = true
+
+# 模拟端负墟(hero_44)：尝试对 t 施加一次负面（该次攻击带负面时才调用）。
+# 若 t 是负墟 -> 免疫该负面并按"本次动作去重"给负墟 +1 攻；返回 true 表示应跳过原负面挂载。
+func _sim_neg_immunity(sim: Sim, t: SimUnit) -> bool:
+	if t == null or t.hero_id != "hero_44":
+		return false
+	if not sim._neg_gained.has(t.sim_index):
+		sim._neg_gained[t.sim_index] = true
+		t.eatk += 1   # 负墟被负面攻击命中：免疫负面、攻+1
+	return true
 
 # 移动后专属机制（敌方 AI 规划时模拟，与真实执行一致，减少"计划打不到/漏算"）：
 #   烛火：灼烧相邻玩家（伤害=有效攻击，受圣盾/重伤规则影响，不触发反击）
@@ -618,7 +651,8 @@ func _sim_on_move(sim: Sim, u: SimUnit) -> void:
 		for i in sim.units.size():
 			var t: SimUnit = sim.units[i]
 			if t.alive and t.fn != u.fn and grid.distance(u.cell, t.cell) == 1:
-				t.frozen = true
+				if not _sim_neg_immunity(sim, t):
+					t.frozen = true
 	if u.hero_id == "hero_06":   # 医护兵：治疗相邻最低血队友
 		var best_ally: SimUnit = null
 		for i in sim.units.size():
@@ -658,6 +692,7 @@ func _sim_hit_no_counter(sim: Sim, t: SimUnit, dmg_raw: int) -> void:
 	if t.heavy:
 		dmg += 1
 	t.hp = max(t.hp - dmg, 0)
+	_sim_possess_mirror(sim, t, dmg)   # 宿魂受伤：附体目标镜像（在死亡清除前遍历）
 	if t.hp <= 0:
 		t.alive = false
 		sim.occ.erase(t.cell)
@@ -668,9 +703,28 @@ func _sim_real_damage(sim: Sim, t: SimUnit, dmg_raw: int) -> void:
 	if t.heavy:
 		dmg += 1
 	t.hp = max(t.hp - dmg, 0)
+	_sim_possess_mirror(sim, t, dmg)
 	if t.hp <= 0:
 		t.alive = false
 		sim.occ.erase(t.cell)
+
+# 宿魂附体镜像：宿魂（hero_46 施放者）受伤时，其附体的目标同受伤害（递归，防互相附体死循环）
+func _sim_possess_mirror(sim: Sim, caster: SimUnit, dmg: int) -> void:
+	if caster == null or caster.hero_id != "hero_46" or dmg <= 0:
+		return
+	if sim._pos_mirror_depth >= 8:
+		return
+	sim._pos_mirror_depth += 1
+	var targets: Array = []
+	for i in sim.units.size():
+		var m: SimUnit = sim.units[i]
+		if m != null and m.alive and m.possessed_by == caster.sim_index and m != caster:
+			targets.append(m)
+	for m in targets:
+		if m == null or not m.alive:
+			continue
+		_sim_hit_no_counter(sim, m, dmg)   # 镜像目标受伤害（其自身圣盾/重伤同样生效，可再触发镜像）
+	sim._pos_mirror_depth -= 1
 
 # 长角：自己结算基础伤害——先把目标沿"攻击者->目标"直线方向击退 1 格（能退则 1 倍伤害），
 # 不能击退（界外/被占/被挡）则 2 倍伤害；击退后若仍贴身则目标可反击（与真实一致）。
@@ -789,6 +843,7 @@ func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	t.counter_used = true
 	var cdmg: int = t.eatk * (2 if t.hero_id == "hero_23" else 1)
 	u.hp = max(u.hp - cdmg, 0)
+	_sim_possess_mirror(sim, u, cdmg)   # 被反击的宿魂受伤：附体目标镜像
 	if u.hp <= 0:
 		u.alive = false
 		sim.occ.erase(u.cell)
