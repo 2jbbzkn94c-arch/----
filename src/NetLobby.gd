@@ -50,6 +50,12 @@ func _ready() -> void:
 	NetBus.connected.connect(_on_connected)
 	# 用对象方法连接 autoload 信号：大厅释放时自动断开，避免 Lambda capture freed
 	NetBus.disconnected.connect(_on_net_disconnected)
+	# 恢复"上次会话"（对局退回大厅后场景重建，靠 GameState 记录让「重新连接」仍可用）
+	_last_join_addr = GameState.net_last_addr
+	_last_join_port = GameState.net_last_port
+	_am_host = GameState.net_last_was_host
+	_session_started = GameState.net_last_joined
+	_refresh_ui()
 
 func _on_net_disconnected() -> void:
 	if not is_instance_valid(_status):
@@ -124,6 +130,7 @@ func _on_connected() -> void:
 	_connected_ok = true
 	_session_started = true
 	_connecting_sec = 0.0
+	GameState.note_net_room(true, _last_join_addr, _last_join_port, NetBus.is_host)
 	if not NetBus.is_host:
 		NetBus.send_to(1, JSON.stringify({ "type": "hello", "ver": NET_VERSION }))
 	_refresh_ui()
@@ -620,6 +627,7 @@ func _on_host() -> void:
 		_connected_ok = false
 		_am_host = false
 		_session_started = false   # 主动取消：会话结束，"重新连接"不再可用
+		GameState.note_net_room(false, "", 18861, false)
 		_status.text = "已取消开房。"
 		_refresh_ui()
 		return
@@ -639,6 +647,7 @@ func _on_host() -> void:
 		_am_host = true
 		_session_started = true
 		_auto_retry_done = true   # 主机不做自动重连（等对方重新加入，或自己再开房）
+		GameState.note_net_room(true, "", NetBus.active_port, true)
 	else:
 		_status.text = "开房失败: %s" % NetBus.last_tick_error
 	_refresh_ui()
@@ -663,6 +672,7 @@ func _on_join() -> void:
 	_last_join_port = portv
 	_am_host = false
 	_auto_retry_done = false   # 新的手动加入会话：允许之后断线自动重连一次
+	GameState.note_net_room(false, addr, portv, false)   # 记录地址；连上后(note joined)再置可用
 	NetBus.join_match(addr, portv)
 	if NetBus.is_online and not NetBus.is_host:
 		_status.text = "正在连接 %s:%d…" % [addr, portv]

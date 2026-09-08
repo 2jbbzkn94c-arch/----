@@ -46,6 +46,20 @@ var net_edit_mode := false
 func end_deck_edit() -> void:
 	net_edit_mode = false
 
+# —— 联机"上次会话"记录（跨场景保留：对局退回大厅后重连按钮仍可用）——
+var net_last_joined := false      # 本次运行是否曾成功开房/加入过
+var net_last_addr := ""           # 上次以客户端身份加入的主机地址
+var net_last_port := 18861        # 上次加入的端口
+var net_last_was_host := false    # 上次是否为开房主机
+
+func note_net_room(joined: bool, addr: String = "", port: int = 18861, was_host: bool = false) -> void:
+	net_last_joined = joined
+	if addr != "" or joined:
+		net_last_addr = addr
+	if port != 18861 or joined:
+		net_last_port = port
+	net_last_was_host = was_host
+
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
 
