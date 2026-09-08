@@ -3619,11 +3619,12 @@ func _front_cell(u: Unit) -> Vector2i:
 			best = n
 	return best
 
-# 炸弹人周围可放炸弹的空地（相邻、界内、无单位/障碍/已有炸弹
+# 炸弹人周围可放炸弹的空地（相邻、界内、无单位/障碍/炸弹/buff道具/金矿）
 func _bomb_spots(u: Unit) -> Array:
 	var out: Array = []
 	for n in grid.neighbors(u.cell):
-		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not bombs.has(n):
+		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not bombs.has(n) \
+				and not buff_items.has(n):
 			out.append(n)
 	return out
 
@@ -3684,12 +3685,14 @@ func _apply_bomb_cmd(u: Unit, cell: Vector2i) -> void:
 	_apply_highlights()
 	_continue_after_move(u)
 
-# 炸弹落点公共校验并放置（单机 / 联机主机 / 回放端共用同一规则
+# 炸弹落点公共校验并放置（单机 / 联机主机 / 回放端共用同一规则）
+# 不能放在：自己脚下、界外、非相邻、单位/障碍/已有炸弹、增益道具格与金矿格
 func _apply_bomb_placement(u: Unit, cell: Vector2i) -> bool:
 	if u == null or not is_instance_valid(u):
 		return false
 	if cell == u.cell or not grid.in_bounds(cell) or grid.distance(u.cell, cell) != 1 \
-			or occupancy.has(cell) or obstacles.has(cell) or bombs.has(cell):
+			or occupancy.has(cell) or obstacles.has(cell) or bombs.has(cell) \
+			or buff_items.has(cell):   # buff 道具与金矿(类型"gold")都在 buff_items 里
 		return false
 	bombs[cell] = true
 	if board_view:
