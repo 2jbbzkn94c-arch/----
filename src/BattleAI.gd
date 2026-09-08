@@ -139,9 +139,17 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 			u.atk_range = 99
 			u.ignore_los = true
 		s.units.append(u)
-	s.occ = occ.duplicate()
+	# 统一 occupancy 值语义为 SimUnit 对象：外部传入的是 "cell -> idx"，这里转成 "cell -> 对象"，
+	# 与 _apply/_sim_swap_cells 等写入对象保持类型一致，避免部分状态 int、部分对象导致 cast 失败。
+	var by_idx: Dictionary = {}
 	for i in s.units.size():
 		s.units[i].sim_index = i
+		by_idx[i] = s.units[i]
+	s.occ.clear()
+	for k in occ.keys():
+		var unit: SimUnit = by_idx.get(occ[k], null)
+		if unit != null:
+			s.occ[k] = unit
 	return s
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
@@ -509,7 +517,7 @@ func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool
 		if sim.obstacles.has(c) or sim.graves.has(c):
 			return true
 		if sim.occ.has(c):
-			var oi: int = sim.occ[c]
+			var oi: int = (sim.occ[c] as SimUnit).sim_index
 			if oi >= 0 and oi < sim.units.size():
 				return true
 		return false)
@@ -578,7 +586,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			var prev_cell: Vector2i = u.cell
 			sim.occ.erase(u.cell)
 			u.cell = mc
-			sim.occ[mc] = idx
+			sim.occ[mc] = u
 			u.moved = true
 			u.move_use_buff = 0   # 移动道具在本次移动中消耗
 			# 移动后拾取普通增益道具(收益已在走位排序中权衡)
@@ -850,9 +858,9 @@ func _sim_pierce_line(sim: Sim, u: SimUnit, target_cell: Vector2i) -> void:
 		var off := grid.offset_of(cur)
 		if not grid.in_bounds(off):
 			break
-		var idx := int(sim.occ.get(off, -1))
-		if idx >= 0 and idx < sim.units.size():
-			var other: SimUnit = sim.units[idx]
+		var holder = sim.occ.get(off, null)
+		if holder is SimUnit:
+			var other: SimUnit = holder
 			if other.alive and other.fn != u.fn:
 				_sim_hit_no_counter(sim, other, u.eatk)
 		cur += step
