@@ -7,10 +7,11 @@ func applies_status_on_hit() -> bool:
 	return true
 
 func on_attack(target: Unit) -> void:
-	fx()
-	fx_on_target(target)
 	if target == null or not target.alive:
 		return
+	if not target.has_status("shield"):   # 主目标带圣盾挡[冰冻]：不播命中/机制演出
+		fx()
+		fx_on_target(target)
 	battle._add_status_msg(target, "freeze", "冰冻")
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)
