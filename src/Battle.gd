@@ -1397,13 +1397,13 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 const OBSTACLE_DUR := 3
 func _place_obstacles() -> void:
 	# 预设障碍布局(坐标为代码坐标:用户左下角[1,1] 对应 x=列-1, y=7-行):
-	#   1) [3,1][3,2][3,3][3,4] -> 中部整列
+	#   1) [3,2][3,3][3,4][3,5] -> 中列一线(略上移,不占底线出生行)
 	#   2) [2,4][4,4]          -> 顶部两行隔列
 	#   3) [1,3][1,4][5,3][5,4] -> 左右两翼
 	#   4) 无障碍
 	# 每局开局随机选取一种。
 	var presets: Array = [
-		[Vector2i(2, 6), Vector2i(2, 5), Vector2i(2, 4), Vector2i(2, 3)],
+		[Vector2i(2, 5), Vector2i(2, 4), Vector2i(2, 3), Vector2i(2, 2)],
 		[Vector2i(1, 3), Vector2i(3, 3)],
 		[Vector2i(0, 4), Vector2i(0, 3), Vector2i(4, 4), Vector2i(4, 3)],
 		[],
