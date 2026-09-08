@@ -303,7 +303,7 @@ var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（触摸�
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
 # 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
-# 六边形边对边贴紧连成蜂窝）。固定 7 列、卡面放大；超高时滚动容器出现滚动条。
+# 六边形边对边贴紧连成蜂窝）。每行 5 张放大卡面，超高时滚动容器出现滚动条。
 func _build_hex_pool(host: Control) -> void:
 	# 卡池按稀有度排：白(低)→金→紫→虹(高)，同稀有按 hero_id 排——保证初始界面顺序固定，
 	# 新增英雄无论加在角色列表的哪个位置都落到对应稀有度区段。
@@ -316,13 +316,13 @@ func _build_hex_pool(host: Control) -> void:
 		if ra != rb:
 			return ra < rb
 		return a < b)
-	var cols := 7
-	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 56.0, 340.0)
-	# 半径：让 7 列蜂窝（总宽 = 2r + 6*1.5r = 11r）尽量宽大，但不超过上限
-	var r: float = clampf(avail_w / 11.0, 30.0, 96.0)
+	var cols := 5
+	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 40.0, 340.0)
+	# 半径：让 5 列蜂窝（总宽 = 2r + 4*1.5r = 8r）尽量宽大
+	var r: float = clampf(avail_w / 8.0, 30.0, 96.0)
 	var sq3 := sqrt(3.0)
 	var per := int(ceil(float(ids.size()) / float(cols)))
-	var total_w := 11.0 * r
+	var total_w := 8.0 * r
 	_hex_pool_size = Vector2(total_w, float(per + 1) * sq3 * r)
 	host.custom_minimum_size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	host.size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
