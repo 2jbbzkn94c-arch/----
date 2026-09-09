@@ -88,7 +88,6 @@ func hero_strength(id: String) -> float:
 				s += 1.5
 			Skill.LOGISTICS:
 				s += 1.0
-	s += float(def.rarity) * 0.3
 	return s
 
 # 职能分类（给 AI 组队配比用）：替补标签>嘲讽坦克>后勤功能>其余输出
@@ -227,8 +226,17 @@ func parse_column(text: String) -> Array:
 	out.append_array(_numeric_filter_heroes(text))
 	return out
 
-# 品级
-enum Rarity { SILVER, GOLD, MASTER, LEGEND }
+# 种族（卡面配色/卡池分组用；随 角色列表 第二列）
+enum Race { HUMAN, MECH, BEAST, ELF, DEMON }
+
+# 种族英文名 -> 中文（展示/调试用）
+const RACE_NAMES := {
+	Race.HUMAN: "人族",
+	Race.MECH: "机械",
+	Race.BEAST: "兽族",
+	Race.ELF: "精灵",
+	Race.DEMON: "魔族",
+}
 
 # 阵营
 enum Faction { PLAYER, ENEMY }
@@ -237,7 +245,7 @@ enum Faction { PLAYER, ENEMY }
 class HeroDef:
 	var id: String
 	var display_name: String
-	var rarity: int
+	var race: int   # Race 枚举（人族/机械/兽族/精灵/魔族）
 	var attack_type: int
 	var max_hp: int
 	var atk: int
@@ -396,7 +404,7 @@ func _load_heroes() -> void:
 		return
 
 	# 表头列名 -> 下标（表格列可增改，按列名取值，避免列位置写死错位）
-	var col := {}   # "名称"/"攻击力"/"HP"/"技能"/"等级"... -> 下标
+	var col := {}   # "名称"/"攻击力"/"HP"/"技能"/"种族"... -> 下标
 	var hdr_idx := -1
 	for ri in rows.size():
 		var r0: Array = rows[ri]
@@ -412,7 +420,7 @@ func _load_heroes() -> void:
 		var col_name_cell := str(header[i]).strip_edges()
 		if col_name_cell != "":
 			col[col_name_cell] = i
-	var col_grade: int = col.get("等级", 2)
+	var col_race: int = col.get("种族", col.get("等级", 2))
 	var col_no: int = col.get("No.", 1)
 	var col_name: int = col.get("名称", 3)
 	var col_atk: int = col.get("攻击力", 4)
@@ -436,11 +444,11 @@ func _load_heroes() -> void:
 		var cells: Array = rows[ri]
 		if cells.size() < 7:
 			continue
-		var grade: String = str(cells[col_grade]).strip_edges() if (col_grade >= 0 and col_grade < cells.size()) else ""
-		if grade == "":
+		var race_text: String = str(cells[col_race]).strip_edges() if (col_race >= 0 and col_race < cells.size()) else ""
+		if race_text == "":
 			continue
 		var no_text: String = str(cells[col_no]).strip_edges() if (col_no >= 0 and col_no < cells.size()) else ""
-		var is_summon := (grade == "衍生物")
+		var is_summon := (race_text == "衍生物")
 		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
 			continue
 		var pid: String = "summon_skeleton" if is_summon else ("hero_%02d" % no_text.to_int())
@@ -452,12 +460,12 @@ func _load_heroes() -> void:
 		var cells: Array = rows[ri]
 		if cells.size() < 7:
 			continue
-		var grade: String = str(cells[col_grade]).strip_edges() if (col_grade >= 0 and col_grade < cells.size()) else ""
-		if grade == "":
+		var race_text: String = str(cells[col_race]).strip_edges() if (col_race >= 0 and col_race < cells.size()) else ""
+		if race_text == "":
 			continue
 		# 跳过表头/分隔行（No 列非整数且非"-"）
 		var no_text: String = str(cells[col_no]).strip_edges() if (col_no >= 0 and col_no < cells.size()) else ""
-		var is_summon := (grade == "衍生物")
+		var is_summon := (race_text == "衍生物")
 		if not is_summon and (no_text == "" or not no_text.is_valid_int()):
 			continue
 
@@ -506,7 +514,7 @@ func _load_heroes() -> void:
 		var has_logistics: bool = has_tag.call("<后勤>")
 		var has_bench: bool = skill_raw.begins_with("<替补>") or has_tag.call("<替补>")
 
-		h.rarity = _rarity_of(grade)
+		h.race = _race_of(race_text)
 		h.attack_type = AttackType.RANGED if has_ranged else AttackType.MELEE
 		# 基础移动力 2（疾行由生成时 +1），射程 1（远程 → 2）
 		h.move_range = 2
@@ -567,17 +575,19 @@ func _tail_has(text: String, tag: String) -> bool:
 		tail = text.substr(dot + 1)
 	return tail.contains(tag)
 
-func _rarity_of(grade: String) -> int:
-	match grade:
-		"白":
-			return Rarity.SILVER
-		"金":
-			return Rarity.GOLD
-		"紫":
-			return Rarity.MASTER
-		"虹":
-			return Rarity.LEGEND
-	return Rarity.SILVER
+func _race_of(race_text: String) -> int:
+	match race_text:
+		"人族":
+			return Race.HUMAN
+		"机械":
+			return Race.MECH
+		"兽族":
+			return Race.BEAST
+		"精灵":
+			return Race.ELF
+		"魔族":
+			return Race.DEMON
+	return Race.HUMAN
 
 func get_hero(id: String) -> HeroDef:
 	return heroes.get(id, null)

@@ -29,7 +29,7 @@ func _ready() -> void:
 
 func _build_label() -> void:
 	var c := size / 2.0
-	# 名称行：放在卡面中上（颜色沿用稀有度色）。字号随卡片缩放，下限 12 保证小卡也清晰
+	# 名称行：放在卡面中上（颜色沿用种族色）。字号随卡片缩放，下限 12 保证小卡也清晰
 	var name_fs := int(clampf(radius * 0.34, 12.0, 36.0))
 	_label = Label.new()
 	_label.text = def.display_name
@@ -37,7 +37,7 @@ func _build_label() -> void:
 	_label.add_theme_font_size_override("font_size", name_fs)
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_label.add_theme_color_override("font_color", _rarity_color())
+	_label.add_theme_color_override("font_color", _race_color())
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_label.add_theme_constant_override("outline_size", 2)
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -131,28 +131,32 @@ func _make_stat_icon(path: String, center: Vector2, box: float) -> Sprite2D:
 			float(info.get("cy", tsz.y / 2.0)) - tsz.y / 2.0) * sc
 	return spr
 
-func _rarity_color() -> Color:
-	match def.rarity:
-		DataRegistry.Rarity.SILVER:
-			return Color(0.72, 0.75, 0.8)
-		DataRegistry.Rarity.GOLD:
+func _race_color() -> Color:
+	match def.race:
+		DataRegistry.Race.HUMAN:   # 人族：金色
 			return Color(0.95, 0.8, 0.4)
-		DataRegistry.Rarity.MASTER:
-			return Color(0.6, 0.85, 1.0)
-		DataRegistry.Rarity.LEGEND:
-			return Color(1.0, 0.55, 0.5)
+		DataRegistry.Race.MECH:    # 机械：金属银
+			return Color(0.75, 0.78, 0.82)
+		DataRegistry.Race.BEAST:   # 兽族：棕色
+			return Color(0.72, 0.5, 0.3)
+		DataRegistry.Race.ELF:     # 精灵：绿色
+			return Color(0.4, 0.85, 0.45)
+		DataRegistry.Race.DEMON:   # 魔族：紫色
+			return Color(0.65, 0.45, 0.9)
 	return Color.WHITE
 
-func _rarity_bg() -> Color:
-	match def.rarity:
-		DataRegistry.Rarity.SILVER:
-			return Color(0.20, 0.22, 0.28, 0.95)
-		DataRegistry.Rarity.GOLD:
+func _race_bg() -> Color:
+	match def.race:
+		DataRegistry.Race.HUMAN:
 			return Color(0.30, 0.24, 0.12, 0.95)
-		DataRegistry.Rarity.MASTER:
-			return Color(0.12, 0.24, 0.34, 0.95)
-		DataRegistry.Rarity.LEGEND:
-			return Color(0.34, 0.12, 0.12, 0.95)
+		DataRegistry.Race.MECH:
+			return Color(0.20, 0.22, 0.26, 0.95)
+		DataRegistry.Race.BEAST:
+			return Color(0.26, 0.18, 0.10, 0.95)
+		DataRegistry.Race.ELF:
+			return Color(0.10, 0.22, 0.13, 0.95)
+		DataRegistry.Race.DEMON:
+			return Color(0.24, 0.13, 0.30, 0.95)
 	return Color(0.2, 0.2, 0.24, 0.95)
 
 func set_selected(sel: bool) -> void:
@@ -168,12 +172,12 @@ func _draw() -> void:
 	for i in 6:
 		var a := deg_to_rad(60.0 * i)   # 平顶六边形（横线朝上）
 		pts.append(c + Vector2(cos(a), sin(a)) * radius)
-	var bg := _rarity_bg()
+	var bg := _race_bg()
 	if disabled_draw:
 		bg = bg.darkened(0.45)
 	draw_colored_polygon(pts, bg)
 	# 选中高亮：绿色描边（比最初 3px 略粗更醒目，但比黑色粗框细）
-	var border := Color(0.30, 1.0, 0.45) if selected else (_rarity_color().darkened(0.2) if disabled_draw else _rarity_color())
+	var border := Color(0.30, 1.0, 0.45) if selected else (_race_color().darkened(0.2) if disabled_draw else _race_color())
 	draw_polyline(_closed(pts), border, clampf(radius * 0.07, 4.0, 8.0) if selected else 2.0, true)
 
 func _closed(pts: PackedVector2Array) -> PackedVector2Array:

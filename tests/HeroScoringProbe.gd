@@ -3,7 +3,7 @@ extends Node
 func _ready() -> void:
 	_run.call_deferred()
 
-func score_of(id: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: float, rar_w: float) -> float:
+func score_of(id: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: float) -> float:
 	var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
 	var s := float(def.atk) * atk_w + float(def.max_hp) * hp_w
 	if def.attack_type == DataRegistry.AttackType.RANGED:
@@ -18,15 +18,14 @@ func score_of(id: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: f
 				s += 1.5
 			DataRegistry.Skill.LOGISTICS:
 				s += 1.0
-	s += float(def.rarity) * rar_w
 	return s
 
-func _dump(title: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: float, rar_w: float) -> void:
+func _dump(title: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: float) -> void:
 	var rows: Array = []
 	for id in DataRegistry.heroes.keys():
 		var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
 		var is_tank := def.skills.has(DataRegistry.Skill.TAUNT)
-		rows.append({ "n": def.display_name, "s": score_of(id, hp_w, atk_w, ranged_w, taunt_w, rar_w), "tank": is_tank })
+		rows.append({ "n": def.display_name, "s": score_of(id, hp_w, atk_w, ranged_w, taunt_w), "tank": is_tank })
 	rows.sort_custom(func(a, b): return a["s"] > b["s"])
 	var top := rows.slice(0, 12)
 	var tanks := 0
@@ -36,8 +35,8 @@ func _dump(title: String, hp_w: float, atk_w: float, ranged_w: float, taunt_w: f
 	print(">> %s TOP12(坦克%d/12): %s" % [title, tanks, "、".join(top.map(func(r): return "%s(%.1f)" % [r["n"], float(r["s"])]))])
 
 func _run() -> void:
-	_dump("现公式(atk1.8+hp1.0+坦2+稀有.5)", 1.0, 1.8, 2.0, 2.0, 0.5)
-	_dump("变体1(atk1.8+hp0.5+坦1+稀有.3)", 0.5, 1.8, 2.0, 1.0, 0.3)
-	_dump("变体2(atk2.2+hp0.45+坦0.8+稀有.3)", 0.45, 2.2, 2.5, 0.8, 0.3)
+	_dump("现公式(atk1.8+hp1.0+坦2)", 1.0, 1.8, 2.0, 2.0)
+	_dump("变体1(atk1.8+hp0.5+坦1)", 0.5, 1.8, 2.0, 1.0)
+	_dump("变体2(atk2.2+hp0.45+坦0.8)", 0.45, 2.2, 2.5, 0.8)
 	print("FINAL PASS")
 	get_tree().quit(0)

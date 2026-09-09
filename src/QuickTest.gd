@@ -117,14 +117,14 @@ func _build() -> void:
 
 	_refresh()
 
-# 与普通模式英雄池同款：5 列平顶蜂窝 HexCard，按稀有度排（白→金→紫→虹），超高可滚动
+# 与普通模式英雄池同款：5 列平顶蜂窝 HexCard，按种族分组（人族→机械→兽族→精灵→魔族），超高可滚动
 func _build_hex_pool(host: Control) -> void:
 	var ids: Array = DataRegistry.heroes.keys()
 	ids.sort_custom(func(a: String, b: String):
 		var da := DataRegistry.get_hero(a)
 		var db := DataRegistry.get_hero(b)
-		var ra := da.rarity if da != null else 0
-		var rb := db.rarity if db != null else 0
+		var ra := da.race if da != null else 99
+		var rb := db.race if db != null else 99
 		if ra != rb:
 			return ra < rb
 		return a < b)

@@ -1,16 +1,16 @@
 extends Node
-## 英雄数值基线自检：按 单体价值=攻×2.2+HP×0.45+远程2.5+技能调整+稀有度0.3/等 计算，
-## 按稀有度分组统计均值/标准差，标出明显偏离区间（>1.15σ）的英雄，输出到控制台与 平衡基线.md。
+## 英雄数值基线自检：按 单体价值=攻×2.2+HP×0.45+远程2.5+技能调整 计算，
+## 按种族分组统计均值/标准差，标出明显偏离区间（>1.15σ）的英雄，输出到控制台与 平衡基线.md。
 ## 运行：godot --headless --scene res://tests/BalanceBaseline.tscn
-var _names := { 0: "白", 1: "金", 2: "紫", 3: "虹" }
+var _names := { 0: "人族", 1: "机械", 2: "兽族", 3: "精灵", 4: "魔族" }
 
 func _ready() -> void:
 	_run.call_deferred()
 
 func _run() -> void:
 	var ids: Array = DataRegistry.heroes.keys()
-	var groups := {}   # rarity -> {list:[{id,name,score,role}], sum:…}
-	for r in [0, 1, 2, 3]:
+	var groups := {}   # race -> {list:[{id,name,score,role}], sum:…}
+	for r in [0, 1, 2, 3, 4]:
 		groups[r] = { "items": [], "sum": 0.0, "n": 0 }
 	for id in ids:
 		var def := DataRegistry.get_hero(id)
@@ -19,7 +19,7 @@ func _run() -> void:
 		if def.is_summon or id.begins_with("summon"):
 			continue
 		var score := DataRegistry.hero_strength(id)
-		var r: int = def.rarity
+		var r: int = def.race
 		if not groups.has(r):
 			continue
 		groups[r]["items"].append({ "id": id, "name": def.display_name, "score": score, "role": DataRegistry.hero_role_name(id) })
@@ -29,11 +29,11 @@ func _run() -> void:
 	var lines: Array[String] = []
 	lines.append("# 英雄数值基线自检")
 	lines.append("")
-	lines.append("> 单体价值 = 攻×2.2 + HP×0.45 + 远程2.5 + 词条(嘲0.8/疾1.0/渗1.5/勤1.0) + 稀有度0.3/档（不含复杂特殊技的额外加成，仅面板与基础词条）。")
+	lines.append("> 单体价值 = 攻×2.2 + HP×0.45 + 远程2.5 + 词条(嘲0.8/疾1.0/渗1.5/勤1.0)（不含复杂特殊技的额外加成，仅面板与基础词条）。")
 	lines.append("> 分组均值 ±1.15σ 外视为异常偏高/偏低。")
 	lines.append("")
 	var overall: Array = []
-	for r in [0, 1, 2, 3]:
+	for r in [0, 1, 2, 3, 4]:
 		var g: Dictionary = groups[r]
 		var n: int = g["n"]
 		if n == 0:
@@ -68,11 +68,11 @@ func _run() -> void:
 	lines.append("## 全局最强/最弱")
 	var s_max: Array[String] = []
 	for o in overall.slice(0, 5):
-		s_max.append("%s(%.2f/%s)" % [o["name"], o["score"], _names[DataRegistry.get_hero(o["id"]).rarity]])
+		s_max.append("%s(%.2f/%s)" % [o["name"], o["score"], _names[DataRegistry.get_hero(o["id"]).race]])
 	lines.append("- 最强：" + "、".join(s_max))
 	var s_min: Array[String] = []
 	for o in overall.slice(maxi(overall.size() - 5, 0)):
-		s_min.append("%s(%.2f/%s)" % [o["name"], o["score"], _names[DataRegistry.get_hero(o["id"]).rarity]])
+		s_min.append("%s(%.2f/%s)" % [o["name"], o["score"], _names[DataRegistry.get_hero(o["id"]).race]])
 	lines.append("- 最弱：" + "、".join(s_min))
 	var text := "\n".join(lines)
 	var f := FileAccess.open("res://平衡基线.md", FileAccess.WRITE)
