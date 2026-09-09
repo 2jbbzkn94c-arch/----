@@ -384,8 +384,8 @@ func _process(dt: float) -> void:
 				continue
 			if u.alive and u.faction == _operable_faction():
 				# 可移动=绿色、可攻击=红色；两者可独立显示（后勤不能攻击，攻击标识不亮）。
-				# 规则：攻击后不能再移动 → 绿色可移动仅在"未移动且未攻击"时亮。
-				u.set_action_markers(not u.moved_this_turn and not u.attacked_this_turn, not u.attacked_this_turn and _can_actively_attack(u))
+				# 规则：攻击后不能再移动 → 绿色可移动仅在"未移动且未攻击且可移动(can_move，排除荆棘/眩晕)"时亮。
+				u.set_action_markers(not u.moved_this_turn and not u.attacked_this_turn and u.can_move(), not u.attacked_this_turn and _can_actively_attack(u))
 			else:
 				u.set_action_marker(false)   # 旧统一标识关闭，避免残留
 				u.set_action_markers(false, false)
