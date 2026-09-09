@@ -16,4 +16,4 @@ func on_move() -> void:
 	for v in enemies:
 		fx_on_target(v)
 		v.set_big_hit_style()
-		v.take_damage(unit.effective_atk(), false, false, "被%s的烛火灼烧" % unit.display_name)
+		v.take_damage(unit.effective_atk(), false, false, "被%s的烛火灼烧" % unit.display_name, true)

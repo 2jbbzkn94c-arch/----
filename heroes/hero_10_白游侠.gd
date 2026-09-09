@@ -16,7 +16,7 @@ func on_attack(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)
 		v.set_big_hit_style()
-		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name)
+		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, "freeze", "冰冻")
 
 func on_attack_dead(target: Unit) -> void:
@@ -26,5 +26,5 @@ func on_attack_dead(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)
 		v.set_big_hit_style()
-		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name)
+		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, "freeze", "冰冻")

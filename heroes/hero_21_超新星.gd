@@ -11,7 +11,7 @@ func on_attack(target: Unit) -> void:
 		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
-			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)
+			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)
 
 func on_attack_dead(target: Unit) -> void:
 	if target == null or not target.alive:
@@ -20,4 +20,4 @@ func on_attack_dead(target: Unit) -> void:
 		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
-			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name)
+			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)

@@ -11,6 +11,6 @@ func on_move() -> void:
 	if low != null:
 		fx_on_target(low)
 		low.set_big_hit_style()
-		low.take_damage(maxi(1, unit.effective_atk()), false, false, "被%s电击" % unit.display_name)   # 电击：可被圣盾格挡（消耗盾、免伤）
+		low.take_damage(maxi(1, unit.effective_atk()), false, false, "被%s电击" % unit.display_name, true)   # 电击：可被圣盾格挡（消耗盾、免伤）；属攻击伤害，坚固可减
 	var selfdmg: int = maxi(1, unit.effective_atk())
-	unit.take_damage(selfdmg, false, false, "被%s的电击反噬" % unit.display_name)   # 自伤同样可被自身圣盾格挡
+	unit.take_damage(selfdmg, false, false, "被%s的电击反噬" % unit.display_name)   # 自伤同样可被自身圣盾格挡（非攻击伤害，坚固不减）
