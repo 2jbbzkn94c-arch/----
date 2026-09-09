@@ -9,4 +9,4 @@ func on_move() -> void:
 	fx()
 	for v in enemies:
 		fx_on_target(v)
-		battle._add_status_msg(v, "freeze", "冰冻")
+		battle._add_status_msg(v, "freeze", "冰冻", true)   # 纯状态施加(无伤害)：穿圣盾，不消耗盾

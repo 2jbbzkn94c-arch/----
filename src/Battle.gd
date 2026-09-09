@@ -3505,11 +3505,11 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 		return   # 远程被贴身：射程/攻击降为1，且技能效果无法造成
 	_hero(u).on_attack(target)
 
-func _add_status_msg(u: Unit, status: String, label: String) -> void:
+func _add_status_msg(u: Unit, status: String, label: String, pierce_shield: bool = false) -> void:
 	if u._shield_block_status:
 		# 本次攻击已被圣盾整段挡下：不再施加状态(盾的 [圣盾] 提示已由挡伤时显示)
 		return
-	u.add_status(status)
+	u.add_status(status, pierce_shield)
 	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
 	log_message.emit("%s 获得[%s]。" % [u.display_name, label])
 

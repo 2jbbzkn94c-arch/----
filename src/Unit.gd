@@ -268,10 +268,12 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 func _is_negative_status(s: String) -> bool:
 	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison" or s == "possess"
 
-func add_status(s: String) -> void:
+func add_status(s: String, pierce_shield: bool = false) -> void:
 	# 圣盾：抵挡一次受到的伤害或异常状态——负面状态施加时也消费掉圣盾并抵消本次负面。
+	# 但"纯状态施加"(无伤害，如雪拳移动后冰冻)用 pierce_shield=true 穿过圣盾：
+	# 盾保留，目标照常获得状态。带伤害攻击施加的状态(默认 false)仍由盾整段挡下。
 	# 圣盾判定在负墟免疫之前：带盾的负墟被负面命中先被盾挡下，不算"被负面命中"，不触发 +1 攻
-	if _is_negative_status(s) and has_status("shield"):
+	if _is_negative_status(s) and has_status("shield") and not pierce_shield:
 		remove_status("shield")
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -32, -92)   # 文字抬高，避免压住伤害数字
 		return
