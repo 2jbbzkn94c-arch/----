@@ -1343,7 +1343,8 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 	var my_turn := true
 	if battle != null:
 		if GameState.dual_control:
-			my_turn = true   # 自由部署双控：当前行动方都由本端操控
+			# 自由部署双控：当前行动方都由本端操控，但状态栏仍要如实显示当前是谁的回合（敌方行动=敌方回合）
+			my_turn = battle.side_faction(GameState.active_side) == battle._my_faction()
 		else:
 			my_turn = GameState.active_side == battle._my_side()
 	# 非回合阶段（开局部署/竞技场选人/替补中）不声称"你的回合/敌方回合"：
