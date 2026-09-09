@@ -713,14 +713,14 @@ func clean_skill_desc(raw: String) -> String:
 # 技能正文中以 [方括号] 出现的状态词（对目标施加的减益/增益）-> 中文解释行。
 # 与 keyword_lines 的"英雄自身关键词"互补：状态词是效果对象，不是英雄自带标签。
 const STATUS_DESC := {
-	"猛毒": "猛毒：任一回合开始时受1点伤害（圣盾可抵挡一次该伤害）",
-	"重伤": "重伤：受到的伤害+1",
-	"麻痹": "麻痹：攻击力-1",
-	"冰冻": "冰冻：移动力-1",
-	"沉默": "沉默：无法主动使用技能",
-	"眩晕": "眩晕：无法移动与攻击",
-	"圣盾": "圣盾：抵挡一次受到的伤害或异常状态",
-	"附体": "附体（负面）：与施加者伤害绑定。施加者受到伤害时，目标受到同等伤害；目标方回合结束时解除（负墟免疫）",
+	"猛毒": "任一回合开始时受1点伤害（圣盾可抵挡一次该伤害）",
+	"重伤": "受到的伤害+1",
+	"麻痹": "攻击力-1",
+	"冰冻": "移动力-1",
+	"沉默": "无法主动使用技能",
+	"眩晕": "无法移动与攻击",
+	"圣盾": "抵挡一次受到的伤害或异常状态",
+	"附体": "与施加者伤害绑定。施加者受到伤害时，目标受到同等伤害；目标方回合结束时解除（负墟免疫）",
 }
 
 # 从技能原文提取方括号状态词的解释行（按出现顺序、去重；未收录的词忽略）。
@@ -736,8 +736,10 @@ func desc_status_lines(raw: String) -> Array:
 		if b < 0:
 			break
 		var status_word := text.substr(a + 1, b - a - 1)
-		if STATUS_DESC.has(status_word) and not out.has(STATUS_DESC[status_word]):
-			out.append(STATUS_DESC[status_word])
+		if STATUS_DESC.has(status_word):
+			var line := "%s：%s" % [status_word, STATUS_DESC[status_word]]
+			if not out.has(line):
+				out.append(line)
 		i = b + 1
 	return out
 
