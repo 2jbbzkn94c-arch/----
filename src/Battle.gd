@@ -3164,6 +3164,10 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	if attacker == null or not is_instance_valid(attacker) or target == null or not is_instance_valid(target):
 		_finish_attack(attacker, for_enemy)
 		return
+	# 暗域：攻击会与目标交换位置,无需"前冲再弹回"的突突动画——直接结算,换位交给 _swap_units
+	if attacker.hero_id == "hero_27":
+		_apply_attack(attacker, target, for_enemy)
+		return
 	var apos := board_view.cell_world_center(attacker.cell)
 	var hit_to := apos.lerp(board_view.cell_world_center(target.cell), 0.35)   # 攻击者轻冲接
 	var t := create_tween()
