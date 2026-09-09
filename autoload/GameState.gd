@@ -62,6 +62,8 @@ func note_net_room(joined: bool, addr: String = "", port: int = 18861, was_host:
 
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
+# 自由部署(测试)双控：true 时敌方回合也由本端玩家操控(不再跑 AI)
+var dual_control := false
 
 # 联机对战：true 时敌方是真人，敌方回合不跑 AI，改为等待对端真人指令（网络层驱动）
 var is_online := false

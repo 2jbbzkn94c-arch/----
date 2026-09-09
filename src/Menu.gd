@@ -578,6 +578,7 @@ func _on_start() -> void:
 	GameState.set_decks(ordered, enemy)
 	GameState.clear_placement()   # 普通模式用正常部署，不沿用"自由部署"放置，避免选人异常
 	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
+	GameState.dual_control = false
 	GameState.arena_mode = false
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
@@ -778,6 +779,7 @@ func _start_arena(dif: int) -> void:
 	GameState.ai_difficulty = dif
 	GameState.arena_mode = true
 	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
+	GameState.dual_control = false
 	GameState.clear_placement()   # 竞技场用随机2选1构建卡组，不沿用"自由部署"放置
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 

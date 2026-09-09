@@ -231,6 +231,7 @@ func _on_start() -> void:
 			edeck.append(cand[i])
 	GameState.clear_placement()
 	GameState.no_death_limit = true   # 自由部署沙箱：无 3 人判负，替补用完才算负
+	GameState.dual_control = true     # 自由部署双控：敌方回合也由玩家操控(不跑 AI)
 	# 首发各 3 名直接摆到出生格（若我方不足 3 首发时按实际前几名摆放）
 	var p_first: Array = _sel_p.slice(0, STARTERS)
 	var e_first: Array = edeck.slice(0, STARTERS)

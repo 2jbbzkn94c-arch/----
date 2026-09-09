@@ -1715,6 +1715,13 @@ func _run_side_skills(side: int) -> void:
 		# 敌方若有上一回合阵亡待替补：按阵亡数量在出生区自动落位，再开始敌方回
 		if _pending_enemy_sub > 0 and enemy_roster.size() > 0:
 			_place_enemy_sub()
+		if GameState.dual_control:
+			# 自由部署双控：敌方回合也由本端操控(不跑 AI)
+			turn_time_left = TURN_TIME_LIMIT
+			state = State.PLAYER_INPUT
+			action_info.emit("敌方回合（你来操控）：点击一名敌方英雄。")
+			turn_banner.emit("敌方回合（你操控）")
+			return
 		state = State.ENEMY_TURN
 		if GameState.is_online:
 			# 联机：敌方是真人，不AI，等待对端真人发指令
@@ -1748,6 +1755,13 @@ func _my_faction() -> int:
 
 func _my_side() -> int:
 	return GameState.SIDE_ENEMY if _my_faction() == DataRegistry.Faction.ENEMY else GameState.SIDE_PLAYER
+
+# 自由部署双控：本端当前"可操作阵营"= 当前行动方(active 阵营)——双方回合都由玩家操控。
+# 其它模式 = 固定我方(_my_faction)。
+func _operable_faction() -> int:
+	if GameState.dual_control:
+		return side_faction(GameState.active_side)
+	return _my_faction()
 
 func _opp_side() -> int:
 	return GameState.SIDE_ENEMY if _my_side() == GameState.SIDE_PLAYER else GameState.SIDE_PLAYER
@@ -2078,7 +2092,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
 		var cu = occupancy.get(cell, null)
-		if cu != null and cu.alive and cu.faction == _my_faction():
+		if cu != null and cu.alive and cu.faction == _operable_faction():
 			_begin_drag(cu)
 			return
 		_on_cell_clicked(cell)
@@ -2099,7 +2113,7 @@ func _handle_touch_gesture(event: InputEvent) -> void:
 		_press_time_ms = Time.get_ticks_msec()
 		_press_unit = null
 		var cu = occupancy.get(_press_cell, null)
-		if cu != null and cu.alive and cu.faction == _my_faction():
+		if cu != null and cu.alive and cu.faction == _operable_faction():
 			_press_unit = cu
 		_press_active = true
 		_press_viewed = false
@@ -2174,7 +2188,7 @@ func _press_active_clickable(_cell: Vector2i) -> bool:
 
 func _on_cell_clicked(cell: Vector2i) -> void:
 	var clicked_unit = occupancy.get(cell, null)   # 可能null/单位；用真值判
-	var my_f := _my_faction()
+	var my_f := _operable_faction()   # 自由部署双控时=当前行动方阵营(双方都归本端)
 	# 点击己方单位 -> 选中（可继续行动者）；攻击过的英雄视为本回合已完成
 	if clicked_unit != null and clicked_unit.alive and clicked_unit.faction == my_f:
 		if _is_done(clicked_unit):
@@ -2203,8 +2217,8 @@ func _on_cell_clicked(cell: Vector2i) -> void:
 		if clicked_unit == null and not selected.attacked_this_turn and obstacles.has(cell) and enemy_cells.has(cell) and _can_actively_attack(selected):
 			submit_attack_obstacle(units.find(selected), cell)
 			return
-	# 点击敌方单位：显示其移动/攻击范围（预览）+ 属
-	if clicked_unit != null and clicked_unit.alive and clicked_unit.faction != _my_faction():
+	# 点击非可操作阵营单位：显示其移动/攻击范围（预览）+ 属性
+	if clicked_unit != null and clicked_unit.alive and clicked_unit.faction != _operable_faction():
 		_preview_enemy(clicked_unit)
 		return
 	_clear_selection()

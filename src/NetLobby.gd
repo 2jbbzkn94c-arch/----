@@ -744,6 +744,7 @@ func _on_start() -> void:
 	GameState.is_online = true
 	GameState.is_host = true
 	GameState.no_death_limit = false   # 联机正式规则：3 人判负
+	GameState.dual_control = false
 	GameState.arena_mode = (_mode == "arena")
 	# 主机随机生成对局种子并广播：两端 Battle 同种子 -> 障碍/竞技场发牌/先后手确定性一致。
 	# 必须先 randomize()：全局 RNG 默认固定序列，不随机化则每局 seed 相同、先后手永远一样。
