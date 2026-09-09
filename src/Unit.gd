@@ -248,10 +248,10 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		remove_status("shield")
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
 		return
-	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（两者可共存，先加后减，至少为1）
+	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（两者可共存，先加后减，最低为0——可完全免疫1点攻击）
 	var dmg := amount + (1 if has_status("heavy") else 0)
 	if has_status("solid"):
-		dmg = max(dmg - 1, 1)
+		dmg = max(dmg - 1, 0)
 	# 塔盾：伤害结算前，相邻塔盾代替承受1点（队友实际伤害减1）
 	var battle_node := get_parent()
 	if battle_node != null and battle_node.has_method("_bulwark_absorb"):
@@ -263,8 +263,14 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	if dmg > 0:
 		death_cause = cause
 	hp_changed.emit(self)
-	damaged.emit(self, dmg)
 	_update_hp_label()
+	if dmg <= 0:
+		# 坚固把攻击完全挡下（1点伤害-1=0）：不算受伤——不 emit damaged(避免锤头鲨等误触发)、
+		# 不播受击闪屏/音效，只弹"防住"提示
+		_float_text("防住", Color(1.0, 0.9, 0.5), -24, -46)
+		_dmg_style = 0
+		return
+	damaged.emit(self, dmg)
 	_flash()
 	_shake()
 	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分；
