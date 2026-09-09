@@ -1,5 +1,5 @@
 extends HeroBase
-## 战锤：攻击后，目标攻击力-1、移动力-1，直到回合结束。
+## 战锤：攻击后，目标攻击力-1、移动力-1，直到目标方回合结束（即施加者的对方回合结束）。
 class_name HeroWarhammer
 
 func applies_status_on_hit() -> bool:

@@ -118,7 +118,10 @@ func _build_visual() -> void:
 	var hp_icon_w := num_icon_w * 1.0   # 爱心单独放大：比剑大 10%；想更大就加大系数并配合把 hp_c.x 往左调
 	var atk_c := Vector2(-hex_radius * 0.34, hex_radius * 0.6)
 	var hp_c := Vector2(hex_radius * 0.36, hex_radius * 0.6)   # 爱心中心（大爱心需稍左移避免出右边框）
-	var atk_icon := _make_stat_icon(DataRegistry.ICON_ATK, atk_c, num_icon_w)
+	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图
+	var atk_icon_path := DataRegistry.ICON_ATK_LOGISTICS if skills.has(DataRegistry.Skill.LOGISTICS) else (
+		DataRegistry.ICON_ATK_RANGED if attack_type == DataRegistry.AttackType.RANGED else DataRegistry.ICON_ATK)
+	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, num_icon_w)
 	if atk_icon != null:
 		atk_icon.name = "AtkIcon"
 		add_child(atk_icon)

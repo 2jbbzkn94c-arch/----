@@ -1862,7 +1862,8 @@ func _sync_one_echo(u: Unit) -> void:
 	u.echo_set = total
 	u.refresh_stats()
 
-# 己方回合结束时解除临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
+# 某一方结束自己回合时解除**该方**身上的临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
+# 注意：麻痹/冰冻等减益挂在"被打者(目标)"身上，故随"目标方回合结束"解除——即施加者的"对方回合结束"。
 func _clear_statuses(faction: int) -> void:
 	for u in units:
 		if u == null or not is_instance_valid(u):

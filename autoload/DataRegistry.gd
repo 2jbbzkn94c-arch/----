@@ -600,6 +600,8 @@ func get_summon(id: String) -> HeroDef:
 # 供 Unit 棋子与 HexCard 卡面按"主体宽度"等比放大，并把图标主体精确放到数字下方。
 const ICON_HEART := "res://assets/美术资源/爱心.png"
 const ICON_ATK := "res://assets/美术资源/攻击.png"
+const ICON_ATK_RANGED := "res://assets/美术资源/攻击_远程.png"   # 远程角色的攻击力图标（弩）
+const ICON_ATK_LOGISTICS := "res://assets/美术资源/攻击_后勤.png"   # 后勤角色的攻击力图标（齿轮）
 var _stat_icons: Dictionary = {}   # path -> {tex:Texture2D, w,h,cx,cy}
 var _stat_bold_font: FontVariation = null   # 数值（攻击/血量）加粗字体，全部界面共享
 
@@ -724,11 +726,11 @@ func clean_skill_desc(raw: String) -> String:
 # 与 keyword_lines 的"英雄自身关键词"互补：状态词是效果对象，不是英雄自带标签。
 const STATUS_DESC := {
 	"猛毒": "任一回合开始时受1点伤害（圣盾可抵挡一次该伤害）",
-	"重伤": "受到的伤害+1",
-	"麻痹": "攻击力-1",
-	"冰冻": "移动力-1",
-	"沉默": "无法主动使用技能",
-	"眩晕": "无法移动与攻击",
+	"重伤": "受到的伤害+1（目标方回合结束时解除）",
+	"麻痹": "攻击力-1（目标方回合结束时解除）",
+	"冰冻": "移动力-1（目标方回合结束时解除）",
+	"沉默": "无法主动使用技能（目标方回合结束时解除）",
+	"眩晕": "无法移动与攻击（目标方回合结束时解除）",
 	"圣盾": "抵挡一次受到的伤害或异常状态",
 	"附体": "与施加者伤害绑定。施加者受到伤害时，目标受到同等伤害；目标方回合结束时解除（负墟免疫）",
 }

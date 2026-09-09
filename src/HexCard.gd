@@ -66,7 +66,10 @@ func _build_label() -> void:
 	var num_fs := int(clampf(icon_w * 0.56, 12.0, 44.0))
 	var atk_c := c + Vector2(-radius * 0.32, radius * 0.5)
 	var hp_c := c + Vector2(radius * 0.36, radius * 0.5)
-	var atk_icon := _make_stat_icon(DataRegistry.ICON_ATK, atk_c, icon_w)
+	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图
+	var atk_icon_path := DataRegistry.ICON_ATK_LOGISTICS if def.skills.has(DataRegistry.Skill.LOGISTICS) else (
+		DataRegistry.ICON_ATK_RANGED if def.attack_type == DataRegistry.AttackType.RANGED else DataRegistry.ICON_ATK)
+	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, icon_w)
 	var hp_icon := _make_stat_icon(DataRegistry.ICON_HEART, hp_c, icon_w)
 	if atk_icon == null and hp_icon == null:
 		# 素材缺失兜底：退回"HP… 攻…"文字
@@ -137,12 +140,12 @@ func _race_color() -> Color:
 			return Color(0.95, 0.8, 0.4)
 		DataRegistry.Race.MECH:    # 机械：金属银
 			return Color(0.75, 0.78, 0.82)
-		DataRegistry.Race.BEAST:   # 兽族：棕色
-			return Color(0.72, 0.5, 0.3)
-		DataRegistry.Race.ELF:     # 精灵：绿色
-			return Color(0.4, 0.85, 0.45)
-		DataRegistry.Race.DEMON:   # 魔族：紫色
-			return Color(0.65, 0.45, 0.9)
+		DataRegistry.Race.BEAST:   # 兽族：浅绿色
+			return Color(0.55, 0.9, 0.5)
+		DataRegistry.Race.ELF:     # 精灵：天蓝色
+			return Color(0.45, 0.8, 1.0)
+		DataRegistry.Race.DEMON:   # 魔族：红色
+			return Color(0.9, 0.35, 0.3)
 	return Color.WHITE
 
 func _race_bg() -> Color:
@@ -151,12 +154,12 @@ func _race_bg() -> Color:
 			return Color(0.30, 0.24, 0.12, 0.95)
 		DataRegistry.Race.MECH:
 			return Color(0.20, 0.22, 0.26, 0.95)
-		DataRegistry.Race.BEAST:
-			return Color(0.26, 0.18, 0.10, 0.95)
-		DataRegistry.Race.ELF:
-			return Color(0.10, 0.22, 0.13, 0.95)
-		DataRegistry.Race.DEMON:
-			return Color(0.24, 0.13, 0.30, 0.95)
+		DataRegistry.Race.BEAST:   # 兽族（浅绿）：深绿底
+			return Color(0.10, 0.24, 0.10, 0.95)
+		DataRegistry.Race.ELF:     # 精灵（天蓝）：深蓝底
+			return Color(0.12, 0.24, 0.36, 0.95)
+		DataRegistry.Race.DEMON:   # 魔族（红）：深红底
+			return Color(0.32, 0.11, 0.11, 0.95)
 	return Color(0.2, 0.2, 0.24, 0.95)
 
 func set_selected(sel: bool) -> void:
