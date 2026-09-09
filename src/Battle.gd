@@ -2707,8 +2707,9 @@ func submit_attack_obstacle(unit_idx: int, cell: Vector2i) -> bool:
 
 # 单机：本地执行。联机客户端：发主机（不本地执行）。联机主机：本地执行 + 广播
 func _dispatch_player_op(cmd: Dictionary) -> bool:
-	# 硬门控：当前行动== 本端阵营"才能提交行动（防止后手方走提交路径行动）
-	if GameState.active_side != _my_side():
+	# 硬门控：当前行动 == 本端可操作方"才能提交行动（防止后手方走提交路径行动）
+	# 自由部署双控:当前行动方都由本端操控
+	if GameState.active_side != _operable_side():
 		return false
 	if not GameState.is_online:
 		apply_command(cmd)
