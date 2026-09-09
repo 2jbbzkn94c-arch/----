@@ -399,6 +399,8 @@ func _status_text(u: Unit) -> String:
 	if u.has_status("silence"): s += "沉默 "
 	if u.has_status("stun"): s += "眩晕 "
 	if u.has_status("possess"): s += "附体 "
+	if u.has_status("thorn"): s += "荆棘 "
+	if u.has_status("solid"): s += "坚固 "
 	if u.has_status("shield"): s += "圣盾 "
 	return s if s != "" else "无"
 
@@ -407,6 +409,7 @@ func _status_explain_lines(u: Unit) -> Array:
 	var code_label := {
 		"poison": "猛毒", "heavy": "重伤", "atkdown": "麻痹", "freeze": "冰冻",
 		"silence": "沉默", "stun": "眩晕", "possess": "附体", "shield": "圣盾",
+		"thorn": "荆棘", "solid": "坚固",
 	}
 	var out: Array = []
 	for code in code_label.keys():

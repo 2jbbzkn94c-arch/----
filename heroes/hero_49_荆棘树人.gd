@@ -1,0 +1,13 @@
+extends HeroBase
+## 荆棘树人：攻击后，目标获得[荆棘]（无法移动，对方回合结束时解除）。
+class_name HeroThornTreant
+
+func applies_status_on_hit() -> bool:
+	return true
+
+func on_attack(target: Unit) -> void:
+	if target and target.alive:
+		if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
+			fx()
+			fx_on_target(target)
+		battle._add_status_msg(target, "thorn", "荆棘")

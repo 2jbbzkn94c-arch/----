@@ -1616,6 +1616,7 @@ func _begin_side(side: int) -> void:
 	_in_begin_phase = true   # 演出期内阵亡先排队，结束再弹替补面板（避免面板插入回合开始流程）
 	_clear_selection()       # 切回合：清除上回合选中单位及移攻击范围高亮（含客户端收begin_side 路径
 	for u in units:
+		u.moved_last_turn = u.moved_this_turn   # 备份"上一回合是否移动"（供装甲堡垒[坚固]判定）
 		u.reset_for_new_turn()
 	# 古灵精怪：变身后的英雄在本方回合开始时还原为本源并重新变身
 	# 只重即将开始回合的这一——变身后的形态应保持到下一次变

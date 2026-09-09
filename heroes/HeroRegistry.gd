@@ -51,6 +51,8 @@ const _SCRIPTS := {
 	"hero_45": "res://heroes/hero_45_坠炮手.gd",
 	"hero_46": "res://heroes/hero_46_宿魂.gd",
 	"hero_47": "res://heroes/hero_47_共鸣者.gd",
+	"hero_48": "res://heroes/hero_48_装甲堡垒.gd",
+	"hero_49": "res://heroes/hero_49_荆棘树人.gd",
 }
 
 ## 创建某英雄的行为实例（不含 setup）。找不到脚本或衍生物时返回 HeroBase 空实例。

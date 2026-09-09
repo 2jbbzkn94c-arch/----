@@ -24,6 +24,7 @@ var cell := Vector2i(0, 0)
 var alive := true
 var moved_this_turn := false
 var attacked_this_turn := false
+var moved_last_turn := false           # 上一回合是否移动过（回合开始时由 Battle 从 moved_this_turn 录入）
 var counter_used_this_turn := false  # 近战被动阶段每回合只能反击一次
 var last_move_dist := 0              # 最近一次移动的距离（风语者回血用）
 var once_this_turn := false          # 每回合限一次类技能（圣光等）
@@ -160,13 +161,13 @@ func _build_visual() -> void:
 	if _skill_tags() != "":
 		_ensure_tags_label()
 
-	# 状态标签（猛/伤/麻/冻/默/晕/附 紫色 + 盾 金色，分开着色；都在六边形中部、界内）
+	# 增益状态标签（坚固 金色，居中）；减益紫(debuff_label) + 盾金(shield_label) 分开
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", int(11.0 * fs))
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
 	_status_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
-	_status_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
+	_status_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
 	add_child(_status_label)
 	_debuff_label = Label.new()
 	_debuff_label.add_theme_font_size_override("font_size", int(11.0 * fs))
@@ -248,8 +249,10 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		remove_status("shield")
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
 		return
-	# 重伤：受到的伤害 +1
+	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（两者可共存，先加后减，至少为1）
 	var dmg := amount + (1 if has_status("heavy") else 0)
+	if has_status("solid"):
+		dmg = max(dmg - 1, 1)
 	# 塔盾：伤害结算前，相邻塔盾代替承受1点（队友实际伤害减1）
 	var battle_node := get_parent()
 	if battle_node != null and battle_node.has_method("_bulwark_absorb"):
@@ -286,7 +289,7 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 # 负墟：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
 # [附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
 func _is_negative_status(s: String) -> bool:
-	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison" or s == "possess"
+	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison" or s == "possess" or s == "thorn"
 
 func add_status(s: String, pierce_shield: bool = false) -> void:
 	# 圣盾：抵挡一次受到的伤害或异常状态——负面状态施加时也消费掉圣盾并抵消本次负面。
@@ -370,7 +373,7 @@ func _ensure_tags_label() -> void:
 	_tags_label = tag_label
 
 func clear_temp_statuses() -> void:
-	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess"]:
+	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess", "solid", "thorn"]:
 		statuses.erase(s)
 	_update_status_label()
 
@@ -391,7 +394,7 @@ func effective_atk() -> int:
 	return max(a, 0)
 
 func effective_move() -> int:
-	if has_status("stun"):
+	if has_status("stun") or has_status("thorn"):
 		return 0
 	var m := move_range + move_buff + move_use_buff
 	if has_status("freeze"):
@@ -406,7 +409,7 @@ func set_ranged_adjacent(adj: bool) -> void:
 	_update_atk_label()
 
 func can_move() -> bool:
-	return alive and not has_status("stun")
+	return alive and not has_status("stun") and not has_status("thorn")
 
 func can_attack() -> bool:
 	return alive and not has_status("stun")
@@ -437,8 +440,15 @@ func _update_status_label() -> void:
 		dtxt += "晕"
 	if has_status("possess"):
 		dtxt += "附"
+	if has_status("thorn"):
+		dtxt += "荆"
 	if _status_label:
-		_status_label.text = ""
+		# 增益状态小字（坚固/圣盾）单独显示：与减益紫分开
+		var gtxt := ""
+		if has_status("solid"):
+			gtxt += "固"
+		_status_label.text = gtxt
+		_status_label.visible = gtxt != ""
 		if _debuff_label:
 			_debuff_label.text = dtxt
 			_debuff_label.visible = dtxt != ""
