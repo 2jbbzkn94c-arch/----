@@ -24,7 +24,6 @@ var cell := Vector2i(0, 0)
 var alive := true
 var moved_this_turn := false
 var attacked_this_turn := false
-var moved_last_turn := false           # 上一回合是否移动过（回合开始时由 Battle 从 moved_this_turn 录入）
 var counter_used_this_turn := false  # 近战被动阶段每回合只能反击一次
 var last_move_dist := 0              # 最近一次移动的距离（风语者回血用）
 var once_this_turn := false          # 每回合限一次类技能（圣光等）
@@ -373,7 +372,9 @@ func _ensure_tags_label() -> void:
 	_tags_label = tag_label
 
 func clear_temp_statuses() -> void:
-	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess", "solid", "thorn"]:
+	# 注意：solid(坚固) 不在其中——它是装甲堡垒自己回合结束时挂的增益，
+	# 要撑过整个对方回合，由英雄自己 on_turn_start 在无回合开始时清除，不随回合末自动清。
+	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess", "thorn"]:
 		statuses.erase(s)
 	_update_status_label()
 
