@@ -353,7 +353,8 @@ func _process(dt: float) -> void:
 				action_info.emit("选卡超时，自动选择第一张")
 				_auto_pick_first()
 	var match_live: bool = GameState.match_running and not GameState.match_over
-	var my_turn_live: bool = match_live and GameState.active_side == _my_side()
+	# 双控：当前行动方都由本端操控 → my_turn_live=当前行动方；否则=本端回合
+	var my_turn_live: bool = match_live and GameState.active_side == _operable_side()
 	# 本端回合倒计时（从回合开始起算，演出/行动动画也算时间）；超时置标记，回到可提交状态时自动结束
 	if my_turn_live and turn_time_left > 0.0:
 		turn_time_left = maxf(turn_time_left - dt, 0.0)
@@ -381,7 +382,7 @@ func _process(dt: float) -> void:
 		for u in units:
 			if u == null or not is_instance_valid(u):
 				continue
-			if u.alive and u.faction == _my_faction():
+			if u.alive and u.faction == _operable_faction():
 				# 可移动=绿色、可攻击=红色；两者可独立显示（后勤不能攻击，攻击标识不亮）。
 				# 规则：攻击后不能再移动 → 绿色可移动仅在"未移动且未攻击"时亮。
 				u.set_action_markers(not u.moved_this_turn and not u.attacked_this_turn, not u.attacked_this_turn and _can_actively_attack(u))
@@ -2190,6 +2191,9 @@ func set_unit_card_open(open: bool) -> void:
 		_press_drag_started = false
 
 func _press_active_clickable(_cell: Vector2i) -> bool:
+	# 自由部署双控：当前行动方都由本端操控 → 只要在输入状态就可点击行动；否则仅"本端回合"
+	if GameState.dual_control:
+		return state == State.PLAYER_INPUT and GameState.active_side == _operable_side()
 	return state == State.PLAYER_INPUT and GameState.active_side == _my_side()
 
 func _on_cell_clicked(cell: Vector2i) -> void:
