@@ -3842,7 +3842,7 @@ func _occupy_dead_cell(u: Unit, target: Unit) -> void:
 		var grave_cell := u.cell
 		if grid.in_bounds(grave_cell):
 			graves[grave_cell] = { "hero": target.hero_id, "fn": target.faction }
-			target._grave_moved = true
+			target.grave_moved = true
 	occupancy.erase(u.cell)
 	# 目标已死，从 occupancy 移除其原格占用，再让暗域入位
 	if occupancy.get(c) == target:
@@ -4183,9 +4183,9 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	if occupancy.get(u.cell) == u:
 		occupancy.erase(u.cell)
 	# 阵亡留下墓碑：替补可选择在该格落位（骷髅兵等召唤物不立碑；主动撤下不立碑。
-	# 暗域占据死亡格时墓碑已回退到其原格(_grave_moved)，此格不再重复立碑。
+	# 暗域占据死亡格时墓碑已回退到其原格(grave_moved)，此格不再重复立碑。
 	var is_summon: bool = DataRegistry.summons.has(u.hero_id)
-	if not is_summon and leave_grave and not u._grave_moved:
+	if not is_summon and leave_grave and not u.grave_moved:
 		graves[u.cell] = { "hero": u.hero_id, "fn": u.faction }
 		_refresh_board()
 	if selected == u:
