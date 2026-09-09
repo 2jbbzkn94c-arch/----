@@ -1849,7 +1849,8 @@ func _clear_statuses(faction: int) -> void:
 			u.move_buff = 0
 			u.echo_bonus = 0
 			u.ramble_bonus = 0
-			u.branch_override = false
+			if u.hero_id != "hero_41":   # 血锁直线限制是身份机制,不随回合清除(否则一回合漏激活就变不直线)
+				u.branch_override = false
 			u.refresh_stats()
 	# 附体：目标方（该阵营）回合结束时解除其身上的绑定
 	if _possess_links.size() > 0:
