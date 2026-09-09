@@ -2471,9 +2471,11 @@ func _preview_enemy(u: Unit) -> void:
 	_clear_selection()
 	_preview_unit = u   # 记录预览对象：其格由单位描边标识（与己方选中同粗细），不用格子黄底
 	var pc := {}
-	var reach := _move_reachable(u)
-	for k in reach.keys():
-		pc[k] = Color(0.35, 0.55, 0.95, 0.65)   # 蓝：敌方可移
+	# 荆棘/眩晕等无法移动：预览时不显示移动格（仍显示攻击范围）
+	if u.can_move():
+		var reach := _move_reachable(u)
+		for k in reach.keys():
+			pc[k] = Color(0.35, 0.55, 0.95, 0.65)   # 蓝：敌方可移
 	# 攻击范围：只显示"当前能直接攻击到的目
 	var attack_cells := {}
 	for v in _attackable_from(u, u.cell):
