@@ -2085,9 +2085,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if state != State.PLAYER_INPUT:
 		return
-	# 硬门控：只有"当前行动== 本端阵营"时本端才能操作
+	# 硬门控：只有"当前行动 == 本端可操作方"时本端才能操作
 	# 即使 state 被误置为 PLAYER_INPUT，本端也绝不响应（防止后手方在我方回合行动）
-	if GameState.active_side != _my_side():
+	# 自由部署双控:当前行动方(敌/我)都由本端操控 → 用它判定
+	if GameState.active_side != _operable_side():
 		return
 	# 拖拽撤下：按住己方英雄（左键），拖到下方出生点释放即撤下
 	if _drag_unit != null:
