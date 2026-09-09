@@ -1625,6 +1625,9 @@ func _begin_side(side: int) -> void:
 	var side_fn := side_faction(side)
 	for u in units:
 		if u.alive and u.transform_base_id != "" and u.faction == side_fn:
+			# 被沉默/眩晕时：不还原——保持"变身后的英雄"形态，仅技能失效(由 skill_allowed 拦截)
+			if not u.skill_allowed():
+				continue
 			u.hero_id = u.transform_base_id
 			_apply_base_hero(u, u.transform_base_id)
 			u._update_name_label()
