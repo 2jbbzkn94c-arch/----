@@ -34,7 +34,7 @@ var statuses: Dictionary = {}
 # 本回合临时增益/减益（攻击、移动力增减，回合结束时重置）
 var atk_buff := 0
 var move_buff := 0
-var echo_bonus := 0            # 共鸣者：本回合攻击力=所有队友攻击力之和（己方回合结束重置）
+var echo_set := -1              # 共鸣者：本回合攻击力"变为"所有队友攻击力之和(-1=未激活)。己方回合结束重置
 var branch_override := false   # 血锁：射程+2 且只能直线攻击
 var ramble_bonus := 0          # 大大骑士冲锋后攻击上升量
 var sun_bonus := 0             # 太阳斩：登场攻击+3，每次攻击/反击后-1，直到恢复正常
@@ -376,10 +376,13 @@ func clear_temp_statuses() -> void:
 var ranged_adjacent := false
 
 func effective_atk() -> int:
+	# 共鸣者：攻击力"变为"队友攻击力之和(echo_set>=0),覆盖自身基础/加成,直到回合结束
+	if echo_set >= 0:
+		return max(echo_set, 0)
 	var base := atk
 	if attack_type == DataRegistry.AttackType.RANGED and ranged_adjacent:
 		base = 1   # 远程被贴身：默认攻击力变为 1（buff 不受影响）
-	var a := base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff + echo_bonus
+	var a := base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff
 	if has_status("atkdown"):
 		a -= 1
 	return max(a, 0)
@@ -491,7 +494,7 @@ func _update_atk_label() -> void:
 	if _atk_label:
 		_atk_label.text = str(effective_atk())
 		# 增益状态(攻击加成/共鸣/太阳斩等临时增益)下数字用黄色突出
-		var boosted := atk_buff > 0 or echo_bonus > 0 or sun_bonus > 0
+		var boosted := atk_buff > 0 or echo_set >= 0 or sun_bonus > 0
 		_atk_label.add_theme_color_override("font_color",
 				Color(1.0, 0.9, 0.25) if boosted else Color(1.0, 1.0, 1.0))
 

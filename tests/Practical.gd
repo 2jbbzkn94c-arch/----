@@ -187,8 +187,8 @@ func _test_hero(id: String) -> void:
 			battle._trigger_on_attack(hero, tgt, false)
 			rec(id, battle._possess_links.has(tgt) and battle._possess_links[tgt] == hero, "附体=%s" % str(battle._possess_links.has(tgt)))
 		"hero_47":
-			# 共鸣者：回合开始 echo_bonus = 队友有效攻击之和（快照含 echo_bonus）
+			# 共鸣者：攻击力"变为"队友有效攻击之和（echo_set）
 			var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			battle._sync_one_echo(hero)
-			rec(id, hero.echo_bonus >= 1, "echo=%d" % hero.echo_bonus)
+			rec(id, hero.echo_set >= 1, "echo=%d" % hero.echo_set)
 		_: rec(id, false, "未接入")

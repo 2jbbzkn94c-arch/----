@@ -1821,7 +1821,7 @@ func _sync_echo(faction: int) -> void:
 			total += v.effective_atk()
 		sums[u] = total
 	for u in list:
-		u.echo_bonus = sums[u]
+		u.echo_set = sums[u]
 		u.refresh_stats()
 
 # 单个共鸣者即时补算（替补登场/变身/任意入场）：立即按当前队友取和，插队也不耽误当回合。
@@ -1835,7 +1835,7 @@ func _sync_one_echo(u: Unit) -> void:
 		if v == u or v.faction != u.faction:
 			continue
 		total += v.effective_atk()
-	u.echo_bonus = total
+	u.echo_set = total
 	u.refresh_stats()
 
 # 己方回合结束时解除临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
@@ -1847,7 +1847,7 @@ func _clear_statuses(faction: int) -> void:
 			u.clear_temp_statuses()
 			u.atk_buff = 0
 			u.move_buff = 0
-			u.echo_bonus = 0
+			u.echo_set = -1
 			u.ramble_bonus = 0
 			if u.hero_id != "hero_41":   # 血锁直线限制是身份机制,不随回合清除(否则一回合漏激活就变不直线)
 				u.branch_override = false
@@ -4072,7 +4072,7 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 	u.attack_range = bdef.attack_range
 	u.attack_type = bdef.attack_type
 	u.los_ignore = (hid == "hero_45")   # 回到基础英雄：清理坠炮手的无视阻挡
-	u.echo_bonus = 0   # 回到基础英雄：清空共鸣者加成
+	u.echo_set = -1   # 回到基础英雄：清空共鸣者"攻击力变为队友之和"
 	u.display_name = bdef.display_name
 	u.behavior = HeroRegistry.create(hid)
 	u.behavior.setup(self, u)
@@ -4130,7 +4130,7 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	if u.hero_id == "hero_47":
 		_sync_one_echo(u)
 	else:
-		u.echo_bonus = 0
+		u.echo_set = -1
 		u.refresh_stats()
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
