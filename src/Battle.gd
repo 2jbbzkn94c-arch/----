@@ -3223,7 +3223,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			# 带状态的攻击命中带圣盾目标：圣盾挡下整次攻击——不扣血、后续状态也不生效
 			if target.has_status("shield") and attacker.alive and _hero(attacker).applies_status_on_hit():
 				target._shield_block_status = true
-			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name)
+			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name, true)
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
@@ -3286,7 +3286,7 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			return   # 反击者在演出期间被释放：跳过反击，正常收尾
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -3319,7 +3319,7 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		proj.queue_free()
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name)
+			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -3958,7 +3958,7 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 		var v = occupancy.get(off, null)
 		if v != null and v.alive and v.faction != u.faction:
 			v.set_big_hit_style()
-			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name)
+			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name, true)
 		cur += step
 
 # 剑气演出：一道银蓝月弯沿攻击者朝向直线扫到尽头后消失(月弯型)
@@ -4085,7 +4085,7 @@ func _hurt_lowest_enemy_stun(u: Unit) -> bool:
 				best = v
 	if best != null:
 		best.set_big_hit_style()
-		best.take_damage(3, false, false, "被%s锁定重创" % u.display_name)
+		best.take_damage(3, false, false, "被%s锁定重创" % u.display_name, true)
 		_add_status_msg(best, "stun", "眩晕")
 		return true
 	return false   # 没有敌方目标：技能未生效

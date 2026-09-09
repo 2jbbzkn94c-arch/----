@@ -238,7 +238,7 @@ func set_big_hit_style() -> void:
 func is_shield_hit_blocked() -> bool:
 	return _shield_block_status
 
-func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "") -> void:
+func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "", is_attack: bool = false) -> void:
 	if not alive:
 		return
 	_was_counter_damage = counter   # 记录本次是否为反击伤害
@@ -248,9 +248,10 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		remove_status("shield")
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
 		return
-	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（两者可共存，先加后减，最低为0——可完全免疫1点攻击）
+	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（只减攻击伤害，猛毒/烧血/炸弹等非攻击伤害不减）
+	# 两者可共存，先加后减，最低为0——可完全免疫1点攻击
 	var dmg := amount + (1 if has_status("heavy") else 0)
-	if has_status("solid"):
+	if has_status("solid") and is_attack:
 		dmg = max(dmg - 1, 0)
 	# 塔盾：伤害结算前，相邻塔盾代替承受1点（队友实际伤害减1）
 	var battle_node := get_parent()
