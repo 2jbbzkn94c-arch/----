@@ -57,6 +57,8 @@ var _label: Label
 var _atk_label: Label
 var _hp_label: Label
 var _status_label: Label
+var _debuff_label: Label   # 减益小字(紫)：毒/伤/麻/冻/默/晕/附
+var _shield_label: Label   # 圣盾小字(金)：盾
 var _tags_label: Label
 var _passive_border: Line2D
 var _passive_tween: Tween
@@ -155,15 +157,30 @@ func _build_visual() -> void:
 	if _skill_tags() != "":
 		_ensure_tags_label()
 
-	# 状态标签（猛伤攻冻默晕盾）——放在六边形中部、界内
+	# 状态标签（猛/伤/麻/冻/默/晕/附 紫色 + 盾 金色，分开着色；都在六边形中部、界内）
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", int(11.0 * fs))
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
 	_status_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
-	# 减益用紫色（原粉红与敌方红卡面太接近）；仅圣盾时淡蓝（见 _update_status_label 覆盖）
 	_status_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
 	add_child(_status_label)
+	_debuff_label = Label.new()
+	_debuff_label.add_theme_font_size_override("font_size", int(11.0 * fs))
+	_debuff_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_debuff_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
+	_debuff_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
+	_debuff_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
+	_debuff_label.visible = false
+	_shield_label = Label.new()
+	_shield_label.add_theme_font_size_override("font_size", int(11.0 * fs))
+	_shield_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_shield_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
+	_shield_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
+	_shield_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	_shield_label.visible = false
+	add_child(_debuff_label)
+	add_child(_shield_label)
 
 # 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
 # 保持长宽比缩放到"外接框边长=box"内（宽高谁大以谁定基准），并把主体中心精确放到 center。
@@ -398,39 +415,30 @@ func mortar_active() -> bool:
 	return alive and los_ignore and skill_allowed()
 
 func _update_status_label() -> void:
-	# 在单位牌面下加状态小字
-	var txt := ""
-	var has_debuff := false
+	# 在单位牌面下加状态小字(减益紫 + 盾金,分开着色)
+	var dtxt := ""
 	if has_status("poison"):
-		txt += "毒"
-		has_debuff = true
+		dtxt += "毒"
 	if has_status("heavy"):
-		txt += "伤"
-		has_debuff = true
+		dtxt += "伤"
 	if has_status("atkdown"):
-		txt += "麻"
-		has_debuff = true
+		dtxt += "麻"
 	if has_status("freeze"):
-		txt += "冻"
-		has_debuff = true
+		dtxt += "冻"
 	if has_status("silence"):
-		txt += "默"
-		has_debuff = true
+		dtxt += "默"
 	if has_status("stun"):
-		txt += "晕"
-		has_debuff = true
-	if has_status("shield"):
-		txt += "盾"
+		dtxt += "晕"
 	if has_status("possess"):
-		txt += "附"
-		has_debuff = true
+		dtxt += "附"
 	if _status_label:
-		_status_label.text = txt
-		# 配色：减益=紫色（勿与敌方红色卡面混淆）；仅剩圣盾(增益)=金黄（勿用蓝，与本方蓝卡面接近）
-		var col := Color(1.0, 0.85, 0.4)
-		if has_debuff:
-			col = Color(0.78, 0.5, 1.0)
-		_status_label.add_theme_color_override("font_color", col)
+		_status_label.text = ""
+		if _debuff_label:
+			_debuff_label.text = dtxt
+			_debuff_label.visible = dtxt != ""
+		if _shield_label:
+			_shield_label.text = "盾" if has_status("shield") else ""
+			_shield_label.visible = has_status("shield")
 
 # 受击震屏：仅抖动六边形本体，不影响单位移动坐标
 func _shake() -> void:
