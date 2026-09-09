@@ -1339,7 +1339,10 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 	# 联机视角：本端操作的是"我方"，另一方是"敌方"。用 battle._my_side() 判断本端是否当前行动方。
 	var my_turn := true
 	if battle != null:
-		my_turn = GameState.active_side == battle._my_side()
+		if GameState.dual_control:
+			my_turn = true   # 自由部署双控：当前行动方都由本端操控
+		else:
+			my_turn = GameState.active_side == battle._my_side()
 	# 非回合阶段（开局部署/竞技场选人/替补中）不声称"你的回合/敌方回合"：
 	# 否则对方先部署/先手时顶部仍错误显示"你的回合"。
 	var phase_txt := ""
@@ -1531,7 +1534,11 @@ func _set_edge_warning(on: bool) -> void:
 func _refresh_controls() -> void:
 	var my_turn := false
 	if battle != null:
-		my_turn = battle.state == Battle.State.PLAYER_INPUT and GameState.active_side == battle._my_side()
+		if GameState.dual_control:
+			# 自由部署双控：当前行动方都由本端操控(已在 _begin_side 设为 PLAYER_INPUT)，可结束回合
+			my_turn = battle.state == Battle.State.PLAYER_INPUT
+		else:
+			my_turn = battle.state == Battle.State.PLAYER_INPUT and GameState.active_side == battle._my_side()
 	if _end_btn != null:
 		_end_btn.disabled = not my_turn
 	if _restart_btn != null:

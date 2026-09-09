@@ -1763,6 +1763,12 @@ func _operable_faction() -> int:
 		return side_faction(GameState.active_side)
 	return _my_faction()
 
+# 可结束/可操作的一边(自由部署双控时=当前行动方；否则=本端)
+func _operable_side() -> int:
+	if GameState.dual_control:
+		return GameState.active_side
+	return _my_side()
+
 func _opp_side() -> int:
 	return GameState.SIDE_ENEMY if _my_side() == GameState.SIDE_PLAYER else GameState.SIDE_PLAYER
 
@@ -3409,8 +3415,8 @@ func _end_side(side: int) -> void:
 
 # 联机结束回合入口：我方点"结束回合"
 func submit_end_turn() -> bool:
-	# 仅当前行动方是我方时才可结束
-	if GameState.active_side != _my_side():
+	# 仅当前行动方是"本端可操作方"时才可结束(自由部署双控=当前行动方，否则=本端)
+	if GameState.active_side != _operable_side():
 		return false
 	if state != State.PLAYER_INPUT:
 		return false
