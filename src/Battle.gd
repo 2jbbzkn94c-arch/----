@@ -4259,6 +4259,8 @@ func _place_enemy_sub() -> void:
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
 		_grant_sub_aura_after_enter(eu)   # 替补补发光环（风语者等：中途上场才补；先补位再技能阶段跳过）
 		_trigger_on_enter(eu)   # 敌方替补登场技能已触发
+		if eu.hero_id == "hero_47":
+			_sync_one_echo(eu)   # 敌方共鸣者替补进场补算队友攻击之和
 		_pending_enemy_sub -= 1
 	# 全部敌方替补补完后：清理剩余敌方墓碑（安葬完毕）
 	if _pending_enemy_sub == 0:
@@ -4515,6 +4517,9 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	var nu := _spawn_unit(hero_id, fn, cell)
 	_grant_sub_aura_after_enter(nu)   # 替补补发光环（风语者…中途上场才补；先补位再技能阶段跳过）
 	_trigger_on_enter(nu)   # 替补登场技能（波盾/太阳梅林/猎颅者）
+	# 共鸣者替补进场已错过回合开始 _sync_echo：立即按当前队友攻击补算
+	if nu.hero_id == "hero_47":
+		_sync_one_echo(nu)
 	_preview_cells = {}
 	_apply_highlights()
 	log_message.emit("替补登场：%s。" % DataRegistry.get_hero(hero_id).display_name)
@@ -4812,6 +4817,8 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	# 替补登场效果：当场同步结算（避免 call_deferred 落到下一帧、晚于"回合开始技/共鸣取和"执行，
 	# 造成登场技明明先发生却算不进当回合的问题）
 	_trigger_on_enter(u)
+	if u.hero_id == "hero_47":
+		_sync_one_echo(u)   # 共鸣者替补进场补算队友攻击之和
 
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
