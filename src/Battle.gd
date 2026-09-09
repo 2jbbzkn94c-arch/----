@@ -3364,6 +3364,10 @@ func _end_side(side: int) -> void:
 		NetBus.send_all(JSON.stringify({ "type": "turn_end", "faction": side_faction(side) }))
 	await _trigger_turn_end_all(side_faction(side))
 	_clear_statuses(side_faction(side))
+	# 我方回合结束：统一清空我方(玩家)墓碑——墓碑为我方替补落位点，
+	# 本回合结束即用完；延迟到此刻而非"替补一落位就清"，避免我方墓碑过早消失。
+	if side_faction(side) == _my_faction() and graves.size() > 0:
+		_clear_side_graves(_my_faction())
 	# 11 回合起：本方回合结束只扣本方的血（双方各自回合结束各扣各，不一起扣
 	_settle_side_round_damage(side)
 	if GameState.match_over:
@@ -4524,6 +4528,8 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	# 只有"确实没有下一个替时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
 	# 联机：clear_side>=0 时用负责端广播的结论（两端一致执行，避免墓碑只在本端视角消失）；
 	# clear_side<0（单机/直接调用）才按本端视角推断。
+	# 我方(玩家)墓碑延迟到"我方回合结束"(_end_side)才统一清空，避免"替补一落位墓碑就消失"；
+	# 敌方墓碑仍按其替补完成即时清理。
 	if not more_subs:
 		var fn_done: bool
 		if clear_side >= 0:
@@ -4534,7 +4540,7 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 				if fn_done:
 					_pending_player_subs = 0   # 替补耗尽：清空剩余名额，避免残留
 				fn_done = fn_done or _pending_player_subs <= 0
-		if fn_done:
+		if fn_done and fn != _my_faction():   # 我方墓碑留到回合末清；其余阵营立即清
 			_clear_side_graves(fn)
 
 # 清除某一方的全部墓碑（该方替补已全部补完时调用）
