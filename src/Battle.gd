@@ -139,26 +139,61 @@ class SwordCrescent:
 				return false
 		return Geometry2D.triangulate_polygon(poly).size() > 0
 
-# 血锁的链子：一长串鲜红链环，从血锁射向目标并被勾拉收拢
-class BloodChain:
+# 血锁的钩爪：钩头连着一串链环，从血锁**飞出去**咬住目标，再收链把目标拖到面前。
+# head_dist 由 _spawn_hook 的 tween 驱动：0=未出钩、=目标距离=已咬住、收到近身=拉回完成。
+# 每帧 queue_redraw 重绘，所以链子长度与钩头位置始终跟手。
+class BloodHook:
 	extends Node2D
-	var length := 60.0
-	var color := Color(0.95, 0.16, 0.28)
+	var k := 1.0            # 随棋盘缩放的系数（基准：棋子半径 54）
+	var head_dist := 0.0    # 钩根离血锁的距离（链子画到这里，钩体由此向前伸出）
+	var color := Color(0.95, 0.16, 0.28)        # 链环主色（鲜红）
+	var metal := Color(0.894, 0.918, 0.965)     # 钩体金属亮面
+	var outline := Color(0.094, 0.039, 0.055)   # 钩体深色描边（任何底色上都看得清轮廓）
+	var blood := Color(0.784, 0.118, 0.227)     # 钩根血环（与链子衔接）
+
+	func _process(_dt: float) -> void:
+		queue_redraw()
 
 	func _draw() -> void:
-		# +X 延伸的节状链环（更粗、更鲜红，链环交错更像锁链）
-		var seg := 11.0
-		var n := int(length / seg)
+		var seg := 10.0 * k
+		var s := maxf(head_dist, 0.0)
+		# 链环：从血锁一路排到钩根（相邻环上下交错，像锁链）
+		var n := int(s / seg)
 		for i in n:
 			var x := i * seg + seg * 0.5
-			# 相邻环交错上下，更像锁链
-			var oy := -3.0 if (i % 2 == 0) else 3.0
-			draw_arc(Vector2(x, oy), 7.0, 0.0, TAU, 28, color, 3.5, true)
-			draw_circle(Vector2(x, oy), 2.8, Color(0.5, 0.05, 0.12))
-		# 链头（勾钩）
-		var hx := length
-		draw_arc(Vector2(hx, 0), 9.0, -1.2, 1.2, 20, Color(1.0, 0.25, 0.35), 3.0, true)
-		draw_circle(Vector2(hx, 0), 4.0, Color(1.0, 0.3, 0.4))
+			var oy := (-2.6 if (i % 2 == 0) else 2.6) * k
+			draw_arc(Vector2(x, oy), 6.2 * k, 0.0, TAU, 20, color, 3.2 * k, true)
+			draw_circle(Vector2(x, oy), 2.3 * k, Color(0.5, 0.05, 0.12))
+		if s <= 1.0:
+			return   # 还没飞出：只画链子起始段
+		# 钩体：钩身单独放大一档，作为视觉重点（比链环醒目）
+		var hk := k * 1.5
+		var b := Vector2(s, 0.0)                                   # 钩根位置
+		var c := b + Vector2(26.0 * hk, 11.0 * hk)                 # 钩身圆心
+		var rad := 11.2 * hk
+		# 钩身用圆弧采样（26 段）：比手写折线顺滑，不会有多边形感
+		var pts := PackedVector2Array()
+		var steps := 26
+		for i in steps + 1:
+			var a := deg_to_rad(lerpf(-110.0, 190.0, float(i) / float(steps)))
+			pts.append(c + Vector2(cos(a), sin(a)) * rad)
+		# 两遍描线：先深色描边，再金属亮面 —— 保证压在棋子/棋盘上轮廓依旧清楚
+		for pass_i in 2:
+			var oc: Color = outline if pass_i == 0 else metal
+			var w_shank := (7.4 if pass_i == 0 else 5.0) * hk
+			var w_hook := (6.4 if pass_i == 0 else 4.2) * hk
+			draw_line(b, b + Vector2(22.0 * hk, 0.0), oc, w_shank, true)                      # 钩柄
+			draw_polyline(pts, oc, w_hook, true)                                             # 钩身（卷曲）
+			draw_line(b + Vector2(14.0 * hk, 9.0 * hk),
+					b + Vector2(19.0 * hk, 5.0 * hk), oc, w_hook, true)                      # 钩口内侧倒刺
+		# 钩根血环（与链子衔接处）+ 倒刺尖端亮点
+		var r_base := 4.8 * hk
+		draw_circle(b, r_base, blood)
+		draw_arc(b, r_base, 0.0, TAU, 22, outline, 2.2 * hk, true)
+		draw_circle(b + Vector2(14.0 * hk, 9.0 * hk), 2.8 * hk, Color(1, 1, 1))
+
+# 钩爪"飞出→咬住"的时长（与 _pull_to 里目标被拖回的延迟保持一致）
+const HOOK_FLY_TIME := 0.16
 
 var grid: HexGrid
 var board_view: BoardView
@@ -257,6 +292,12 @@ const DEFAULT_DECK_SIZE := 5
 # _CONSOLE_AI_LOG  = AI 行为决策日志（行动方案评分/竞技场选人/首发部署/敌方AI替补上人）：默认关，避免刷屏
 const _CONSOLE_SUB_LOG := true
 const _CONSOLE_AI_LOG := false
+
+# 敌方 AI 回放节奏（秒）——三名敌人连招时"谁在动/动了什么"要能看清，故在动作之间留停顿。
+# 调大=更慢更好读，调小=更紧凑；嫌敌回合太慢就调小 _ENEMY_HERO_GAP。
+const _ENEMY_HERO_GAP := 0.7    # 相邻两名不同英雄的行动之间
+const _ENEMY_STEP_GAP := 0.25   # 同一名英雄"移动→攻击"之间
+const _ENEMY_TELL_GAP := 0.3    # 敌方回合第一步：亮起行动描边后、出手前的起手停顿
 
 func _default_deck() -> Array:
 	var ids := DataRegistry.heroes.keys()
@@ -4092,14 +4133,17 @@ func _pull_to(u: Unit, target: Unit) -> void:
 			best = n
 	if best.x == -99:
 		return
-	_spawn_chain(u, target)   # 血锁链子勾拉演出（从血锁射向目标）
+	_spawn_hook(u, target)   # 钩爪飞出咬住目标 → 收链把人拖到面前
 	occupancy.erase(target.cell)
 	target.cell = best
 	occupancy[best] = target
 	_trigger_bomb(target)   # 被拉近到炸弹格：炸弹人以外即引爆
 	_pickup_buff_at_cell(target)   # 被拉近到增益/金矿格：同样拾取
+	# 视觉：等钩子飞到并咬住（HOOK_FLY_TIME）后再把人拽回来，与钩爪收链的节奏对齐
 	var t := create_tween()
-	t.tween_property(target, "position", board_view.cell_world_center(best), 0.2)
+	t.tween_interval(HOOK_FLY_TIME)
+	t.tween_property(target, "position", board_view.cell_world_center(best), 0.18) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	log_message.emit("血锁把 %s 拉到面前（%s）。" % [target.display_name, str(best)])
 
 func _pierce_back(u: Unit, target: Unit) -> void:
@@ -4161,19 +4205,37 @@ func _spawn_scythe(u: Unit, target: Unit) -> void:
 	t.parallel().tween_property(scy, "modulate:a", 0.0, dur)
 	t.tween_callback(scy.queue_free)
 
-# 血锁链子：从血锁射向目标、随目标被拉回而收拢的链状光条（贴链子勾过）
-func _spawn_chain(u: Unit, target: Unit) -> void:
+# 血锁钩爪演出：钩头连链从血锁**飞出去** → 咬住目标（短暂停顿）→ 收链把目标拖回面前。
+# 收回段与 _pull_to 里目标位置的 tween 同步，看起来就是"钩子钩住人往回拽"。
+func _spawn_hook(u: Unit, target: Unit) -> void:
 	var start := board_view.cell_world_center(u.cell)
 	var tpos := board_view.cell_world_center(target.cell)
-	var chain := BloodChain.new()
-	chain.position = start
-	chain.rotation = (tpos - start).angle()
-	chain.length = (tpos - start).length()
-	add_child(chain)
+	var dist := (tpos - start).length()
+	if dist < 1.0:
+		return
+	var hook := BloodHook.new()
+	hook.k = maxf(hex_size / 54.0, 0.5)
+	hook.position = start
+	hook.rotation = (tpos - start).angle()   # 朝目标方向出钩
+	hook.head_dist = 0.0
+	hook.z_index = 40                         # 压在棋子之上
+	add_child(hook)
+	var hk := hook.k * 1.5
+	# 咬住距离：钩体从钩根再向前伸约 26*hk，所以钩根停在"目标前方一段"，
+	# 让钩身中段正好落在目标身上（否则整只钩子会飞过目标）。
+	var bite := maxf(dist - 26.0 * hk, 6.0)
+	var back := maxf(hex_size * 0.8, 14.0)    # 收回时钩根停在血锁身前
 	var t := create_tween()
-	t.tween_property(chain, "scale", Vector2(0.85, 0.5), 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)   # 拉近时链子收
-	t.parallel().tween_property(chain, "modulate:a", 0.0, 0.4)
-	t.tween_callback(chain.queue_free)
+	# ① 抛出：钩根加速飞向目标
+	t.tween_method(func(v: float): hook.head_dist = v, 0.0, bite, 0.12) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	# ② 咬住：短暂停顿（让玩家看清钩子挂上了）
+	t.tween_interval(HOOK_FLY_TIME - 0.12)
+	# ③ 收链：钩根拖回，同时淡出
+	t.tween_method(func(v: float): hook.head_dist = v, bite, back, 0.18) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	t.parallel().tween_property(hook, "modulate:a", 0.0, 0.18)
+	t.tween_callback(hook.queue_free)
 
 func _random_step(v: Unit) -> void:
 	var nbrs := grid.neighbors(v.cell)
@@ -5127,7 +5189,10 @@ func _enemy_ai_worker(ai: BattleAI, descs: Array, occ_snap: Dictionary, gold_sna
 	_ai_mutex.unlock()
 
 # 回放执行 AI 计划（主线程逐招执行并等待动画）
+# 节奏：每名英雄出手前亮起"行动描边"并停顿一拍（见 _ENEMY_*_GAP），
+# 一人一停、一招一停，避免多名敌人连招连成一片看不清谁在动。
 func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
+	var first := true          # 本回合第一招（起手停顿更短，回合切换本身已有停顿）
 	for step in plan:
 		if GameState.match_over:
 			break
@@ -5150,12 +5215,22 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 		var u: Unit = raw_u as Unit
 		if u == null or not u.alive:
 			continue
+		# 亮起"正在行动"的红橙脉冲描边：多名敌人连续出手时一眼看出轮到谁在动
+		u.set_acting_ring(true)
+		# 亮边后先停一拍再出手：让玩家先定位到这名英雄，再接它的动作
+		await _enemy_gap(_ENEMY_TELL_GAP if first else _ENEMY_HERO_GAP)
+		first = false
+		if my_session != _session_id or get_tree() == null:
+			if is_instance_valid(u):
+				u.set_acting_ring(false)
+			return   # 已重开/场景已释放：安全退出
 		var a: Dictionary = step["action"]
 		if a.has("move") and a["move"] != null:
 			_do_move(u, a["move"], true)
 			await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
 		if a.has("atk_obs"):
 			if is_instance_valid(u):
+				await _enemy_gap(_ENEMY_STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
 				_do_attack_obstacle(u, a["atk_obs"])
 				await _wait_action_done()
 		if a.has("atk") and int(a["atk"]) >= 0:
@@ -5165,8 +5240,22 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 				if t.alive and t.faction != DataRegistry.Faction.ENEMY and is_instance_valid(u):
 					# 只允许攻击当前射程内的目标（防御AI计划偏差/移动失败导致越界攻击
 					if _in_attack_range(u, t):
+						await _enemy_gap(_ENEMY_STEP_GAP)   # 走位与出手之间留一拍，读得出"先走再打"
 						_do_attack(u, t, true)
 						await _wait_action_done()   # 等待攻击（含反击）演出完全结
+		# 本英雄行动结束：熄灭行动描边（下一名英雄出手前会重新亮起，交接不拖影）
+		if is_instance_valid(u):
+			u.set_acting_ring(false)
+	# 全部行动结束：留一拍再进回合末结算（避免最后一招与回合结束演出首尾相连）
+	if my_session != _session_id or get_tree() == null:
+		return
+	await _enemy_gap(_ENEMY_STEP_GAP)
+
+# 敌方回放中的节奏停顿（可被重开安全打断；process_always=false 故跟随暂停一起停）
+func _enemy_gap(sec: float) -> void:
+	if sec <= 0.0 or get_tree() == null:
+		return   # 已脱离场景树：不停顿直接返回
+	await get_tree().create_timer(sec, false).timeout
 
 # 替补流程期间暂停敌方 AI 执行（轮询直到替补结束）
 # 暂停中：协程在此等待恢复（单机暂停用；联机不暂停，故几乎是空转）
