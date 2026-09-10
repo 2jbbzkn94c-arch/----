@@ -111,6 +111,7 @@ var _drag_orig_pos := Vector2.ZERO
 var _dragging := false
 const _DRAG_THRESHOLD = 12.0
 var _pending_bomb_unit: Unit = null   # 炸弹人待放置（等待点选空地）
+var _charge_pending: Dictionary = {}   # 冲锋待结算：Unit -> 本次实际冲到的格数（移动动画播完才结算加成）
 var _pending_player_subs := 0     # 我方阵亡待替补名额数（可 >1：同时阵亡多人时逐个替补
 var _defer_side_skills := false   # 回合开始先补位：替补全部落位完成后才触发回合开始技
 var _waiting_side_skills_round := -1   # 联机等待端：行动方补位完成后广播 side_skills,收到后本端才执行回合开始技(同步 rng)
@@ -858,6 +859,7 @@ func reset_match(redraft := false) -> void:
 	_possess_links.clear()
 	_possess_depth = 0
 	_preview_cells = {}
+	_charge_pending.clear()   # 重开新局：清掉未结算的冲锋记账
 	_refresh_board()   # 同步棋盘显示：清空上一局的墓障碍/道具残留（board_view 缓存需要重绘）
 	player_roster = []
 	enemy_roster = []
@@ -2964,16 +2966,14 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 		max_steps = hb.charge_step_cap()   # 冲锋：直线冲任意距离，不按移动力截断
 	if path.size() > max_steps:
 		path = path.slice(0, max_steps)
+	# 冲锋：本次实际冲到的格数先记账，等**移动动画播完**再结算攻击力上升
+	# （数字不会先于人跳到位；一步未动也走这条路，结算值为 0）
+	if hb.uses_charge_movement():
+		_charge_pending[u] = path.size()
 	if path.size() == 0:
-		# 冲锋一步未动（面前被挡）：原地收尾，不传送；冲锋加成 0
-		if hb.uses_charge_movement():
-			hb.on_charge_settled(0)
 		_finish_move(u, for_enemy)
 		return
 	var final_cell: Vector2i = path[path.size() - 1] if path.size() > 0 else target_cell
-	# 冲锋被剪裁时实际冲到的格结算（避免穿墙落点前的加成虚高）
-	if hb.uses_charge_movement():
-		hb.on_charge_settled(path.size())
 	occupancy.erase(u.cell)
 	u.cell = final_cell
 	occupancy[final_cell] = u
@@ -3084,6 +3084,12 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 func _finish_move(u: Unit, for_enemy: bool) -> void:
 	if u == null or not is_instance_valid(u):   # 防御：单位已释放则跳过
 		return
+	# 冲锋结算：移动动画播完后**此刻**才把"实际冲到的格数"写回攻击力上升并刷新面板，
+	# 否则数字会先于棋子滑到位（面板/棋子上的攻击力在移动途中就跳变）
+	if _charge_pending.has(u):
+		var charge_steps: int = _charge_pending[u]
+		_charge_pending.erase(u)
+		_hero(u).on_charge_settled(charge_steps)
 	var prev_move_buff := u.move_use_buff   # 移动开始前已有的移动 buff（本次移动应消耗的部分）
 	u.moved_this_turn = true
 	# 移动后光环：由拥有"移动光环"的队友结算一次（风语者：移动者回复 = 本次移动距离），
@@ -4116,6 +4122,8 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	if u != null and u.death_cause != "":
 		cause_txt = "（%s）" % u.death_cause
 	log_message.emit("%s 阵亡%s。" % [u.display_name, cause_txt])
+	# 阵亡：清掉未结算的冲锋记账（移动被炸弹炸死等中途终止的情况）
+	_charge_pending.erase(u)
 	# 专属阵亡效果（红帽扑街等
 	_hero(u).on_died()
 	if occupancy.get(u.cell) == u:
