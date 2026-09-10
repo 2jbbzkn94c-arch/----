@@ -431,6 +431,11 @@ func skill_allowed() -> bool:
 func mortar_active() -> bool:
 	return alive and los_ignore and skill_allowed()
 
+# 坠炮手是否"豁免嘲讽"：全场狙击生效 **且未被贴身**。
+# 被贴身（有敌人紧邻）时按普通远程处理 —— 必须优先攻击射程内的嘲讽单位。
+func mortar_ignores_taunt() -> bool:
+	return mortar_active() and not ranged_adjacent
+
 func _update_status_label() -> void:
 	# 在单位牌面下加状态小字(减益紫 + 盾金,分开着色)
 	var dtxt := ""

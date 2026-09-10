@@ -2418,9 +2418,10 @@ func _in_attack_range(a: Unit, b: Unit) -> bool:
 # 否则被墙挡住的嘲讽会把本可攻击的目标从高亮里误滤掉（"能打到的没标红"）。
 func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 	var range_at := _effective_range_at(u, from_cell)
-	# 坠炮手(未沉默)无视嘲讽：不收集嘲讽、不受"只能打嘲讽"限制；沉默时受嘲讽约束
+	# 坠炮手(未沉默且未被贴身)无视嘲讽：不收集嘲讽、不受"只能打嘲讽"限制；
+	# 沉默或被贴身时受嘲讽约束
 	var taunts: Array = []
-	if not u.mortar_active():
+	if not u.mortar_ignores_taunt():
 		for v in units:
 			if v.alive and v.faction != u.faction and v.skills.has(DataRegistry.Skill.TAUNT):
 				var d := grid.distance(from_cell, v.cell)
@@ -2533,7 +2534,8 @@ func _taunters_in_range(a: Unit) -> Array:
 	return out
 
 func _valid_targets(a: Unit) -> Dictionary:  # Unit -> true
-	var taunts := _taunters_in_range(a) if not a.mortar_active() else []   # 坠炮手未沉默才无视嘲讽
+	# 坠炮手未沉默且"未被贴身"才无视嘲讽；被贴身时受嘲讽约束（必须优先打嘲讽单位）
+	var taunts := _taunters_in_range(a) if not a.mortar_ignores_taunt() else []
 	var out := {}
 	for v in units:
 		if v.alive and v.faction != a.faction and _in_attack_range(a, v):
