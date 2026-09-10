@@ -1820,7 +1820,7 @@ func _on_pause_pressed() -> void:
 	add_child(overlay)
 	_pause_overlay = overlay
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.66)
+	dim.color = Color(0, 0, 0, 1.0)   # 暂停时背景全黑（遮住棋盘）
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
@@ -1829,6 +1829,7 @@ func _on_pause_pressed() -> void:
 	sb.set_corner_radius_all(12)
 	sb.set_border_width_all(2)
 	sb.border_color = Color(1.0, 0.85, 0.5)
+	# 全黑背景之上，"已暂停"面板不铺满：保持紧凑居中
 	sb.content_margin_left = 26.0
 	sb.content_margin_right = 26.0
 	sb.content_margin_top = 20.0
