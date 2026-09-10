@@ -46,6 +46,7 @@ class Sim:
 	var buff_cells: Dictionary = {}    # cell -> "atk"/"move"/"shield"/"heal"（普通增益道具，AI可评估收益去吃）
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
 	var buff_taken := 0.0     # 本回合内拾取的增益道具价值合计（供评估加分，驱动 AI 主动去吃道具）
+	var gold_taken := 0       # 本回合内吃到的金矿数（供评估加分，驱动黄金矿工去吃矿）
 	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
 	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
 
@@ -58,6 +59,7 @@ class Sim:
 		c.buff_cells = buff_cells.duplicate()
 		c.killed_players = killed_players
 		c.buff_taken = buff_taken
+		c.gold_taken = gold_taken
 		c._neg_gained = _neg_gained.duplicate()
 		c._pos_mirror_depth = 0   # 镜像深度每次搜索步重置（防跨步累计误限）
 		for i in units.size():
@@ -106,6 +108,10 @@ const MAX_MOVE_OPTIONS := 16
 const GOLD_LOW_ATK := 4
 # 吃增益道具的评分权重：本回合拾取的道具按价值 × 该权重计入评估，驱动 AI 主动绕路去吃
 const BUFF_TAKE_WEIGHT := 3.0
+# 黄金矿工吃到 1 枚金矿的评分（永久 +1 攻 / +3 血上限，滚雪球）。
+# 量级：普通一次攻击约 +2.5 分，击杀约 +25 起 —— 吃矿应明显优于"随手打一下"，但不该高于击杀。
+const GOLD_TAKE_VALUE := 26.0
+const GOLD_TAKE_VALUE_LOW := 34.0   # 攻击力 < GOLD_LOW_ATK 时更高（自身薄弱，成长更关键）
 
 func _init(g: HexGrid) -> void:
 	grid = g
@@ -625,12 +631,14 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 大骑士：冲锋移动距离加成攻击力（与真实规则一致，冲越远攻越高）
 			if u.hero_id == "hero_24":
 				u.eatk += grid.distance(prev_cell, mc)
-			# 黄金矿工踏上加分的金矿格：拾取（攻击+1，血量上限+3）
+			# 黄金矿工踏上金矿格：拾取（与真实规则一致：攻击+1(永久)、HP上限+3、回复3血）
 			if u.hero_id == "hero_42" and sim.gold_cells.has(mc):
 				sim.gold_cells.erase(mc)
+				sim.gold_taken += 1
 				u.atk += 1
+				u.eatk += 1   # 有效攻击同步+1：本回合后续攻击即吃到这份成长
 				u.max_hp += 3
-				u.hp += 3
+				u.hp = mini(u.hp + 3, u.max_hp)
 			# 移动后专属（与真实规则同触发点：移动落位后、攻击前；沉默时失效）
 			if not u.silenced:
 				_sim_on_move(sim, u)
@@ -1070,18 +1078,21 @@ func _evaluate(sim: Sim) -> float:
 			elif t.hp <= 6:
 				score += 1.8   # 残血：再挨一两刀就死，优先收
 	score += _synergy_value(sim)
-	# 黄金矿工吃矿：金矿每枚=攻击+1、HP上限+HP+3(永久成长),是滚雪球核心。
-	# 只要敌方矿工存活且场上还有金矿,就给一个"期望吃矿"的长线价值,引导它优先赶去拾取
-	# (而不是在有攻击目标时弃矿去打人);已站上金矿格则给更高的即时加成。
-	# 攻击力 < GOLD_LOW_ATK 的矿工：自身输出薄弱，吃矿是主要成长手段，权重再提高一档。
+	# 黄金矿工吃矿：金矿每枚=攻击+1、HP上限+3(永久成长),是滚雪球核心。评分分两种情形：
+	#  1) 本回合真的吃到了矿(sim.gold_taken)：给重奖——此前"站在金矿格"的判定永不命中
+	#     （拾取时金矿已被擦除），导致"移动去吃矿"在评分上没有任何收益，矿工就转头去打人了。
+	#  2) 还没吃到：按"离最近金矿的距离"给梯度，让它在够不着时也会朝矿的方向靠。
+	# 攻击力 < GOLD_LOW_ATK 的矿工自身输出薄弱，吃矿权重再提高一档。
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
 		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.hero_id == "hero_42":
 			var low_atk: bool = u.eatk < GOLD_LOW_ATK
-			if sim.gold_cells.has(u.cell):
-				score += 30.0 if low_atk else 20.0   # 正站在金矿格:本回合结算即成 +4.6 分/枚以上,拉满优先
+			if sim.gold_taken > 0:
+				score += float(sim.gold_taken) * (GOLD_TAKE_VALUE_LOW if low_atk else GOLD_TAKE_VALUE)
 			elif sim.gold_cells.size() > 0:
-				score += 14.0 if low_atk else 8.0    # 场上还有金矿且矿工待命:吃矿是持续成长收益,避免被攻击目标挤掉
+				var gd := _nearest_gold_dist(sim, u)
+				var base := 14.0 if low_atk else 8.0
+				score += maxf(base - float(gd) * 2.0, 0.0)
 	# 吃增益道具：本回合实际拾取的道具按价值计入（攻击/移动/圣盾/回血），
 	# 让 AI 主动绕路去吃有用的道具，而不是"顺路才吃"。
 	score += sim.buff_taken * BUFF_TAKE_WEIGHT
@@ -1267,6 +1278,15 @@ func _position_score(sim: Sim) -> float:
 		if not u.moved:
 			s += 0.5
 	return s
+
+# 黄金矿工到最近金矿的距离（无金矿返回一个大数）。用于给"朝矿靠拢"的评分梯度。
+func _nearest_gold_dist(sim: Sim, u: SimUnit) -> int:
+	var best := 1 << 30
+	for c in sim.gold_cells.keys():
+		var d := grid.distance(u.cell, c)
+		if d < best:
+			best = d
+	return best
 
 # 后勤里"需要冲前线"的特例：烛火(hero_17) 靠"移动后伤害相邻敌人"输出，
 # 必须顶到敌人身边才有效——不能按普通后勤缩在后方。
