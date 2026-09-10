@@ -63,6 +63,8 @@ var _tags_label: Label
 var _passive_border: Line2D
 var _passive_tween: Tween
 var _sel_border: Line2D = null   # 金色选中描边（选中时叠加在单位六边形上）
+var _acting_border: Line2D = null     # 敌方AI"正在行动"描边（红橙脉冲，区别于金色选中边）
+var _acting_tween: Tween
 var _action_dot: Label   # 本回合仍有行动的顶部标识（旧，保留兼容）
 var _move_dot: Label      # 可移动标识（绿色）
 var _attack_dot: Label    # 可攻击标识（红色）
@@ -274,10 +276,9 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	damaged.emit(self, dmg)
 	_flash()
 	_shake()
-	# 反击伤害用蓝色，居中落在被反击对象身上，与普通攻击伤害（橙红）区分；
-	# 重击（_dmg_style=2，如嬉皮死神双倍）用紫粉色并放大，更醒目又不挡后读
-	# 伤害数字统一红色、水平居中在卡面中心；重击(_dmg_style=2)只靠字号放大区分
-	if counter or _dmg_style == 2:
+	# 伤害数字统一红色、水平居中在卡面中心；**只有重击**(_dmg_style=2，如嬉皮死神双倍)
+	# 靠字号放大区分。反击一律用普通字号——否则 1 点反击也显示成大字，看起来像重击。
+	if _dmg_style == 2:
 		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -52, true)
 	else:
 		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -46)
@@ -633,6 +634,39 @@ func set_highlight_ring(on: bool) -> void:
 		_sel_border.default_color = Color(1.0, 0.85, 0.3)
 		add_child(_sel_border)
 	_sel_border.visible = true
+
+# 敌方 AI 行动指示：正在行动的单位外圈套一层红橙脉冲描边。
+# 与金色选中边（set_highlight_ring）区分：颜色更暖、线更粗，让玩家一眼看出"这一步是谁在动"，
+# 多名敌人连招时不会看串。on=false 立即熄灭（回合结束/重开时必须清掉）。
+func set_acting_ring(on: bool) -> void:
+	if not on:
+		if _acting_tween != null:
+			_acting_tween.kill()
+			_acting_tween = null
+		if _acting_border != null:
+			_acting_border.modulate.a = 0.0
+			_acting_border.visible = false
+		return
+	if not is_inside_tree():
+		return   # 未入树（已释放/尚未加入场景）：不建特效，安全退
+	if _acting_border == null:
+		_acting_border = Line2D.new()
+		_acting_border.points = _hex_points(hex_radius + 5.0)
+		_acting_border.closed = true
+		_acting_border.width = 5.0 * (hex_radius / 54.0)   # 线宽随棋盘放大，比选中边粗
+		_acting_border.z_index = 17
+		_acting_border.default_color = Color(1.0, 0.42, 0.22)
+		_acting_border.modulate.a = 0.0
+		add_child(_acting_border)
+	if _acting_tween != null:
+		_acting_tween.kill()
+	_acting_border.visible = true
+	_acting_border.modulate.a = 1.0
+	# 呼吸式脉冲：持续闪烁到该英雄行动结束（set_acting_ring(false) 时 kill）
+	var t := create_tween().set_loops()
+	_acting_tween = t
+	t.tween_property(_acting_border, "modulate:a", 0.25, 0.42)
+	t.tween_property(_acting_border, "modulate:a", 1.0, 0.42)
 
 # 本回合仍有行动（未完成移动+攻击）的标识：顶部亮点
 func set_action_marker(show_dot: bool) -> void:
