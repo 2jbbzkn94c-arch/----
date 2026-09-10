@@ -82,6 +82,19 @@ func is_damage_absorber() -> bool:
 func absorb_ally_damage(_target: Unit, dmg: int) -> int:
 	return dmg
 
+## 是否向本方提供"移动光环"（默认否）。返回 true 的英雄会在队友移动/新人入场时被询问（如风语者）。
+func grants_move_aura() -> bool:
+	return false
+
+## 队友完成移动后（mover 移动了 dist 格）：光环拥有者在此结算收益（风语者：回复 = 移动距离）。
+## Battle 每方只派发一次（由第一个拥有该光环的队友处理），避免多个光环源重复结算。
+func on_ally_moved(_mover: Unit, _dist: int) -> void:
+	pass
+
+## 队友新入场（替补登场）后：光环拥有者给新单位补上光环（风语者：+1 移动力）。
+func on_ally_entered(_newcomer: Unit) -> void:
+	pass
+
 
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。

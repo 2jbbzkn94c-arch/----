@@ -3120,10 +3120,13 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 		return
 	var prev_move_buff := u.move_use_buff   # 移动开始前已有的移动 buff（本次移动应消耗的部分）
 	u.moved_this_turn = true
-	# 风语者光环：移动回血（自己不吃自己的光环，但场上另有风语者时互为"其他队友"可回血）
-	if u.alive and u.last_move_dist > 0 and _has_other_wind_speaker(u):
-		_heal(u, u.last_move_dist)
-		log_message.emit("%s 移动 %d 格，风语者令其回复 %d 点生命。" % [u.display_name, u.last_move_dist, u.last_move_dist])
+	# 移动后光环：由拥有"移动光环"的队友结算一次（风语者：移动者回复 = 本次移动距离），
+	# Battle 不认具体英雄；每方只派发一次，避免多个光环源重复结算。
+	for s in units:
+		if s != null and is_instance_valid(s) and s.alive and s.faction == u.faction \
+				and _hero(s).grants_move_aura():
+			_hero(s).on_ally_moved(u, u.last_move_dist)
+			break
 	# 炸弹爆炸：非炸弹人踏上炸弹格（已_bomb_enter_check 在逐格动画中处理：经过或停留均爆炸
 	_pickup_buff_at_cell(u)   # 增益道具/金矿拾取（公共逻辑，强制位移也走这里）
 	# 先刷远程被贴状态，再触发移动后技能——医护兵等用"移动攻击贴身状态结
@@ -3696,14 +3699,6 @@ func _same_side_adjacent(x: Unit) -> Array:
 			out.append(v)
 	return out
 
-# 场上是否存在"另一位"存活风语者（≠u）：移动回血按"其他队友"判定——
-# 风语者本人吃不到自己发的光环，但两个风语者在场时互为队友、都可回血
-func _has_other_wind_speaker(u: Unit) -> bool:
-	for v in units:
-		if v.alive and v.faction == u.faction and v.hero_id == "hero_43" and v != u:
-			return true
-	return false
-
 func _adjacent_ally(u: Unit) -> Array:
 	var out: Array = []
 	for v in units:
@@ -4192,13 +4187,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 				var st := create_tween()
 				st.tween_property(s, "modulate:a", 0.0, 0.25)
 				st.tween_callback(_skeleton_owner_gone.bind(s))
-	# 风语者离场：立即收回本回合发给队友的移动力 +1（光环只在他在场时存在）
-	if u.hero_id == "hero_43" and not is_summon:
-		for v in units:
-			if v != null and is_instance_valid(v) and v.alive and v.faction == u.faction and v.hero_id != "hero_43":
-				if v.move_buff > 0:
-					v.move_buff -= 1
-					v.refresh_stats()
+	# 离场类光环的收回由英雄脚本自己的 on_died() 处理（如风语者收回发给队友的移动力 +1）
 	# 骷髅兵等召唤物死亡不计入胜负死亡人数
 	if not is_summon:
 		# 记录阵亡
@@ -4497,23 +4486,14 @@ func _grant_sub_aura_after_enter(u: Unit) -> void:
 func _grant_sub_aura(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
-	if u.hero_id == "hero_43":
-		# 替补登场的是风语者本人：他的光环是"在场时所有其他队友移动力+1"。
-		# 回合中途替补会错过回合开始的 on_turn_start，须在此给在场队友补发（风语者本人不吃）。
-		for v in units:
-			if v == null or not is_instance_valid(v) or not v.alive:
-				continue
-			if v.faction == u.faction and v.hero_id != "hero_43":
-				v.move_buff += 1
-				v.refresh_stats()
-		return
-	for v in units:
-		if v == null or not is_instance_valid(v) or not v.alive:
+	# 移动光环补发：由拥有该光环的队友给新入场单位补上（风语者）。
+	# 若新入场者本人就是光环源，则由它自己的 on_enter() 反向发给队友（见 _trigger_on_enter）。
+	for s in units:
+		if s == null or not is_instance_valid(s) or not s.alive or s == u:
 			continue
-		if v.faction == u.faction and v.hero_id == "hero_43":
-			u.move_buff += 1
-			u.refresh_stats()
-			return
+		if s.faction == u.faction and _hero(s).grants_move_aura():
+			_hero(s).on_ally_entered(u)
+			break
 
 func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) -> void:
 	var roster := _roster_of(fn)
