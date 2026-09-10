@@ -6,6 +6,14 @@ extends HeroBase
 ## 避免把对方当成 AI 自动放、或两边各自乱放。
 class_name HeroBomber
 
+## 移动后能放置炸弹（联机 bomb 指令的合法性与 UI 选格都以此为准）
+func can_place_bomb() -> bool:
+	return true
+
+## 自己放的雷不炸自己：经过/停在炸弹格都安然无恙
+func immune_to_bombs() -> bool:
+	return true
+
 func on_move() -> void:
 	fx()
 	if GameState.is_online:

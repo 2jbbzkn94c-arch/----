@@ -2538,21 +2538,10 @@ func _is_logistics(u: Unit) -> bool:
 
 # 计算单位可移动范围（考虑渗透技能：可穿越敌方格子但不可停靠；冻结尾生效；障碍物阻挡
 func _move_reachable(u: Unit) -> Dictionary:
-	# 大大骑士：冲锋——沿 6 *轴向**直线方向冲任意距离，直到被阻挡（移动力不封顶
-	if u.hero_id == "hero_24":
-		var out := {}
-		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
-		for d in dirs:
-			var ax := grid.axial_of(u.cell) + d
-			while true:
-				var off := grid.offset_of(ax)
-				if not grid.in_bounds(off):
-					break
-				if occupancy.has(off) or obstacles.has(off) or graves.has(off):
-					break
-				out[off] = true
-				ax += d
-		return out
+	# 一部分英雄的移动范围完全自定义（大骑士冲锋：沿 6 轴向直线冲任意距离，移动力不封顶）
+	var hb := _hero(u)
+	if hb.uses_charge_movement():
+		return hb.charge_reachable_cells()
 	var stop_forbidden := occupancy.duplicate()
 	var path_blockers := occupancy.duplicate()
 	if u.skills.has(DataRegistry.Skill.INFILTRATE):
@@ -2619,7 +2608,7 @@ func apply_command(cmd: Dictionary) -> void:
 		"bomb":
 			# 炸弹人放置炸弹（联机主机执行 / 客户端回放重演同一条指令）
 			var bc: Vector2i = _v2(cmd.get("cell"))
-			if u != null and is_instance_valid(u) and u.alive and u.hero_id == "hero_35":
+			if u != null and is_instance_valid(u) and u.alive and _hero(u).can_place_bomb():
 				_apply_bomb_cmd(u, bc)
 
 # 攻击障碍物的完整副作用（两端重演一致）：扣行动 + 伤害 + AOE/穿透技+ 收尾
@@ -2953,15 +2942,10 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	# 逐格路径（沿格子走；冲锋为直线格列；寻路失败则直奔目标）
 	# 大骑士冲锋：逐格检查阻挡，途中遇障墓碑/其他单位即停在阻挡前—
 	# 玩家 UI 的可达格本就挡墙（见 _move_reachable），此处兜底 AI/联机指令误算穿墙
+	var hb := _hero(u)
 	var path: Array
-	if u.hero_id == "hero_24":
-		path = []
-		for c in _charge_line_cells(u.cell, target_cell):
-			if occupancy.has(c) or obstacles.has(c) or graves.has(c):
-				break
-			path.append(c)
-			if c == target_cell:
-				break
+	if hb.uses_charge_movement():
+		path = hb.charge_path(target_cell)
 	else:
 		path = grid.find_path(u.cell, target_cell, _current_path_blockers(u))
 		# 防御：find_path 在目标不可达时按约定也返回 [goal]（单格直跳）。
@@ -2976,24 +2960,20 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	# 防御：无论调用方传入多远的目标，单次移动不得超过单位的实际移动力
 	# 把路径截断到有效移动力步数，杜绝敌方 AI 计划偏差/偏移导致程移动
 	var max_steps := u.effective_move()
-	if u.hero_id == "hero_24":
-		max_steps = 60   # 大骑士冲锋：直线冲任意距离，不截
+	if hb.uses_charge_movement():
+		max_steps = hb.charge_step_cap()   # 冲锋：直线冲任意距离，不按移动力截断
 	if path.size() > max_steps:
 		path = path.slice(0, max_steps)
 	if path.size() == 0:
-		# 冲锋一步未动（面前被挡）：原地收尾，不传送；冲锋加成0 
-		if u.hero_id == "hero_24":
-			u.last_move_dist = 0
-			u.ramble_bonus = 0
-			u.refresh_stats()
+		# 冲锋一步未动（面前被挡）：原地收尾，不传送；冲锋加成 0
+		if hb.uses_charge_movement():
+			hb.on_charge_settled(0)
 		_finish_move(u, for_enemy)
 		return
 	var final_cell: Vector2i = path[path.size() - 1] if path.size() > 0 else target_cell
 	# 冲锋被剪裁时实际冲到的格结算（避免穿墙落点前的加成虚高）
-	if u.hero_id == "hero_24":
-		u.last_move_dist = path.size()
-		u.ramble_bonus = u.last_move_dist
-		u.refresh_stats()
+	if hb.uses_charge_movement():
+		hb.on_charge_settled(path.size())
 	occupancy.erase(u.cell)
 	u.cell = final_cell
 	occupancy[final_cell] = u
@@ -3021,8 +3001,8 @@ func _animate_step_path(u: Unit, path: Array, idx: int, for_enemy: bool) -> void
 func _bomb_enter_check(u: Unit, cell: Vector2i, _for_enemy: bool) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true   # 单位已释放：不再继续判炸弹，安全退
-	if u.hero_id == "hero_35":
-		return true   # 炸弹人：经炸弹安
+	if _hero(u).immune_to_bombs():
+		return true   # 炸弹人：经过/停在炸弹格安然无恙
 	if not bombs.has(cell):
 		return true
 	bombs.erase(cell)
@@ -3036,7 +3016,7 @@ func _bomb_enter_check(u: Unit, cell: Vector2i, _for_enemy: bool) -> bool:
 # 统一炸弹触发：任意方式（击退/拉近/换位/瞬移/随机步…）让炸弹人以外的单位出现在炸弹格上都会引爆
 # 检unit 当前所在格；若为炸弹格且非炸弹人则爆炸。供各位移落点调用
 func _trigger_bomb(u: Unit) -> void:
-	if u == null or not is_instance_valid(u) or u.hero_id == "hero_35":
+	if u == null or not is_instance_valid(u) or _hero(u).immune_to_bombs():
 		return   # 炸弹人安全；非单已释放跳
 	if not bombs.has(u.cell):
 		return
@@ -3046,24 +3026,6 @@ func _trigger_bomb(u: Unit) -> void:
 		board_view.queue_redraw()
 	log_message.emit("%s 踩中炸弹！" % u.display_name)
 	u.take_damage(5, false, false, "踩中炸弹")
-
-# 冲锋（hero_24）：from 沿某*轴向**直线方向逐格直到 to 的直线格
-func _charge_line_cells(from: Vector2i, to: Vector2i) -> Array:
-	var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
-	var fa := grid.axial_of(from)
-	var ta := grid.axial_of(to)
-	for d in dirs:
-		var path: Array = []
-		var cur := fa
-		for i in range(60):
-			cur += d
-			var off := grid.offset_of(cur)
-			if not grid.in_bounds(off):
-				break
-			path.append(off)
-			if cur == ta:
-				return path
-	return [to]
 
 # 计算当前单位移动时的通行阻挡（与 _move_reachable path_blockers 一致）
 func _current_path_blockers(u: Unit) -> Dictionary:
@@ -3641,18 +3603,12 @@ func _trigger_turn_start(u: Unit) -> bool:
 
 # 回合结束时（该阵营）的角色技
 func _trigger_turn_end(u: Unit) -> bool:
-	# 骷髅兵：回合结束时消散（干净淡出，不弹伤害数字、不触发被动闪烁
-	if u.hero_id == "summon_skeleton":
-		log_message.emit("骷髅兵随回合结束而消散")
-		if u.alive:
-			u.alive = false
-			var dt := create_tween()
-			dt.tween_property(u, "modulate:a", 0.0, 0.25)
-			dt.tween_callback(func(): _on_unit_died(u))
+	var hb := _hero(u)
+	# 沉默：无法触发回合结束技能。
+	# 但召唤物消散等"非技能"的寿命类效果不受沉默影响，由英雄脚本自己声明。
+	if not u.skill_allowed() and not hb.runs_turn_end_while_silenced():
 		return false
-	if not u.skill_allowed():   # 沉默：无法触发回合结束技能（骷髅兵消散不受影响）
-		return false
-	return _hero(u).on_turn_end()
+	return hb.on_turn_end()
 
 # 替补登场时触
 func _trigger_on_enter(u: Unit) -> void:
@@ -4137,9 +4093,8 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能
 	# **注意：只触发"回合开类技能，绝不触发"替补登场"(on_enter)类效*—
 	# 变身不是替补登场，波梅林/太阳猎颅者的替补效果不应因变身触发
-	if u.hero_id == "hero_28":
-		pass   # 变回自身：无额外效果（正常不会发生，候选排除自身）
-	else:
+	# 变回自身（古灵精怪变回自己）时不补触发，由英雄脚本自己声明
+	if _hero(u).wants_turn_start_on_transform():
 		_hero(u).on_turn_start()   # 只继回合开类效
 	log_message.emit("%s 变身 %s。" % [u.display_name, def.display_name])
 	u.display_name = def.display_name   # 完整显示变身后的英雄名（曾误留孤立 "(" 致名字残缺）

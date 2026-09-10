@@ -113,6 +113,43 @@ func skips_lunge_anim() -> bool:
 func suppressed_attack_range() -> int:
 	return -1
 
+## 是否使用"直线冲锋"式移动（大骑士）：可达格 / 路径 / 步数上限全部交给本脚本决定。默认否。
+func uses_charge_movement() -> bool:
+	return false
+
+## 冲锋式移动的可达格集合（uses_charge_movement() 为 true 时 Battle 直接采用本结果）。
+func charge_reachable_cells() -> Dictionary:
+	return {}
+
+## 冲锋路径（沿 6 轴向直线冲向 target，遇阻挡即停在阻挡前）；返回空数组 = 一步未动。
+func charge_path(_target: Vector2i) -> Array:
+	return []
+
+## 冲锋单次移动的步数上限（冲锋不封顶，但仍设一个安全上限）。默认 60。
+func charge_step_cap() -> int:
+	return 60
+
+## 冲锋落定后结算（actual_steps = 本次实际冲到的格数，0 = 一步未动）。
+func on_charge_settled(_actual_steps: int) -> void:
+	pass
+
+## 能否放置炸弹（炸弹人：移动后可在周围空地放雷）。默认否。
+func can_place_bomb() -> bool:
+	return false
+
+## 是否免疫炸弹（炸弹人自己踩雷不引爆）。默认否。
+func immune_to_bombs() -> bool:
+	return false
+
+## 变身为该英雄后，是否补触发一次"回合开始技"（默认补触发）。
+## 古灵精怪变回自身时不补，避免重复触发自己的回合开效果。
+func wants_turn_start_on_transform() -> bool:
+	return true
+
+## 回合结束时，即使被沉默也要执行 on_turn_end()（召唤物消散等非技能效果）。默认否。
+func runs_turn_end_while_silenced() -> bool:
+	return false
+
 
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。

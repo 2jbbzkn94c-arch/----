@@ -53,6 +53,8 @@ const _SCRIPTS := {
 	"hero_47": "res://heroes/hero_47_共鸣者.gd",
 	"hero_48": "res://heroes/hero_48_装甲堡垒.gd",
 	"hero_49": "res://heroes/hero_49_荆棘树人.gd",
+	# 召唤物 / 衍生物（同样各自一个脚本，逻辑不写回 Battle）
+	"summon_skeleton": "res://heroes/summon_骷髅兵.gd",
 }
 
 ## 创建某英雄的行为实例（不含 setup）。找不到脚本或衍生物时返回 HeroBase 空实例。
