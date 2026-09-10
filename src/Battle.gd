@@ -145,6 +145,7 @@ class SwordCrescent:
 class BloodHook:
 	extends Node2D
 	var k := 1.0            # 随棋盘缩放的系数（基准：棋子半径 54）
+	var hook_scale := 0.9   # 钩体相对链环的放大倍数（1.0=与链环同尺度；越小钩子越小）
 	var head_dist := 0.0    # 钩根离血锁的距离（链子画到这里，钩体由此向前伸出）
 	var color := Color(0.95, 0.16, 0.28)        # 链环主色（鲜红）
 	var metal := Color(0.894, 0.918, 0.965)     # 钩体金属亮面
@@ -166,8 +167,8 @@ class BloodHook:
 			draw_circle(Vector2(x, oy), 2.3 * k, Color(0.5, 0.05, 0.12))
 		if s <= 1.0:
 			return   # 还没飞出：只画链子起始段
-		# 钩体：钩身单独放大一档，作为视觉重点（比链环醒目）
-		var hk := k * 1.5
+		# 钩体：按 hook_scale 缩放（相对链环的大小；调小=钩子更小）
+		var hk := k * hook_scale
 		var b := Vector2(s, 0.0)                                   # 钩根位置
 		var c := b + Vector2(26.0 * hk, 11.0 * hk)                 # 钩身圆心
 		var rad := 11.2 * hk
@@ -194,6 +195,8 @@ class BloodHook:
 
 # 钩爪"飞出→咬住"的时长（与 _pull_to 里目标被拖回的延迟保持一致）
 const HOOK_FLY_TIME := 0.16
+# 血锁钩体相对链环的放大倍数：1.0 = 与链环同尺度；越小钩子越小（想改大小只动这一个数）
+const HOOK_BODY_SCALE := 0.9
 
 var grid: HexGrid
 var board_view: BoardView
@@ -4215,12 +4218,13 @@ func _spawn_hook(u: Unit, target: Unit) -> void:
 		return
 	var hook := BloodHook.new()
 	hook.k = maxf(hex_size / 54.0, 0.5)
+	hook.hook_scale = HOOK_BODY_SCALE
 	hook.position = start
 	hook.rotation = (tpos - start).angle()   # 朝目标方向出钩
 	hook.head_dist = 0.0
 	hook.z_index = 40                         # 压在棋子之上
 	add_child(hook)
-	var hk := hook.k * 1.5
+	var hk := hook.k * hook.hook_scale
 	# 咬住距离：钩体从钩根再向前伸约 26*hk，所以钩根停在"目标前方一段"，
 	# 让钩身中段正好落在目标身上（否则整只钩子会飞过目标）。
 	var bite := maxf(dist - 26.0 * hk, 6.0)
