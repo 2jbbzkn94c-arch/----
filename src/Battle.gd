@@ -782,7 +782,7 @@ func _oa_finish_to_deploy() -> void:
 
 # ---- 开局部署（棋盘上进行，带演出动画----
 const DEPLOY_COUNT_BATTLE := 3
-const DEPLOY_BUDGET_SECONDS := 45.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
+const DEPLOY_BUDGET_SECONDS := 60.0   # 开局选人：本端全部选人的总预算（秒），不按轮重置
 var deploy_budget_left := DEPLOY_BUDGET_SECONDS   # 剩余总时间（随时间流逝减少，不按轮重置）
 var deploy_budget_active := false                 # 当前是否正处本端真人选人/放位（此时才倒计时）
 # 敌方出生区整片（顶帽 row0 的 1,3 + 第一满行 row1 的 0,2,4 交错皇冠，共 5 格；居中窄顶宽底）
@@ -1462,6 +1462,12 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 		roster.append(hid)
 
 const OBSTACLE_DUR := 3
+# 炸弹陷阱伤害。炸弹"谁能放 / 放哪 / 自己免疫"全部由英雄脚本决定（hero_35_炸弹人.gd），
+# 这里只是"雷已经在盘面上之后"的地形规则伤害（规则书里任何一颗雷都是 5 点，与障碍耐久同类）。
+const BOMB_DAMAGE := 5
+# 金矿寿命（完整回合数，每轮开始减 1，到 0 风化）。金矿"谁会掉 / 掉哪格 / 谁能捡 / 捡了加什么"
+# 全部由英雄脚本决定（hero_42_黄金矿工.gd），这里只是"矿已经在盘面上之后"的地形寿命。
+const GOLD_LIFE := 3
 func _place_obstacles() -> void:
 	# 预设障碍布局(坐标为代码坐标:用户左下角[1,1] 对应 x=列-1, y=7-行):
 	#   1) [3,2][3,3][3,4][3,5] -> 中列一线(略上移,不占底线出生行)
@@ -1562,19 +1568,22 @@ func _opening_item_placeable(c: Vector2i) -> bool:
 	return grid != null and grid.in_bounds(c) and not occupancy.has(c) \
 			and not obstacles.has(c) and not bombs.has(c) and not graves.has(c) and not buff_items.has(c)
 
-# 黄金矿工：在随机空地放置一枚金矿（buff_items "gold" 类型
-func _place_gold(u: Unit) -> void:
-	var spots: Array = []
-	for cell in grid.all_cells():
-		if not occupancy.has(cell) and not obstacles.has(cell) and not bombs.has(cell) \
-				and not buff_items.has(cell) and not graves.has(cell):   # 墓碑格不放金矿
-			spots.append(cell)
-	if spots.size() == 0:
-		return
-	var c: Vector2i = spots[rng.randi() % spots.size()]
-	buff_items[c] = "gold"
-	gold_left[c] = 3   # 金矿存在 3 个完整回合，每轮结束减 1，到 0 消失
-	log_message.emit("%s 在 %s 丢下一块金矿（3 回合后消失）。" % [u.display_name, str(c)])
+# ---- 金矿：Battle 只保留"矿已经落在盘面上之后"的地形规则（寿命倒计时 / 渲染 / 拾取落盘 / AI 参考）----
+# "谁会掉矿、掉在哪一格、谁能捡、捡了加什么"全部由英雄脚本决定，Battle 不认具体英雄：
+#   HeroBase.can_pickup_gold / on_pickup_gold（实现见 hero_42_黄金矿工.gd）
+
+# 金矿落点的**地形合法性**原语（英雄脚本挑落点用）：
+# 界内、无单位、无障碍、无炸弹、无其它增益道具、无墓碑
+func gold_cell_ok(cell: Vector2i) -> bool:
+	return grid.in_bounds(cell) and not occupancy.has(cell) and not obstacles.has(cell) \
+			and not bombs.has(cell) and not buff_items.has(cell) and not graves.has(cell)
+
+# 公共原语：在盘面上放一枚金矿（写盘 + 记寿命 + 重绘 + 日志）。落点合法性由调用方保证。
+func place_gold(cell: Vector2i, u: Unit) -> void:
+	buff_items[cell] = "gold"
+	gold_left[cell] = GOLD_LIFE
+	var who := u.display_name if (u != null and is_instance_valid(u)) else "有人"
+	log_message.emit("%s 在 %s 丢下一块金矿（%d 回合后消失）。" % [who, str(cell), GOLD_LIFE])
 	_refresh_board()
 
 # 金矿到期：每完整回合开始减 1；到 0 移除（只清理仍存在格上的金矿，防止与测试手清不一致）
@@ -2997,35 +3006,35 @@ func _animate_step_path(u: Unit, path: Array, idx: int, for_enemy: bool) -> void
 		else:
 			_finish_move(u, for_enemy))
 
-# 停在终点格时检测炸弹：非炸弹人停在炸弹格即引爆(经过不炸)。返回true表示单位仍可继续前进
+# 停在终点格时检测炸弹：不免疫炸弹的单位停在炸弹格即引爆(经过不炸)。返回true表示单位仍可继续前进
 func _bomb_enter_check(u: Unit, cell: Vector2i, _for_enemy: bool) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true   # 单位已释放：不再继续判炸弹，安全退
 	if _hero(u).immune_to_bombs():
-		return true   # 炸弹人：经过/停在炸弹格安然无恙
+		return true   # 免疫炸弹的英雄（炸弹人）：经过/停在炸弹格安然无恙
 	if not bombs.has(cell):
 		return true
+	_explode_bomb_at(cell, u)
+	return u.alive   # 爆炸致死 -> 停止前进（不再走完剩余路径）
+
+# 统一炸弹触发：任意方式（击退/拉近/换位/瞬移/随机步/召唤…）让"不免疫炸弹"的单位出现在炸弹格上都会引爆
+# 检unit 当前所在格；免疫与否由英雄脚本给出（HeroBase.immune_to_bombs）。供各位移落点调用
+func _trigger_bomb(u: Unit) -> void:
+	if u == null or not is_instance_valid(u) or _hero(u).immune_to_bombs():
+		return   # 免疫炸弹的英雄安全；单位已释放跳过
+	if not bombs.has(u.cell):
+		return
+	_explode_bomb_at(u.cell, u)
+
+# 引爆某格上的炸弹（清格 + 渲染 + 日志 + 扣血）。
+# 调用方负责先判定"该单位不免疫炸弹、且此格确实有炸弹"。
+func _explode_bomb_at(cell: Vector2i, u: Unit) -> void:
 	bombs.erase(cell)
 	if board_view:
 		board_view.bombs = bombs
 		board_view.queue_redraw()
 	log_message.emit("%s 踩中炸弹！" % u.display_name)
-	u.take_damage(5, false, false, "踩中炸弹")
-	return u.alive   # 爆炸致死 -> 停止前进（不再走完剩余路径）
-
-# 统一炸弹触发：任意方式（击退/拉近/换位/瞬移/随机步…）让炸弹人以外的单位出现在炸弹格上都会引爆
-# 检unit 当前所在格；若为炸弹格且非炸弹人则爆炸。供各位移落点调用
-func _trigger_bomb(u: Unit) -> void:
-	if u == null or not is_instance_valid(u) or _hero(u).immune_to_bombs():
-		return   # 炸弹人安全；非单已释放跳
-	if not bombs.has(u.cell):
-		return
-	bombs.erase(u.cell)
-	if board_view:
-		board_view.bombs = bombs
-		board_view.queue_redraw()
-	log_message.emit("%s 踩中炸弹！" % u.display_name)
-	u.take_damage(5, false, false, "踩中炸弹")
+	u.take_damage(BOMB_DAMAGE, false, false, "踩中炸弹")
 
 # 计算当前单位移动时的通行阻挡（与 _move_reachable path_blockers 一致）
 func _current_path_blockers(u: Unit) -> Dictionary:
@@ -3047,12 +3056,17 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 	if not buff_items.has(u.cell):
 		return
 	var btype: String = buff_items[u.cell]
-	if btype == "gold" and not _hero(u).can_pickup_gold():
-		# 金矿只有黄金矿工可拾取（规则由英雄脚本提供）：其他单位踩到不消费、金矿保留在格上
+	if btype == "gold":
+		# 金矿：只有能拾取它的英雄才消费（规则由英雄脚本提供 can_pickup_gold）——
+		# 其他单位踩到不消费、金矿留在格上继续倒计时
+		if not _hero(u).can_pickup_gold():
+			return
+		buff_items.erase(u.cell)
+		gold_left.erase(u.cell)   # 被拾取后不再倒计时
+		_hero(u).on_pickup_gold()   # 收益由英雄脚本结算（矿工：攻 +1 永久 / 上限 +3 / 回 3 血）
+		_refresh_board()
 		return
 	buff_items.erase(u.cell)
-	if btype == "gold":
-		gold_left.erase(u.cell)   # 被拾取后不再倒计时
 	if btype == "atk":
 		u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
 		u.refresh_stats()
@@ -3071,13 +3085,6 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 		u.add_status("shield")   # 圣盾：抵挡一次受到的伤害（非叠加
 		u.refresh_stats()
 		log_message.emit("%s 拾取护盾道具，获得[圣盾]。" % u.display_name)
-	elif btype == "gold":
-		u.atk += 1
-		u.perm_atk += 1   # 永久加成，变身时保留
-		u.max_hp += 3
-		u.hp = min(u.hp + 3, u.max_hp)
-		u.refresh_stats()
-		log_message.emit("%s 拾取金矿！攻击 +1（永久）、生命上限 +3 并回复 3 血。" % u.display_name)
 	_refresh_board()
 
 # 先移动到指定格、再攻击同一目标（合并的"移动+攻击"
@@ -3686,35 +3693,32 @@ func _adjacent_obstacles(u: Unit) -> Array:
 			out.append(n)
 	return out
 
-# 炸弹人：正前方（朝敌方底线方向）的相邻格
-func _front_cell(u: Unit) -> Vector2i:
-	var best := u.cell
-	var best_d := INF
-	for n in grid.neighbors(u.cell):
-		var d: float
-		if u.faction == DataRegistry.Faction.PLAYER:
-			# 玩家从下方进攻，正前方朝上（包围敌方底线 y 最小）
-			d = grid.cell_to_world(n).y
-		else:
-			# 敌方从上方进攻，正前方朝下（包围玩家底线 y 最大）
-			d = -grid.cell_to_world(n).y
-		if d < best_d:
-			best_d = d
-			best = n
-	return best
+# ---- 炸弹：Battle 只保留"雷已经落在盘面上之后"的地形规则（引爆/伤害/渲染/AI 避让）----
+# "能不能放、放在哪几个格、自己是否免疫"全部由英雄脚本决定，Battle 不认具体英雄：
+#   HeroBase.can_place_bomb / bomb_place_cells / immune_to_bombs（实现见 hero_35_炸弹人.gd）
 
-# 炸弹人周围可放炸弹的空地（相邻、界内、无单位/障碍/炸弹/buff道具/金矿）
-func _bomb_spots(u: Unit) -> Array:
-	var out: Array = []
-	for n in grid.neighbors(u.cell):
-		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not bombs.has(n) \
-				and not buff_items.has(n):
-			out.append(n)
-	return out
+# 炸弹落点的**地形合法性**原语（英雄脚本算可放格、落点校验、UI 高亮共用）：
+# 界内、无单位、无障碍、格上无已放炸弹、无增益道具与金矿
+func bomb_cell_ok(cell: Vector2i) -> bool:
+	return grid.in_bounds(cell) and not occupancy.has(cell) and not obstacles.has(cell) \
+			and not bombs.has(cell) and not buff_items.has(cell)
+
+# 公共原语：英雄脚本在移动结算里申请进入"选格放炸弹"（炸弹人：本端真人手动选格）
+func request_bomb_place(u: Unit) -> void:
+	_pending_bomb_unit = u
+
+# 公共原语：把一颗炸弹放到盘面上（写盘 + 重绘 + 日志）。合法性由调用方保证。
+func place_bomb(cell: Vector2i, u: Unit) -> void:
+	bombs[cell] = true
+	if board_view:
+		board_view.bombs = bombs
+		board_view.queue_redraw()
+	var who := u.display_name if (u != null and is_instance_valid(u)) else "有人"
+	log_message.emit("%s 在 %s 放置了炸弹。" % [who, str(cell)])
 
 # 进入炸弹选格状态：高亮可用空地；无空位则走正常收尾
 func _begin_bomb_place(u: Unit) -> void:
-	var spots := _bomb_spots(u)
+	var spots: Array = _hero(u).bomb_place_cells()   # 可放格由英雄脚本给出
 	if spots.size() == 0:
 		_pending_bomb_unit = null
 		_continue_after_move(u)
@@ -3752,7 +3756,7 @@ func _try_place_bomb(cell: Vector2i) -> bool:
 		_apply_highlights()
 		_continue_after_move(u)
 		return true
-	action_info.emit("请点击炸弹人相邻的空地放置炸弹")
+	action_info.emit("请点击高亮格放置炸弹（只能放在自己周围的空地上）")
 	_pending_bomb_unit = u
 	state = State.PLACE_BOMB
 	_begin_bomb_place(u)
@@ -3770,19 +3774,13 @@ func _apply_bomb_cmd(u: Unit, cell: Vector2i) -> void:
 	_continue_after_move(u)
 
 # 炸弹落点公共校验并放置（单机 / 联机主机 / 回放端共用同一规则）
-# 不能放在：自己脚下、界外、非相邻、单位/障碍/已有炸弹、增益道具格与金矿格
+# 可放格由英雄脚本给出（炸弹人：自己周围地形合法的相邻格）；此处复检兜底，防绕高亮/改包
 func _apply_bomb_placement(u: Unit, cell: Vector2i) -> bool:
 	if u == null or not is_instance_valid(u):
 		return false
-	if cell == u.cell or not grid.in_bounds(cell) or grid.distance(u.cell, cell) != 1 \
-			or occupancy.has(cell) or obstacles.has(cell) or bombs.has(cell) \
-			or buff_items.has(cell):   # buff 道具与金矿(类型"gold")都在 buff_items 里
+	if not bomb_cell_ok(cell) or not _hero(u).bomb_place_cells().has(cell):
 		return false
-	bombs[cell] = true
-	if board_view:
-		board_view.bombs = bombs
-		board_view.queue_redraw()
-	log_message.emit("%s 在 %s 放置了炸弹。" % [u.display_name, str(cell)])
+	place_bomb(cell, u)
 	return true
 
 func _knockback(target: Unit, from_cell: Vector2i) -> bool:
@@ -4452,7 +4450,8 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	var nu := _spawn_unit(hero_id, fn, cell)
 	_grant_sub_aura_after_enter(nu)   # 替补补发光环（风语者…中途上场才补；先补位再技能阶段跳过）
 	_trigger_on_enter(nu)   # 替补登场技能（波盾/太阳梅林/猎颅者）
-	# 共鸣者不在此触发：只在"回合开始"(1684 _sync_echo)统一生效；回合中间替补不触发
+	# 共鸣者不在此触发：只在"每方回合开始"由 wants_side_turn_start_sync/on_side_turn_start 统一结算；
+	# 回合中间替补不触发
 	_preview_cells = {}
 	_apply_highlights()
 	log_message.emit("替补登场：%s。" % DataRegistry.get_hero(hero_id).display_name)
@@ -4750,7 +4749,7 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	# 替补登场效果：当场同步结算（避免 call_deferred 落到下一帧、晚于"回合开始技/共鸣取和"执行，
 	# 造成登场技明明先发生却算不进当回合的问题）
 	_trigger_on_enter(u)
-	# 共鸣者不在此触发：回合开始由 _sync_echo 统一生效，回合中间替补不触发
+	# 共鸣者不在此触发：回合开始由英雄脚本的 on_side_turn_start 统一结算，回合中间替补不触发
 
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
@@ -4782,6 +4781,9 @@ func _run_enemy_turn() -> void:
 			"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
 			"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
 			"poss_by": poss_by,
+			# 炸弹免疫 / 金矿拾取权都由英雄脚本决定（炸弹人 / 黄金矿工），AI 不再硬编码 hero_id
+			"immune_bombs": _hero(u).immune_to_bombs(),
+			"can_pickup_gold": _hero(u).can_pickup_gold(),
 		})
 		occ_snap[u.cell] = i
 
