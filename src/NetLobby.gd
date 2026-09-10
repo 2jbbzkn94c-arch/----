@@ -189,7 +189,7 @@ func _on_packet(_from: int, text: String) -> void:
 				_refresh_ui()
 				if NetBus.is_host:
 					_maybe_start()
-		"arena_ready":  # 加入方已点"准备完毕"（仅主机处理）
+		"arena_ready":  # 加入方已点"准备"（仅主机处理；普通模式与竞技场通用）
 			if NetBus.is_host:
 				_peer_ready = true
 				_status.text = "对方已准备完毕，可以开始"
@@ -362,18 +362,12 @@ func _build() -> void:
 	_deck_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_deck_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(_deck_info)
-	# 确认卡组：点了槽位后还需"确认"才会把选择发给对方（避免误点/反悔时暴露选择）
-	_btn_confirm = Button.new()
-	_btn_confirm.text = "确认卡组"
-	_btn_confirm.custom_minimum_size = Vector2(0, 56)
-	_btn_confirm.add_theme_font_size_override("font_size", 22)
-	_btn_confirm.disabled = true
-	_btn_confirm.pressed.connect(_on_confirm_slot)
-	vbox.add_child(_btn_confirm)
+	# 已去掉"确认卡组"按钮：普通模式与竞技场一致，由加入方点"准备"、主机开始对局
+	# （队伍改为进入对战后选择，大厅只查看/编辑卡组）
 
-	# 竞技场模式：加入方点击"准备完毕"后，主机才能开始对局
+	# 加入方点击"准备"后，主机才能开始对局（普通模式 / 竞技场通用）
 	_btn_ready = Button.new()
-	_btn_ready.text = "准备完毕"
+	_btn_ready.text = "准备"
 	_btn_ready.custom_minimum_size = Vector2(0, 60)
 	_btn_ready.add_theme_font_size_override("font_size", 22)
 	_btn_ready.disabled = true
@@ -449,18 +443,18 @@ func _send_my_confirmation() -> void:
 	# 把本机该槽位的卡组内容一起发给主机：双方各自用自己的卡组，避免主机用自己机器上的卡顶替。
 	NetBus.send_all(JSON.stringify({ "type": "choseslot", "slot": _my_slot, "deck": deck }))
 
-# 竞技场"准备完毕/取消准备"（仅加入方；主机收到后才解锁「开始对局」）
+# "准备/取消准备"（仅加入方；主机收到后才解锁「开始对局」）。普通模式与竞技场通用
 func _on_ready_toggle() -> void:
-	if _mode != "arena" or not NetBus.is_online or NetBus.is_host:
+	if not NetBus.is_online or NetBus.is_host:
 		return
 	if _my_ready:
 		_my_ready = false
 		NetBus.send_to(1, JSON.stringify({ "type": "arena_unready" }))
-		_status.text = "已取消准备，请点击「准备完毕」"
+		_status.text = "已取消准备，请点击「准备」"
 	else:
 		_my_ready = true
 		NetBus.send_to(1, JSON.stringify({ "type": "arena_ready" }))
-		_status.text = "我方已准备完毕，等待主机开始…"
+		_status.text = "我方已准备，等待主机开始…"
 	_refresh_ui()
 
 # 所选卡组队伍小卡预览：与普通模式卡组槽/替补队伍同款一行蜂窝卡
@@ -571,10 +565,7 @@ func _open_deck_editor() -> void:
 # 选人叠层关闭回调（Menu._on_edit_done 调用）：刷新卡组状态与预览
 func _on_editor_closed() -> void:
 	if NetBus.is_online:
-		if _my_slot == 0:
-			_status.text = "编辑完成：请选择卡组槽并点「确认卡组」。"
-		else:
-			_status.text = "编辑完成：可点「确认卡组」把选择发给对方。"
+		_status.text = "编辑完成：可点击「准备」通知主机开始。"
 	else:
 		_status.text = "编辑完成。"
 	_refresh_ui()
@@ -597,14 +588,17 @@ func _enter_arena_mode() -> void:
 		_status.text = "竞技场模式：请点击「准备完毕」"
 	_refresh_ui()
 
-# 切回普通模式：重置竞技场准备状态；队伍在"进入对战后"选择，这里可查看/编辑卡组
+# 切回普通模式：重置准备状态；队伍在"进入对战后"选择，这里可查看/编辑卡组
 func _enter_normal_mode() -> void:
 	_my_ready = false
 	_peer_ready = false
 	if _my_slot <= 0:
 		_my_slot = 1   # 默认查看槽1
 	if NetBus.is_online:
-		_status.text = "普通模式：可在此查看/编辑卡组，开始对战后选择出战队伍"
+		if NetBus.is_host:
+			_status.text = "普通模式：等待对方点击「准备」后即可开始"
+		else:
+			_status.text = "普通模式：查看/编辑卡组后点击「准备」"
 	else:
 		_status.text = "普通模式：开房或加入后选择卡组"
 	_refresh_ui()
@@ -713,14 +707,15 @@ func _on_reconnect() -> void:
 func _maybe_start() -> void:
 	if _ver_mismatch:
 		return   # 版本不一致：禁止开始
-	# 主机：普通模式等对端加入即可开始（队伍改为进战斗后选）；竞技场模式要等加入方"准备完毕"。
+	# 主机：两种模式都要等加入方点"准备"（普通模式的队伍改为进战斗后选）
 	if NetBus.is_host:
 		if _mode == "arena":
 			if _peer_ready:
 				_btn_start.disabled = false
-				_status.text = "对方已准备完毕，可以开始（竞技场选卡）"
-		elif _peer_online:
+				_status.text = "对方已准备，可以开始（竞技场选卡）"
+		elif _peer_ready:
 			_btn_start.disabled = false
+			_status.text = "对方已准备，可以开始（进入对战后选择队伍）"
 
 # 返回主菜单：停止网络连接并重置联机状态（避免残留连接/标志影响下次进入）。
 func _back_to_menu() -> void:
@@ -834,72 +829,34 @@ func _refresh_ui() -> void:
 		elif _my_slot == s:
 			b.text = "槽%d\n▲" % s   # 待确认：向上的三角形位于槽号下方
 	# 卡组状态文案（阵容以预览小卡展示，这里不重复名单）
-	var can_confirm := false
 	if _deck_info != null:
 		if _mode == "normal" and NetBus.is_online and _my_slot > 0:
 			var deck := DeckStore.load_deck(_my_slot)
 			if deck.size() == 0:
-				_deck_info.text = "卡组（槽 %d）：空 —— 点「编辑卡组」选够 %d 名英雄后才能确认。" % [_my_slot, MIN_PICK]
+				_deck_info.text = "卡组（槽 %d）：空 —— 点「编辑卡组」选够 %d 名英雄。" % [_my_slot, MIN_PICK]
 			elif deck.size() < MIN_PICK:
-				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d）—— 点「编辑卡组」补足后才能确认。" % [_my_slot, deck.size(), MIN_PICK]
-			elif _my_confirmed:
-				_deck_info.text = "卡组（槽 %d）已确认。" % _my_slot
+				_deck_info.text = "卡组（槽 %d）：仅 %d 人（不足 %d）—— 点「编辑卡组」补足。" % [_my_slot, deck.size(), MIN_PICK]
 			else:
-				_deck_info.text = "卡组（槽 %d）：共 %d 名 —— 点「确认卡组」发给对方。" % [_my_slot, deck.size()]
-			can_confirm = not _my_confirmed and deck.size() >= MIN_PICK
+				_deck_info.text = "卡组（槽 %d）：共 %d 名" % [_my_slot, deck.size()]
 		else:
 			_deck_info.text = "卡组：未选择"
-	# 确认按钮：仅普通模式、已选中槽位且尚未确认时可点；可点时高亮提醒
-	if _btn_confirm != null:
-		_btn_confirm.remove_theme_stylebox_override("normal")
-		_btn_confirm.remove_theme_stylebox_override("hover")
-		_btn_confirm.remove_theme_stylebox_override("pressed")
-		_btn_confirm.remove_theme_color_override("font_color")
-		_btn_confirm.remove_theme_font_size_override("font_size")
-		if _mode != "normal":
-			_btn_confirm.disabled = true
-			_btn_confirm.text = "确认卡组"
-		elif _my_confirmed:
-			# 已确认：按钮变为"取消确认"（可点），方便反悔后重新选槽
-			_btn_confirm.disabled = false
-			_btn_confirm.text = "取消确认"
-		else:
-			_btn_confirm.disabled = not can_confirm
-			_btn_confirm.text = "确认卡组"
-			if can_confirm:
-				# 高亮收敛为"边框加强"：保持默认底色，仅加亮橙边框（+轻微底衬）
-				var hl := StyleBoxFlat.new()
-				hl.bg_color = Color(0.24, 0.28, 0.38, 0.6)
-				hl.corner_radius_top_left = 8
-				hl.corner_radius_top_right = 8
-				hl.corner_radius_bottom_left = 8
-				hl.corner_radius_bottom_right = 8
-				hl.set_border_width_all(3)
-				hl.border_color = Color(1.0, 0.7, 0.2)
-				var hl_h: StyleBoxFlat = hl.duplicate()
-				hl_h.border_color = Color(1.0, 0.82, 0.35)
-				hl_h.set_border_width_all(4)
-				var hl_p: StyleBoxFlat = hl.duplicate()
-				hl_p.border_color = Color(0.9, 0.55, 0.1)
-				_btn_confirm.add_theme_stylebox_override("normal", hl)
-				_btn_confirm.add_theme_stylebox_override("hover", hl_h)
-				_btn_confirm.add_theme_stylebox_override("pressed", hl_p)
-	# 竞技场"准备完毕"（仅加入方显示）：点击后通知主机解锁"开始对局"
+	# 加入方"准备"（普通模式 / 竞技场通用）：点击后通知主机解锁"开始对局"
 	if _btn_ready != null:
 		_btn_ready.remove_theme_stylebox_override("normal")
 		_btn_ready.remove_theme_stylebox_override("hover")
 		_btn_ready.remove_theme_stylebox_override("pressed")
-		var show_ready := _mode == "arena" and not my_is_host
+		# 仅加入方显示（主机不需要准备）；普通模式与竞技场通用
+		var show_ready := NetBus.is_online and not my_is_host
 		_btn_ready.visible = show_ready
 		if not show_ready:
 			_btn_ready.disabled = true
-			_btn_ready.text = "准备完毕"
+			_btn_ready.text = "准备"
 		elif _my_ready:
 			_btn_ready.disabled = false
 			_btn_ready.text = "取消准备"
 		else:
 			_btn_ready.disabled = not NetBus.is_online
-			_btn_ready.text = "准备完毕"
+			_btn_ready.text = "准备"
 			if NetBus.is_online:
 				# 高亮提醒点击准备（橙色边框）
 				var hlr := StyleBoxFlat.new()
@@ -918,20 +875,16 @@ func _refresh_ui() -> void:
 				_btn_ready.add_theme_stylebox_override("normal", hlr)
 				_btn_ready.add_theme_stylebox_override("hover", hlr_h)
 				_btn_ready.add_theme_stylebox_override("pressed", hlr_p)
-	# 开始按钮：主机 + 已连接 + 版本一致 + 模式一致
-	# 普通模式 = 对端已加入（队伍进战斗后选）；竞技场模式 = 加入方已"准备完毕"
+	# 开始按钮：主机 + 已连接 + 版本一致；两种模式都需"加入方已准备"
 	var start_ok := false
 	if _ver_mismatch:
 		_status.text = "版本不一致，无法开始。请双方使用同一版本的游戏（本机 v%d）。" % NET_VERSION
 	elif my_is_host and NetBus.is_online:
-		if _mode == "arena":
-			start_ok = _peer_ready
-			if not start_ok:
-				_status.text = "竞技场模式：等待对方点击「准备完毕」…"
+		if not _peer_online:
+			_status.text = "等待对方加入…"
+		elif not _peer_ready:
+			_status.text = "等待对方点击「准备」…"
 		else:
-			start_ok = _peer_online
-			if not start_ok:
-				_status.text = "等待对方加入…"
-			else:
-				_status.text = "对方已加入，可以开始（进入对战后选择队伍）"
+			start_ok = true
+			_status.text = "对方已准备，可以开始（进入对战后选择队伍）"
 	_btn_start.disabled = not start_ok
