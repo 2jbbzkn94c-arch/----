@@ -29,7 +29,7 @@ var _mode_label: Label
 var _mode_btn: Array = []   # [普通按钮, 竞技场按钮]：客户端跟随主机时禁用
 
 var _mode := "normal"    # "normal" / "arena"
-var _my_slot := 0        # 本端选的卡组槽（0=未选）
+var _my_slot := 1        # 本端查看/选用的卡组槽（默认槽1；0=未选）
 var _my_confirmed := false   # 本端是否已点"确认卡组"（确认后才把选择发给对方）
 var _peer_slot := 0      # 对端选的卡组槽（收到对端"确认"消息后才有值）
 var _peer_deck: Array = []   # 对端槽位对应的卡组内容（客户端选槽时把自己本机的卡组发过来）
@@ -601,6 +601,8 @@ func _enter_arena_mode() -> void:
 func _enter_normal_mode() -> void:
 	_my_ready = false
 	_peer_ready = false
+	if _my_slot <= 0:
+		_my_slot = 1   # 默认查看槽1
 	if NetBus.is_online:
 		_status.text = "普通模式：可在此查看/编辑卡组，开始对战后选择出战队伍"
 	else:
