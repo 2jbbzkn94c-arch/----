@@ -3693,9 +3693,9 @@ func _heal_adjacent_lowest(u: Unit) -> bool:
 				best = v
 	if best != null:
 		var heal := maxi(1, u.effective_atk())
-		_heal(best, heal)
-		if is_instance_valid(u):
-			u.float_tag_text("治疗", Color(0.45, 0.9, 0.6))   # 施加回复方弹"治疗"，被治只弹数值
+		_heal(best, heal)   # 被治者自己弹 "+N" 数值（+绿色粒子），见 Unit.float_heal
+		# 这里**不要**再弹"治疗"飘字：施加方的演出由英雄脚本负责（医护兵 fx() 的
+		# HERO_FX 文案本身就是"治疗"），Battle 再弹一次会出现两个"治疗"叠着。
 		return true
 	return false   # 没有可治疗的受伤队友
 
