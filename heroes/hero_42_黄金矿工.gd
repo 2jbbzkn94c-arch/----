@@ -6,3 +6,7 @@ class_name HeroGoldminer
 func on_turn_start() -> bool:
 	battle._place_gold(unit)
 	return true
+
+## 只有黄金矿工能拾取金矿（其他单位踩到不消费、金矿留在格上）
+func can_pickup_gold() -> bool:
+	return true

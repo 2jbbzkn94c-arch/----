@@ -1718,9 +1718,13 @@ func _run_side_skills(side: int) -> void:
 		_gold_tick_round = GameState.round_number
 		_tick_gold_age()
 	await _trigger_turn_start_all(side)   # 回合开始的角色技能（逐个触发+边框闪烁
-	# 共鸣者：在回合开始技**之后**结算——死灵法师等召唤物、烈焰加攻等在技能阶段入场/生效，
-	# 结算晚了会把它们算进"所有队友攻击之和"。
-	_sync_echo(side_faction(side))
+	# 阵营级回合开始同步：需要"整队取样再赋值"的英雄自行实现（如共鸣者）。
+	# 每方只派发一次（由第一个声明需要的英雄负责处理整队），Battle 不认具体英雄。
+	for u in units:
+		if u != null and is_instance_valid(u) and u.alive and u.faction == side_faction(side) \
+				and _hero(u).wants_side_turn_start_sync():
+			_hero(u).on_side_turn_start(side_faction(side))
+			break
 	# 让回合开始增益在牌面上可
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
@@ -1860,43 +1864,6 @@ func _trigger_turn_end_all(faction: int) -> void:
 
 # 共鸣者（hero_47）：己方回合开始时，"攻击力增加所有队友攻击力之和"直到我方回合结束。
 # 先统一取样所有共鸣者的总和再逐个赋值（若有多名共鸣者，避免后者把前者的新加成又算进去）。
-func _sync_echo(faction: int) -> void:
-	var list: Array = []
-	for u in units:
-		if u == null or not is_instance_valid(u) or not u.alive:
-			continue
-		if u.faction == faction and u.hero_id == "hero_47" and u.skill_allowed():
-			list.append(u)
-	if list.size() == 0:
-		return
-	var sums := {}
-	for u in list:
-		var total := 0
-		for v in units:
-			if v == null or not is_instance_valid(v) or not v.alive:
-				continue
-			if v == u or v.faction != faction:
-				continue
-			total += v.effective_atk()
-		sums[u] = total
-	for u in list:
-		u.echo_set = sums[u]
-		u.refresh_stats()
-
-# 单个共鸣者即时补算（替补登场/变身/任意入场）：立即按当前队友取和，插队也不耽误当回合。
-func _sync_one_echo(u: Unit) -> void:
-	if u == null or not is_instance_valid(u) or not u.alive or not u.skill_allowed():
-		return
-	var total := 0
-	for v in units:
-		if v == null or not is_instance_valid(v) or not v.alive:
-			continue
-		if v == u or v.faction != u.faction:
-			continue
-		total += v.effective_atk()
-	u.echo_set = total
-	u.refresh_stats()
-
 # 某一方结束自己回合时解除**该方**身上的临时状态（含[附体]：被附体者属于该阵营的绑定一并解除）
 # 注意：麻痹/冰冻等减益挂在"被打者(目标)"身上，故随"目标方回合结束"解除——即施加者的"对方回合结束"。
 func _clear_statuses(faction: int) -> void:
@@ -3114,8 +3081,9 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 	if not buff_items.has(u.cell):
 		return
 	var btype: String = buff_items[u.cell]
-	if btype == "gold" and u.hero_id != "hero_42":
-		return   # 金矿只有黄金矿工可拾取：其他单位踩到不消费、金矿保留在格上
+	if btype == "gold" and not _hero(u).can_pickup_gold():
+		# 金矿只有黄金矿工可拾取（规则由英雄脚本提供）：其他单位踩到不消费、金矿保留在格上
+		return
 	buff_items.erase(u.cell)
 	if btype == "gold":
 		gold_left.erase(u.cell)   # 被拾取后不再倒计时
@@ -4172,12 +4140,8 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 		u.branch_override = true
 	# 坠炮手：变身后也获得全场射程与无视阻挡（数值已在 spawn_attack_range 覆盖为 99）
 	u.los_ignore = (u.hero_id == "hero_45")
-	# 共鸣者：变身即补算（或变回非共鸣者则清空共鸣加成）
-	if u.hero_id == "hero_47":
-		_sync_one_echo(u)
-	else:
-		u.echo_set = -1
-		u.refresh_stats()
+	# 变身即生效的数值补算：由英雄脚本自己处理（共鸣者补算共鸣加成；其余默认清掉残留）
+	_hero(u).on_become_hero()
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能

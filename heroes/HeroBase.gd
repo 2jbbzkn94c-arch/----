@@ -63,6 +63,28 @@ func on_attack(_target: Unit) -> void:
 func play_attack_fx(_target: Unit) -> void:
 	pass
 
+## 能否拾取**金矿**（默认不能：金矿只有黄金矿工可拾，其他人踩到不消费、金矿留在格上）。
+func can_pickup_gold() -> bool:
+	return false
+
+## 是否需要在"每方回合开始"做一次**整队取样**类结算（默认否）。
+## 返回 true 的英雄会在每方回合开始被调用一次 on_side_turn_start（每方只调一次，见 Battle._begin_side）。
+func wants_side_turn_start_sync() -> bool:
+	return false
+
+## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
+## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。
+func on_side_turn_start(_faction: int) -> void:
+	pass
+
+## 变身为该英雄后调用（古灵精怪变形）：用于"变身即生效"的数值补算。
+## 默认行为：清掉变身前的临时加成残留（共鸣加成等不随变身保留）。
+func on_become_hero() -> void:
+	if unit == null or not is_instance_valid(unit):
+		return
+	unit.echo_set = -1
+	unit.refresh_stats()
+
 ## 攻击命中且目标被打死后触发（死于本次攻击）。
 func on_attack_dead(_target: Unit) -> void:
 	pass
