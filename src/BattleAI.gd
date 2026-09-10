@@ -100,6 +100,8 @@ var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
 var log_decisions := true   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
 
 const MAX_MOVE_OPTIONS := 16
+# 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
+const GOLD_LOW_ATK := 4
 
 func _init(g: HexGrid) -> void:
 	grid = g
@@ -325,6 +327,10 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 				var bv := _buff_value(sim, u, String(sim.buff_cells[c]))
 				if bv > 0.0:
 					dkey -= bv * 2.0
+			# 黄金矿工（攻击力 < GOLD_LOW_ATK）：自身输出薄弱、吃矿成长收益更高，
+			# 把可达矿格的优先度拉满——压过任何高价值增益道具格，保证"能吃到矿就一定先去吃"。
+			if u.hero_id == "hero_42" and u.eatk < GOLD_LOW_ATK and sim.gold_cells.has(c):
+				dkey = -1000.0
 			ranked.append({ "cell": c, "d": d, "dkey": dkey, "threat": threat })
 		# 主排序：dkey（近战=距离、远程=射程边缘优先）；同键威胁小的格优先
 		ranked.sort_custom(func(a, b):
@@ -1052,13 +1058,15 @@ func _evaluate(sim: Sim) -> float:
 	# 黄金矿工吃矿：金矿每枚=攻击+1、HP上限+HP+3(永久成长),是滚雪球核心。
 	# 只要敌方矿工存活且场上还有金矿,就给一个"期望吃矿"的长线价值,引导它优先赶去拾取
 	# (而不是在有攻击目标时弃矿去打人);已站上金矿格则给更高的即时加成。
+	# 攻击力 < GOLD_LOW_ATK 的矿工：自身输出薄弱，吃矿是主要成长手段，权重再提高一档。
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
 		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.hero_id == "hero_42":
+			var low_atk: bool = u.eatk < GOLD_LOW_ATK
 			if sim.gold_cells.has(u.cell):
-				score += 20.0   # 正站在金矿格:本回合结算即成 +4.6 分/枚以上,拉满优先
+				score += 30.0 if low_atk else 20.0   # 正站在金矿格:本回合结算即成 +4.6 分/枚以上,拉满优先
 			elif sim.gold_cells.size() > 0:
-				score += 8.0    # 场上还有金矿且矿工待命:吃矿是持续成长收益,避免被攻击目标挤掉
+				score += 14.0 if low_atk else 8.0    # 场上还有金矿且矿工待命:吃矿是持续成长收益,避免被攻击目标挤掉
 	# 走位候选(见 _actions_for):矿工把可达金矿格排最前(d=-1),这里额外把"能走到金矿"纳入评分,
 	# 让"绕路去吃矿"也值得,而不只盯着当前占格。
 	# 搏命攻击激励：敌方单位本回合攻击过（即使之后被反死也保留 attacked 标记），且其所在格逃不掉。
