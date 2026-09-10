@@ -1285,20 +1285,23 @@ func _build() -> void:
 	_enemy_deaths.text = "☠☠☠ 敌方"
 	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_enemy_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_enemy_deaths.size = Vector2(vsize.x - 12 - 58, 32)   # 右侧留出暂停键的位置
+	_enemy_deaths.size = Vector2(vsize.x - 12, 32)
 	_enemy_deaths.position = Vector2(0, 11)
 	root.add_child(_enemy_deaths)
 	_refresh_deaths()
 
-	# 右上角暂停键（仅单机对局显示；联机不可暂停，见 _refresh_controls）
+	# 右上角暂停键（仅单机对局显示；联机不可暂停）：
+	# 放在**状态栏下方**（y=60，状态栏高 54），不挤占顶部状态栏。
 	_pause_btn = Button.new()
 	_pause_btn.text = "暂停"
 	_pause_btn.add_theme_font_size_override("font_size", 15)
-	_pause_btn.custom_minimum_size = Vector2(50, 32)
-	_pause_btn.size = Vector2(50, 32)
-	_pause_btn.position = Vector2(vsize.x - 56, 11)
+	_pause_btn.custom_minimum_size = Vector2(50, 30)
 	_pause_btn.pressed.connect(_on_pause_pressed)
 	root.add_child(_pause_btn)
+	# 按实际尺寸贴右边缘定位（主题内边距会让按钮比 custom_minimum_size 略大，
+	# 用设定值定位会溢出屏幕右缘）
+	_pause_btn.reset_size()
+	_pause_btn.position = Vector2(vsize.x - _pause_btn.size.x - 6.0, 60.0)
 
 	# 按钮：结束回合 / 重开 / 返回选人（用明确的绝对坐标放置，避免锚点+坐标混搭导致错位）
 	var btn_row := HBoxContainer.new()
