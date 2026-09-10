@@ -139,64 +139,6 @@ class SwordCrescent:
 				return false
 		return Geometry2D.triangulate_polygon(poly).size() > 0
 
-# 血锁的钩爪：钩头连着一串链环，从血锁**飞出去**咬住目标，再收链把目标拖到面前。
-# head_dist 由 _spawn_hook 的 tween 驱动：0=未出钩、=目标距离=已咬住、收到近身=拉回完成。
-# 每帧 queue_redraw 重绘，所以链子长度与钩头位置始终跟手。
-class BloodHook:
-	extends Node2D
-	var k := 1.0            # 随棋盘缩放的系数（基准：棋子半径 54）
-	var hook_scale := 0.9   # 钩体相对链环的放大倍数（1.0=与链环同尺度；越小钩子越小）
-	var head_dist := 0.0    # 钩根离血锁的距离（链子画到这里，钩体由此向前伸出）
-	var color := Color(0.95, 0.16, 0.28)        # 链环主色（鲜红）
-	var metal := Color(0.894, 0.918, 0.965)     # 钩体金属亮面
-	var outline := Color(0.094, 0.039, 0.055)   # 钩体深色描边（任何底色上都看得清轮廓）
-	var blood := Color(0.784, 0.118, 0.227)     # 钩根血环（与链子衔接）
-
-	func _process(_dt: float) -> void:
-		queue_redraw()
-
-	func _draw() -> void:
-		var seg := 7.5 * k
-		var s := maxf(head_dist, 0.0)
-		# 链环：从血锁一路排到钩根（相邻环上下交错，像锁链）
-		var n := int(s / seg)
-		for i in n:
-			var x := i * seg + seg * 0.5
-			var oy := (-2.0 if (i % 2 == 0) else 2.0) * k
-			draw_arc(Vector2(x, oy), 4.4 * k, 0.0, TAU, 18, color, 2.4 * k, true)
-			draw_circle(Vector2(x, oy), 1.6 * k, Color(0.5, 0.05, 0.12))
-		if s <= 1.0:
-			return   # 还没飞出：只画链子起始段
-		# 钩体：按 hook_scale 缩放（相对链环的大小；调小=钩子更小）
-		var hk := k * hook_scale
-		var b := Vector2(s, 0.0)                                   # 钩根位置
-		var c := b + Vector2(18.0 * hk, 11.0 * hk)                 # 钩身圆心
-		var rad := 11.0 * hk
-		# 钩身只卷 210°（−90°→120°）：左侧留出**钩口**，是"钩子"而不是一个圆圈
-		var pts := PackedVector2Array()
-		var steps := 22
-		for i in steps + 1:
-			var a := deg_to_rad(lerpf(-90.0, 120.0, float(i) / float(steps)))
-			pts.append(c + Vector2(cos(a), sin(a)) * rad)
-		var tip_pt := pts[pts.size() - 1]
-		# 两遍描线：先深色描边，再金属亮面 —— 保证压在棋子/棋盘上轮廓依旧清楚
-		for pass_i in 2:
-			var oc: Color = outline if pass_i == 0 else metal
-			var w_shank := (5.6 if pass_i == 0 else 3.6) * hk
-			var w_hook := (5.0 if pass_i == 0 else 3.0) * hk
-			draw_line(b, b + Vector2(18.0 * hk, 0.0), oc, w_shank, true)                      # 钩柄
-			draw_polyline(pts, oc, w_hook, true)                                             # 钩身（开口卷钩）
-			draw_line(tip_pt, b + Vector2(12.0 * hk, 13.0 * hk), oc, w_hook, true)            # 钩尖倒刺（朝钩口内）
-		# 钩根血环（与链子衔接处）+ 钩尖亮点
-		var r_base := 3.4 * hk
-		draw_circle(b, r_base, blood)
-		draw_arc(b, r_base, 0.0, TAU, 20, outline, 1.8 * hk, true)
-		draw_circle(tip_pt, 1.9 * hk, Color(1, 1, 1))
-
-# 钩爪"飞出→咬住"的时长（与 _pull_to 里目标被拖回的延迟保持一致）
-const HOOK_FLY_TIME := 0.16
-# 血锁钩体相对链环的放大倍数：1.0 = 与链环同尺度；越小钩子越小（想改大小只动这一个数）
-const HOOK_BODY_SCALE := 0.9
 
 var grid: HexGrid
 var board_view: BoardView
@@ -4120,10 +4062,12 @@ func _pull_obstacle(oc: Vector2i, from_cell: Vector2i) -> bool:
 		board_view.queue_redraw()
 	return true
 
-func _pull_to(u: Unit, target: Unit) -> void:
-	# 目标已贴距离1)：已在血锁面前，无需再拉动（避免把已贴身的敌人再位移一格）
+func _pull_to(u: Unit, target: Unit) -> bool:
+	# 纯规则：把 target 拉到 u 面前一格（位移 + 炸弹/道具副作用），**不含任何演出**。
+	# 血锁的钩爪演出由英雄脚本 heroes/hero_41_血锁.gd 负责播放。
+	# 返回是否真的拉动了（已贴身 / 无空位可拉 时为 false）。
 	if grid.distance(u.cell, target.cell) <= 1:
-		return
+		return false   # 已在血锁面前，无需再拉动（避免把已贴身的敌人再位移一格）
 	# 血>目标"连线方向，把目标拉到血锁面前（紧贴血锁、朝目标方向的那一格）
 	var best: Vector2i = Vector2i(-99, -99)
 	var best_d := 99999
@@ -4135,19 +4079,14 @@ func _pull_to(u: Unit, target: Unit) -> void:
 			best_d = d
 			best = n
 	if best.x == -99:
-		return
-	_spawn_hook(u, target)   # 钩爪飞出咬住目标 → 收链把人拖到面前
+		return false
 	occupancy.erase(target.cell)
 	target.cell = best
 	occupancy[best] = target
 	_trigger_bomb(target)   # 被拉近到炸弹格：炸弹人以外即引爆
 	_pickup_buff_at_cell(target)   # 被拉近到增益/金矿格：同样拾取
-	# 视觉：等钩子飞到并咬住（HOOK_FLY_TIME）后再把人拽回来，与钩爪收链的节奏对齐
-	var t := create_tween()
-	t.tween_interval(HOOK_FLY_TIME)
-	t.tween_property(target, "position", board_view.cell_world_center(best), 0.18) \
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	log_message.emit("血锁把 %s 拉到面前（%s）。" % [target.display_name, str(best)])
+	return true
 
 func _pierce_back(u: Unit, target: Unit) -> void:
 	_pierce_line(u, target.cell)
@@ -4207,39 +4146,6 @@ func _spawn_scythe(u: Unit, target: Unit) -> void:
 	t.parallel().tween_property(scy, "scale", Vector2(1.15, 0.7), dur)   # 收割时刀刃略微压
 	t.parallel().tween_property(scy, "modulate:a", 0.0, dur)
 	t.tween_callback(scy.queue_free)
-
-# 血锁钩爪演出：钩头连链从血锁**飞出去** → 咬住目标（短暂停顿）→ 收链把目标拖回面前。
-# 收回段与 _pull_to 里目标位置的 tween 同步，看起来就是"钩子钩住人往回拽"。
-func _spawn_hook(u: Unit, target: Unit) -> void:
-	var start := board_view.cell_world_center(u.cell)
-	var tpos := board_view.cell_world_center(target.cell)
-	var dist := (tpos - start).length()
-	if dist < 1.0:
-		return
-	var hook := BloodHook.new()
-	hook.k = maxf(hex_size / 54.0, 0.5)
-	hook.hook_scale = HOOK_BODY_SCALE
-	hook.position = start
-	hook.rotation = (tpos - start).angle()   # 朝目标方向出钩
-	hook.head_dist = 0.0
-	hook.z_index = 40                         # 压在棋子之上
-	add_child(hook)
-	var hk := hook.k * hook.hook_scale
-	# 咬住距离：钩身圆心在钩根前方 18*hk 处，所以钩根停在"目标前方一段"，
-	# 让钩身正好套在目标身上（否则整只钩子会飞过目标）。
-	var bite := maxf(dist - 18.0 * hk, 6.0)
-	var back := maxf(hex_size * 0.8, 14.0)    # 收回时钩根停在血锁身前
-	var t := create_tween()
-	# ① 抛出：钩根加速飞向目标
-	t.tween_method(func(v: float): hook.head_dist = v, 0.0, bite, 0.12) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	# ② 咬住：短暂停顿（让玩家看清钩子挂上了）
-	t.tween_interval(HOOK_FLY_TIME - 0.12)
-	# ③ 收链：钩根拖回，同时淡出
-	t.tween_method(func(v: float): hook.head_dist = v, bite, back, 0.18) \
-		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(hook, "modulate:a", 0.0, 0.18)
-	t.tween_callback(hook.queue_free)
 
 func _random_step(v: Unit) -> void:
 	var nbrs := grid.neighbors(v.cell)
