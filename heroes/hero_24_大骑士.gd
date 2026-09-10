@@ -10,29 +10,22 @@ const _DIRS: Array[Vector2i] = [
 ]
 ## 冲锋的单次最大格数（不封顶，但设安全上限避免死循环）
 const _MAX_CHARGE := 60
-## 出生时对移动力的冲锋近似加成（被沉默时这部分一并失效）
+## 出生时对移动力的冲锋近似加成（仅用于卡面/AI 估值，实际移动由直线冲锋决定）
 const _CHARGE_MOVE_BONUS := 6
 
 func on_spawn() -> void:
 	# 冲锋任意距离（近似大幅提升移动力）；冲锋加成/直线在移动逻辑中结算
 	unit.move_range += _CHARGE_MOVE_BONUS
 
-## 被沉默/眩晕时技能失效：不再冲锋，退回普通移动（射程数值见 suppressed_move_range）
+## 冲锋是**移动方式**，不是可被沉默的技能：
+## 沉默只让"攻击力上升"失效（见 on_charge_settled），直线冲锋照旧可以冲任意距离。
+## 只有眩晕/荆棘这类"根本不能移动"的状态才拦住冲锋。
 func uses_charge_movement() -> bool:
 	if unit == null or not is_instance_valid(unit):
 		return false
-	return unit.skill_allowed()
+	return unit.can_move()
 
-## 沉默/眩晕下"冲锋"被动失效 -> 移动力退回本体的普通移动力（扣掉冲锋近似加成）
-func suppressed_move_range() -> int:
-	if unit == null or not is_instance_valid(unit) or unit.skill_allowed():
-		return -1
-	var def := DataRegistry.get_hero(unit.hero_id)
-	if def == null:
-		return max(unit.move_range - _CHARGE_MOVE_BONUS, 0)
-	return max(DataRegistry.spawn_move(def) - _CHARGE_MOVE_BONUS, 0)
-
-## 卡面"移动"按 ∞ 展示（与选卡界面一致；沉默失效时退回普通数值）
+## 卡面"移动"一直按 ∞ 展示（冲锋不随沉默失效）
 func shows_infinite_move() -> bool:
 	return uses_charge_movement()
 
@@ -67,10 +60,11 @@ func charge_path(target: Vector2i) -> Array:
 func charge_step_cap() -> int:
 	return _MAX_CHARGE
 
-## 冲锋落定：按"实际冲到的格数"写回攻击力上升量（被阻挡剪裁时用实际格数，避免虚高）
+## 冲锋落定：按"实际冲到的格数"写回攻击力上升量（被阻挡剪裁时用实际格数，避免虚高）。
+## 被沉默/眩晕时"攻击力上升"这部分技能失效 -> 加成记 0（移动照常，回血类的移动距离照常记）。
 func on_charge_settled(actual_steps: int) -> void:
 	unit.last_move_dist = actual_steps
-	unit.ramble_bonus = actual_steps
+	unit.ramble_bonus = actual_steps if unit.skill_allowed() else 0
 	unit.refresh_stats()
 
 ## 从当前格沿某轴向直线逐格直到 to 的直线格；to 不在任何直线上时退化为 [to]

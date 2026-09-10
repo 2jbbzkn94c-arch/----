@@ -441,8 +441,8 @@ func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
 
 func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴向直线冲锋（与玩家一致，避免规划与执行轨迹不符）。
 	# 途中被单位/墓碑/**障碍物**阻挡即停：障碍同样挡冲锋，防止 AI 计划穿墙。
-	# 被沉默/眩晕时冲锋被动失效 -> 退回普通移动（emove 已随之退化）
-	if u.hero_id == "hero_24" and not u.silenced and not u.stunned:
+	# 注：冲锋是移动方式，沉默不影响；只有"根本不能移动"（眩晕/荆棘）时 emove 已为 0
+	if u.hero_id == "hero_24" and not u.stunned:
 		var out := {}
 		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
 		for d in dirs:
@@ -631,7 +631,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					u.hp += 3
 			# 大骑士：冲锋移动距离加成攻击力（与真实规则一致，冲越远攻越高；被沉默则无加成）
 			if u.hero_id == "hero_24" and not u.silenced and not u.stunned:
-				u.eatk += grid.distance(prev_cell, mc)
+				u.eatk += grid.distance(prev_cell, mc)   # 沉默只吃不到这个加成，冲锋照常
 			# 黄金矿工踏上金矿格：拾取（与真实规则一致：攻击+1(永久)、HP上限+3、回复3血）
 			if u.hero_id == "hero_42" and sim.gold_cells.has(mc):
 				sim.gold_cells.erase(mc)
