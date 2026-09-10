@@ -10,13 +10,31 @@ const _DIRS: Array[Vector2i] = [
 ]
 ## 冲锋的单次最大格数（不封顶，但设安全上限避免死循环）
 const _MAX_CHARGE := 60
+## 出生时对移动力的冲锋近似加成（被沉默时这部分一并失效）
+const _CHARGE_MOVE_BONUS := 6
 
 func on_spawn() -> void:
 	# 冲锋任意距离（近似大幅提升移动力）；冲锋加成/直线在移动逻辑中结算
-	unit.move_range += 6
+	unit.move_range += _CHARGE_MOVE_BONUS
 
+## 被沉默/眩晕时技能失效：不再冲锋，退回普通移动（射程数值见 suppressed_move_range）
 func uses_charge_movement() -> bool:
-	return true
+	if unit == null or not is_instance_valid(unit):
+		return false
+	return unit.skill_allowed()
+
+## 沉默/眩晕下"冲锋"被动失效 -> 移动力退回本体的普通移动力（扣掉冲锋近似加成）
+func suppressed_move_range() -> int:
+	if unit == null or not is_instance_valid(unit) or unit.skill_allowed():
+		return -1
+	var def := DataRegistry.get_hero(unit.hero_id)
+	if def == null:
+		return max(unit.move_range - _CHARGE_MOVE_BONUS, 0)
+	return max(DataRegistry.spawn_move(def) - _CHARGE_MOVE_BONUS, 0)
+
+## 卡面"移动"按 ∞ 展示（与选卡界面一致；沉默失效时退回普通数值）
+func shows_infinite_move() -> bool:
+	return uses_charge_movement()
 
 ## 可达格：沿 6 个轴向直线逐格推进，撞到单位/障碍/墓碑即停（移动力不封顶）
 func charge_reachable_cells() -> Dictionary:

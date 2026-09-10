@@ -405,7 +405,13 @@ func effective_atk() -> int:
 func effective_move() -> int:
 	if has_status("stun") or has_status("thorn"):
 		return 0
-	var m := move_range + move_buff + move_use_buff
+	var base := move_range
+	# 被动失效时的退化移动力（大骑士被沉默 -> 冲锋失效，退回普通移动力）：由英雄脚本声明
+	if behavior != null:
+		var fb := behavior.suppressed_move_range()
+		if fb >= 0:
+			base = fb
+	var m := base + move_buff + move_use_buff
 	if has_status("freeze"):
 		m -= 1
 	return max(m, 0)

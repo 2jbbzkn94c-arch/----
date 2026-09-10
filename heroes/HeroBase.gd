@@ -113,6 +113,19 @@ func skips_lunge_anim() -> bool:
 func suppressed_attack_range() -> int:
 	return -1
 
+## 自身被动失效时（如大骑士被沉默，冲锋失效）退化后的**基础移动力**；-1 = 无此机制（默认）。
+## 注意返回的是"基础值"，移动 buff/冰冻等仍在 Unit.effective_move() 里照常叠加。
+func suppressed_move_range() -> int:
+	return -1
+
+## 面板/卡面是否按"移动 ∞"展示（大骑士冲锋生效时）。默认否。
+func shows_infinite_move() -> bool:
+	return false
+
+## 面板/卡面是否按"射程 ∞"展示（坠炮手全场狙击生效时）。默认否。
+func shows_infinite_range() -> bool:
+	return false
+
 ## 是否使用"直线冲锋"式移动（大骑士）：可达格 / 路径 / 步数上限全部交给本脚本决定。默认否。
 func uses_charge_movement() -> bool:
 	return false

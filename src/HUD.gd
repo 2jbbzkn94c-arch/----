@@ -246,13 +246,13 @@ func show_unit_card(u: Unit) -> void:
 	# 显示区②：实战属性（HP 现值/上限 + 有效数值 + 状态）
 	v.add_child(_make_zone_sep())
 	var stats := Label.new()
-	# 大骑士移动=直线冲锋任意距离（与选卡界面一致按 ∞ 展示，不显示误导性的数值）
+	# 大骑士移动=直线冲锋任意距离、坠炮手射程=全场：按 ∞ 展示（由英雄脚本声明是否生效，
+	# 被沉默失效时自动退回普通数值），不显示误导性的数值
 	var move_txt := "%d" % u.effective_move()
-	if u.hero_id == "hero_24":
+	if battle != null and is_instance_valid(battle) and battle._hero(u).shows_infinite_move():
 		move_txt = "∞"
-	# 坠炮手射程=全场，按 ∞ 展示
 	var range_txt := "%d" % u.attack_range
-	if u.hero_id == "hero_45":
+	if battle != null and is_instance_valid(battle) and battle._hero(u).shows_infinite_range():
 		range_txt = "∞"
 	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt]
 	stats.add_theme_font_size_override("font_size", 17)

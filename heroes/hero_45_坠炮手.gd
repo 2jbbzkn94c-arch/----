@@ -12,3 +12,9 @@ func refresh_identity() -> void:
 ## 被沉默/眩晕时全场狙击失效 -> 退化为普通远程（射程 2）
 func suppressed_attack_range() -> int:
 	return 2
+
+## 卡面"射程"按 ∞ 展示；被沉默失效时退回普通射程
+func shows_infinite_range() -> bool:
+	if unit == null or not is_instance_valid(unit):
+		return false
+	return unit.mortar_active()
