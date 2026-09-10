@@ -72,6 +72,17 @@ func can_pickup_gold() -> bool:
 func wants_side_turn_start_sync() -> bool:
 	return false
 
+## 是否会在**伤害结算前**替队友分担伤害（默认否）。返回 true 的英雄才会被 Battle 依次询问。
+## 用于塔盾这类"替相邻队友扛伤"的机制，避免 Battle 认识具体英雄。
+func is_damage_absorber() -> bool:
+	return false
+
+## 替队友分担伤害（在队友的伤害结算**之前**调用，dmg 为其将受的伤害）。
+## 返回分担后的伤害（未分担则原样返回 dmg）。默认不分担。
+func absorb_ally_damage(_target: Unit, dmg: int) -> int:
+	return dmg
+
+
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。
 func on_side_turn_start(_faction: int) -> void:

@@ -3492,25 +3492,21 @@ func _on_unit_damaged(u: Unit, amount: int) -> void:
 # 若目标相邻有同阵营塔hero_11)且本次伤1，则塔盾代替承受1点：
 # 目标实际伤害，塔盾扣1血（直接扣，避免递归再触发塔盾）
 # 返回目标应受到的实际伤害。塔盾未生效时返回原伤害
+# 伤害结算**之前**的"队友替扛"询问：逐个问会替队友分担伤害的英雄（塔盾等，规则在英雄脚本里）。
+# 返回目标实际应受的伤害；无人分担时原样返回。
 func _bulwark_absorb(target: Unit, dmg: int) -> int:
 	if dmg <= 1:
 		return dmg
 	if target == null or not target.alive:
 		return dmg
 	for s in units:
-		if s.alive and s != target and s.hero_id == "hero_11" and s.faction == target.faction \
-				and grid.distance(s.cell, target.cell) == 1 and s.skill_allowed():
-			# 塔盾代替承受1点（直接扣血，不触发塔盾递归/伤害后钩子）
-			s.hp = max(s.hp - 1, 0)
-			s.hp_changed.emit(s)
-			s._update_hp_label()
-			if s.hp <= 0:
-				s.die()
-			elif s.is_inside_tree():
-				# 演出：塔盾亮起蓝色守护特效（扩散环+粒子+飘字），提示这次伤害被格挡
-				s.burst_fx(DataRegistry.hero_fx("hero_11").color, "格挡")
-			log_message.emit("%s 的塔盾代替承受 1 点伤害。" % s.display_name)
-			return dmg - 1
+		if s == null or not is_instance_valid(s) or not s.alive:
+			continue
+		if not _hero(s).is_damage_absorber():
+			continue
+		var out := _hero(s).absorb_ally_damage(target, dmg)
+		if out != dmg:
+			return out
 	return dmg
 
 # ============ 角色专属技能效果系============
