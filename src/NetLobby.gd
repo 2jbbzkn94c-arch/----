@@ -597,12 +597,12 @@ func _enter_arena_mode() -> void:
 		_status.text = "竞技场模式：请点击「准备完毕」"
 	_refresh_ui()
 
-# 切回普通模式：重置竞技场准备状态；队伍改为进战斗后选，这里只提示可开始
+# 切回普通模式：重置竞技场准备状态；队伍在"进入对战后"选择，这里可查看/编辑卡组
 func _enter_normal_mode() -> void:
 	_my_ready = false
 	_peer_ready = false
 	if NetBus.is_online:
-		_status.text = "普通模式：等待主机开始（进入对战后选择队伍）"
+		_status.text = "普通模式：可在此查看/编辑卡组，开始对战后选择出战队伍"
 	else:
 		_status.text = "普通模式：开房或加入后选择卡组"
 	_refresh_ui()
@@ -803,9 +803,11 @@ func _refresh_ui() -> void:
 		var mb: Button = b
 		# 仅主机能选择模式；客户端按钮置灰并跟随主机
 		mb.disabled = not my_is_host
-	# 队伍改为"进战斗后选卡组"（与单机一致）：普通模式不再需要在此选卡组槽/确认，
-	# 仅保留「编辑卡组」按钮用于编辑卡组内容。
-	var show_slots := false
+	# 卡组槽区域仅在"已开房/加入（联网）且当前为普通模式"时显示：
+	# 未连接时默认隐藏，开房/加入成功、或房主已开房后点「普通模式」即显示。
+	# 注：队伍最终在"进入对战后"选择，这里保留卡组槽/队伍预览与「编辑卡组」，
+	# 方便对局前后查看与编辑自己的卡组（「确认卡组」不再是开战前置条件）。
+	var show_slots := _mode == "normal" and NetBus.is_online
 	if _slot_head != null:
 		_slot_head.visible = show_slots
 	for b in _slot_btn:
@@ -815,8 +817,8 @@ func _refresh_ui() -> void:
 	if _preview_host != null:
 		_preview_host.visible = show_slots
 	if _btn_edit != null:
-		_btn_edit.visible = _mode == "normal" and NetBus.is_online
-		_btn_edit.disabled = false   # 不再有"已确认"，编辑随时可用
+		_btn_edit.visible = show_slots
+		_btn_edit.disabled = _my_confirmed   # 已确认的选择先「取消确认」再编辑
 	_refresh_slot_preview()
 	if _btn_confirm != null:
 		_btn_confirm.visible = show_slots
