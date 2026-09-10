@@ -554,7 +554,7 @@ func _on_hero_hovered(hid: String) -> void:
 # "编辑卡组"：叠层打开普通模式选人页（网络连接不断、大厅状态保留）。
 # 编辑目标 = 当前已选槽（未选则沿用上次槽位），Menu 会自动载入并自动保存。
 func _open_deck_editor() -> void:
-	if _mode != "normal" or _my_confirmed:
+	if _mode != "normal" or _my_ready:   # 已准备 = 锁定队伍，需先取消准备
 		return
 	if _my_slot > 0:
 		GameState.last_deck_slot = _my_slot
@@ -815,7 +815,7 @@ func _refresh_ui() -> void:
 		_preview_host.visible = show_slots
 	if _btn_edit != null:
 		_btn_edit.visible = show_slots
-		_btn_edit.disabled = _my_confirmed   # 已确认的选择先「取消确认」再编辑
+		_btn_edit.disabled = _my_ready   # 已点「准备」= 锁定队伍：需先「取消准备」才能编辑
 	_refresh_slot_preview()
 	if _btn_confirm != null:
 		_btn_confirm.visible = show_slots
@@ -823,14 +823,16 @@ func _refresh_ui() -> void:
 		var s: int = SLOTS[i]
 		var b: Button = _slot_btn[i]
 		b.text = "槽%d" % s
-		b.disabled = not (_mode == "normal") or _my_confirmed   # 已确认后不可再改
+		b.disabled = not (_mode == "normal") or _my_ready   # 已点「准备」后锁定槽位（需先取消准备）
 		if _my_slot == s and _my_confirmed:
 			b.text = "槽%d ✓" % s
 		elif _my_slot == s:
 			b.text = "槽%d\n▲" % s   # 待确认：向上的三角形位于槽号下方
 	# 卡组状态文案（阵容以预览小卡展示，这里不重复名单）
 	if _deck_info != null:
-		if _mode == "normal" and NetBus.is_online and _my_slot > 0:
+		if _my_ready and NetBus.is_online and not NetBus.is_host:
+			_deck_info.text = "已准备 —— 队伍已锁定，取消准备后可编辑卡组"
+		elif _mode == "normal" and NetBus.is_online and _my_slot > 0:
 			var deck := DeckStore.load_deck(_my_slot)
 			if deck.size() == 0:
 				_deck_info.text = "卡组（槽 %d）：空 —— 点「编辑卡组」选够 %d 名英雄。" % [_my_slot, MIN_PICK]
