@@ -515,7 +515,7 @@ func _show_arena_round() -> void:
 	if total_done >= ARENA_PICKS_PER_SIDE * 2:
 		# 8 轮选完：_arena_picked 累积了玩家拿到的全部 8 个（玩家4+敌轮归你4），
 		# _arena_enemy 累积了敌方拿到的全部 8 个（玩家轮归+敌方自）
-		# 保持 arena_mode=true：竞技场模式下"再来一局"会重新选人，直到玩家返回选人界面退出
+		# 保持 arena_mode=true：竞技场模式下"重开"沿用本局已选好的双方卡组（同队伍重开，不再重新选人）
 		# 双方都把<替补> 标签的英雄排到卡组末尾（进替补席），保证3 = 首发英雄
 		GameState.set_decks(_order_deck(_arena_picked), _order_deck(_arena_enemy))
 		log_message.emit("竞技场选人完成：我方 %d 名，敌方 %d 名。" % [GameState.player_deck.size(), GameState.enemy_deck.size()])
@@ -926,9 +926,9 @@ func reset_match() -> void:
 	_waiting_side_skills_round = -1   # 重开清除等待技能广播标记
 	_opening_items_spawned = false   # 重开新局开局道具重新刷一次
 	selected = null
-	# 重置 GameState（按当前模式；重置后重新部署/竞技场选人
+	# 重置 GameState（按当前模式；重置后进入部署）
 	if GameState.arena_mode:
-		GameState.arena_mode = true   # 竞技场模式：重开后保持竞技场，重新随机选人（直到玩家返回选人界面退出）
+		GameState.arena_mode = true   # 竞技场模式：重开后保持竞技场（但同队伍重开，不再重新选人）
 	GameState.round_number = 1
 	GameState.active_side = GameState.SIDE_PLAYER
 	GameState.match_over = false
@@ -946,15 +946,9 @@ func reset_match() -> void:
 		# 自由部署：直接放置并开
 		_place_units()
 		_start_match()
-	elif GameState.arena_mode and not GameState.is_online:
-		# 单机竞技场重开：重新随机生成障碍并回到 2 1 选人（与 _ready 竞技场分支一致）
-		# _begin_arena_draft 内部会清空卡组并刷新 HUD（旧队伍面板随之收起）
-		_place_obstacles()
-		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
-		arena_pick_time_left = -1.0
-		_begin_arena_draft()
 	else:
-		# 普通模式重开：重新随机生成障碍再进入部署（与 _ready 普通分支一致：先放障碍再部署）
+		# 重开：重新随机生成障碍/道具，再进入部署。
+		# 竞技场与普通模式一致：沿用当前已确定的双方卡组（arena 不再重新 2 选 1），实现"同队伍重开"。
 		_place_obstacles()
 		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
 		_begin_deployment()
