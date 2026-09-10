@@ -15,7 +15,14 @@ var _result_overlay: Control = null
 var _netdown_overlay: CanvasLayer = null   # 联机对局断线提示层
 var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）——替补阶段复用为"选人面板"
 var _arena_panel: PanelContainer = null   # 竞技场选人面板（2选1）
-var _deck_pick_overlay: Control = null     # 普通模式"选择卡组"面板（进战斗后弹，三选一已存卡组/随机英雄）
+var _deck_pick_overlay: Control = null     # 普通模式"选择卡组"面板（进战斗后弹：卡组1/2/3 切换 + 随机英雄）
+var _deck_pick_decks: Array = []           # 面板持有的 3 个已存卡组（下标0=卡组1）
+var _deck_pick_slot := 1                   # 当前查看的卡组槽（1..3）
+var _deck_pick_tabs: Dictionary = {}       # slot -> Button（卡组1/2/3 切换钮）
+var _deck_pick_preview: Control = null     # 当前卡组的队伍预览宿主
+var _deck_pick_info: Label = null          # 当前卡组信息行（人数/不足提示）
+var _deck_pick_start_btn: Button = null     # 用当前卡组出战
+var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重算尺寸定位）
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
 var _player_deaths: Label
 var _enemy_deaths: Label
@@ -970,16 +977,17 @@ func _close_arena_panel() -> void:
 	_arena_touch_id = ""
 	_hide_arena_view()
 
-# ---- 普通模式：进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）----
-# 只展示已保存的卡组（场内不可编辑英雄），卡牌可悬停查看属性；
-# 卡组不足 5 名时点它弹提示、不进入对战。
+# ---- 普通模式：进入战斗后弹"选择卡组"面板 ----
+# 样式与普通模式编辑页一致：卡组1/2/3 切换钮（点哪个显示哪个队伍）+ 右侧"随机英雄"。
+# 只展示已保存的卡组（场内不可编辑英雄），卡牌可悬停查看属性；不足 5 名时点出战弹提示。
 func _show_deck_pick_panel(decks: Array) -> void:
 	_refresh_round()   # 顶部标签显示"选择卡组"
 	_close_deck_pick_panel()
 	_close_arena_panel()
 	_close_deploy_panel()
 	_close_team_panel()
-	var vsize := get_viewport().get_visible_rect().size
+	_deck_pick_decks = decks
+	_deck_pick_slot = 1
 	# 全屏遮罩拦截棋盘输入（面板打开期间不允许操作棋盘）
 	var overlay := Control.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -998,6 +1006,7 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	sb.content_margin_bottom = 14.0
 	panel.add_theme_stylebox_override("panel", sb)
 	overlay.add_child(panel)
+	_deck_pick_panel = panel
 	var wrapbox := VBoxContainer.new()
 	wrapbox.add_theme_constant_override("separation", 10)
 	panel.add_child(wrapbox)
@@ -1007,63 +1016,118 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrapbox.add_child(title)
-	var hint := Label.new()
-	hint.text = "从 3 个已保存的卡组中选一个；鼠标悬停卡牌可查看英雄属性。"
-	hint.add_theme_font_size_override("font_size", 13)
-	hint.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	wrapbox.add_child(hint)
-	# 3 个卡组：标题行 + 队伍小卡一行（悬停看属性）+ "用此卡组出战"按钮
-	for i in decks.size():
-		var ids: Array = decks[i]
-		var slot := i + 1
-		var box := VBoxContainer.new()
-		box.add_theme_constant_override("separation", 2)
-		wrapbox.add_child(box)
-		var lb := Label.new()
-		lb.text = "卡组 %d（%d 名）" % [slot, ids.size()]
-		lb.add_theme_font_size_override("font_size", 15)
-		lb.add_theme_color_override("font_color", Color(0.6, 0.85, 1.0) if ids.size() >= 5 else Color(1.0, 0.6, 0.55))
-		box.add_child(lb)
-		if ids.size() > 0:
-			var hover_cb := func(hid: String):
-				if hid == "":
-					_set_score_tooltip_visible(false)
-				else:
-					_set_score_tooltip_hero(hid)
-			var click_cb := func(_hid: String):
-				pass
-			var pool := _make_hex_pool(ids, hover_cb, click_cb, false, "", true, 30.0)
-			box.add_child(pool)
-		else:
-			var empty_lb := Label.new()
-			empty_lb.text = "（空卡组）"
-			empty_lb.add_theme_font_size_override("font_size", 13)
-			empty_lb.add_theme_color_override("font_color", Color(0.6, 0.6, 0.68))
-			box.add_child(empty_lb)
-		var btn := Button.new()
-		btn.text = "用卡组 %d 出战" % slot
-		btn.add_theme_font_size_override("font_size", 16)
-		btn.custom_minimum_size = Vector2(0, 34)
-		btn.pressed.connect(_try_pick_deck.bind(slot, ids))
-		box.add_child(btn)
-	# 随机英雄：随机组一整队直接开战
+	# 卡组1/2/3 切换行（同编辑页 deck_bar 布局：tabs 占满整行，右侧放按钮）
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 8)
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapbox.add_child(bar)
+	var tabs := HBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 6)
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.add_child(tabs)
+	for slot in [1, 2, 3]:
+		var tab := Button.new()
+		tab.text = "卡组 %d" % slot
+		tab.toggle_mode = true
+		tab.custom_minimum_size = Vector2(0, 34)
+		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tab.pressed.connect(_on_deck_pick_tab.bind(slot))
+		tabs.add_child(tab)
+		_deck_pick_tabs[slot] = tab
+	# 卡组1/2/3 右边 = 随机英雄
 	var rand_btn := Button.new()
 	rand_btn.text = "随机英雄"
-	rand_btn.add_theme_font_size_override("font_size", 18)
-	rand_btn.custom_minimum_size = Vector2(0, 42)
+	rand_btn.add_theme_font_size_override("font_size", 15)
+	rand_btn.custom_minimum_size = Vector2(130, 34)
 	rand_btn.pressed.connect(_on_deck_pick_random_pressed)
-	wrapbox.add_child(rand_btn)
-	panel.reset_size()
-	var min_sz := panel.get_combined_minimum_size()
-	var pw: float = clampf(maxf(min_sz.x, 340.0), 340.0, maxf(vsize.x - 24.0, 340.0))
+	bar.add_child(rand_btn)
+	# 当前卡组信息行
+	_deck_pick_info = Label.new()
+	_deck_pick_info.add_theme_font_size_override("font_size", 14)
+	_deck_pick_info.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	_deck_pick_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	wrapbox.add_child(_deck_pick_info)
+	# 当前卡组的队伍预览（点卡组1/2/3 切换显示；悬停卡牌看属性）
+	var host := Control.new()
+	host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapbox.add_child(host)
+	_deck_pick_preview = host
+	# 出战按钮
+	_deck_pick_start_btn = Button.new()
+	_deck_pick_start_btn.add_theme_font_size_override("font_size", 18)
+	_deck_pick_start_btn.custom_minimum_size = Vector2(0, 42)
+	_deck_pick_start_btn.pressed.connect(_on_deck_pick_confirm)
+	wrapbox.add_child(_deck_pick_start_btn)
+	_on_deck_pick_tab(1)
+
+# 点卡组1/2/3：切换到该槽并刷新队伍预览
+func _on_deck_pick_tab(slot: int) -> void:
+	_deck_pick_slot = slot
+	for s in _deck_pick_tabs.keys():
+		var t: Button = _deck_pick_tabs[s]
+		t.set_pressed_no_signal(int(s) == slot)
+	_refresh_deck_pick_preview()
+	_layout_deck_pick_panel()
+
+# 重建当前卡组的队伍预览（清空旧内容后按当前槽重建）
+func _refresh_deck_pick_preview() -> void:
+	if _deck_pick_preview == null:
+		return
+	for c in _deck_pick_preview.get_children():
+		_deck_pick_preview.remove_child(c)
+		c.queue_free()
+	var idx := _deck_pick_slot - 1
+	var ids: Array = _deck_pick_decks[idx] if (idx >= 0 and idx < _deck_pick_decks.size()) else []
+	if _deck_pick_start_btn != null:
+		_deck_pick_start_btn.text = "用卡组 %d 出战" % _deck_pick_slot
+	if ids.size() == 0:
+		if _deck_pick_info != null:
+			_deck_pick_info.text = "卡组 %d：空 —— 请到普通模式编辑页添加英雄。" % _deck_pick_slot
+		_deck_pick_preview.custom_minimum_size = Vector2.ZERO
+		_deck_pick_preview.size = Vector2.ZERO
+		return
+	if _deck_pick_info != null:
+		_deck_pick_info.text = "卡组 %d（%d 名）%s" % [_deck_pick_slot, ids.size(), "" if ids.size() >= 5 else "  ⚠ 不足 5 名"]
+	var pool := _make_deck_preview_cards(ids)
+	_deck_pick_preview.add_child(pool)
+	# 宿主要撑到队伍卡行的实际尺寸，否则面板宽度不随人数变化、卡牌会溢出面板
+	_deck_pick_preview.custom_minimum_size = pool.custom_minimum_size
+	_deck_pick_preview.size = pool.custom_minimum_size
+
+# 一行平顶蜂窝小卡（与编辑页"卡组预览"同款），悬停查看英雄属性
+func _make_deck_preview_cards(ids: Array) -> Control:
+	var hover_cb := func(hid: String):
+		if hid == "":
+			_set_score_tooltip_visible(false)
+		else:
+			_set_score_tooltip_hero(hid)
+	var click_cb := func(_hid: String):
+		pass
+	return _make_hex_pool(ids, hover_cb, click_cb, false, "", true, 30.0)
+
+# 面板尺寸/位置（切换卡组后队伍人数不同，需重算并居中）
+func _layout_deck_pick_panel() -> void:
+	if _deck_pick_panel == null or not is_instance_valid(_deck_pick_panel):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	_deck_pick_panel.reset_size()
+	var min_sz := _deck_pick_panel.get_combined_minimum_size()
+	var pw: float = clampf(maxf(min_sz.x, 400.0), 400.0, maxf(vsize.x - 24.0, 400.0))
 	var ph: float = minf(min_sz.y, vsize.y - 16.0)
-	panel.custom_minimum_size = Vector2(pw, ph)
-	panel.size = Vector2(pw, ph)
-	panel.position = Vector2((vsize.x - pw) / 2.0, maxf((vsize.y - ph) / 2.0, 8.0))
+	_deck_pick_panel.custom_minimum_size = Vector2(pw, ph)
+	_deck_pick_panel.size = Vector2(pw, ph)
+	_deck_pick_panel.position = Vector2((vsize.x - pw) / 2.0, maxf((vsize.y - ph) / 2.0, 8.0))
+
+# 点"用卡组 N 出战"：取当前查看的卡组
+func _on_deck_pick_confirm() -> void:
+	_try_pick_deck(_deck_pick_slot)
 
 # 点某卡组槽出战：不足 5 名则弹提示并保持面板
-func _try_pick_deck(slot: int, ids: Array) -> void:
+func _try_pick_deck(slot: int, ids_override: Array = []) -> void:
+	var idx := slot - 1
+	var ids: Array = ids_override
+	if ids.is_empty() and idx >= 0 and idx < _deck_pick_decks.size():
+		ids = _deck_pick_decks[idx]
 	if ids.size() < 5:
 		var d := AcceptDialog.new()
 		d.title = "卡组人数不足"
@@ -1086,6 +1150,12 @@ func _close_deck_pick_panel() -> void:
 	if _deck_pick_overlay != null:
 		_deck_pick_overlay.queue_free()
 		_deck_pick_overlay = null
+	_deck_pick_panel = null
+	_deck_pick_preview = null
+	_deck_pick_info = null
+	_deck_pick_start_btn = null
+	_deck_pick_tabs.clear()
+	_deck_pick_decks = []
 	_set_score_tooltip_visible(false)
 
 # 下方常驻队伍面板：整支卡组（上阵 + 替补），一字行透明卡牌，随 team_updated 刷新。
