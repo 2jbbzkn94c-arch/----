@@ -69,6 +69,10 @@ func refresh_identity() -> void:
 	super.refresh_identity()
 	unit.branch_override = true
 
+## 靠钩爪勾拉（射程+2 直线）：不做"前冲再弹回"的出招动画，演出交给钩爪
+func skips_lunge_anim() -> bool:
+	return true
+
 # 每回合结束 _clear_statuses 会清掉 branch_override，故本回合开始时必须重新激活，
 # 否则血锁从第二回合起不再受限（能攻击直线外目标）。
 func on_turn_start() -> bool:

@@ -8,3 +8,7 @@ func refresh_identity() -> void:
 	super.refresh_identity()
 	unit.los_ignore = true
 	unit.attack_range = 99
+
+## 被沉默/眩晕时全场狙击失效 -> 退化为普通远程（射程 2）
+func suppressed_attack_range() -> int:
+	return 2

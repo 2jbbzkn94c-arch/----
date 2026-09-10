@@ -2312,9 +2312,11 @@ func _attackable_from(u: Unit, from_cell: Vector2i) -> Array:
 func _effective_range_at(u: Unit, from_cell: Vector2i) -> int:
 	if u.attack_type == DataRegistry.AttackType.RANGED and _enemy_adjacent_at(u, from_cell):
 		return 1
-	# 坠炮手沉默：全场狙击失效 -> 退化为普通远程(射程2)
-	if u.hero_id == "hero_45" and not u.mortar_active():
-		return 2
+	# 被动失效时的退化射程（坠炮手被沉默 -> 退化为普通远程2）：由英雄脚本声明
+	if not u.mortar_active():
+		var fb := _hero(u).suppressed_attack_range()
+		if fb > 0:
+			return fb
 	return u.attack_range
 
 func _enemy_adjacent_at(u: Unit, from_cell: Vector2i) -> bool:
@@ -2338,9 +2340,11 @@ func _has_enemy_adjacent(a: Unit) -> bool:
 func _effective_attack_range(a: Unit) -> int:
 	if a.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(a):
 		return 1
-	# 坠炮手沉默：全场狙击失效 -> 退化为普通远程(射程2)
-	if a.hero_id == "hero_45" and not a.mortar_active():
-		return 2
+	# 被动失效时的退化射程（坠炮手被沉默 -> 退化为普通远程2）：由英雄脚本声明
+	if not a.mortar_active():
+		var fb := _hero(a).suppressed_attack_range()
+		if fb > 0:
+			return fb
 	return a.attack_range
 
 # 同步所有单位的"远程被贴标志（移攻击/回合切换后调用，用于面板与伤害结算）
@@ -3196,9 +3200,8 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	if attacker == null or not is_instance_valid(attacker) or target == null or not is_instance_valid(target):
 		_finish_attack(attacker, for_enemy)
 		return
-	# 暗域：攻击会与目标交换位置,无需"前冲再弹回"的突突动画——直接结算,换位交给 _swap_units
-	# 血锁：靠钩爪勾拉（射程+2 直线），同样不做前冲弹回——直接结算，演出交给钩爪
-	if attacker.hero_id == "hero_27" or attacker.hero_id == "hero_41":
+	# 部分英雄跳过"前冲再弹回"的出招动画（暗域换位、血锁钩爪）：由英雄脚本声明
+	if _hero(attacker).skips_lunge_anim():
 		_apply_attack(attacker, target, for_enemy)
 		return
 	var apos := board_view.cell_world_center(attacker.cell)
@@ -4172,18 +4175,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 		_clear_selection()
 	# 从单位列表移除，避免后续遍历触发已释放节点访
 	units.erase(u)
-	# 死灵法师阵亡：他召唤的骷髅兵一起消散（骷髅都带召唤者 id，逐个淡出离场）
-	if u.hero_id == "hero_33" and not is_summon:
-		for s in units.duplicate():
-			if s == null or not is_instance_valid(s) or not s.alive:
-				continue
-			if s.hero_id == "summon_skeleton" and s.summon_owner == u.id:
-				log_message.emit("%s 召唤的骷髅兵随之消散。" % s.display_name)
-				s.alive = false
-				var st := create_tween()
-				st.tween_property(s, "modulate:a", 0.0, 0.25)
-				st.tween_callback(_skeleton_owner_gone.bind(s))
-	# 离场类光环的收回由英雄脚本自己的 on_died() 处理（如风语者收回发给队友的移动力 +1）
+	# 离场类光环的收回、召唤物随主人消散等，由英雄脚本自己的 on_died() 处理
 	# 骷髅兵等召唤物死亡不计入胜负死亡人数
 	if not is_summon:
 		# 记录阵亡

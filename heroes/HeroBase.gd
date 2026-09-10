@@ -103,6 +103,16 @@ func refresh_identity() -> void:
 	unit.los_ignore = false
 	unit.branch_override = false
 
+## 近战出招时是否**跳过**"前冲再弹回"的动画（默认不跳过）。
+## 适用于攻击后自身会位移/靠远程手段拉人的英雄（暗域换位、血锁钩爪），
+## 前冲弹回会与后续位移演出打架。
+func skips_lunge_anim() -> bool:
+	return false
+
+## 自身被动失效时（如坠炮手被沉默，全场狙击失效）射程退化成的值；-1 = 无此机制（默认）。
+func suppressed_attack_range() -> int:
+	return -1
+
 
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。

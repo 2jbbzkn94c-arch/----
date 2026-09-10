@@ -8,6 +8,10 @@ func on_attack(target: Unit) -> void:
 	if target and target.alive:
 		battle._swap_units(unit, target)
 
+## 攻击会与目标交换位置：不做"前冲再弹回"的出招动画（否则与换位演出打架）
+func skips_lunge_anim() -> bool:
+	return true
+
 func on_attack_dead(target: Unit) -> void:
 	if target and not target.alive:
 		battle._occupy_dead_cell(unit, target)
