@@ -424,6 +424,7 @@ func send_quick_chat(text: String) -> void:
 # ---- 普通模式新流程：进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）----
 # 玩家在编辑页已把队伍存进卡组槽；这里只做"选择已保存的卡组"，不提供英雄编辑。
 func _begin_deck_pick() -> void:
+	_deck_pick_match = true   # 本局为"入场选卡组"开局：重开时据此重新选队伍
 	state = State.DECK_PICK
 	_prepare_first_side()   # 弹面板的同时提示"本局先手"
 	var decks: Array = []
@@ -906,6 +907,7 @@ const ARENA_PICKS_PER_SIDE := 4   # 每边各
 const ARENA_PICK_SECONDS := 15.0  # 竞技场选人每轮限时（秒），超时自动选第 1 
 const RANDOM_DECK_SIZE := 8       # "随机英雄"按钮：固定随机 8 名
 var _online_deck_pick := false    # 联机普通模式：本局走"入场选卡组"流程（等待双方卡组就绪）
+var _deck_pick_match := false      # 单机普通模式：本局由"入场选卡组"开局（重开时需重新选队伍）
 var _online_my_deck: Array = []    # 联机入场选卡组：本端已选卡组
 var _online_peer_deck: Array = []  # 联机入场选卡组：对端已选卡组（收到 deckchoice 后填入）
 var arena_pick_time_left := -1.0  # 当前轮剩余选择秒数0=不限时，如等待对敌方AI轮）
@@ -1004,6 +1006,11 @@ func reset_match() -> void:
 		_spawn_opening_items()
 		arena_pick_time_left = -1.0
 		_begin_arena_draft()
+	elif _deck_pick_match:
+		# 普通模式"入场选卡组"对局：重开要重新选择队伍（重新弹选卡组面板）
+		_place_obstacles()
+		_spawn_opening_items()
+		_begin_deck_pick()
 	else:
 		# 已选完人的竞技场 / 普通模式：沿用当前双方卡组，重新随机障碍/道具后进入部署
 		_place_obstacles()
