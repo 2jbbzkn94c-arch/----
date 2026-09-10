@@ -995,9 +995,17 @@ func reset_match() -> void:
 		# 自由部署：直接放置并开
 		_place_units()
 		_start_match()
+	elif GameState.arena_mode and GameState.player_deck.is_empty():
+		# 竞技场"选人阶段"重开：还没选完人（卡组为空，见 _begin_arena_draft 会先清空卡组）——
+		# 重新开一轮选人：重新随机障碍/道具与候选卡牌（单机换一批卡；联机由种子保持一致）。
+		if not GameState.is_online:
+			rng.randomize()   # 单机：换一批选人卡牌，避免重开还是同样两张
+		_place_obstacles()
+		_spawn_opening_items()
+		arena_pick_time_left = -1.0
+		_begin_arena_draft()
 	else:
-		# 重开：重新随机生成障碍/道具，再进入部署。
-		# 竞技场与普通模式一致：沿用当前已确定的双方卡组（arena 不再重新 2 选 1），实现"同队伍重开"。
+		# 已选完人的竞技场 / 普通模式：沿用当前双方卡组，重新随机障碍/道具后进入部署
 		_place_obstacles()
 		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
 		_begin_deployment()

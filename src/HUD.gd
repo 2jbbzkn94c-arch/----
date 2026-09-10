@@ -1802,6 +1802,8 @@ func _on_restart() -> void:
 	# 已打开的面板不会随 deploy_refresh 收起，上一局的英雄行会残留在屏底。
 	_close_team_panel()
 	_close_deploy_panel()
+	_close_arena_panel()     # 竞技场选人阶段重开：收掉 2 选 1 面板，避免残留挡住新一轮选人
+	_close_deck_pick_panel()
 	if battle != null and is_instance_valid(battle):
 		if GameState.is_online:
 			battle.request_rematch_online()   # 联机：请求再来一局（不退出连接/大厅）
