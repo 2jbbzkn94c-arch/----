@@ -823,7 +823,7 @@ func _refresh_ui() -> void:
 		var s: int = SLOTS[i]
 		var b: Button = _slot_btn[i]
 		b.text = "槽%d" % s
-		b.disabled = not (_mode == "normal") or _my_ready   # 已点「准备」后锁定槽位（需先取消准备）
+		b.disabled = not (_mode == "normal")   # 准备后仍可切槽"查看"其它卡组（编辑卡组仍锁定）
 		if _my_slot == s and _my_confirmed:
 			b.text = "槽%d ✓" % s
 		elif _my_slot == s:
@@ -831,7 +831,7 @@ func _refresh_ui() -> void:
 	# 卡组状态文案（阵容以预览小卡展示，这里不重复名单）
 	if _deck_info != null:
 		if _my_ready and NetBus.is_online and not NetBus.is_host:
-			_deck_info.text = "已准备 —— 队伍已锁定，取消准备后可编辑卡组"
+			_deck_info.text = "已准备（可切换卡组槽查看；编辑卡组需先取消准备）"
 		elif _mode == "normal" and NetBus.is_online and _my_slot > 0:
 			var deck := DeckStore.load_deck(_my_slot)
 			if deck.size() == 0:
