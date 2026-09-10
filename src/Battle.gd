@@ -3318,7 +3318,8 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		_finish_attack(attacker, for_enemy)
 		return
 	# 暗域：攻击会与目标交换位置,无需"前冲再弹回"的突突动画——直接结算,换位交给 _swap_units
-	if attacker.hero_id == "hero_27":
+	# 血锁：靠钩爪勾拉（射程+2 直线），同样不做前冲弹回——直接结算，演出交给钩爪
+	if attacker.hero_id == "hero_27" or attacker.hero_id == "hero_41":
 		_apply_attack(attacker, target, for_enemy)
 		return
 	var apos := board_view.cell_world_center(attacker.cell)
