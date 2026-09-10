@@ -996,7 +996,7 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	_deck_pick_overlay = overlay
 	var panel := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.09, 0.14, 0.97)
+	sb.bg_color = Color(0.08, 0.09, 0.14, 0.55)   # 半透明：能透出下方棋盘
 	sb.border_color = Color(1.0, 0.85, 0.5, 0.85)
 	sb.set_border_width_all(2)
 	sb.set_corner_radius_all(10)
