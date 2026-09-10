@@ -125,7 +125,14 @@ func _test_hero(id: String) -> void:
 			var vf := DataRegistry.Faction.ENEMY if id == "hero_37" else DataRegistry.Faction.PLAYER
 			var victim := spawn("hero_15", vf, Vector2i(4, 6))
 			match id:
-				"hero_22": battle._on_unit_damaged(victim, 3); rec(id, victim.has_status("shield"), "圣盾=%s" % victim.has_status("shield"))
+				"hero_22":
+					# 圣光：**敌方回合**里己方受伤 → 得[圣盾]；发盾延迟一帧，必须等帧再断言
+					var side0: int = GameState.active_side
+					GameState.active_side = GameState.SIDE_ENEMY
+					battle._on_unit_damaged(victim, 3)
+					await sleep_frames(3)
+					rec(id, victim.has_status("shield"), "圣盾=%s" % victim.has_status("shield"))
+					GameState.active_side = side0
 				"hero_11": victim.take_damage(3); rec(id, hero.hp < hero.max_hp, "塔盾代受")   # 塔盾主动减免：走 take_damage 前置
 				"hero_37": battle._on_unit_damaged(victim, 3); rec(id, hero.atk_buff >= 1, "buff=%d" % hero.atk_buff)
 		"hero_43":
@@ -189,6 +196,8 @@ func _test_hero(id: String) -> void:
 		"hero_47":
 			# 共鸣者：攻击力"变为"队友有效攻击之和（echo_set）
 			var ally := spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
-			battle._sync_one_echo(hero)
+			# 走生产路径：Battle._run_side_skills 对声明 wants_side_turn_start_sync 的英雄派发本钩子
+			# （原 battle._sync_one_echo 已在"重构第二批(1)"中删除，逻辑搬进 hero_47_共鸣者.gd）
+			hero.behavior.on_side_turn_start(hero.faction)
 			rec(id, hero.echo_set >= 1, "echo=%d" % hero.echo_set)
 		_: rec(id, false, "未接入")

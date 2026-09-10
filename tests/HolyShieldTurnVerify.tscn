@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://b8ugle1lujeii"]
+
+[ext_resource type="Script" path="res://tests/HolyShieldTurnVerify.gd" id="1_script"]
+
+[node name="HolyShieldTurnVerify" type="Node"]
+script = ExtResource("1_script")

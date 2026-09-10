@@ -22,3 +22,6 @@ Thumbs.db
 # 生成日志文件导出目录
 /log/
 
+
+# 本机测试用的 Godot 用户目录（APPDATA 重定向，避免污染仓库）
+/.godot_userdata/

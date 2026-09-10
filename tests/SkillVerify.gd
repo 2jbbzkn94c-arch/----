@@ -16,7 +16,7 @@ func rec(id: String, ok: bool, note: String) -> void: results[id] = [ok, note]
 func _run() -> void:
 	for id in DataRegistry.heroes.keys():
 		clear_all()
-		_test_hero(id)
+		await _test_hero(id)   # hero_22（圣光发盾是延迟一帧的）需要 await，故这里也 await
 		if not results.has(id): results[id] = [false, "未产出"]
 	for id in DataRegistry.heroes.keys():
 		var r: Array = results[id]
@@ -105,8 +105,15 @@ func _test_hero(id: String) -> void:
 			spawn(id, DataRegistry.Faction.PLAYER, Vector2i(3, 6)); var a:=spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 			battle._trigger_turn_start(battle.units[0]); rec(id, a.atk_buff>=1, "buff=%d" % a.atk_buff)
 		"hero_22":
+			# 圣光：**敌方回合**里己方英雄受伤 → 其获得[圣盾]。发盾是延迟到下一帧的，必须等一帧再断言
 			spawn(id, DataRegistry.Faction.PLAYER, Vector2i(3, 6)); var v:=spawn("hero_15", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
-			battle._on_unit_damaged(v,3); rec(id, v.has_status("shield"), "圣盾")
+			var side0: int = GameState.active_side
+			GameState.active_side = GameState.SIDE_ENEMY   # 敌方回合才触发
+			battle._on_unit_damaged(v,3)
+			await battle.get_tree().process_frame
+			await battle.get_tree().process_frame
+			rec(id, v.has_status("shield"), "圣盾=%s" % v.has_status("shield"))
+			GameState.active_side = side0   # 还原视角，避免影响后续用例
 		"hero_23":
 			var u:=spawn(id, DataRegistry.Faction.PLAYER, Vector2i(3, 6)); var t:=spawn("hero_13", DataRegistry.Faction.ENEMY, Vector2i(4, 6))
 			rec(id, battle._counter_bonus(u,t)==2, "反击2倍")

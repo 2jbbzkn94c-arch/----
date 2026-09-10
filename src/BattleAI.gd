@@ -1098,10 +1098,14 @@ func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	elif not u.shield:
 		_sim_maybe_guard(sim, u)   # 圣光：己方受损后获盾（每回合一次）
 
-# 圣光：己方(敌方)角色受伤后获得圣盾；每名圣光每回合限一次（模拟真实 aura_used 节奏）
+# 圣光：**敌方回合**里己方角色受伤后获得圣盾；每名圣光每回合限一次（模拟真实 aura_used 节奏）。
+# 本模拟固定是"敌方(AI 自己)回合"，所以只有**非行动方**（玩家一方）的伤者才会触发——
+# 与真实规则一致：行动方自己回合里挨打不给盾。
 func _sim_maybe_guard(sim: Sim, wounded: SimUnit) -> void:
 	if wounded.shield or not wounded.alive:
 		return
+	if wounded.fn == DataRegistry.Faction.ENEMY:
+		return   # 行动方(=AI 自己)的伤者发生在"己方回合"，不触发圣光
 	for i in sim.units.size():
 		var g: SimUnit = sim.units[i]
 		if not g.alive or g.fn != wounded.fn or g.hero_id != "hero_22" or g.silenced or g.aura_used:

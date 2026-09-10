@@ -1,16 +1,23 @@
-﻿extends HeroBase
-## 圣光：每回合限一次，一名己方角色受伤后，其获得[圣盾]。
+extends HeroBase
+## 圣光：**敌方回合**里，一名己方英雄受到伤害后，其获得[圣盾]（一回合限一次）。
+## 触发时机限定在"敌方回合"：己方回合里挨打（反击、猛毒、回合烧血等）不给盾。
+## 已有盾的目标不消耗次数（通常是同一次受伤已被另一名圣光先加上盾），名额留给下一位伤者。
+## 给盾延迟到本次攻击整体结算完成（下一帧）再发：否则盾会赶在同一次攻击后续附加的状态
+## （毒蛇的猛毒等）之前被套上，把本该中的状态也挡掉了。
 class_name HeroLight
 
 func on_someone_damaged(target: Unit, _amount: int) -> void:
 	if target == null or not target.alive:
 		return
 	if target.faction != unit.faction:
+		return   # 只护己方
+	# 只在**敌方回合**触发：当前行动方与本单位所属阵营相同时 = 己方回合，不给盾
+	if battle.side_faction(GameState.active_side) == unit.faction:
 		return
 	if unit.once_this_turn:
-		return
+		return   # 一回合限一次
 	if target.has_status(StatusDB.SHIELD):
-		return   # 目标已有盾(通常是同一次受伤被另一名圣光先加上了):本次不消耗次数,留给下一位伤者
+		return   # 目标已有盾：本次不消耗次数，留给下一位伤者
 	unit.once_this_turn = true
 	# 延迟到本次攻击整体结算完成(下一帧)再给盾：否则盾会赶在同一次攻击
 	# 后续附加的状态(毒蛇的猛毒等)之前被套上，把本该中的状态也挡掉了。

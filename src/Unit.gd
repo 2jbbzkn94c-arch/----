@@ -530,9 +530,35 @@ func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, b
 	t.tween_property(lbl, "modulate:a", 0.0, fade)
 	t.tween_callback(lbl.queue_free)
 
-# 治疗飘字（供 Battle 调用）：被治疗者只显示 +血量数值
+# 治疗飘字（供 Battle 调用）：被治疗者显示 +血量数值，并冒一圈绿色粒子
 func float_heal(amount: int) -> void:
-	_float_text("+%d" % amount, Color(0.45, 0.95, 0.5))
+	_float_text("+%d" % amount, HEAL_COLOR)
+	heal_fx()
+
+# 治疗主色（与被治疗飘字同色）
+const HEAL_COLOR := Color(0.45, 0.95, 0.5)
+
+# 被治疗目标的绿色粒子：从脚下升起的小绿点，边上飘边淡出。
+# 刻意不做白闪/光环（那是技能爆发的语言），免得盖住 +N 飘字、也避免和技能演出混淆。
+# 随机数用全局 randf()，**不要**动 battle.rng —— 那是联机同步用的确定性随机源。
+func heal_fx() -> void:
+	if not is_inside_tree():
+		return
+	var k := hex_radius / 54.0   # 随棋盘缩放（基准：旧 hex60 → radius54）
+	for i in 14:
+		var s := (2.6 + randf() * 2.0) * k
+		var dot := Polygon2D.new()
+		dot.polygon = PackedVector2Array([Vector2(-s, -s), Vector2(s, -s), Vector2(s, s), Vector2(-s, s)])
+		dot.z_index = 14
+		dot.color = HEAL_COLOR.lerp(Color(0.78, 1.0, 0.62), randf() * 0.6)
+		var from := Vector2((randf() - 0.5) * hex_radius * 1.5, hex_radius * (0.3 + randf() * 0.4))
+		dot.position = from
+		add_child(dot)
+		var dt := dot.create_tween()
+		var rise := hex_radius * (1.0 + randf() * 0.8)
+		dt.tween_property(dot, "position", from + Vector2((randf() - 0.5) * hex_radius * 0.6, -rise), 0.5 + randf() * 0.25)
+		dt.parallel().tween_property(dot, "modulate:a", 0.0, 0.6 + randf() * 0.25)
+		dt.tween_callback(dot.queue_free)
 
 # 机制文字（挂在单位头顶小字，如施加治疗方弹"治疗"）
 func float_tag_text(text: String, color: Color) -> void:
