@@ -80,6 +80,7 @@ func reset_online() -> void:
 	is_host = false
 	online_seed = 12345
 	arena_mode = false
+	pick_deck_in_battle = false
 	player_deck = []
 	enemy_deck = []
 	player_placement.clear()

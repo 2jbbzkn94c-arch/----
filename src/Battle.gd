@@ -314,6 +314,8 @@ func _ready() -> void:
 		_setup_hud()
 		if GameState.arena_mode:
 			_begin_online_arena_draft()
+		elif GameState.pick_deck_in_battle:
+			_begin_online_deck_pick()   # 联机普通模式：入场选卡组（与单机一致），双方齐备后一起进入部署
 		else:
 			if GameState.player_deck.size() == 0:
 				GameState.player_deck = ["hero_06", "hero_17", "hero_26"]
@@ -436,22 +438,65 @@ func _on_deck_pick(slot: int) -> void:
 	if state != State.DECK_PICK:
 		return
 	var ids: Array = DeckStore.load_deck(slot)
-	_start_with_player_deck(ids)
 	log_message.emit("选用卡组 %d（%d 名英雄）。" % [slot, ids.size()])
+	_commit_deck(ids)
 
-# HUD 面板回调：点"随机英雄"——随机组一整队直接开战（不写回卡组槽）
+# HUD 面板回调：点"随机英雄"——随机组一整队（固定 8 人）开战（不写回卡组槽）
 func _on_deck_pick_random() -> void:
 	if state != State.DECK_PICK:
 		return
-	# 随机 5-8 名（上限不超过英雄总数）
+	# 随机 8 名（上限不超过英雄总数）
 	var pool: Array = DataRegistry.heroes.keys().duplicate()
 	pool.shuffle()
-	var want := randi_range(5, 8)
 	var ids: Array = []
-	for i in mini(want, pool.size()):
+	for i in mini(RANDOM_DECK_SIZE, pool.size()):
 		ids.append(pool[i])
-	_start_with_player_deck(ids)
 	log_message.emit("随机英雄出战（%d 名）。" % ids.size())
+	_commit_deck(ids)
+
+# 本端已确定卡组：单机直接开战；联机则发给对端并等双方齐备
+func _commit_deck(ids: Array) -> void:
+	if _online_deck_pick:
+		_online_my_deck = _order_deck(ids)
+		deck_pick_done.emit()   # 收起选卡组面板
+		NetBus.send_all(JSON.stringify({ "type": "deckchoice", "deck": _online_my_deck }))
+		action_info.emit("已选择卡组，等待对方选择…")
+		_maybe_start_online_deploy()
+		return
+	_start_with_player_deck(ids)
+
+# 联机普通模式：进入战斗后弹"选择卡组"面板（双方各自选自己的卡组，齐备后一起进入部署）
+func _begin_online_deck_pick() -> void:
+	_online_deck_pick = true
+	_online_my_deck = []
+	state = State.DECK_PICK
+	_prepare_first_side()   # 先手由种子决定，两端一致；同时弹"本局先手"提示
+	var decks: Array = []
+	for slot in [1, 2, 3]:
+		decks.append(DeckStore.load_deck(slot))
+	deck_pick_requested.emit(decks)
+	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）。")
+	# 对端若已先发来卡组（启动竞态）：这里补一次判定
+	_maybe_start_online_deploy()
+
+# 双方卡组齐备 -> 进入部署。约定：主机卡组=PLAYER（下方/蓝）、客户端卡组=ENEMY（上方/红）
+func _maybe_start_online_deploy() -> void:
+	if not _online_deck_pick:
+		return
+	if _online_my_deck.is_empty() or _online_peer_deck.is_empty():
+		return
+	if state == State.DEPLOY or state == State.PLACE_DEPLOY:
+		return   # 已开始，防重复
+	_online_deck_pick = false
+	GameState.pick_deck_in_battle = false
+	if GameState.is_host:
+		GameState.player_deck = _online_my_deck
+		GameState.enemy_deck = _online_peer_deck
+	else:
+		GameState.player_deck = _online_peer_deck
+		GameState.enemy_deck = _online_my_deck
+	log_message.emit("双方卡组已确定，开始部署。")
+	_begin_deployment()
 
 # 选定我方卡组后：生成敌方卡组，进入正常部署流程
 func _start_with_player_deck(player_ids: Array) -> void:
@@ -859,6 +904,10 @@ var _pending_enemy_deploy := ""   # 敌轮：客户端已选中的敌方英雄�
 # ---- 竞技场模式：随机2构建双方卡组（共8轮：轮玩家选、后4轮敌方选，最终双方各8名） ----
 const ARENA_PICKS_PER_SIDE := 4   # 每边各
 const ARENA_PICK_SECONDS := 15.0  # 竞技场选人每轮限时（秒），超时自动选第 1 
+const RANDOM_DECK_SIZE := 8       # "随机英雄"按钮：固定随机 8 名
+var _online_deck_pick := false    # 联机普通模式：本局走"入场选卡组"流程（等待双方卡组就绪）
+var _online_my_deck: Array = []    # 联机入场选卡组：本端已选卡组
+var _online_peer_deck: Array = []  # 联机入场选卡组：对端已选卡组（收到 deckchoice 后填入）
 var arena_pick_time_left := -1.0  # 当前轮剩余选择秒数0=不限时，如等待对敌方AI轮）
 var _arena_pending: Array = []       # 当前轮随机的2个候选英id
 var _arena_pool: Array = []          # 剩余候选池（未被选走的英雄）
@@ -2866,6 +2915,13 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 		if t == "turn_time":
 			# 对端行动回合剩余秒数同步（本端等待时显示"对方 N 
 			peer_turn_time_left = float(cmd.get("left", 0))
+			return
+		if t == "deckchoice":
+			# 联机普通模式：对端发来"入场选卡组"的选择。双方齐备后各自进入部署（约定见 _maybe_start_online_deploy）
+			var pd: Array = cmd.get("deck", [])
+			if pd.size() > 0:
+				_online_peer_deck = pd
+				_maybe_start_online_deploy()
 			return
 		if t == "arena_pick":
 			# 联机竞技场：客户端把每轮选择发给主机（主机收集齐双方后汇总广播）

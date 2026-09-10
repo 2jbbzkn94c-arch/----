@@ -597,12 +597,12 @@ func _enter_arena_mode() -> void:
 		_status.text = "竞技场模式：请点击「准备完毕」"
 	_refresh_ui()
 
-# 切回普通模式：重置竞技场准备状态并给出选卡组提示
+# 切回普通模式：重置竞技场准备状态；队伍改为进战斗后选，这里只提示可开始
 func _enter_normal_mode() -> void:
 	_my_ready = false
 	_peer_ready = false
 	if NetBus.is_online:
-		_status.text = "普通模式：请选择卡组并点「确认卡组」"
+		_status.text = "普通模式：等待主机开始（进入对战后选择队伍）"
 	else:
 		_status.text = "普通模式：开房或加入后选择卡组"
 	_refresh_ui()
@@ -711,24 +711,14 @@ func _on_reconnect() -> void:
 func _maybe_start() -> void:
 	if _ver_mismatch:
 		return   # 版本不一致：禁止开始
-	# 主机：普通模式双方都确认了卡组 -> 可开始；竞技场模式要等加入方"准备完毕"。
+	# 主机：普通模式等对端加入即可开始（队伍改为进战斗后选）；竞技场模式要等加入方"准备完毕"。
 	if NetBus.is_host:
 		if _mode == "arena":
 			if _peer_ready:
 				_btn_start.disabled = false
 				_status.text = "对方已准备完毕，可以开始（竞技场选卡）"
-		elif _my_confirmed and _peer_slot > 0:
-			# 双方都已确认：各自卡组应已 ≥5（确认前各自校验），此处再兜底一次
-			var my_d := DeckStore.load_deck(_my_slot)
-			if my_d.size() < MIN_PICK:
-				_btn_start.disabled = true
-				_status.text = "你的卡组（槽 %d）不足 %d 名英雄：点「编辑卡组」补足后再开始。" % [_my_slot, MIN_PICK]
-			elif _peer_deck.size() < MIN_PICK:
-				_btn_start.disabled = true
-				_status.text = "对方卡组不足 %d 名英雄，无法开始。" % MIN_PICK
-			else:
-				_btn_start.disabled = false
-				_status.text = "双方已确认卡组，可以开始"
+		elif _peer_online:
+			_btn_start.disabled = false
 
 # 返回主菜单：停止网络连接并重置联机状态（避免残留连接/标志影响下次进入）。
 func _back_to_menu() -> void:
@@ -736,7 +726,7 @@ func _back_to_menu() -> void:
 	GameState.reset_online()
 	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
-# 主机开战：普通模式双方卡组（本机槽位 + 对端发来的卡组）不足 MIN_PICK 人则拒绝开始并提示
+# 主机开战：普通模式不再预先锁定队伍——进战斗后双方各自弹"选择卡组"面板（与单机一致）。
 func _on_start() -> void:
 	if not NetBus.is_host:
 		_status.text = "等待主机开始…"
@@ -753,15 +743,13 @@ func _on_start() -> void:
 	GameState.online_seed = sd
 	var pdeck := _deck_of(_my_slot)
 	var edeck := _peer_deck
-	# 普通模式：任一方卡组不足 5 人不自动随机，拒绝开始并提示补足。
 	if _mode == "normal":
-		if pdeck.size() < MIN_PICK:
-			_status.text = "你的卡组（槽 %d）不足 %d 名英雄，无法开始。请点「编辑卡组」补足。" % [_my_slot, MIN_PICK]
-			return
-		if edeck.size() < MIN_PICK:
-			_status.text = "对方卡组不足 %d 名英雄，无法开始。" % MIN_PICK
-			return
+		# 普通模式：队伍改由"进战斗后选卡组"确定，这里不校验、不带卡组（留空）
+		GameState.pick_deck_in_battle = true
+		pdeck = []
+		edeck = []
 	else:
+		GameState.pick_deck_in_battle = false
 		if pdeck.size() == 0:
 			pdeck = ["hero_06", "hero_17", "hero_26"]
 		if edeck.size() == 0:
@@ -777,6 +765,8 @@ func _go_to_match_online() -> void:
 	GameState.is_online = true
 	GameState.is_host = false
 	GameState.arena_mode = (_peer_mode == "arena")
+	# 普通模式：队伍由进战斗后的"选择卡组"面板确定（与单机一致）
+	GameState.pick_deck_in_battle = (_peer_mode == "normal")
 	if _last_start.size() > 0:
 		GameState.online_seed = int(_last_start.get("seed", 12345))
 		GameState.player_deck = _last_start.get("pdeck", [])
@@ -813,9 +803,9 @@ func _refresh_ui() -> void:
 		var mb: Button = b
 		# 仅主机能选择模式；客户端按钮置灰并跟随主机
 		mb.disabled = not my_is_host
-	# 卡组槽区域仅在"已开房/加入（联网）且当前为普通模式"时显示：
-	# 未连接时默认隐藏，开房/加入成功、或房主已开房后点「普通模式」即显示。
-	var show_slots := _mode == "normal" and NetBus.is_online
+	# 队伍改为"进战斗后选卡组"（与单机一致）：普通模式不再需要在此选卡组槽/确认，
+	# 仅保留「编辑卡组」按钮用于编辑卡组内容。
+	var show_slots := false
 	if _slot_head != null:
 		_slot_head.visible = show_slots
 	for b in _slot_btn:
@@ -825,8 +815,8 @@ func _refresh_ui() -> void:
 	if _preview_host != null:
 		_preview_host.visible = show_slots
 	if _btn_edit != null:
-		_btn_edit.visible = show_slots
-		_btn_edit.disabled = _my_confirmed   # 已确认的选择先「取消确认」再编辑
+		_btn_edit.visible = _mode == "normal" and NetBus.is_online
+		_btn_edit.disabled = false   # 不再有"已确认"，编辑随时可用
 	_refresh_slot_preview()
 	if _btn_confirm != null:
 		_btn_confirm.visible = show_slots
@@ -925,7 +915,7 @@ func _refresh_ui() -> void:
 				_btn_ready.add_theme_stylebox_override("hover", hlr_h)
 				_btn_ready.add_theme_stylebox_override("pressed", hlr_p)
 	# 开始按钮：主机 + 已连接 + 版本一致 + 模式一致
-	# 普通模式 = 双方都已"确认卡组"；竞技场模式 = 加入方已"准备完毕"
+	# 普通模式 = 对端已加入（队伍进战斗后选）；竞技场模式 = 加入方已"准备完毕"
 	var start_ok := false
 	if _ver_mismatch:
 		_status.text = "版本不一致，无法开始。请双方使用同一版本的游戏（本机 v%d）。" % NET_VERSION
@@ -935,6 +925,9 @@ func _refresh_ui() -> void:
 			if not start_ok:
 				_status.text = "竞技场模式：等待对方点击「准备完毕」…"
 		else:
-			# 对端只有确认过才会发来槽位消息；本端需自己点「确认卡组」
-			start_ok = _my_confirmed and _peer_slot > 0
+			start_ok = _peer_online
+			if not start_ok:
+				_status.text = "等待对方加入…"
+			else:
+				_status.text = "对方已加入，可以开始（进入对战后选择队伍）"
 	_btn_start.disabled = not start_ok
