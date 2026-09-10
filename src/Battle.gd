@@ -11,7 +11,7 @@ signal action_finished                   # 某单位一招（移动/攻击）动
 signal team_updated                      # 英雄阵容变化（上替补/变身/阵亡）——HUD 刷新下方队伍展示
 signal enemy_turn_waiting                # 联机：敌方回合已开始，等待对端真人发行动指
 signal peer_message(text: String)        # 联机:收到对端快捷喊话(顶栏下方弹气泡)
-enum State { IDLE, PLAYER_INPUT, ANIMATING, ENEMY_TURN, DEPLOY, PLACE_DEPLOY, SUBSTITUTING, PLACE_SUB, PLACE_BOMB, ARENA_DRAFT, ENDED }
+enum State { IDLE, PLAYER_INPUT, ANIMATING, ENEMY_TURN, DEPLOY, PLACE_DEPLOY, SUBSTITUTING, PLACE_SUB, PLACE_BOMB, ARENA_DRAFT, DECK_PICK, ENDED }
 
 # 远程攻击的投掷物：飞向目标后命中
 class Projectile:
@@ -331,6 +331,8 @@ func _ready() -> void:
 		_setup_hud()
 		if GameState.arena_mode:
 			_begin_arena_draft()   # 竞技场：先随构建双方卡组，再部署
+		elif GameState.pick_deck_in_battle:
+			_begin_deck_pick()     # 普通模式新流程：先弹"选择卡组"面板，选完再部署
 		else:
 			_begin_deployment()
 
@@ -416,6 +418,78 @@ func send_quick_chat(text: String) -> void:
 	if text == "" or not GameState.is_online or not NetBus.is_online:
 		return
 	NetBus.send_all(JSON.stringify({ "type": "chat", "text": text }))
+
+# ---- 普通模式新流程：进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）----
+# 玩家在编辑页已把队伍存进卡组槽；这里只做"选择已保存的卡组"，不提供英雄编辑。
+func _begin_deck_pick() -> void:
+	state = State.DECK_PICK
+	_prepare_first_side()   # 弹面板的同时提示"本局先手"
+	var decks: Array = []
+	for slot in [1, 2, 3]:
+		decks.append(DeckStore.load_deck(slot))
+	deck_pick_requested.emit(decks)
+	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）。")
+
+# HUD 面板回调：玩家选中某个卡组槽（slot 1..3）。
+# 卡组不足 5 名时由 HUD 侧弹提示并保持面板，不进入此函数。
+func _on_deck_pick(slot: int) -> void:
+	if state != State.DECK_PICK:
+		return
+	var ids: Array = DeckStore.load_deck(slot)
+	_start_with_player_deck(ids)
+	log_message.emit("选用卡组 %d（%d 名英雄）。" % [slot, ids.size()])
+
+# HUD 面板回调：点"随机英雄"——随机组一整队直接开战（不写回卡组槽）
+func _on_deck_pick_random() -> void:
+	if state != State.DECK_PICK:
+		return
+	# 随机 5-8 名（上限不超过英雄总数）
+	var pool: Array = DataRegistry.heroes.keys().duplicate()
+	pool.shuffle()
+	var want := randi_range(5, 8)
+	var ids: Array = []
+	for i in mini(want, pool.size()):
+		ids.append(pool[i])
+	_start_with_player_deck(ids)
+	log_message.emit("随机英雄出战（%d 名）。" % ids.size())
+
+# 选定我方卡组后：生成敌方卡组，进入正常部署流程
+func _start_with_player_deck(player_ids: Array) -> void:
+	GameState.pick_deck_in_battle = false
+	var want := randi_range(5, 8)
+	var enemy := _synergy_pick_enemy(want)
+	GameState.set_decks(_order_deck(player_ids), _order_deck(enemy))
+	deck_pick_done.emit()   # 通知 HUD 收起"选择卡组"面板（无论走哪条选择路径都收）
+	_begin_deployment()
+
+# 按协同随机组建敌方卡组（与菜单选人同口径：强度 + 已选协同 + 职能配比加权抽取）
+func _synergy_pick_enemy(want: int) -> Array:
+	var cand: Array = DataRegistry.heroes.keys().duplicate()
+	var chosen: Array = []
+	while chosen.size() < want and cand.size() > 0:
+		var wins: Array[float] = []
+		var ids: Array = []
+		var total := 0.0
+		for id in cand:
+			var sc := _hero_strength(id)
+			for c in chosen:
+				sc += DataRegistry.synergy_bonus(c, id)
+			sc += DataRegistry.role_balance_bonus(chosen, id)
+			var w := maxf(sc, 0.0) + 1.0
+			wins.append(w)
+			ids.append(id)
+			total += w
+		var r := randf() * total
+		var acc := 0.0
+		var best_id: String = ids[0]
+		for i in ids.size():
+			acc += wins[i]
+			if acc >= r:
+				best_id = ids[i]
+				break
+		chosen.append(best_id)
+		cand.erase(best_id)
+	return chosen
 
 # ---- 竞技场模式：随机2构建双方卡组 ----
 func _begin_arena_draft() -> void:
@@ -802,6 +876,10 @@ signal touch_view_end_requested           # 触屏长按查看后松手：请求
 
 # 开局先手提示（单机）：先= 部署上首发先+ 开战先行动。短暂浮~1s 自动消失，不阻塞流程
 signal first_side_notice(text: String)   # 请求 HUD 显示"本局先手"浮框
+
+# 普通模式新流程：进入战斗后弹"选择卡组"面板，让玩家从 3 个已存卡组里选一个（或点随机英雄）
+signal deck_pick_requested(decks: Array)   # 3 个已存卡组：Array[Array[hero_id]]，空槽为 []
+signal deck_pick_done                      # 卡组已选定（面板应收起），随后进入部署
 
 # 回合切换醒目提示：每方回合开始时屏幕中央弹横幅（我方"你的回合"、对方"敌方回合"）
 signal turn_banner(text: String)

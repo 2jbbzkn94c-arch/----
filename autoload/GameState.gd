@@ -62,6 +62,8 @@ func note_net_room(joined: bool, addr: String = "", port: int = 18861, was_host:
 
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
+# 普通模式新流程：进入战斗后再弹"选择卡组"面板（三选一已存卡组/随机英雄），入场前不再锁定队伍
+var pick_deck_in_battle := false
 # 自由部署(测试)双控：true 时敌方回合也由本端玩家操控(不再跑 AI)
 var dual_control := false
 
