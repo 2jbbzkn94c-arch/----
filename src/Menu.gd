@@ -29,6 +29,7 @@ const CARD_GAP_SCALE := 0.96   # 选人池卡牌绘制半径/间距半径：1.0=
 const RULES_TEXT := "《酒馆纷争》玩法说明\n\n一、目标与胜负\n· 你和对手各有一支队伍：3 名首发上场，其余在替补席待命。\n· 一方累计阵亡 3 名英雄（含替补）即判负。\n· 若同一时刻双方都达到 3 名阵亡（同归于尽），判对方负、你获胜。\n\n二、开局流程\n· 普通模式：先在编辑页组成阵容并保存到卡组槽（选 5-8 名，前 3 名首发、其余替补）；开战后在战斗内弹出“选择卡组”，从 3 个已存卡组里挑一个出战（也可点「随机英雄」）→ 再轮流上首发。\n· 竞技场模式：开局进入“2 选 1 选人”，你挑 4 次、敌方也会把没选的英雄给你（每队最终各 8 名），再轮流上首发。\n· 开局会提示本局先手：先手方先上首发，开战后也先行动。\n\n三、回合怎么进行\n· 每人一回合内：先移动、后攻击（攻击后即不能再移动）；“后勤”单位不能主动攻击。\n· 先手方行动完 → 对方行动 → 双方都完成才算满 1 回合。\n· 点击「结束回合」结束自己的回合；每回合限时 90 秒，超时自动结束。\n\n四、基础数值\n· 移动力默认 2（带「疾行」+1）；射程：近战 1、远程 2。\n· 攻击力会受增益/状态影响；远程单位身边紧邻敌人时攻击降为 1。\n\n五、阵亡与替补\n· 英雄阵亡留下墓碑；替补只能落在自己出生区或本方墓碑（不能落对方墓碑）。\n· 同时死多人时会逐个替补。\n· 第 11 回合起进入“烧血”阶段：每当你方回合结束结算一次，扣血 = 当前回合数 - 10\n  （第 11 回合扣 1、第 12 回合扣 2……），拖得越久越快。\n\n六、关键词（卡面 <xxx>）\n· 远程：无贴身敌人时射程为 2；有敌人紧邻时攻击降为 1。\n· 嘲讽：攻击范围内有带「嘲讽」的敌方时，只能先打它。\n· 疾行：移动力 +1。\n· 后勤：不能主动攻击（但会反击），只提供支援/光环。\n· 替补：替补登场时触发其后效果。\n· 渗透：移动可穿过双方单位与障碍物，但不能停留。\n\n七、状态效果（卡面 [xxx]，同类不叠加，回合结束解除）\n· 猛毒：双方任一回合开始时都受 1 点伤害，无法解除。\n· 重伤：受到的伤害 +1。\n· 麻痹：攻击力 -1（至少为 0）。\n· 冰冻：移动力 -1（至少为 0）。\n· 沉默：不能触发非关键词技能。\n· 眩晕：不能移动/攻击/反击/触发技能。\n· 圣盾：抵挡一次受到的伤害或异常状态，生效后解除。\n\n八、战场注意\n· 障碍物只能靠直接攻击打掉耐久（每次 -1；伐木工攻击障碍额外 -99），技能不再作用于障碍。\n· 炸弹：炸弹人放置；其他单位停留在炸弹格上会爆炸受 5 点伤害（单纯经过不炸）。\n· 增益道具拾取即生效；金矿：攻击+1（永久）、生命上限+3并回复3点血（仅黄金矿工可拾取）。"
 
 var _help_overlay: Control = null   # 游戏说明弹窗
+var _stats_overlay: Control = null  # 对战统计弹窗
 
 func _ready() -> void:
 	_build()
@@ -280,6 +281,7 @@ func _build_main_menu() -> void:
 	add_mode_btn.call("联机模式", _go_net)
 	add_mode_btn.call("自由部署（测试）", _go_test_deploy)
 	add_mode_btn.call("游戏说明", _open_help)
+	add_mode_btn.call("对战统计", _open_stats)
 	add_mode_btn.call("复制诊断信息", _copy_diagnostics)
 	var quit_btn := Button.new()
 	quit_btn.text = "退出游戏"
@@ -835,6 +837,158 @@ func _close_help() -> void:
 	if _help_overlay != null and is_instance_valid(_help_overlay):
 		_help_overlay.queue_free()
 	_help_overlay = null
+
+# ---- 对战统计弹窗：四种模式的胜场/败场/胜率 + 重置 ----
+func _open_stats() -> void:
+	if _stats_overlay != null and is_instance_valid(_stats_overlay):
+		_stats_overlay.queue_free()
+		_stats_overlay = null
+	var vsize := get_viewport().get_visible_rect().size
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(overlay)
+	_stats_overlay = overlay
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.7)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(dim)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.12, 0.16, 0.99)
+	sb.set_corner_radius_all(12)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(1.0, 0.85, 0.5)
+	sb.content_margin_left = 18.0
+	sb.content_margin_right = 18.0
+	sb.content_margin_top = 14.0
+	sb.content_margin_bottom = 14.0
+	panel.add_theme_stylebox_override("panel", sb)
+	overlay.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "对战统计"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	# 表头 + 四行数据（模式 / 胜场 / 败场 / 胜率）
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 10)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.add_child(grid)
+	var col_w := [220.0, 76.0, 76.0, 96.0]
+	for i in 4:
+		var head := Label.new()
+		head.text = ["模式", "胜场", "败场", "胜率"][i]
+		head.add_theme_font_size_override("font_size", 15)
+		head.add_theme_color_override("font_color", Color(0.75, 0.8, 0.92))
+		head.custom_minimum_size = Vector2(col_w[i], 0)
+		head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER if i > 0 else HORIZONTAL_ALIGNMENT_LEFT
+		grid.add_child(head)
+	for key in Stats.MODES:
+		var name_lb := Label.new()
+		name_lb.text = Stats.mode_name(key)
+		name_lb.add_theme_font_size_override("font_size", 17)
+		name_lb.add_theme_color_override("font_color", Color(0.92, 0.93, 1.0))
+		name_lb.custom_minimum_size = Vector2(col_w[0], 0)
+		grid.add_child(name_lb)
+		var w_lb := Label.new()
+		w_lb.text = str(Stats.win_count(key))
+		w_lb.add_theme_font_size_override("font_size", 17)
+		w_lb.add_theme_color_override("font_color", Color(0.55, 0.95, 0.6))
+		w_lb.custom_minimum_size = Vector2(col_w[1], 0)
+		w_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		grid.add_child(w_lb)
+		var l_lb := Label.new()
+		l_lb.text = str(Stats.loss_count(key))
+		l_lb.add_theme_font_size_override("font_size", 17)
+		l_lb.add_theme_color_override("font_color", Color(1.0, 0.55, 0.55))
+		l_lb.custom_minimum_size = Vector2(col_w[2], 0)
+		l_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		grid.add_child(l_lb)
+		var r_lb := Label.new()
+		r_lb.text = Stats.win_rate_text(key)
+		r_lb.add_theme_font_size_override("font_size", 17)
+		r_lb.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+		r_lb.custom_minimum_size = Vector2(col_w[3], 0)
+		r_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		grid.add_child(r_lb)
+	# 总计
+	var total_w := 0
+	var total_l := 0
+	for key in Stats.MODES:
+		total_w += Stats.win_count(key)
+		total_l += Stats.loss_count(key)
+	var total_lb := Label.new()
+	var total_txt := "总计：胜 %d · 败 %d" % [total_w, total_l]
+	if total_w + total_l > 0:
+		total_txt += " · 胜率 %.1f%%" % (float(total_w) / float(total_w + total_l) * 100.0)
+	total_lb.text = total_txt
+	total_lb.add_theme_font_size_override("font_size", 16)
+	total_lb.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	total_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(total_lb)
+	var hint := Label.new()
+	hint.text = "只统计双方以「一方累计 3 名英雄阵亡」分出胜负的对局；中途退出、断线不算。"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.custom_minimum_size = Vector2(minf(vsize.x - 90.0, 500.0), 0)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hint)
+	# 按钮：重置统计 / 关闭
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	vb.add_child(btn_row)
+	var reset := Button.new()
+	reset.text = "重置统计"
+	reset.add_theme_font_size_override("font_size", 17)
+	reset.custom_minimum_size = Vector2(0, 44)
+	reset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reset.pressed.connect(_confirm_reset_stats)
+	btn_row.add_child(reset)
+	var close := Button.new()
+	close.text = "关闭"
+	close.add_theme_font_size_override("font_size", 17)
+	close.custom_minimum_size = Vector2(0, 44)
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close.pressed.connect(_close_stats)
+	btn_row.add_child(close)
+	# 尺寸与居中
+	panel.reset_size()
+	var min_sz := panel.get_combined_minimum_size()
+	var pw: float = clampf(maxf(min_sz.x, 420.0), 420.0, maxf(vsize.x - 40.0, 420.0))
+	var ph: float = minf(min_sz.y, vsize.y - 40.0)
+	panel.custom_minimum_size = Vector2(pw, ph)
+	panel.size = Vector2(pw, ph)
+	panel.position = Vector2((vsize.x - pw) / 2.0, maxf((vsize.y - ph) / 2.0, 20.0))
+
+# 重置统计：二次确认后清零并刷新面板
+func _confirm_reset_stats() -> void:
+	var d := ConfirmationDialog.new()
+	d.title = "重置统计"
+	d.dialog_text = "确定要把所有模式的对战统计清零吗？此操作不可撤销。"
+	d.ok_button_text = "确定重置"
+	d.cancel_button_text = "取消"
+	d.confirmed.connect(_do_reset_stats)
+	d.confirmed.connect(d.queue_free)
+	d.canceled.connect(d.queue_free)
+	add_child(d)
+	d.popup_centered()
+
+func _do_reset_stats() -> void:
+	Stats.reset_all()
+	_open_stats()   # 重建面板刷新显示
+
+func _close_stats() -> void:
+	if _stats_overlay != null and is_instance_valid(_stats_overlay):
+		_stats_overlay.queue_free()
+	_stats_overlay = null
 
 # ---- 崩溃诊断：把引擎日志等现场信息复制到剪贴板 ----
 # 玩家遇到问题(闪退/卡死/报错)后点此按钮 → 粘贴发给开发者即可定位。

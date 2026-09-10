@@ -266,6 +266,7 @@ func _default_deck() -> Array:
 		out.append(ids[i])
 	return out
 const LOSS_DEATH_COUNT := 3   # 一方累3 名英雄阵亡即判负
+var _stats_recorded := false   # 本局是否已记入对战统计（每局只记一次）
 
 # 替补与阵亡统
 var player_roster: Array = []   # 我方替补英雄 id（尚未上场）
@@ -945,6 +946,7 @@ func reset_match() -> void:
 	_ai_done = false
 	_ai_used = false
 	_ending_side = false
+	_stats_recorded = false   # 重开算新的一局：允许再次记账
 	_clear_selection()   # 清掉选中单位 + 可移可攻击高亮：否则"点击英雄后重开"会把旧可行动范围带到新一局
 	# 清场上单
 	for u in units:
@@ -2121,9 +2123,20 @@ func _check_no_limit_end() -> bool:
 # 保证死亡即使只在一端结算，另一端也能立即显示对局结束。单机仅本地弹框
 func _emit_match_result(winner_side: int) -> void:
 	var local_win := (winner_side == _my_side())
+	# 对战统计：只统计"一方累计 3 名英雄阵亡"判定出的正式对局
+	# （自由部署测试 no_death_limit=true 不计入；中途退出/断线不会走到这里）
+	if not GameState.no_death_limit:
+		_record_stats(local_win)
 	match_result.emit(local_win)
 	if GameState.is_online and GameState.is_host:
 		NetBus.send_all(JSON.stringify({ "type": "match_end", "winner": winner_side }))
+
+# 记录本局胜负到统计（每局只记一次；联机两端各自记本端视角）
+func _record_stats(local_win: bool) -> void:
+	if _stats_recorded:
+		return
+	_stats_recorded = true
+	Stats.record(local_win)
 
 func _dead_count(faction: int) -> int:
 	return player_dead if faction == DataRegistry.Faction.PLAYER else enemy_dead
@@ -3023,6 +3036,9 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			# 主机权威公布对局结束：客户端若尚未本地结算（死亡只发生在主机端），补结算并弹胜负框
 			var winner := int(cmd.get("winner", GameState.SIDE_PLAYER))
 			GameState.end_match(winner)
+			# 对战统计：客户端可能没本地跑过 _check_win，这里补记一次（_record_stats 内部去重）
+			if not GameState.no_death_limit:
+				_record_stats(winner == _my_side())
 			if state != State.ENDED:
 				state = State.ENDED
 				_clear_selection()
