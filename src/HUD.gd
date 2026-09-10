@@ -1792,7 +1792,9 @@ func _on_end_turn() -> void:
 	if battle and battle.state == Battle.State.PLAYER_INPUT:
 		battle.submit_end_turn()
 
-func _on_restart() -> void:
+# redraft=true = 对局结束后"再战一局"（竞技场需重新 2 选 1 选人）；
+# 对局中的"重开"用默认 false（竞技场沿用同队伍，普通模式重新选卡组）。
+func _on_restart(redraft := false) -> void:
 	if _result_overlay != null:
 		# 关闭结算浮层（场景不卸载，需手动收起，否则遮住重开的选人/部署界面）
 		_result_overlay.queue_free()
@@ -1808,7 +1810,7 @@ func _on_restart() -> void:
 		if GameState.is_online:
 			battle.request_rematch_online()   # 联机：请求再来一局（不退出连接/大厅）
 		else:
-			battle.reset_match()   # 重置本局（不卸载场景，避免 reload 打断异步导致 get_tree() null 崩溃）
+			battle.reset_match(redraft)   # 重置本局（不卸载场景，避免 reload 打断异步导致 get_tree() null 崩溃）
 	elif GameState.is_online:
 		# 异常兜底（Battle 已失效）：退回联机大厅
 		NetBus.stop()
@@ -1859,7 +1861,7 @@ func show_result(win: bool) -> void:
 	again.text = "再来一局" if GameState.is_online else "再战一局"
 	again.custom_minimum_size = Vector2(260, 52)
 	again.add_theme_font_size_override("font_size", 20)
-	again.pressed.connect(_on_restart)
+	again.pressed.connect(_on_restart.bind(true))   # 结束后再战一局：竞技场重新选人
 	box.add_child(again)
 	# 单机/联机都显示：联机由主机权威广播重启（不退出大厅连接）
 

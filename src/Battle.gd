@@ -937,7 +937,8 @@ signal deck_pick_done                      # 卡组已选定（面板应收起�
 signal turn_banner(text: String)
 
 # 重开本局：清空场上单道具/状态并重新开局*不卸载场景树**，避reload 打断异步协程导致 get_tree() null 崩溃）
-func reset_match() -> void:
+# redraft=true 用于"对局结束后再战一局"：竞技场会重新 2 选 1 选人（对局中"重开"则沿用同队伍）
+func reset_match(redraft := false) -> void:
 	_session_id += 1   # 让上次对局的异步协程（敌方回放等）检测到会话已变并安全退
 	# 若敌方 AI 后台线程仍在跑，等它结束并回收（搜索已限幅，耗时短；避免线程泄漏）
 	if _ai_thread != null and _ai_thread.is_started():
@@ -999,9 +1000,11 @@ func reset_match() -> void:
 		# 自由部署：直接放置并开
 		_place_units()
 		_start_match()
-	elif GameState.arena_mode and GameState.player_deck.is_empty():
-		# 竞技场"选人阶段"重开：还没选完人（卡组为空，见 _begin_arena_draft 会先清空卡组）——
-		# 重新开一轮选人：重新随机障碍/道具与候选卡牌（单机换一批卡；联机由种子保持一致）。
+	elif GameState.arena_mode and (redraft or GameState.player_deck.is_empty()):
+		# 竞技场重新选人，两种情况：
+		#  1) "选人阶段"中途重开：还没选完人（卡组为空，见 _begin_arena_draft 会先清空卡组）；
+		#  2) 对局结束后点"再战一局"（redraft=true）：重新 2 选 1 构建卡组。
+		# 都会重新随机障碍/道具与候选卡牌（单机换一批卡；联机由种子保持一致）。
 		if not GameState.is_online:
 			rng.randomize()   # 单机：换一批选人卡牌，避免重开还是同样两张
 		_place_obstacles()
