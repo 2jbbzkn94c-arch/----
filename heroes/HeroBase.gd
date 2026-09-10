@@ -95,6 +95,14 @@ func on_ally_moved(_mover: Unit, _dist: int) -> void:
 func on_ally_entered(_newcomer: Unit) -> void:
 	pass
 
+## 刷新"身份类状态位"（不随回合/变身失效的机制标志：血锁恒直线攻击、坠炮手全场射程等）。
+## Battle 在"变身后"与"回合末清理临时状态时"调用；默认清成普通人，需要保留的英雄自行置位。
+func refresh_identity() -> void:
+	if unit == null or not is_instance_valid(unit):
+		return
+	unit.los_ignore = false
+	unit.branch_override = false
+
 
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。

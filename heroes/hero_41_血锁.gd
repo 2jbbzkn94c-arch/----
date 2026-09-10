@@ -64,6 +64,11 @@ func on_spawn() -> void:
 	unit.attack_range += 2
 	unit.branch_override = true
 
+## 身份类状态位：血锁"只能沿直线攻击"是身份机制，不随回合清理/变身失效（否则一漏激活就不直线了）
+func refresh_identity() -> void:
+	super.refresh_identity()
+	unit.branch_override = true
+
 # 每回合结束 _clear_statuses 会清掉 branch_override，故本回合开始时必须重新激活，
 # 否则血锁从第二回合起不再受限（能攻击直线外目标）。
 func on_turn_start() -> bool:

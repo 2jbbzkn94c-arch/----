@@ -1876,8 +1876,8 @@ func _clear_statuses(faction: int) -> void:
 			u.move_buff = 0
 			u.echo_set = -1
 			u.ramble_bonus = 0
-			if u.hero_id != "hero_41":   # 血锁直线限制是身份机制,不随回合清除(否则一回合漏激活就变不直线)
-				u.branch_override = false
+			# 身份类状态位（血锁恒直线等）由英雄脚本自己维持，不随回合清零
+			_hero(u).refresh_identity()
 			u.refresh_stats()
 	# 附体：目标方（该阵营）回合结束时解除其身上的绑定
 	if _possess_links.size() > 0:
@@ -4076,11 +4076,12 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 		u.move_range += 1
 	u.attack_range = bdef.attack_range
 	u.attack_type = bdef.attack_type
-	u.los_ignore = (hid == "hero_45")   # 回到基础英雄：清理坠炮手的无视阻挡
 	u.echo_set = -1   # 回到基础英雄：清空共鸣者"攻击力变为队友之和"
 	u.display_name = bdef.display_name
 	u.behavior = HeroRegistry.create(hid)
 	u.behavior.setup(self, u)
+	# 身份类状态位（坠炮手全场射程/无视阻挡、血锁恒直线）由（新的）英雄脚本自己维持
+	_hero(u).refresh_identity()
 
 # 古灵精怪：随机变为己方队伍中的一名其他角色，暂时获得其技能与数
 func _transform(u: Unit, picked_override: String = "") -> void:
@@ -4124,13 +4125,8 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	# 变身：重新挂接对应英雄的行为脚本，使其后续技能按新英雄分
 	u.behavior = HeroRegistry.create(u.hero_id)
 	u.behavior.setup(self, u)
-	# 血锁的直线限制状态位补上（数值加成已含在 spawn_attack_range；状态位在变身瞬间补，
-	# 之后每回合由血锁 on_turn_start 维持）。不调用目标 on_spawn：其数值加成都已由 spawn_* 覆盖，
-	# 直接调会重复叠加（大骑士/血锁会双倍）。
-	if u.hero_id == "hero_41":
-		u.branch_override = true
-	# 坠炮手：变身后也获得全场射程与无视阻挡（数值已在 spawn_attack_range 覆盖为 99）
-	u.los_ignore = (u.hero_id == "hero_45")
+	# 变身：身份类状态位（血锁恒直线、坠炮手全场射程）由英雄脚本自己维持
+	_hero(u).refresh_identity()
 	# 变身即生效的数值补算：由英雄脚本自己处理（共鸣者补算共鸣加成；其余默认清掉残留）
 	_hero(u).on_become_hero()
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
