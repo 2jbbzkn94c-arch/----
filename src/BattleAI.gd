@@ -45,6 +45,7 @@ class Sim:
 	var bombs: Dictionary = {}         # cell -> true（炸弹：经过不炸，落停引爆，非炸弹人应避免停在上面）
 	var buff_cells: Dictionary = {}    # cell -> "atk"/"move"/"shield"/"heal"（普通增益道具，AI可评估收益去吃）
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
+	var buff_taken := 0.0     # 本回合内拾取的增益道具价值合计（供评估加分，驱动 AI 主动去吃道具）
 	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
 	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
 
@@ -56,6 +57,7 @@ class Sim:
 		c.bombs = bombs.duplicate()
 		c.buff_cells = buff_cells.duplicate()
 		c.killed_players = killed_players
+		c.buff_taken = buff_taken
 		c._neg_gained = _neg_gained.duplicate()
 		c._pos_mirror_depth = 0   # 镜像深度每次搜索步重置（防跨步累计误限）
 		for i in units.size():
@@ -102,6 +104,8 @@ var log_decisions := true   # 每次敌方行动后把"评分+决策理由"打�
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
 const GOLD_LOW_ATK := 4
+# 吃增益道具的评分权重：本回合拾取的道具按价值 × 该权重计入评估，驱动 AI 主动绕路去吃
+const BUFF_TAKE_WEIGHT := 3.0
 
 func _init(g: HexGrid) -> void:
 	grid = g
@@ -326,7 +330,7 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 			if sim.buff_cells.has(c):
 				var bv := _buff_value(sim, u, String(sim.buff_cells[c]))
 				if bv > 0.0:
-					dkey -= bv * 2.0
+					dkey -= bv * 3.0   # 权重提高：AI 更愿意绕路去吃有用的道具
 			# 黄金矿工（攻击力 < GOLD_LOW_ATK）：自身输出薄弱、吃矿成长收益更高，
 			# 把可达矿格的优先度拉满——压过任何高价值增益道具格，保证"能吃到矿就一定先去吃"。
 			if u.hero_id == "hero_42" and u.eatk < GOLD_LOW_ATK and sim.gold_cells.has(c):
@@ -539,10 +543,11 @@ func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
 			return true
 	return false
 
-# 返回某落点可攻击的目标 idx（含嘲讽规则；坠炮手 ignore_los 无视嘲讽）
+# 返回某落点可攻击的目标 idx（含嘲讽规则；坠炮手 ignore_los 且未被贴身时无视嘲讽）
 func _valid_targets(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
 	var taunts: Array = []
-	if not (u.ignore_los and not u.silenced):   # 坠炮手未沉默才无视嘲讽；沉默时受嘲讽约束
+	# 坠炮手未沉默且"未被贴身"才无视嘲讽；被贴身时按普通远程处理、受嘲讽约束
+	if not (u.ignore_los and not u.silenced and not _mortar_engaged(sim, u)):
 		for i in sim.units.size():
 			var t: SimUnit = sim.units[i]
 			if t.alive and t.fn != u.fn and t.skills.has(DataRegistry.Skill.TAUNT) and _in_range(sim, u, from_cell, t):
@@ -556,6 +561,15 @@ func _valid_targets(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
 			continue
 		out.append(i)
 	return out
+
+# 坠炮手(hero_45)是否"被贴身"：有敌方单位紧邻其**当前格**。
+# 被贴身时全场狙击的嘲讽豁免失效（与真实规则一致）。
+func _mortar_engaged(sim: Sim, u: SimUnit) -> bool:
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn != u.fn and grid.distance(u.cell, t.cell) == 1:
+			return true
+	return false
 
 func _nearest_player(sim: Sim, cell: Vector2i) -> SimUnit:
 	var best: SimUnit = null
@@ -598,6 +612,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 移动后拾取普通增益道具(收益已在走位排序中权衡)
 			if sim.buff_cells.has(mc):
 				var bt: String = String(sim.buff_cells[mc])
+				sim.buff_taken += _buff_value(sim, u, bt)   # 记录本回合吃到的道具价值（_evaluate 据此加分）
 				sim.buff_cells.erase(mc)
 				if bt == "atk":
 					u.atk_use_buff += 1
@@ -1067,6 +1082,9 @@ func _evaluate(sim: Sim) -> float:
 				score += 30.0 if low_atk else 20.0   # 正站在金矿格:本回合结算即成 +4.6 分/枚以上,拉满优先
 			elif sim.gold_cells.size() > 0:
 				score += 14.0 if low_atk else 8.0    # 场上还有金矿且矿工待命:吃矿是持续成长收益,避免被攻击目标挤掉
+	# 吃增益道具：本回合实际拾取的道具按价值计入（攻击/移动/圣盾/回血），
+	# 让 AI 主动绕路去吃有用的道具，而不是"顺路才吃"。
+	score += sim.buff_taken * BUFF_TAKE_WEIGHT
 	# 走位候选(见 _actions_for):矿工把可达金矿格排最前(d=-1),这里额外把"能走到金矿"纳入评分,
 	# 让"绕路去吃矿"也值得,而不只盯着当前占格。
 	# 搏命攻击激励：敌方单位本回合攻击过（即使之后被反死也保留 attacked 标记），且其所在格逃不掉。
@@ -1224,6 +1242,8 @@ func _position_score(sim: Sim) -> float:
 		var max_y := float(grid.height - 1)
 		if u.skills.has(DataRegistry.Skill.TAUNT):
 			s += row / max_y * 4.0                     # 坦克前压
+		elif _logistics_charges(u):
+			s += row / max_y * 4.0                     # 烛火：虽为后勤但要冲前线（靠移动后相邻AOE输出）
 		elif u.skills.has(DataRegistry.Skill.LOGISTICS):
 			s += (1.0 - row / max_y) * 3.0             # 后勤缩后
 		if u.atk_type == DataRegistry.AttackType.RANGED:
@@ -1234,9 +1254,10 @@ func _position_score(sim: Sim) -> float:
 				s += 2.0                               # 卡在射程边缘：安全又能打
 			elif near > u.atk_range and near <= u.emove:
 				s -= float(near - u.atk_range) * 0.4   # 超射程略减分（需再走一步才能开火）
-		elif not u.skills.has(DataRegistry.Skill.LOGISTICS):
+		elif not u.skills.has(DataRegistry.Skill.LOGISTICS) or _logistics_charges(u):
 			# 近战/坦克够不着时的贴近激励：离玩家越远减分越多，驱动尽量贴近；
 			# “靠近会吃多少伤害”由威胁图/落点威胁负责权衡，不会让它无脑踩雷。
+			# 烛火（后勤特例）同样吃这个激励：必须贴上去才能用移动AOE打到人。
 			var near_m := _nearest_enemy_dist(sim, u)
 			var engage := u.emove + u.atk_range   # 本回合全力后可够到的距离
 			if near_m > engage and near_m < (1 << 29):
@@ -1246,6 +1267,11 @@ func _position_score(sim: Sim) -> float:
 		if not u.moved:
 			s += 0.5
 	return s
+
+# 后勤里"需要冲前线"的特例：烛火(hero_17) 靠"移动后伤害相邻敌人"输出，
+# 必须顶到敌人身边才有效——不能按普通后勤缩在后方。
+func _logistics_charges(u: SimUnit) -> bool:
+	return u.hero_id == "hero_17"
 
 # 与最近对立单位（此处即玩家单位）的距离；无则返回一个大数
 func _nearest_enemy_dist(sim: Sim, u: SimUnit) -> int:
@@ -1286,8 +1312,8 @@ func _siege_bonus(sim: Sim) -> float:
 		var u: SimUnit = sim.units[i]
 		if not u.alive or u.fn != DataRegistry.Faction.ENEMY:
 			continue
-		if u.skills.has(DataRegistry.Skill.LOGISTICS):
-			continue   # 后勤可在后方支援，不强行贴脸
+		if u.skills.has(DataRegistry.Skill.LOGISTICS) and not _logistics_charges(u):
+			continue   # 后勤可在后方支援，不强行贴脸（烛火例外：它必须冲前线）
 		var near := _nearest_enemy_dist(sim, u)
 		# 参战激励：能打到玩家(在射程内)给强加分，这正是"参与战斗"；
 		# 超出攻击射程(打不到)则按超出格数**扣分**——明确惩罚"躲在角落游荡"，
