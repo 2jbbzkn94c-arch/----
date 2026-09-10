@@ -57,6 +57,9 @@ var _ai_plan: Array = []           # 线程算出的敌方行动计划
 var _ai_done := false              # 线程是否已完成
 var _ai_used := false              # 是否已消费本次线程结果
 var _ai_mutex := Mutex.new()       # 保护 _ai_plan/_ai_done 跨线程读写
+var _enemy_refs: Array = []        # 敌方回放的单位引用表（计划里的 idx 是这张表的下标）
+var _enemy_plan_running := false   # 当前是否正在回放敌方计划（中途落位的替补据此补一步）
+var _enemy_replay: EnemyReplay = null   # 敌方计划回放器（演出+节奏+等待兜底，见 EnemyReplay.gd）
 var _ending_side := false   # 正在"结束回合/结算扣血"流程中：期间阵亡不立即替补（推迟到本方下回合
 var _rematch_requested := false   # 客户端已请求"再来一局"（防重复发请求）
 var _rematch_started := false     # 主机已发起联机重开（防重入，重载场景后新实例自动重置）
@@ -147,11 +150,8 @@ const DEFAULT_DECK_SIZE := 5
 const _CONSOLE_SUB_LOG := true
 const _CONSOLE_AI_LOG := false
 
-# 敌方 AI 回放节奏（秒）——三名敌人连招时"谁在动/动了什么"要能看清，故在动作之间留停顿。
-# 调大=更慢更好读，调小=更紧凑；嫌敌回合太慢就调小 _ENEMY_HERO_GAP。
-const _ENEMY_HERO_GAP := 0.7    # 相邻两名不同英雄的行动之间
-const _ENEMY_STEP_GAP := 0.25   # 同一名英雄"移动→攻击"之间
-const _ENEMY_TELL_GAP := 0.3    # 敌方回合第一步：亮起行动描边后、出手前的起手停顿
+# 敌方回放的节奏（起手/英雄之间/招式之间的停顿）随回放器搬到 src/EnemyReplay.gd：
+# HERO_GAP / STEP_GAP / TELL_GAP —— 嫌敌回合太慢就调那里的 HERO_GAP。
 
 func _default_deck() -> Array:
 	var ids := DataRegistry.heroes.keys()
@@ -177,6 +177,7 @@ func _exit_tree() -> void:
 	_ai_thread = null
 
 func _ready() -> void:
+	_enemy_replay = EnemyReplay.new(self)   # 敌方计划回放器（无状态，重开不必重建）
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
 	hex_size = _fit_hex_size()   # 视口铺满自适应:棋盘宽基本占满屏幕,棋子内容随之等比放大
@@ -860,6 +861,8 @@ func reset_match(redraft := false) -> void:
 	_possess_depth = 0
 	_preview_cells = {}
 	_charge_pending.clear()   # 重开新局：清掉未结算的冲锋记账
+	_enemy_refs.clear()       # 重开新局：清掉敌方回放的单位引用表
+	_enemy_plan_running = false
 	_refresh_board()   # 同步棋盘显示：清空上一局的墓障碍/道具残留（board_view 缓存需要重绘）
 	player_roster = []
 	enemy_roster = []
@@ -1499,6 +1502,35 @@ func _damage_obstacle(cell: Vector2i, amt: int) -> void:
 		board_view.obstacles = obstacles
 		board_view.queue_redraw()
 
+# ---- 技能 × 障碍物 规则（两条互补，别再写成"技能一律不作用于障碍"）----
+#   ① 主动攻击障碍物：只扣耐久（每次 -1；伐木工额外 -99），**不触发任何英雄技能**
+#      （见 _impact_obstacle / HeroBase.on_attack_obstacle）。
+#   ② 技能对敌人生效时**波及到**障碍物：障碍同样掉耐久（剑气穿透扫过的格、散射/爆炸的相邻范围…）。
+
+# 技能波及障碍：把"本次技能作用到的格"里的障碍各扣 1 点耐久，返回被波及的障碍数。
+# cells 传技能自己的作用范围；同一格只扣一次。英雄脚本（剑气/散射/爆炸…）在结算伤害时调用。
+func sweep_obstacles(cells: Array) -> int:
+	var n := 0
+	var hit := {}
+	for c in cells:
+		if hit.has(c):
+			continue
+		hit[c] = true
+		if obstacles.has(c):
+			_damage_obstacle(c, 1)
+			n += 1
+	return n
+
+# 以某格为中心的 AOE 波及范围：该格与其相邻格（溅射/爆炸类技能直接用它来算波及）
+func area_around(cell: Vector2i) -> Array:
+	var out: Array = [cell]
+	out.append_array(grid.neighbors(cell))
+	return out
+
+# 以某格为中心的 AOE 波及障碍（溅射/爆炸类技能用），返回被波及的障碍数
+func sweep_obstacles_around(cell: Vector2i) -> int:
+	return sweep_obstacles(area_around(cell))
+
 # 圣诞老人：在空地随机放置 n 个增益道具（"heal"/"atk"/"move"/"shield"
 func _place_buff_items(u: Unit, n: int) -> void:
 	var spots: Array = []
@@ -1789,7 +1821,7 @@ func _tick_statuses(_faction: int) -> void:
 	for u in units:
 		if u == null or not is_instance_valid(u):
 			continue
-		if u.alive and u.has_status("poison"):
+		if u.alive and u.has_status(StatusDB.POISON):
 			var hp_before := u.hp
 			u.take_damage(1, false, false, "猛毒")   # [猛毒]：圣盾可抵挡一次（抵挡则消耗圣盾不掉血）
 			if u.hp < hp_before:
@@ -2674,8 +2706,9 @@ func _melee_obstacle_hit(u: Unit, cell: Vector2i) -> void:
 			if u != null and is_instance_valid(u):
 				_impact_obstacle(u, cell)))
 
-# 障碍受击命中：命中火花演+ 结算伤害（仅直接攻击的伤害，伐木工额99）
-# 英雄技能（溅射/穿击退等）不再作用于障碍物，此处不触发任何英雄特技
+# 障碍受击命中：命中火花演出 + 结算伤害（仅直接攻击的伤害，伐木工额外99）
+# 规则①：主动攻击障碍物不触发任何英雄特技。
+# （另一条互补：技能"对敌人生效时波及到障碍"会扣耐久 —— 见 sweep_obstacles / _pierce_line）
 func _impact_obstacle(u: Unit, cell: Vector2i) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
@@ -3082,7 +3115,7 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 		u.float_heal(3)
 		log_message.emit("%s 拾取回血道具，恢复 3 点生命（可溢出上限）。" % u.display_name)
 	elif btype == "shield":
-		u.add_status("shield")   # 圣盾：抵挡一次受到的伤害（非叠加
+		u.add_status(StatusDB.SHIELD)   # 圣盾：抵挡一次受到的伤害（非叠加
 		u.refresh_stats()
 		log_message.emit("%s 拾取护盾道具，获得[圣盾]。" % u.display_name)
 	_refresh_board()
@@ -3231,7 +3264,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
 			# 带状态的攻击命中带圣盾目标：圣盾挡下整次攻击——不扣血、后续状态也不生效
-			if target.has_status("shield") and attacker.alive and _hero(attacker).applies_status_on_hit():
+			if target.has_status(StatusDB.SHIELD) and attacker.alive and _hero(attacker).applies_status_on_hit():
 				target._shield_block_status = true
 			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name, true)
 	_last_attacked = target
@@ -3250,7 +3283,10 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，
 	# 才以全额攻击力反击（被贴身=压制中：攻击降为1/技能失效，反击不了）
 	var can_counter := false
-	if target.alive and target.can_attack() and (not target.counter_used_this_turn or (target.skill_allowed() and _hero(target).infinite_counter())):
+	# 攻击力为 0（如麻痹把攻击压到 0）的单位打不出反击：直接不反击——**不播反击动画**、
+	# 不消耗"每回合一次"的反击名额（本回合攻击力若回升仍可反击）。
+	if target.alive and target.can_attack() and target.effective_atk() > 0 \
+			and (not target.counter_used_this_turn or (target.skill_allowed() and _hero(target).infinite_counter())):
 		var dist_c := grid.distance(attacker.cell, target.cell)
 		if dist_c <= 1:
 			can_counter = true
@@ -3280,6 +3316,11 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 而远程被贴身时基础攻击应降（若不同步，反击者会按未贴身的基础攻击反击，伤害错误偏高）
 	_sync_ranged_adjacent()
 	var cdmg := counterer.effective_atk() * _counter_bonus(counterer, attacker)
+	if cdmg <= 0:
+		# 兜底：攻击力为 0 的单位不反击——连"轻冲一下"的反击演出都不播，直接收尾
+		# （主闸在 _apply_attack 的 can_counter，这里防"判定后、演出前攻击力被降到 0"）
+		_finish_attack(attacker, for_enemy)
+		return
 	# 远程对射（距离>1）：反击者原地发射投掷物，不贴脸突进
 	if grid.distance(counterer.cell, attacker.cell) > 1:
 		_launch_counter_projectile(attacker, counterer, cdmg, for_enemy)
@@ -3546,13 +3587,15 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 		return   # 远程被贴身：射程/攻击降为1，且技能效果无法造成
 	_hero(u).on_attack(target)
 
-func _add_status_msg(u: Unit, status: String, label: String, pierce_shield: bool = false) -> void:
+# 施加状态 + 统一日志。中文名从 StatusDB 取，调用方只给状态键
+# （以前要在每个调用点再写一遍 "猛毒"/"冰冻"…，中文名因此存在 3 份拷贝）
+func _add_status_msg(u: Unit, status: String, pierce_shield: bool = false) -> void:
 	if u._shield_block_status:
 		# 本次攻击已被圣盾整段挡下：不再施加状态(盾的 [圣盾] 提示已由挡伤时显示)
 		return
 	u.add_status(status, pierce_shield)
 	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
-	log_message.emit("%s 获得[%s]。" % [u.display_name, label])
+	log_message.emit("%s 获得[%s]。" % [u.display_name, StatusDB.label(status)])
 
 # [附体]：宿魂攻击后令敌人绑定。属负面标记（负墟免疫，命中计数攻+1）。
 # 不叠加（后附覆盖先附）；目标方回合结束时由 _clear_statuses 解除（含单位状态与绑定表）。
@@ -3561,8 +3604,8 @@ func _possess_attach(caster: Unit, target: Unit) -> void:
 		return
 	if not target.alive or target.faction == caster.faction or target == caster:
 		return
-	target.add_status("possess")   # 负墟免疫时此处不会挂上状态（add_status 拦截并返回）
-	if not target.has_status("possess"):
+	target.add_status(StatusDB.POSSESS)   # 负墟免疫时此处不会挂上状态（add_status 拦截并返回）
+	if not target.has_status(StatusDB.POSSESS):
 		return   # 免疫成功（负墟等）：不建立绑定
 	_possess_links[target] = caster
 	log_message.emit("%s 令 %s 获得[附体]。" % [caster.display_name, target.display_name])
@@ -3924,24 +3967,28 @@ func _pierce_back(u: Unit, target: Unit) -> void:
 
 # given_cell 为攻击目标，穿透其身后直线到棋盘边
 func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
-	# 用轴向方向计目标身后"的直线，沿该轴向穿透到棋盘边缘
+	# 用轴向方向计"目标身后"的直线，沿该轴向穿透到棋盘边缘
 	# 伤害路径上的所有敌人（真正的六边形直线，不受列错位影响）
-	# 障碍物不再被剑气破坏：剑气只是穿过，不造成技能对地形效果
+	# 剑气照样穿过障碍物（不停下、不挡后面的敌人），但**扫过的障碍会掉 1 点耐久**：
+	# 规则=技能对敌人生效时波及到的障碍要掉耐久（主动攻击障碍则相反：不触发技能）。
 	var a := grid.axial_of(u.cell)
 	var t := grid.axial_of(target_cell)
 	var step := t - a   # 目标相对攻击者的轴向基本步长（长剑为相邻攻击，步长为单步
 	if step == Vector2i.ZERO:
 		return
+	var swept: Array = []
 	var cur := t + step   # 目标身后第一
 	for _i in 60:
 		var off := grid.offset_of(cur)
 		if not grid.in_bounds(off):
 			break
+		swept.append(off)
 		var v = occupancy.get(off, null)
 		if v != null and v.alive and v.faction != u.faction:
 			v.set_big_hit_style()
 			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name, true)
 		cur += step
+	sweep_obstacles(swept)   # 剑气扫过的障碍：各 -1 耐久
 
 func _random_step(v: Unit) -> void:
 	var nbrs := grid.neighbors(v.cell)
@@ -4020,7 +4067,7 @@ func _hurt_lowest_enemy_stun(u: Unit) -> bool:
 	if best != null:
 		best.set_big_hit_style()
 		best.take_damage(3, false, false, "被%s锁定重创" % u.display_name, true)
-		_add_status_msg(best, "stun", "眩晕")
+		_add_status_msg(best, StatusDB.STUN)
 		return true
 	return false   # 没有敌方目标：技能未生效
 
@@ -4041,6 +4088,9 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 	u.attack_type = bdef.attack_type
 	u.echo_set = -1   # 回到基础英雄：清空共鸣者"攻击力变为队友之和"
 	u.display_name = bdef.display_name
+	u.update_atk_icon()   # 攻击图标跟随（近战剑/远程弩/后勤齿轮）
+	u._update_name_label()   # 名字跟随（此前只在 _transform 里刷，直接还原时名字会残留旧英雄）
+	u._update_tags_label()   # 词条标签跟随
 	u.behavior = HeroRegistry.create(hid)
 	u.behavior.setup(self, u)
 	# 身份类状态位（坠炮手全场射程/无视阻挡、血锁恒直线）由（新的）英雄脚本自己维持
@@ -4102,6 +4152,7 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 		_hero(u).on_turn_start()   # 只继回合开类效
 	log_message.emit("%s 变身 %s。" % [u.display_name, def.display_name])
 	u.display_name = def.display_name   # 完整显示变身后的英雄名（曾误留孤立 "(" 致名字残缺）
+	u.update_atk_icon()      # 攻击图标跟随（近战剑/远程弩/后勤齿轮——变远程或后勤时必须换）
 	u._update_name_label()   # 卡面名字跟随变化
 	u._update_tags_label()   # 技能词条标签跟随变
 	u.refresh_stats()        # 攻击等数值也刷新
@@ -4187,6 +4238,33 @@ func _skeleton_owner_gone(s: Unit) -> void:
 	if s != null and is_instance_valid(s):
 		_on_unit_died(s)
 
+# 敌方回合**中途**才落位的替补：本回合的 AI 计划是回合开始时按快照定好的，
+# 直接上线会导致它"站着不动"白站一轮。这里单独给它补算一手，追加到正在回放的计划尾部。
+# 做法：只建"新替补 + 场上玩家"的极小局面（1 个 AI 单位），搜索出来的一步就是它的动作；
+# 引用表同步登记新替补，计划里的 idx 即它在引用表中的下标。
+func _plan_enemy_late_sub(nu: Unit) -> void:
+	if not _enemy_plan_running or nu == null or not is_instance_valid(nu) or not nu.alive:
+		return
+	if GameState.match_over:
+		return
+	var pool: Array = [nu]
+	for u in units:
+		if u != null and is_instance_valid(u) and u.alive and u.faction != DataRegistry.Faction.ENEMY:
+			pool.append(u)
+	var snap := BattleSnapshot.collect(self, pool)   # 快照打包与常规回合共用同一处
+	var ai := BattleAI.new(grid)
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false   # 这是补算的临时搜索，不重复打印决策说明
+	var sim := ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"])
+	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+	if plan.is_empty():
+		return
+	_enemy_refs.append(nu)
+	_ai_plan.append({ "idx": _enemy_refs.size() - 1, "action": plan[0]["action"] })
+	if _CONSOLE_SUB_LOG:
+		print("[替补] 敌方替补 %s 中途落位，本回合补上一手：%s" % [nu.display_name, str(plan[0]["action"])])
+
 # 敌方替补：按阵亡数量在出生区自动落位（我方回合结束时、敌方回合开始前触发）
 func _place_enemy_sub() -> void:
 	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
@@ -4203,6 +4281,8 @@ func _place_enemy_sub() -> void:
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
 		_grant_sub_aura_after_enter(eu)   # 替补补发光环（风语者等：中途上场才补；先补位再技能阶段跳过）
 		_trigger_on_enter(eu)   # 敌方替补登场技能已触发
+		# 敌方回合中途落位（反击反杀/自爆自伤等）：本回合补上一手，别让它白站一轮
+		_plan_enemy_late_sub(eu)
 		_pending_enemy_sub -= 1
 	# 全部敌方替补补完后：清理剩余敌方墓碑（安葬完毕）
 	if _pending_enemy_sub == 0:
@@ -4759,59 +4839,15 @@ func _run_enemy_turn() -> void:
 	await get_tree().create_timer(0.5, false).timeout
 	if my_session != _session_id:
 		return   # 已重开：本会话作废，安全退
-	await _wait_unpaused()   # 暂停中：等恢复再开始敌方行动（暂停期间不推进任何一步）
-	# 构建模拟快照（与 units 顺序一致，用于回放映射
+	await _enemy_replay.wait_unpaused()   # 暂停中：等恢复再开始敌方行动（暂停期间不推进任何一步）
+	# 构建模拟快照（descs 顺序与 units 一致，回放用的 refs 与之同序）。
+	# 打包集中在 BattleSnapshot（以前 Battle 两处 + 11 个测试各抄一份，字段已漂移过）
 	var refs: Array = units.duplicate()
-	var descs: Array = []
-	var occ_snap := {}
-	var uidx := {}   # Unit -> idx（附体绑定传给模拟用）
-	for i in units.size():
-		uidx[units[i]] = i
-	for i in units.size():
-		var u: Unit = units[i]
-		var poss_by := -1
-		if _possess_links.has(u) and is_instance_valid(_possess_links[u]):
-			poss_by = uidx.get(_possess_links[u], -1)   # 被附体者记录施加它的宿魂
-		descs.append({
-			"fn": u.faction, "hero": u.hero_id, "cell": u.cell, "hp": u.hp, "max_hp": u.max_hp,
-			"atk": u.atk, "eatk": u.effective_atk(), "move": u.move_range, "emove": u.effective_move(),
-			"atk_range": u.attack_range,
-			"atk_type": u.attack_type, "skills": u.skills, "name": u.display_name,
-			"stunned": u.has_status("stun"), "silenced": u.has_status("silence"),
-			"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
-			"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
-			"poss_by": poss_by,
-			# 炸弹免疫 / 金矿拾取权都由英雄脚本决定（炸弹人 / 黄金矿工），AI 不再硬编码 hero_id
-			"immune_bombs": _hero(u).immune_to_bombs(),
-			"can_pickup_gold": _hero(u).can_pickup_gold(),
-		})
-		occ_snap[u.cell] = i
+	var snap := BattleSnapshot.collect(self)
 
 	var ai := BattleAI.new(grid)
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = _CONSOLE_AI_LOG   # AI 行动方案评分输出跟随 AI 行为日志总开关（默认关）
-	# 金矿（buff_items[cell]=="gold"）供 AI 参考，让黄金矿工优先走过去拾取
-	var gold_snap := {}
-	for c in buff_items.keys():
-		if buff_items[c] == "gold":
-			gold_snap[c] = true
-	# 墓碑（阵亡格）供 AI 参考：阻挡移动，不可落
-	var grave_snap := {}
-	for c in graves.keys():
-		grave_snap[c] = true
-	# 障碍物供 AI 参考：阻挡移动与攻击视线(带耐久,AI可攻击打掉)
-	var obstacle_snap := {}
-	for c in obstacles.keys():
-		obstacle_snap[c] = obstacles[c]
-	# 炸弹供 AI 参考：非炸弹人不要停在炸弹格(经过不炸,落停会引爆)
-	var bomb_snap := {}
-	for c in bombs.keys():
-		bomb_snap[c] = true
-	# 普通增益道具(非金矿)供 AI 参考：类型 atk/move/shield/heal,AI 评估收益决定是否去吃
-	var buff_snap := {}
-	for c in buff_items.keys():
-		if buff_items[c] != "gold":
-			buff_snap[c] = buff_items[c]
 	# 后台线程搜索：AI 计算期间主线程保持响应（可点英雄查看属性），算完再回放。
 	# BattleAI 只读 grid 几何与 DataRegistry 静态数据，不触碰场景节点，线程安全。
 	_ai_plan = []
@@ -4820,7 +4856,7 @@ func _run_enemy_turn() -> void:
 	if _ai_thread != null and _ai_thread.is_started():
 		_ai_thread.wait_to_finish()   # 保险：不应有残留线程
 	_ai_thread = Thread.new()
-	_ai_thread.start(_enemy_ai_worker.bind(ai, descs, occ_snap, gold_snap, grave_snap, obstacle_snap, bomb_snap, buff_snap))
+	_ai_thread.start(_enemy_ai_worker.bind(ai, snap))
 	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
 	while true:
 		if get_tree() == null or my_session != _session_id:
@@ -4857,118 +4893,27 @@ func _run_enemy_turn() -> void:
 			_begin_side(GameState.SIDE_PLAYER)
 
 # 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
-func _enemy_ai_worker(ai: BattleAI, descs: Array, occ_snap: Dictionary, gold_snap: Dictionary, grave_snap: Dictionary, obstacle_snap: Dictionary, bomb_snap: Dictionary, buff_snap: Dictionary) -> void:
-	var sim := ai.build_state(descs, occ_snap, gold_snap, grave_snap, obstacle_snap, bomb_snap, buff_snap)
+func _enemy_ai_worker(ai: BattleAI, snap: Dictionary) -> void:
+	var sim := ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"])
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()
 	_ai_plan = result
 	_ai_done = true
 	_ai_mutex.unlock()
 
-# 回放执行 AI 计划（主线程逐招执行并等待动画）
-# 节奏：每名英雄出手前亮起"行动描边"并停顿一拍（见 _ENEMY_*_GAP），
-# 一人一停、一招一停，避免多名敌人连招连成一片看不清谁在动。
+# 回放执行 AI 计划：主体在 EnemyReplay（逐招执行 + 等动画 + 节奏停顿）；
+# 这里只负责"回放期间"的登记——把引用表挂到成员上，中途落位的替补才能补登记+补一步
+# （见 _plan_enemy_late_sub）。
 func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
-	var first := true          # 本回合第一招（起手停顿更短，回合切换本身已有停顿）
-	for step in plan:
-		if GameState.match_over:
-			break
-		if my_session != _session_id:
-			return   # 已重开：安全退出，避免访问已释放单位
-		if not is_instance_valid(self):
-			return   # 自身已被释放：协程恢复后立即退出，不再触碰任何引擎调用
-		if get_tree() == null:
-			return
-		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
-		await _wait_unpaused()   # 暂停中：不推进敌方下一步（恢复后继续）
-		var idx: int = step["idx"]
-		if idx < 0 or idx >= refs.size():
-			continue
-		var raw_u: Variant = refs[idx]
-		if raw_u == null or not is_instance_valid(raw_u):
-			continue
-		if not (raw_u is Unit):
-			continue
-		var u: Unit = raw_u as Unit
-		if u == null or not u.alive:
-			continue
-		# 亮起"正在行动"的红橙脉冲描边：多名敌人连续出手时一眼看出轮到谁在动
-		u.set_acting_ring(true)
-		# 亮边后先停一拍再出手：让玩家先定位到这名英雄，再接它的动作
-		await _enemy_gap(_ENEMY_TELL_GAP if first else _ENEMY_HERO_GAP)
-		first = false
-		if my_session != _session_id or get_tree() == null:
-			if is_instance_valid(u):
-				u.set_acting_ring(false)
-			return   # 已重开/场景已释放：安全退出
-		var a: Dictionary = step["action"]
-		if a.has("move") and a["move"] != null:
-			_do_move(u, a["move"], true)
-			await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
-		if a.has("atk_obs"):
-			if is_instance_valid(u):
-				await _enemy_gap(_ENEMY_STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
-				_do_attack_obstacle(u, a["atk_obs"])
-				await _wait_action_done()
-		if a.has("atk") and int(a["atk"]) >= 0:
-			var t_idx := int(a["atk"])
-			if t_idx >= 0 and t_idx < refs.size() and is_instance_valid(refs[t_idx]):
-				var t: Unit = refs[t_idx]
-				if t.alive and t.faction != DataRegistry.Faction.ENEMY and is_instance_valid(u):
-					# 只允许攻击当前射程内的目标（防御AI计划偏差/移动失败导致越界攻击
-					if _in_attack_range(u, t):
-						await _enemy_gap(_ENEMY_STEP_GAP)   # 走位与出手之间留一拍，读得出"先走再打"
-						_do_attack(u, t, true)
-						await _wait_action_done()   # 等待攻击（含反击）演出完全结
-		# 本英雄行动结束：熄灭行动描边（下一名英雄出手前会重新亮起，交接不拖影）
-		if is_instance_valid(u):
-			u.set_acting_ring(false)
-	# 全部行动结束：留一拍再进回合末结算（避免最后一招与回合结束演出首尾相连）
-	if my_session != _session_id or get_tree() == null:
-		return
-	await _enemy_gap(_ENEMY_STEP_GAP)
+	if _enemy_replay == null:
+		_enemy_replay = EnemyReplay.new(self)   # 保险：异常构造（没走 _ready）时补建
+	_enemy_refs = refs
+	_enemy_plan_running = true
+	await _enemy_replay.run(plan, refs, my_session)
+	_enemy_plan_running = false
+	_enemy_refs = []
 
-# 敌方回放中的节奏停顿（可被重开安全打断；process_always=false 故跟随暂停一起停）
-func _enemy_gap(sec: float) -> void:
-	if sec <= 0.0 or get_tree() == null:
-		return   # 已脱离场景树：不停顿直接返回
-	await get_tree().create_timer(sec, false).timeout
-
-# 替补流程期间暂停敌方 AI 执行（轮询直到替补结束）
-# 暂停中：协程在此等待恢复（单机暂停用；联机不暂停，故几乎是空转）
-func _wait_unpaused() -> void:
-	while get_tree() != null and get_tree().paused:
-		await get_tree().process_frame
-
-func _wait_sub_done() -> void:
-	var my_session := _session_id
-	while state == State.SUBSTITUTING or state == State.PLACE_SUB:
-		if my_session != _session_id:
-			return   # 已重开：安全退出
-		if not is_instance_valid(self):
-			return   # 自身已释放：直接结束轮询
-		if get_tree() == null:
-			return   # 已脱离场景树：停止轮询，避免访问 null get_tree()
-		await get_tree().process_frame
-
-# 等待敌方单位的一招动画播完（移动/攻击）。信号与超时竞速：
-# 正常情况下 _finish_move/_finish_attack 会发射 action_finished，立即返回；
-# 若防御路径漏发射（单位被释放、异常提前返回等），1.5s 超时兜底，避免回放永久挂起
-func _wait_action_done() -> void:
-	var my_session := _session_id
-	var done := [false]   # 用数组承载：lambda 改元素不触发"重赋值捕获"混淆
-	action_finished.connect(func(): done[0] = true, CONNECT_ONE_SHOT)
-	if get_tree() == null:
-		return   # 已脱离场景树：直接返回
-	var limit := get_tree().create_timer(3.0, false)
-	while not done[0] and not limit.time_left <= 0.0:
-		if my_session != _session_id:
-			return   # 已重开：安全退出
-		if not is_instance_valid(self):
-			return   # 自身已释放：停止等待
-		if get_tree() == null:
-			return   # 已脱离场景树：停止轮询
-		await get_tree().process_frame
 
 # 排空"淡出中的死亡结算"：die() 先淡出 0.3s 才发 died（墓碑/补位/阵亡日志都在 died 后执行）。
 # 若回合末不等待，死在敌方回合最后一步的单位，其结算会撞上回合切换（补位窗口按 active_side

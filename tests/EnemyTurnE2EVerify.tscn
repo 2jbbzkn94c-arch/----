@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cou1mpjnribt5"]
+
+[ext_resource type="Script" path="res://tests/EnemyTurnE2EVerify.gd" id="1_script"]
+
+[node name="EnemyTurnE2EVerify" type="Node"]
+script = ExtResource("1_script")

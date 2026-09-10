@@ -1,4 +1,4 @@
-extends Node
+﻿extends Node
 ## AI 战术冒烟测试：构造小对局，直接调用 BattleAI，验证评估函数驱动的行为方向。
 ## 运行：godot --headless --scene res://tests/AISmokeTest.tscn
 var battle: Battle
@@ -24,14 +24,7 @@ func spawn(hid: String, f: int, c: Vector2i) -> Unit:
 	return battle._spawn_unit(hid, f, c)
 
 func build_desc(u: Unit) -> Dictionary:
-	return {
-		"fn": u.faction, "hero": u.hero_id, "cell": u.cell, "hp": u.hp, "max_hp": u.max_hp,
-		"atk": u.atk, "eatk": u.effective_atk(), "move": u.move_range, "emove": u.effective_move(),
-		"atk_range": u.attack_range, "atk_type": u.attack_type, "skills": u.skills, "name": u.display_name,
-		"stunned": u.has_status("stun"), "silenced": u.has_status("silence"),
-		"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
-		"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
-	}
+	return BattleSnapshot.unit_desc(battle, u)
 
 func run_ai(label: String) -> Array:
 	var descs: Array = []

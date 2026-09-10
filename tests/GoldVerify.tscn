@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://8ttocbpo5eii"]
+
+[ext_resource type="Script" path="res://tests/GoldVerify.gd" id="1_script"]
+
+[node name="GoldVerify" type="Node"]
+script = ExtResource("1_script")

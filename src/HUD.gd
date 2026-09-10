@@ -402,33 +402,23 @@ func _keyword_lines(u: Unit) -> Array:
 		lines.append_array(DataRegistry.desc_status_lines(def.desc))
 	return lines
 
+# 状态行文本：名称与顺序都来自 StatusDB（以前这里又抄了一份"键→中文名"的表）
 func _status_text(u: Unit) -> String:
 	var s := ""
-	if u.has_status("poison"): s += "猛毒 "
-	if u.has_status("heavy"): s += "重伤 "
-	if u.has_status("atkdown"): s += "麻痹 "
-	if u.has_status("freeze"): s += "冰冻 "
-	if u.has_status("silence"): s += "沉默 "
-	if u.has_status("stun"): s += "眩晕 "
-	if u.has_status("possess"): s += "附体 "
-	if u.has_status("thorn"): s += "荆棘 "
-	if u.has_status("solid"): s += "坚固 "
-	if u.has_status("shield"): s += "圣盾 "
+	for key in StatusDB.keys():
+		if u.has_status(key):
+			s += StatusDB.label(key) + " "
 	return s if s != "" else "无"
 
-# 当前每个状态的解释(属性框用)：取 DataRegistry.STATUS_DESC 的中文说明
+# 当前每个状态的解释(属性框用)：名称取自 StatusDB，说明取自 DataRegistry.STATUS_DESC
 func _status_explain_lines(u: Unit) -> Array:
-	var code_label := {
-		"poison": "猛毒", "heavy": "重伤", "atkdown": "麻痹", "freeze": "冰冻",
-		"silence": "沉默", "stun": "眩晕", "possess": "附体", "shield": "圣盾",
-		"thorn": "荆棘", "solid": "坚固",
-	}
 	var out: Array = []
-	for code in code_label.keys():
-		if u.has_status(code):
-			var label: String = code_label[code]
-			var desc: String = DataRegistry.STATUS_DESC.get(label, "")
-			out.append("%s：%s" % [label, desc] if desc != "" else label)
+	for key in StatusDB.keys():
+		if not u.has_status(key):
+			continue
+		var label := StatusDB.label(key)
+		var desc: String = DataRegistry.STATUS_DESC.get(label, "")
+		out.append("%s：%s" % [label, desc] if desc != "" else label)
 	return out
 
 # 开局"谁先手"提示：常驻悬浮，直到"部署选人面板出现"（部署选人阶段开始）才淡出收起。

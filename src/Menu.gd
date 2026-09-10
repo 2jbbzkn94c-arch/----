@@ -25,8 +25,14 @@ const PICK_COUNT := 8   # 整支队伍人数上限（前 3 名上阵，其余为
 const MIN_PICK := 5     # 至少选择 5 名英雄
 const DEPLOY_COUNT := 3
 const CARD_GAP_SCALE := 0.96   # 选人池卡牌绘制半径/间距半径：1.0=边贴边无空隙，调小=空隙增大
+# 封面背景候选：按顺序取【第一个能加载的】——换封面只需把想用的那张挪到最前。
+# 源文件在 assets/美术资源/背景/*.svg，改完用 tools/RenderCover 重新出 PNG（缺图自动退回纯色底）
+const COVER_BG_CANDIDATES := [
+	"res://assets/美术资源/背景/酒桌封面.png",   # 方案B：酒桌俯视，桌面刻着六边形棋盘
+	"res://assets/美术资源/背景/酒馆封面.png",   # 方案A：酒馆内景·吧台
+]
 
-const RULES_TEXT := "《酒馆纷争》玩法说明\n\n一、目标与胜负\n· 你和对手各有一支队伍：3 名首发上场，其余在替补席待命。\n· 一方累计阵亡 3 名英雄（含替补）即判负。\n· 若同一时刻双方都达到 3 名阵亡（同归于尽），判对方负、你获胜。\n\n二、开局流程\n· 普通模式：先在编辑页组成阵容并保存到卡组槽（选 5-8 名，前 3 名首发、其余替补）；开战后在战斗内弹出“选择卡组”，从 3 个已存卡组里挑一个出战（也可点「随机英雄」）→ 再轮流上首发。\n· 竞技场模式：开局进入“2 选 1 选人”，你挑 4 次、敌方也会把没选的英雄给你（每队最终各 8 名），再轮流上首发。\n· 开局会提示本局先手：先手方先上首发，开战后也先行动。\n\n三、回合怎么进行\n· 每人一回合内：先移动、后攻击（攻击后即不能再移动）；“后勤”单位不能主动攻击。\n· 先手方行动完 → 对方行动 → 双方都完成才算满 1 回合。\n· 点击「结束回合」结束自己的回合；每回合限时 90 秒，超时自动结束。\n\n四、基础数值\n· 移动力默认 2（带「疾行」+1）；射程：近战 1、远程 2。\n· 攻击力会受增益/状态影响；远程单位身边紧邻敌人时攻击降为 1。\n\n五、阵亡与替补\n· 英雄阵亡留下墓碑；替补只能落在自己出生区或本方墓碑（不能落对方墓碑）。\n· 同时死多人时会逐个替补。\n· 第 11 回合起进入“烧血”阶段：每当你方回合结束结算一次，扣血 = 当前回合数 - 10\n  （第 11 回合扣 1、第 12 回合扣 2……），拖得越久越快。\n\n六、关键词（卡面 <xxx>）\n· 远程：无贴身敌人时射程为 2；有敌人紧邻时攻击降为 1。\n· 嘲讽：攻击范围内有带「嘲讽」的敌方时，只能先打它。\n· 疾行：移动力 +1。\n· 后勤：不能主动攻击（但会反击），只提供支援/光环。\n· 替补：替补登场时触发其后效果。\n· 渗透：移动可穿过双方单位与障碍物，但不能停留。\n\n七、状态效果（卡面 [xxx]，同类不叠加，回合结束解除）\n· 猛毒：双方任一回合开始时都受 1 点伤害，无法解除。\n· 重伤：受到的伤害 +1。\n· 麻痹：攻击力 -1（至少为 0）。\n· 冰冻：移动力 -1（至少为 0）。\n· 沉默：不能触发非关键词技能。\n· 眩晕：不能移动/攻击/反击/触发技能。\n· 圣盾：抵挡一次受到的伤害或异常状态，生效后解除。\n\n八、战场注意\n· 障碍物只能靠直接攻击打掉耐久（每次 -1；伐木工攻击障碍额外 -99），技能不再作用于障碍。\n· 炸弹：炸弹人放置；其他单位停留在炸弹格上会爆炸受 5 点伤害（单纯经过不炸）。\n· 增益道具拾取即生效；金矿：攻击+1（永久）、生命上限+3并回复3点血（仅黄金矿工可拾取）。"
+const RULES_TEXT := "《酒馆纷争》玩法说明\n\n一、目标与胜负\n· 你和对手各有一支队伍：3 名首发上场，其余在替补席待命。\n· 一方累计阵亡 3 名英雄（含替补）即判负。\n· 若同一时刻双方都达到 3 名阵亡（同归于尽），判对方负、你获胜。\n\n二、开局流程\n· 普通模式：先在编辑页组成阵容并保存到卡组槽（选 5-8 名，前 3 名首发、其余替补）；开战后在战斗内弹出“选择卡组”，从 3 个已存卡组里挑一个出战（也可点「随机英雄」）→ 再轮流上首发。\n· 竞技场模式：开局进入“2 选 1 选人”，你挑 4 次、敌方也会把没选的英雄给你（每队最终各 8 名），再轮流上首发。\n· 开局会提示本局先手：先手方先上首发，开战后也先行动。\n\n三、回合怎么进行\n· 每人一回合内：先移动、后攻击（攻击后即不能再移动）；“后勤”单位不能主动攻击。\n· 先手方行动完 → 对方行动 → 双方都完成才算满 1 回合。\n· 点击「结束回合」结束自己的回合；每回合限时 90 秒，超时自动结束。\n\n四、基础数值\n· 移动力默认 2（带「疾行」+1）；射程：近战 1、远程 2。\n· 攻击力会受增益/状态影响；远程单位身边紧邻敌人时攻击降为 1。\n\n五、阵亡与替补\n· 英雄阵亡留下墓碑；替补只能落在自己出生区或本方墓碑（不能落对方墓碑）。\n· 同时死多人时会逐个替补。\n· 第 11 回合起进入“烧血”阶段：每当你方回合结束结算一次，扣血 = 当前回合数 - 10\n  （第 11 回合扣 1、第 12 回合扣 2……），拖得越久越快。\n\n六、关键词（卡面 <xxx>）\n· 远程：无贴身敌人时射程为 2；有敌人紧邻时攻击降为 1。\n· 嘲讽：攻击范围内有带「嘲讽」的敌方时，只能先打它。\n· 疾行：移动力 +1。\n· 后勤：不能主动攻击（但会反击），只提供支援/光环。\n· 替补：替补登场时触发其后效果。\n· 渗透：移动可穿过双方单位与障碍物，但不能停留。\n\n七、状态效果（卡面 [xxx]，同类不叠加，回合结束解除）\n· 猛毒：双方任一回合开始时都受 1 点伤害，无法解除。\n· 重伤：受到的伤害 +1。\n· 麻痹：攻击力 -1（至少为 0）。\n· 冰冻：移动力 -1（至少为 0）。\n· 沉默：不能触发非关键词技能。\n· 眩晕：不能移动/攻击/反击/触发技能。\n· 圣盾：可抵挡一次受到的伤害，抵挡后解除。\n\n八、战场注意\n· 障碍物只能靠直接攻击打掉耐久（每次 -1；伐木工攻击障碍额外 -99），且主动打障碍物不会触发英雄技能；但技能在打敌人时“波及”到的障碍物（剑气穿透扫过、散射/爆炸的相邻范围）同样掉 1 点耐久。\n· 炸弹：炸弹人放置；其他单位停留在炸弹格上会爆炸受 5 点伤害（单纯经过不炸）。\n· 增益道具拾取即生效；金矿：攻击+1（永久）、生命上限+3并回复3点血（仅黄金矿工可拾取）。"
 
 var _help_overlay: Control = null   # 游戏说明弹窗
 var _stats_overlay: Control = null  # 对战统计弹窗
@@ -36,6 +42,50 @@ func _ready() -> void:
 	set_process_input(true)   # 触摸跟踪（轻点 vs 按住拖动池）
 	if GameState.net_edit_mode:
 		_show_team_view()   # 联机大厅叠层打开：直接进选人页
+
+# 封面背景图：等比裁切铺满整屏（候选都缺图时返回 null，由纯色底兜底）
+func _make_cover_bg() -> TextureRect:
+	for path in COVER_BG_CANDIDATES:
+		if not ResourceLoader.exists(path):
+			continue
+		var tex := load(path) as Texture2D
+		if tex == null:
+			continue
+		var cover_rect := TextureRect.new()
+		cover_rect.texture = tex
+		cover_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cover_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		cover_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		cover_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return cover_rect
+	return null
+
+# 竖向渐变遮罩：中段（按钮列/卡池背后）压暗保可读性，顶部标题与底部吧台留亮，
+# 取代原来的 22% 平铺压暗——平铺压暗会把插画的吧台暖光一起吃掉。
+func _make_cover_scrim() -> TextureRect:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.34, 0.74, 0.90, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0, 0, 0, 0.24),
+		Color(0, 0, 0, 0.18),
+		Color(0, 0, 0, 0.40),
+		Color(0, 0, 0, 0.36),
+		Color(0, 0, 0, 0.14),
+		Color(0, 0, 0, 0.08),
+	])
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	gt.fill_from = Vector2(0.0, 0.0)
+	gt.fill_to = Vector2(0.0, 1.0)
+	gt.width = 8
+	gt.height = 256
+	var scrim_rect := TextureRect.new()
+	scrim_rect.texture = gt
+	scrim_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	scrim_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	scrim_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return scrim_rect
 
 # 联机大厅"编辑卡组"完成：复位标志、通知大厅刷新、销毁本叠层
 func _on_edit_done() -> void:
@@ -49,16 +99,16 @@ func _on_edit_done() -> void:
 		get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
 func _build() -> void:
-	# 背景：酒馆木地板 + 轻微压暗增强卡片对比（两层都不接收鼠标）
+	# 背景：纯色木地板兜底 → 封面插画（酒馆内景）铺满 → 竖向渐变遮罩。
+	# 三层都不接收鼠标。缺图时自动退回纯色底，不影响启动。
 	var bg := WoodFloor.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.22)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(dim)
+	var cover := _make_cover_bg()
+	if cover != null:
+		add_child(cover)
+	add_child(_make_cover_scrim())
 
 	# —— 两屏容器：主菜单（模式选择） / 普通模式（组队选人） ——
 	_main_view = Control.new()

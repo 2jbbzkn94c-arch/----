@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://c4xjsawv6tx5y"]
+
+[ext_resource type="Script" path="res://tests/TransformIconVerify.gd" id="1_script"]
+
+[node name="TransformIconVerify" type="Node"]
+script = ExtResource("1_script")

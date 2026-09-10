@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## 锤头鲨 AI 验证：
 ## 1) AI 模拟攻击玩家时，同阵营锤头鲨的攻击力应累积 +1（敌方受伤即触发）；
 ## 2) search 应将锤头鲨排在行动序列末尾（先队友攻击累积，锤头鲨后打）。
@@ -43,14 +43,7 @@ func _run() -> void:
 	var occ := {}
 	for i in battle.units.size():
 		var u: Unit = battle.units[i]
-		descs.append({
-			"fn": u.faction, "hero": u.hero_id, "cell": u.cell, "hp": u.hp, "max_hp": u.max_hp,
-			"atk": u.atk, "eatk": u.effective_atk(), "move": u.move_range, "emove": u.effective_move(),
-			"atk_range": u.attack_range, "atk_type": u.attack_type, "skills": u.skills, "name": u.display_name,
-			"stunned": u.has_status("stun"), "silenced": u.has_status("silence"),
-			"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
-			"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
-		})
+		descs.append(BattleSnapshot.unit_desc(battle, u))
 		occ[u.cell] = i
 	var ai := BattleAI.new(battle.grid)
 	ai.difficulty = 2
@@ -82,14 +75,7 @@ func _run() -> void:
 	var occ2 := {}
 	for i in battle.units.size():
 		var u2: Unit = battle.units[i]
-		descs2.append({
-			"fn": u2.faction, "hero": u2.hero_id, "cell": u2.cell, "hp": u2.hp, "max_hp": u2.max_hp,
-			"atk": u2.atk, "eatk": u2.effective_atk(), "move": u2.move_range, "emove": u2.effective_move(),
-			"atk_range": u2.attack_range, "atk_type": u2.attack_type, "skills": u2.skills, "name": u2.display_name,
-			"stunned": u2.has_status("stun"), "silenced": u2.has_status("silence"),
-			"shield": u2.has_status("shield"), "heavy": u2.has_status("heavy"),
-			"poisoned": u2.has_status("poison"), "frozen": u2.has_status("freeze"),
-		})
+		descs2.append(BattleSnapshot.unit_desc(battle, u2))
 		occ2[u2.cell] = i
 	var ai2 := BattleAI.new(battle.grid)
 	ai2.difficulty = 2

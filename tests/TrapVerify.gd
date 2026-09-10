@@ -28,14 +28,7 @@ func spawn(hid: String, f: int, c: Vector2i) -> Unit:
 	return battle._spawn_unit(hid, f, c)
 
 func build_desc(u: Unit) -> Dictionary:
-	return {
-		"fn": u.faction, "hero": u.hero_id, "cell": u.cell, "hp": u.hp, "max_hp": u.max_hp,
-		"atk": u.atk, "eatk": u.effective_atk(), "move": u.move_range, "emove": u.effective_move(),
-		"atk_range": u.attack_range, "atk_type": u.attack_type, "skills": u.skills, "name": u.display_name,
-		"stunned": u.has_status("stun"), "silenced": u.has_status("silence"),
-		"shield": u.has_status("shield"), "heavy": u.has_status("heavy"),
-		"poisoned": u.has_status("poison"), "frozen": u.has_status("freeze"),
-	}
+	return BattleSnapshot.unit_desc(battle, u)
 
 func _run() -> void:
 	# 敌方近战英雄被玩家远程(射程覆盖全场)盯上：它无论怎么移动都逃不出玩家攻击范围

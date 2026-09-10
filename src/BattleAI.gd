@@ -34,6 +34,8 @@ class SimUnit:
 	var hurt_times := 0     # 本回合被攻击次数（集火评估）
 	var aura_used := false   # 本回合已触发过的光环/次数技（圣光护盾等每回合限一次）
 	var ignore_los := false   # 坠炮手(hero_45)：攻击弹道无视障碍/单位/墓碑阻挡
+	var immune_bombs := false  # 免疫炸弹（炸弹人自己踩雷不引爆）——由英雄脚本免疫钩子提供
+	var can_pickup_gold := false  # 能拾取金矿（黄金矿工）——由英雄脚本 can_pickup_gold 钩子提供
 	var possessed_by := -1   # 宿魂(hero_46)附体：被附体者记录"施加它的宿魂 sim_index"（-1=无；负墟免疫）
 
 class Sim:
@@ -49,12 +51,23 @@ class Sim:
 	var gold_taken := 0       # 本回合内吃到的金矿数（供评估加分，驱动黄金矿工去吃矿）
 	var _neg_gained := {}     # 本动作已对负墟(hero_44)计过 +1 攻的单位 idx（负墟同帧多个负面只计一次）
 	var _pos_mirror_depth := 0  # 宿魂附体镜像递归深度（防互相附体死循环，上限 8）
+	# 路网距离缓存（见 BattleAI.walk_dist）：起点格 -> { 格: 步数 }。
+	# 只取决于"静态地形"（障碍/墓碑），所以在同一地形下可以跨状态复用；
+	# 克隆时**共享同一份引用**（父子局面地形相同），地形一变由 _apply 统一清空，不会读到脏值。
+	var walk_cache: Dictionary = {}        # 地形当墙
+	var walk_cache_pass: Dictionary = {}   # 忽略地形墙（渗透单位能穿障碍/墓碑）
+	# 障碍"软代价"路网缓存：穿过一格障碍要额外付 (1 + 剩余耐久) 步。
+	# 耐久的任何变化（掉 1 点/整块拆掉）都要清空这张表。
+	var soft_cache: Dictionary = {}
 
 	func clone() -> Sim:
 		var c := Sim.new()
 		c.gold_cells = gold_cells.duplicate()
 		c.graves = graves.duplicate()
 		c.obstacles = obstacles.duplicate()
+		c.walk_cache = walk_cache            # 共享引用（不 duplicate：地形缓存是只读派生数据）
+		c.walk_cache_pass = walk_cache_pass
+		c.soft_cache = soft_cache
 		c.bombs = bombs.duplicate()
 		c.buff_cells = buff_cells.duplicate()
 		c.killed_players = killed_players
@@ -94,6 +107,8 @@ class Sim:
 			cu.hurt_times = u.hurt_times
 			cu.aura_used = u.aura_used
 			cu.ignore_los = u.ignore_los
+			cu.immune_bombs = u.immune_bombs
+			cu.can_pickup_gold = u.can_pickup_gold
 			cu.possessed_by = u.possessed_by
 			c.units.append(cu)
 		c.occ = occ.duplicate()
@@ -112,6 +127,13 @@ const BUFF_TAKE_WEIGHT := 3.0
 # 量级：普通一次攻击约 +2.5 分，击杀约 +25 起 —— 吃矿应明显优于"随手打一下"，但不该高于击杀。
 const GOLD_TAKE_VALUE := 26.0
 const GOLD_TAKE_VALUE_LOW := 34.0   # 攻击力 < GOLD_LOW_ATK 时更高（自身薄弱，成长更关键）
+
+# ---- 路网距离（把障碍/墓碑当墙的真步数）----
+# 走位评分不能只看直线：被墙隔开时"离敌人 2 格"可能实际要绕 6 格。
+const INF_DIST := 1 << 29
+# 障碍"挡路"惩罚：按实际绕路代价计分（而不是按障碍个数给固定小分），
+# 于是"拆掉真正挡路的墙"能抬高局面分，拆不挡路的墙几乎不加分。
+const OBSTACLE_DETOUR_WEIGHT := 4.0    # 每个"被墙挡出来的代价"的分值
 
 func _init(g: HexGrid) -> void:
 	grid = g
@@ -146,6 +168,8 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 		u.poisoned = d.get("poisoned", false)
 		u.frozen = d.get("frozen", false)
 		u.possessed_by = int(d.get("poss_by", -1))   # 已有宿魂附体绑定（真实残留）
+		u.immune_bombs = bool(d.get("immune_bombs", false))   # 由英雄脚本免疫钩子提供（炸弹人=true）
+		u.can_pickup_gold = bool(d.get("can_pickup_gold", false))   # 由英雄脚本金矿钩子提供（矿工=true）
 		# 坠炮手：全场射程 + 无视阻挡（与真实规则一致；atk_range 已由出生方置为 99）
 		if u.hero_id == "hero_45":
 			u.atk_range = 99
@@ -234,7 +258,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				new_d = grid.distance(nc, near2.cell)
 			line += " 移动 %s→%s" % [str(ur.cell), str(nc)]
 			var reason: Array[String] = []
-			if u0.hero_id == "hero_42" and sim.gold_cells.has(nc):
+			if u0.can_pickup_gold and sim.gold_cells.has(nc):
 				reason.append("捡金矿")
 			if old_d >= 0 and new_d >= 0:
 				if new_d < old_d:
@@ -314,11 +338,14 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		var ranked: Array = []
 		for c in reach.keys():
 			var target := _nearest_player(sim, c)
-			var d := 1 << 30
+			var d := INF_DIST
 			if target != null:
-				d = grid.distance(c, target.cell)
-			# 黄金矿工：可达的金矿格优先列入候选（优先走过去拾取）
-			if u.hero_id == "hero_42" and sim.gold_cells.has(c):
+				# 走位用**路网距离**：被墙隔开时"直线 2 格"可能实际要绕 6 格，
+				# 用直线距离排序会让 AI 一头撞在墙上（看着离得近，其实过不去）。
+				# 被墙完全隔死时退回"软代价"（肯砸墙的话有多远），否则整盘都是 INF、排序退化成随机。
+				d = approach_dist(sim, c, target.cell, u.skills.has(DataRegistry.Skill.INFILTRATE))
+			# 能拾金矿的单位：可达的金矿格优先列入候选（优先走过去拾取）
+			if u.can_pickup_gold and sim.gold_cells.has(c):
 				d = -1
 			# 排序键：近战越近越好；远程以"正好站在射程边缘(通常2格)"为最优，
 			# 贴脸(d=1)被贴脸降攻/挨打视为很差，避免远程总往敌人脸上贴。
@@ -328,6 +355,8 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 					dkey = 60.0
 				elif d == u.atk_range:
 					dkey = 1.0
+				elif d >= INF_DIST:
+					dkey = 999.0   # 路网不可达：排到最后（别把"被墙隔死的近格"当成好位置）
 				else:
 					dkey = 2.0 + absf(float(d - u.atk_range))
 			# 走位质量：落点被玩家威胁越强，排序越靠后（同时保留近战贴脸候选）
@@ -337,9 +366,9 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 				var bv := _buff_value(sim, u, String(sim.buff_cells[c]))
 				if bv > 0.0:
 					dkey -= bv * 3.0   # 权重提高：AI 更愿意绕路去吃有用的道具
-			# 黄金矿工（攻击力 < GOLD_LOW_ATK）：自身输出薄弱、吃矿成长收益更高，
+			# 能拾金矿的单位（攻击力 < GOLD_LOW_ATK）：自身输出薄弱、吃矿成长收益更高，
 			# 把可达矿格的优先度拉满——压过任何高价值增益道具格，保证"能吃到矿就一定先去吃"。
-			if u.hero_id == "hero_42" and u.eatk < GOLD_LOW_ATK and sim.gold_cells.has(c):
+			if u.can_pickup_gold and u.eatk < GOLD_LOW_ATK and sim.gold_cells.has(c):
 				dkey = -1000.0
 			ranked.append({ "cell": c, "d": d, "dkey": dkey, "threat": threat })
 		# 主排序：dkey（近战=距离、远程=射程边缘优先）；同键威胁小的格优先
@@ -392,14 +421,36 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		for mc in move_cells:
 			if mc != u.cell:
 				combos.append({ "move": mc, "atk": -1 })
-	# 攻击障碍：仅当"当前无任何可攻击目标"时才清障(攻击/击杀永远优先)；
-	# 射程内、视线无阻挡的障碍纳入候选,配合小幅清障激励
+	# 攻击障碍（清障）候选：
+	# 不再"只有当前格打不到人"才允许——障碍的价值由 _obstacle_detour 按**实际绕路代价**给分，
+	# 该不该花一次攻击去拆墙交给评分决定（真正挡路的墙值得拆，不挡路的墙分很低自然不拆）。
+	# ① 原地能打的障碍：任何情况下都是候选；
+	# ② "移动→拆障碍"：只在"这一回合哪儿都打不到人"时才展开（否则候选会爆炸），
+	#    典型场景：敌人被墙隔开、既走不到也打不到，那就走过去先把墙拆开。
 	if can_attack and not u.attacked:
-		if _valid_targets(sim, u, u.cell).size() == 0:
-			for oc in sim.obstacles.keys():
-				var oc2: Vector2i = oc
-				if grid.distance(u.cell, oc2) <= u.atk_range and not _sim_path_blocked(sim, u.cell, oc2):
-					combos.append({ "move": null, "atk": -2, "atk_obs": oc2 })
+		var anywhere_hittable := false
+		for mc in move_cells:
+			if _valid_targets(sim, u, mc).size() > 0:
+				anywhere_hittable = true
+				break
+		for oc in sim.obstacles.keys():
+			var oc2: Vector2i = oc
+			if grid.distance(u.cell, oc2) <= u.atk_range and not _sim_path_blocked(sim, u.cell, oc2):
+				combos.append({ "move": null, "atk": -2, "atk_obs": oc2 })
+		if not anywhere_hittable:
+			# 每块障碍只安排**最近的一个落点**（move_cells 已按贴近目标排序），
+			# 否则"每个落点 × 每块障碍"会让候选暴涨（实测搜索慢 3 倍）。
+			var planned_obs := {}
+			for mc in move_cells:
+				if mc == u.cell:
+					continue
+				for oc in sim.obstacles.keys():
+					var oc3: Vector2i = oc
+					if planned_obs.has(oc3):
+						continue
+					if grid.distance(mc, oc3) <= u.atk_range and not _sim_path_blocked(sim, mc, oc3):
+						planned_obs[oc3] = true
+						combos.append({ "move": mc, "atk": -2, "atk_obs": oc3 })
 	# 撤退克制：只有“移动且本步不打”的拉远走位才可能被去掉。
 	# ① 当前格不疼（受威胁伤害 ≤1.5）→ 玩家下回合也碰不到/伤害可接受，站着占主动，没必要后撤；
 	# ② 就算现在疼，退到“下回合移动力+射程也够不着敌人”的范围外 → 白白丢下一轮主动，也不退。
@@ -411,12 +462,12 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 			var nc: Vector2i = mv
 			var p0 := _nearest_player(sim, u.cell)
 			var p1 := _nearest_player(sim, nc)
-			var d0 := 1 << 30
-			var d1 := 1 << 30
+			var d0 := INF_DIST
+			var d1 := INF_DIST
 			if p0 != null:
-				d0 = grid.distance(u.cell, p0.cell)
+				d0 = walk_dist(sim, u.cell, p0.cell)
 			if p1 != null:
-				d1 = grid.distance(nc, p1.cell)
+				d1 = walk_dist(sim, nc, p1.cell)
 			if d1 > d0 and (cur_inc <= 3.0 or d1 > u.emove + u.atk_range):
 				continue   # 丢弃这种“无谓后撤/退到够不着”
 		kept.append(combo)
@@ -453,7 +504,7 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 					break
 				if sim.occ.has(off) or sim.graves.has(off) or sim.obstacles.has(off):
 					break
-				if sim.bombs.has(off) and u.hero_id != "hero_35":
+				if sim.bombs.has(off) and not u.immune_bombs:
 					# 冲锋经过炸弹格可以穿过(不停不炸)，但不停在该格当终点
 					ax += d
 					continue
@@ -478,8 +529,8 @@ func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴
 			blockers[o] = true
 	var emv: int = u.emove + (1 if u.move_use_buff > 0 else 0)   # 移动道具:本次移动+1
 	var res := grid.reachable(u.cell, emv, stop, blockers)
-	# 炸弹：经过不炸但落停引爆 → 非炸弹人不把炸弹格作为移动终点(炸弹人可以站上去)
-	if sim.bombs.size() > 0 and u.hero_id != "hero_35":
+	# 炸弹：经过不炸但落停引爆 → 不免疫炸弹的单位不把炸弹格作为移动终点（免疫者可以站上去）
+	if sim.bombs.size() > 0 and not u.immune_bombs:
 		var safe := {}
 		for c in res.keys():
 			if not sim.bombs.has(c):
@@ -578,15 +629,91 @@ func _mortar_engaged(sim: Sim, u: SimUnit) -> bool:
 			return true
 	return false
 
+# ---- 路网距离（把障碍/墓碑当墙的 BFS 步数）----# 说明：只把**静态地形**（障碍/墓碑）当墙，不把单位当墙——单位会动，
+# 按墙算会让"绕过一个暂时站着的队友"这种判断过于悲观。
+# passing=true 时忽略地形墙（渗透单位能穿过障碍与墓碑）。
+# 结果按"起点格"缓存在 sim.walk_cache 里：同一地形下反复问同一起点只算一次 BFS。
+func walk_dist(sim: Sim, from: Vector2i, to: Vector2i, passing: bool = false) -> int:
+	if from == to:
+		return 0
+	var cache: Dictionary = sim.walk_cache_pass if passing else sim.walk_cache
+	var field: Dictionary = cache.get(from, {})
+	if field.is_empty():
+		field = _bfs_field(sim, from, passing)
+		cache[from] = field
+	return int(field.get(to, INF_DIST))
+
+func _bfs_field(sim: Sim, from: Vector2i, ignore_terrain: bool) -> Dictionary:
+	var dist: Dictionary = { from: 0 }
+	var frontier: Array = [from]
+	while frontier.size() > 0:
+		var cur: Vector2i = frontier.pop_front()
+		var d: int = dist[cur]
+		for n in grid.neighbors(cur):
+			if dist.has(n):
+				continue
+			if not ignore_terrain and (sim.obstacles.has(n) or sim.graves.has(n)):
+				continue   # 地形墙：障碍/墓碑都过不去（渗透单位走 ignore_terrain 那份缓存）
+			dist[n] = d + 1
+			frontier.append(n)
+	return dist
+
+## 障碍"软代价"路网：把障碍当成"能硬穿但很贵"的墙——穿过一格障碍要额外付 (1 + 剩余耐久) 步，
+## 墓碑按普通格算（打不掉，不参与"清障收益"）。棋盘只有 32 格，用线性扫描的 Dijkstra 足够快。
+## 只用于**障碍价值评分**：走位/威胁/射程判定一律用硬规则 walk_dist（障碍根本过不去）。
+func soft_route_cost(sim: Sim, from: Vector2i, to: Vector2i) -> int:
+	var field: Dictionary = sim.soft_cache.get(from, {})
+	if field.is_empty():
+		field = _soft_field(sim, from)
+		sim.soft_cache[from] = field
+	return int(field.get(to, INF_DIST))
+
+func _soft_field(sim: Sim, from: Vector2i) -> Dictionary:
+	var dist: Dictionary = { from: 0 }
+	var done: Dictionary = {}
+	while true:
+		var cur := Vector2i(-99, -99)
+		var best := INF_DIST
+		for c in dist.keys():
+			if done.has(c):
+				continue
+			var dv: int = dist[c]
+			if dv < best:
+				best = dv
+				cur = c
+		if cur.x == -99:
+			break
+		done[cur] = true
+		for n in grid.neighbors(cur):
+			var step := 1
+			if sim.obstacles.has(n):
+				step = 1 + int(sim.obstacles[n])   # 硬穿一格障碍：按剩余耐久付费
+			var nd: int = best + step
+			if nd < int(dist.get(n, INF_DIST)):
+				dist[n] = nd
+	return dist
+
+## 走位用的距离：优先硬路网；被墙完全隔死时退回软代价（"肯砸墙的话要走多远"），
+## 免得整个棋盘所有格都是 INF、排序退化成随机（AI 会不知道该往哪走、也不知道该去砸哪面墙）。
+func approach_dist(sim: Sim, from: Vector2i, to: Vector2i, passing: bool = false) -> int:
+	var d := walk_dist(sim, from, to, passing)
+	if d >= INF_DIST:
+		d = soft_route_cost(sim, from, to)
+	return d
+
 func _nearest_player(sim: Sim, cell: Vector2i) -> SimUnit:
+	# 选"路网意义上最近"的玩家（被墙隔开时，直线最近的未必是真正够得到的那个）
 	var best: SimUnit = null
-	var best_d := 1 << 30
+	var best_d := INF_DIST
+	var best_straight := INF_DIST
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]
 		if t.alive and t.fn != DataRegistry.Faction.ENEMY:
-			var d := grid.distance(cell, t.cell)
-			if d < best_d:
-				best_d = d
+			var sd := grid.distance(cell, t.cell)
+			var wd := walk_dist(sim, cell, t.cell)
+			if wd < best_d or (wd == best_d and sd < best_straight):
+				best_d = wd
+				best_straight = sd
 				best = t
 	return best
 
@@ -632,8 +759,8 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 大骑士：冲锋移动距离加成攻击力（与真实规则一致，冲越远攻越高；被沉默则无加成）
 			if u.hero_id == "hero_24" and not u.silenced and not u.stunned:
 				u.eatk += grid.distance(prev_cell, mc)   # 沉默只吃不到这个加成，冲锋照常
-			# 黄金矿工踏上金矿格：拾取（与真实规则一致：攻击+1(永久)、HP上限+3、回复3血）
-			if u.hero_id == "hero_42" and sim.gold_cells.has(mc):
+			# 能拾金矿的单位踏上金矿格：拾取（数值镜像真实规则，见 hero_42_黄金矿工.gd 的 on_pickup_gold）
+			if u.can_pickup_gold and sim.gold_cells.has(mc):
 				sim.gold_cells.erase(mc)
 				sim.gold_taken += 1
 				u.atk += 1
@@ -649,8 +776,11 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 		var oc2: Vector2i = a["atk_obs"]
 		if sim.obstacles.has(oc2):
 			var nd: int = int(sim.obstacles[oc2]) - 1
+			sim.soft_cache.clear()        # 耐久变了：软代价路网整表作废（每敲一下都要重算）
 			if nd <= 0:
 				sim.obstacles.erase(oc2)
+				sim.walk_cache.clear()    # 地形变了：硬路网距离缓存整表作废
+				sim.walk_cache_pass.clear()
 			else:
 				sim.obstacles[oc2] = nd
 		return
@@ -934,12 +1064,14 @@ func _sim_pull_target(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	t.cell = best
 	sim.occ[best] = t
 
-# 反击判定（与真实规则一致）：普通单位每回合一次；复仇者无限反击；眩晕/已死不反。
+# 反击判定（与真实规则一致）：普通单位每回合一次；复仇者无限反击；眩晕/已死/**攻击力为 0** 不反。
 # 距离=1（近战互搏 / 贴身）：照常反击。
 # 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，才全额反击。
 func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	if not t.alive or t.stunned:
 		return
+	if t.eatk <= 0:
+		return   # 攻击力为 0（麻痹等）打不出反击：与真实规则一致（也不占用"每回合一次"名额）
 	var dist_c := grid.distance(u.cell, t.cell)
 	if dist_c > 1:
 		# 远程对射：攻击方与反击方都必须是远程；被攻击方被贴身则反击不了
@@ -1015,10 +1147,44 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 #   4. 威胁图：站位风险（这格下回合会被玩家打多少）
 #   5. 胜负节奏：玩家接近 3 杀时补刀权重上升；自己接近死亡时保命权重上升
 #   6. 走位定位：坦克前压、奶妈/后勤缩后、远程贴边缘、AOE 不扎堆
+# 障碍"挡路"惩罚：对每个敌方单位，取它**直线最近**的玩家当目标，
+## 比较"绕障碍的路网代价"与"直线距离"，多出来的部分就是墙挡出来的代价。
+## 用**软代价路网**（soft_route_cost：穿过障碍要按剩余耐久付费）而不是"要么绕死要么不可达"，
+## 这样每敲掉 1 点耐久，代价就降一点 —— 搜索才有"敲一下也变好一点"的梯度，
+## 否则一次清障（耐久 3）在前两下拿不到任何分，波束搜索根本走不到"第三下拆掉"的那一步。
+## 于是：拆挡路的墙 -> 局面分上升（且按耐久给部分分）；拆不挡路的墙 -> 代价为 0，不涨分。
+## 开销：每个敌方单位只查一次（走 soft_route_cost 的缓存），对搜索速度影响很小。
+func _obstacle_detour(sim: Sim) -> float:
+	if sim.obstacles.is_empty():
+		return 0.0   # 没墙就恒为 0（绝大多数局面走这条快路）
+	var total := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		var target: SimUnit = null
+		var straight := INF_DIST
+		for j in sim.units.size():
+			var p: SimUnit = sim.units[j]
+			if not p.alive or p.fn == u.fn:
+				continue
+			var sd := grid.distance(u.cell, p.cell)
+			if sd < straight:
+				straight = sd
+				target = p
+		if target == null or straight >= INF_DIST:
+			continue
+		var soft := soft_route_cost(sim, u.cell, target.cell)
+		if soft < INF_DIST:
+			total += maxf(float(soft - straight), 0.0)
+	return total * OBSTACLE_DETOUR_WEIGHT
+
 func _evaluate(sim: Sim) -> float:
 	var score := 0.0
-	# 障碍清理轻微激励(远低于攻击/击杀收益,仅在无目标可打时才有清障动作)
-	score -= float(sim.obstacles.size()) * 0.08
+	# 障碍"挡路"惩罚：按**实际绕路代价**计分（不再按障碍个数给固定小分）。
+	# 于是"拆掉真正挡路的墙"会明显抬高局面分，"拆掉不相干的墙"几乎没有收益 ——
+	# 该不该花一次攻击去清障，交给评分决定（候选见 _actions_for 的清障分支）。
+	score -= _obstacle_detour(sim)
 	var enemy_dead := 0
 	var player_dead := 0
 	for i in sim.units.size():
@@ -1086,7 +1252,7 @@ func _evaluate(sim: Sim) -> float:
 	# 攻击力 < GOLD_LOW_ATK 的矿工自身输出薄弱，吃矿权重再提高一档。
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
-		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.hero_id == "hero_42":
+		if u.alive and u.fn == DataRegistry.Faction.ENEMY and u.can_pickup_gold:
 			var low_atk: bool = u.eatk < GOLD_LOW_ATK
 			if sim.gold_taken > 0:
 				score += float(sim.gold_taken) * (GOLD_TAKE_VALUE_LOW if low_atk else GOLD_TAKE_VALUE)
@@ -1206,7 +1372,8 @@ func _incoming_damage(sim: Sim, cell: Vector2i, fn: int) -> float:
 		var t: SimUnit = sim.units[i]
 		if not t.alive or t.fn == fn:
 			continue
-		var d := grid.distance(cell, t.cell)
+		# 威胁也用**路网距离**：被墙隔开的玩家这一回合其实够不到这格，不该算成威胁
+		var d := walk_dist(sim, cell, t.cell)
 		var range_at := t.atk_range
 		if t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell):
 			range_at = 1
@@ -1280,11 +1447,13 @@ func _position_score(sim: Sim) -> float:
 			s += 0.5
 	return s
 
-# 黄金矿工到最近金矿的距离（无金矿返回一个大数）。用于给"朝矿靠拢"的评分梯度。
+# 黄金矿工到最近金矿的路网距离（无金矿返回一个大数）。用于给"朝矿靠拢"的评分梯度。
+# 被墙隔死时退回软代价（"肯砸墙的话要走多远"），否则矿工对着被墙隔开的矿会完全没有方向。
 func _nearest_gold_dist(sim: Sim, u: SimUnit) -> int:
-	var best := 1 << 30
+	var best := INF_DIST
+	var passing: bool = u.skills.has(DataRegistry.Skill.INFILTRATE)
 	for c in sim.gold_cells.keys():
-		var d := grid.distance(u.cell, c)
+		var d := approach_dist(sim, u.cell, c, passing)
 		if d < best:
 			best = d
 	return best
@@ -1294,13 +1463,16 @@ func _nearest_gold_dist(sim: Sim, u: SimUnit) -> int:
 func _logistics_charges(u: SimUnit) -> bool:
 	return u.hero_id == "hero_17"
 
-# 与最近对立单位（此处即玩家单位）的距离；无则返回一个大数
+# 与最近对立单位（此处即玩家单位）的**路网距离**；无则返回一个大数。
+# 用路网距离：被墙挡着时"直线 3 格"不等于"这一回合够得到"。
+# 被墙完全隔死时退回软代价（"肯砸墙的话有多远"），这样"我够不到谁"的判断仍有远近之分。
 func _nearest_enemy_dist(sim: Sim, u: SimUnit) -> int:
-	var best := 1 << 30
+	var best := INF_DIST
+	var passing: bool = u.skills.has(DataRegistry.Skill.INFILTRATE)
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]
 		if t.alive and t.fn != u.fn:
-			var d := grid.distance(u.cell, t.cell)
+			var d := approach_dist(sim, u.cell, t.cell, passing)
 			if d < best:
 				best = d
 	return best

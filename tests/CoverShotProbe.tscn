@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://ccovershot0v1"]
+
+[ext_resource type="Script" path="res://tests/CoverShotProbe.gd" id="1_script"]
+
+[node name="CoverShotProbe" type="Node"]
+script = ExtResource("1_script")

@@ -64,8 +64,14 @@ func play_attack_fx(_target: Unit) -> void:
 	pass
 
 ## 能否拾取**金矿**（默认不能：金矿只有黄金矿工可拾，其他人踩到不消费、金矿留在格上）。
+## 这是"是不是金矿的拾取者"的判定；捡到之后的收益见 on_pickup_gold()。
 func can_pickup_gold() -> bool:
 	return false
+
+## 拾到一枚金矿时的收益结算（只有 can_pickup_gold() 为 true 的英雄会被调用）。
+## Battle 负责把矿从盘面移除，收益数值全部写在本钩子里（黄金矿工：攻 +1 永久 / 上限 +3 / 回 3 血）。
+func on_pickup_gold() -> void:
+	pass
 
 ## 是否需要在"每方回合开始"做一次**整队取样**类结算（默认否）。
 ## 返回 true 的英雄会在每方回合开始被调用一次 on_side_turn_start（每方只调一次，见 Battle._begin_side）。
@@ -142,10 +148,17 @@ func on_charge_settled(_actual_steps: int) -> void:
 	pass
 
 ## 能否放置炸弹（炸弹人：移动后可在周围空地放雷）。默认否。
+## 这是"有没有这个能力"的粗判（联机 bomb 指令的合法性预检）；具体能放哪几格见 bomb_place_cells()。
 func can_place_bomb() -> bool:
 	return false
 
+## 本英雄此刻可以放炸弹的格（默认空数组 = 一个都放不了）。
+## 放置合法性、UI 橙色高亮、AI 落点全部以此为准；Battle 只提供地形合法性原语 bomb_cell_ok(cell)。
+func bomb_place_cells() -> Array:
+	return []
+
 ## 是否免疫炸弹（炸弹人自己踩雷不引爆）。默认否。
+## Battle 在逐格移动 / 击退 / 拉近 / 换位 / 瞬移 / 召唤等所有落点统一询问本钩子。
 func immune_to_bombs() -> bool:
 	return false
 
@@ -181,8 +194,10 @@ func on_enter() -> void:
 	pass
 
 ## 以障碍物为攻击目标时触发（AOE/穿透类）。
-## 已停用：障碍物不再触发英雄技能（仅承受直接攻击 / 伐木工额外伤害），
+## 已停用：**主动攻击障碍物不触发英雄技能**（障碍只承受直接攻击 / 伐木工额外伤害），
 ## 保留空实现仅避免破坏继承接口。
+## 与之互补的另一条规则：技能**对敌人生效时波及到**的障碍会掉耐久
+## （剑气穿透/散射/自爆等，走 Battle.sweep_obstacles / sweep_obstacles_around）。
 func on_attack_obstacle(_oc: Vector2i) -> void:
 	pass
 

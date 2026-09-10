@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cskillobs0v1"]
+
+[ext_resource type="Script" path="res://tests/SkillObstacleVerify.gd" id="1_script"]
+
+[node name="SkillObstacleVerify" type="Node"]
+script = ExtResource("1_script")

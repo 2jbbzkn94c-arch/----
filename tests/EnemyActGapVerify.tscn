@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://da6g3f7724dxo"]
+
+[ext_resource type="Script" path="res://tests/EnemyActGapVerify.gd" id="1_script"]
+
+[node name="EnemyActGapVerify" type="Node"]
+script = ExtResource("1_script")

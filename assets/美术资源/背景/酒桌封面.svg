@@ -1,0 +1,322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  酒馆纷争 · 封面背景 方案B：酒桌俯视（桌面刻着六边形棋盘）
+  —— 与 方案A（酒馆内景·吧台）同一条管线，二者可互换。
+
+  风格：粗黑描边 + 平涂暖色，与 assets/美术资源/角色 立绘一致。
+
+  ⚠ 版式依据（tests/CoverLayoutProbe 实测的主菜单真实矩形）：
+     标题「酒馆纷争」  y 252–319   x 90–630（文字实际约 x 260–460）
+     副标题           y 335–358
+     按钮列           y 398–964   x 90–630（不透明深藏青面板）
+     底部Q群宣传行     y 1208–1260 x 290–702
+  构图：酒桌铺满画面；光源是左下角的蜡烛（所以上暗下亮）
+        → 标题压在暗木上（金字对比强），棋盘刻痕与桌上杂物全在可见区。
+        棋盘 = 项目真实盘面 5列×7行 + 2格顶帽(奇列1,3)，大小 86/129/149。
+
+  改完用 tools/RenderCover 重新栅格化成 酒桌封面.png
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1280" viewBox="0 0 720 1280">
+
+  <defs>
+    <!-- 桌面木色：上暗下亮（光源在下方） -->
+    <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#2A1C12"/>
+      <stop offset="0.18" stop-color="#3A2718"/>
+      <stop offset="0.46" stop-color="#4A3320"/>
+      <stop offset="0.72" stop-color="#5C3F27"/>
+      <stop offset="1"    stop-color="#6B4A2F"/>
+    </linearGradient>
+
+    <!-- 房间地面（桌沿之外） -->
+    <linearGradient id="room" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0C0806"/>
+      <stop offset="1" stop-color="#1A120C"/>
+    </linearGradient>
+
+    <!-- 烛光光池 -->
+    <radialGradient id="candleGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"    stop-color="#FFE9BC" stop-opacity="0.90"/>
+      <stop offset="0.22" stop-color="#FFC864" stop-opacity="0.44"/>
+      <stop offset="0.58" stop-color="#E09432" stop-opacity="0.14"/>
+      <stop offset="1"    stop-color="#E09432" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 右上角窗缝冷光（补一点冷色，避免全暖） -->
+    <radialGradient id="moon" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0"   stop-color="#8FAAD2" stop-opacity="0.16"/>
+      <stop offset="0.6" stop-color="#6A86B0" stop-opacity="0.06"/>
+      <stop offset="1"   stop-color="#6A86B0" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 中段压暗（按钮列背后要平） -->
+    <linearGradient id="calm" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#0C0906" stop-opacity="0"/>
+      <stop offset="0.20" stop-color="#0C0906" stop-opacity="0.34"/>
+      <stop offset="0.82" stop-color="#0C0906" stop-opacity="0.34"/>
+      <stop offset="1"    stop-color="#0C0906" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="coolTint" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#2E3A52" stop-opacity="0"/>
+      <stop offset="0.22" stop-color="#2E3A52" stop-opacity="0.20"/>
+      <stop offset="0.80" stop-color="#2E3A52" stop-opacity="0.20"/>
+      <stop offset="1"    stop-color="#2E3A52" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="vignette" cx="0.42" cy="0.62" r="0.82">
+      <stop offset="0.40" stop-color="#050403" stop-opacity="0"/>
+      <stop offset="0.74" stop-color="#050403" stop-opacity="0.42"/>
+      <stop offset="1"    stop-color="#050403" stop-opacity="0.90"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ================= 1. 桌沿之外的房间 ================= -->
+  <rect x="0" y="0" width="720" height="66" fill="url(#room)"/>
+  <rect x="0" y="52" width="720" height="14" fill="#1C130C" stroke="#0A0705" stroke-width="4"/>
+  <rect x="0" y="56" width="720" height="5" fill="#9A6E40" opacity="0.30"/>
+  <g stroke="#0A0705" stroke-width="3" opacity="0.5">
+    <line x1="140" y1="0" x2="140" y2="52"/>
+    <line x1="392" y1="0" x2="392" y2="52"/>
+    <line x1="644" y1="0" x2="644" y2="52"/>
+  </g>
+
+  <!-- ================= 2. 桌面 ================= -->
+  <rect x="0" y="66" width="720" height="1214" fill="url(#wood)"/>
+
+  <!-- 桌板竖缝 -->
+  <g stroke="#1A110A" stroke-width="5" opacity="0.34">
+    <line x1="60"  y1="66" x2="60"  y2="1280"/>
+    <line x1="180" y1="66" x2="180" y2="1280"/>
+    <line x1="300" y1="66" x2="300" y2="1280"/>
+    <line x1="420" y1="66" x2="420" y2="1280"/>
+    <line x1="540" y1="66" x2="540" y2="1280"/>
+    <line x1="660" y1="66" x2="660" y2="1280"/>
+  </g>
+  <!-- 木纹（细曲线，低对比） -->
+  <g fill="none" stroke="#2A1A0E" stroke-width="3" opacity="0.22">
+    <path d="M28 120 C40 380 18 700 34 1010 C40 1120 24 1200 30 1276"/>
+    <path d="M104 96 C118 360 96 690 112 1000 C120 1110 102 1190 108 1276"/>
+    <path d="M232 100 C246 400 224 720 240 1030 C248 1140 230 1210 236 1276"/>
+    <path d="M352 92 C366 380 344 700 360 1020 C368 1130 350 1200 356 1276"/>
+    <path d="M470 100 C484 390 462 710 478 1030 C486 1140 468 1210 474 1276"/>
+    <path d="M592 96 C606 370 584 700 600 1020 C608 1130 590 1200 596 1276"/>
+  </g>
+  <!-- 木节 -->
+  <g fill="none" stroke="#241608" stroke-width="4" opacity="0.22">
+    <ellipse cx="66" cy="884" rx="26" ry="18"/>
+    <ellipse cx="66" cy="884" rx="13" ry="9"/>
+    <ellipse cx="686" cy="1128" rx="30" ry="20"/>
+    <ellipse cx="686" cy="1128" rx="15" ry="10"/>
+  </g>
+
+  <!-- ================= 3. 光照 ================= -->
+  <circle cx="288" cy="1046" r="820" fill="url(#candleGlow)"/>
+  <circle cx="676" cy="70" r="420" fill="url(#moon)"/>
+
+  <!-- ================= 4. 桌面刻着的六边形棋盘 ================= -->
+  <!-- 真实盘面：5列x7行 + 顶帽(仅奇列1,3的第0行) -->
+  <!-- 4a. 出生区不铺色块：10% 蓝/绿的色块在木色上会变成"深浅两片蜂窝"，比刻痕本身还抢眼 -->
+
+  <!-- 4b. 刻痕（暗线） -->
+  <g fill="none" stroke="#241608" stroke-width="4" opacity="0.34">
+    <path transform="translate(102,509)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,657.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,806.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,955.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,1104.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,1253.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,434.5)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,583.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,732.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,881.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1030.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1179.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1328.2)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,509)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,657.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,806.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,955.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,1104.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,1253.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,434.5)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,583.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,732.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,881.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1030.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1179.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1328.2)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,509)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,657.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,806.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,955.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,1104.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,1253.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+  </g>
+  <!-- 4c. 刻痕下沿的高光（做出"凹刻"立体感） -->
+  <g fill="none" stroke="#C08A4E" stroke-width="2" opacity="0.10">
+    <path transform="translate(102,511)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,659.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,808.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,957.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,1106.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(102,1255.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,436.5)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,585.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,734.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,883.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1032.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1181.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(231,1330.2)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,511)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,659.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,808.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,957.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,1106.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(360,1255.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,436.5)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,585.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,734.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,883.4)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1032.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1181.3)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(489,1330.2)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,511)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,659.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,808.9)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,957.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,1106.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+    <path transform="translate(618,1255.8)" d="M86 0 L43 74.5 L-43 74.5 L-86 0 L-43 -74.5 L43 -74.5 Z"/>
+  </g>
+
+  <!-- ================= 5. 桌上杂物（上段：远端，处在暗处） ================= -->
+  <!-- 倒放的酒瓶（左） -->
+  <g>
+    <path d="M26 150 C26 128 44 118 74 118 L156 118 C186 118 204 128 204 150 C204 172 186 182 156 182 L74 182 C44 182 26 172 26 150 Z"
+          fill="#241A12" stroke="#0F0A06" stroke-width="6"/>
+    <path d="M204 136 L248 136 C262 136 268 142 268 150 C268 158 262 164 248 164 L204 164 Z"
+          fill="#1C130C" stroke="#0F0A06" stroke-width="6"/>
+    <rect x="266" y="134" width="22" height="32" rx="6" fill="#39281A" stroke="#0F0A06" stroke-width="5"/>
+    <path d="M40 132 L180 132" stroke="#6B4A2F" stroke-width="6" opacity="0.35" stroke-linecap="round"/>
+  </g>
+  <!-- 两枚骰子（中左，暗处） -->
+  <g>
+    <rect x="252" y="146" width="66" height="66" rx="11" fill="#2A1C12" stroke="#0F0A06" stroke-width="6"/>
+    <rect x="252" y="206" width="66" height="14" rx="5" fill="#2A1C12" stroke="#0F0A06" stroke-width="5"/>
+    <g fill="#8A6238">
+      <circle cx="270" cy="164" r="6"/><circle cx="300" cy="194" r="6"/><circle cx="285" cy="179" r="6"/>
+    </g>
+    <rect x="336" y="170" width="60" height="60" rx="10" fill="#241A12" stroke="#0F0A06" stroke-width="6"/>
+    <g fill="#7A5630">
+      <circle cx="352" cy="186" r="5.5"/><circle cx="380" cy="186" r="5.5"/>
+      <circle cx="352" cy="214" r="5.5"/><circle cx="380" cy="214" r="5.5"/>
+    </g>
+  </g>
+  <!-- 木盘 + 面包（右） -->
+  <g>
+    <ellipse cx="596" cy="182" rx="106" ry="58" fill="#2A1C12" stroke="#0F0A06" stroke-width="7"/>
+    <ellipse cx="596" cy="182" rx="86" ry="45" fill="#241A12" stroke="#0F0A06" stroke-width="4"/>
+    <ellipse cx="566" cy="168" rx="46" ry="30" fill="#513722" stroke="#0F0A06" stroke-width="6" transform="rotate(-12 566 168)"/>
+    <ellipse cx="634" cy="176" rx="42" ry="28" fill="#432C1C" stroke="#0F0A06" stroke-width="6" transform="rotate(9 634 176)"/>
+    <g stroke="#2A1A0E" stroke-width="4" opacity="0.7">
+      <line x1="548" y1="160" x2="580" y2="172"/>
+      <line x1="622" y1="166" x2="648" y2="182"/>
+    </g>
+  </g>
+
+  <!-- ================= 6. 中段压暗（按钮列背后） ================= -->
+  <rect x="0" y="330" width="720" height="680" fill="url(#calm)"/>
+  <rect x="0" y="330" width="720" height="680" fill="url(#coolTint)"/>
+
+  <!-- ================= 7. 桌上杂物（下段：近端，烛光照到的地方） ================= -->
+  <!-- 蜡烛（光源，中左）：整体压低，火苗顶在 y≈978（按钮列底边 964，别被盖住） -->
+  <path d="M244 1124 L332 1124 L322 1082 L254 1082 Z" fill="#2A2A30" stroke="#0F0A06" stroke-width="6"/>
+  <ellipse cx="288" cy="1082" rx="34" ry="13" fill="#3A3A42" stroke="#0F0A06" stroke-width="5"/>
+  <rect x="270" y="1024" width="36" height="58" rx="5" fill="#E8D7B0" stroke="#0F0A06" stroke-width="6"/>
+  <ellipse cx="288" cy="1024" rx="18" ry="7" fill="#FFF3C4" stroke="#0F0A06" stroke-width="5"/>
+  <path d="M288 978 C306 1000 297 1021 288 1026 C279 1021 270 1000 288 978 Z" fill="#FFC864" stroke="#0F0A06" stroke-width="5"/>
+  <ellipse cx="288" cy="1008" rx="5" ry="10" fill="#FFF8DE"/>
+
+  <!-- 大酒杯（左，被烛光照亮） -->
+  <g>
+    <ellipse cx="152" cy="1128" rx="66" ry="26" fill="#2A1A0E"/>
+    <path d="M96 1052 L208 1052 L196 1132 C194 1146 110 1146 108 1132 Z" fill="#8A6238" stroke="#0F0A06" stroke-width="7"/>
+    <ellipse cx="152" cy="1052" rx="56" ry="22" fill="#5C3E26" stroke="#0F0A06" stroke-width="6"/>
+    <ellipse cx="152" cy="1052" rx="45" ry="16" fill="#C9A86A" opacity="0.55"/>
+    <path d="M208 1064 C244 1068 248 1104 210 1112" fill="none" stroke="#0F0A06" stroke-width="8" stroke-linecap="round"/>
+    <g stroke="#3A2A1E" stroke-width="5" opacity="0.8">
+      <line x1="112" y1="1082" x2="196" y2="1082"/>
+      <line x1="116" y1="1106" x2="192" y2="1106"/>
+    </g>
+  </g>
+
+  <!-- 骰子（近端，亮处）：压在两个格心上，读作"下到盘面上的子" -->
+  <g>
+    <rect x="74" y="1204" width="62" height="62" rx="10" fill="#C9A86A" stroke="#0F0A06" stroke-width="6"/>
+    <rect x="74" y="1266" width="62" height="14" rx="5" fill="#8A6238" stroke="#0F0A06" stroke-width="5"/>
+    <g fill="#4A3524">
+      <circle cx="92" cy="1222" r="6"/><circle cx="118" cy="1248" r="6"/><circle cx="105" cy="1235" r="6"/>
+    </g>
+    <rect x="458" y="1151" width="56" height="56" rx="9" fill="#B98A55" stroke="#0F0A06" stroke-width="6"/>
+    <g fill="#4A3524">
+      <circle cx="472" cy="1165" r="5.5"/><circle cx="500" cy="1165" r="5.5"/>
+      <circle cx="472" cy="1193" r="5.5"/><circle cx="500" cy="1193" r="5.5"/>
+    </g>
+  </g>
+
+  <!-- 金币堆（压在 (618,1104.8) 格心）+ 散落的金币 -->
+  <g fill="#C9963C" stroke="#0F0A06" stroke-width="3">
+    <ellipse cx="618" cy="1116" rx="16" ry="10"/>
+    <ellipse cx="618" cy="1106" rx="16" ry="10"/>
+    <ellipse cx="618" cy="1096" rx="16" ry="10"/>
+  </g>
+  <ellipse cx="618" cy="1096" rx="16" ry="10" fill="#FFD980" stroke="#0F0A06" stroke-width="3"/>
+
+  <!-- 散落的金币（右侧，落在棋盘刻痕上） -->
+  <g fill="#FFD980" stroke="#0F0A06" stroke-width="4">
+    <ellipse cx="560" cy="1010" rx="15" ry="9"/>
+    <ellipse cx="594" cy="1030" rx="15" ry="9"/>
+    <ellipse cx="552" cy="1052" rx="15" ry="9"/>
+    <ellipse cx="620" cy="990" rx="15" ry="9"/>
+    <ellipse cx="638" cy="1042" rx="15" ry="9"/>
+    <ellipse cx="470" cy="1042" rx="14" ry="8.5"/>
+    <ellipse cx="672" cy="966" rx="14" ry="8.5"/>
+  </g>
+  <g fill="#C9963C" stroke="#0F0A06" stroke-width="3" opacity="0.9">
+    <ellipse cx="579" cy="1072" rx="15" ry="9"/>
+    <ellipse cx="606" cy="1058" rx="15" ry="9"/>
+  </g>
+  <!-- 左缝里的几枚金币（按钮列左侧唯一露出的一条） -->
+  <g fill="#C9963C" stroke="#0F0A06" stroke-width="4" opacity="0.8">
+    <ellipse cx="38" cy="700" rx="15" ry="9"/>
+    <ellipse cx="62" cy="736" rx="15" ry="9"/>
+    <ellipse cx="34" cy="762" rx="15" ry="9"/>
+  </g>
+
+  <!-- 匕首（左下，斜放） -->
+  <g transform="rotate(-22 130 1196)">
+    <path d="M74 1196 L196 1184 L196 1208 L74 1196 Z" fill="#9AA3B0" stroke="#0F0A06" stroke-width="6"/>
+    <path d="M78 1190 L190 1180" stroke="#DDE3EC" stroke-width="4" opacity="0.55"/>
+    <rect x="188" y="1176" width="18" height="40" rx="5" fill="#7A5630" stroke="#0F0A06" stroke-width="5"/>
+    <rect x="204" y="1180" width="52" height="22" rx="9" fill="#4A3524" stroke="#0F0A06" stroke-width="6"/>
+    <circle cx="264" cy="1191" r="11" fill="#C9963C" stroke="#0F0A06" stroke-width="5"/>
+  </g>
+
+  <!-- ================= 8. 浮尘（烛光里的尘与面粉颗粒） ================= -->
+  <g fill="#FFE3A8">
+    <circle cx="128" cy="944" r="3"   opacity="0.22"/>
+    <circle cx="214" cy="1180" r="2.6" opacity="0.18"/>
+    <circle cx="352" cy="1176" r="2.4" opacity="0.16"/>
+    <circle cx="616" cy="1120" r="3"   opacity="0.16"/>
+    <circle cx="430" cy="1010" r="2.6" opacity="0.14"/>
+    <circle cx="52"  cy="540" r="2.4" opacity="0.12"/>
+    <circle cx="672" cy="640" r="2.2" opacity="0.11"/>
+    <circle cx="30"  cy="860" r="2.6" opacity="0.12"/>
+    <circle cx="694" cy="820" r="2.4" opacity="0.11"/>
+    <circle cx="248" cy="1236" r="2.6" opacity="0.12"/>
+    <circle cx="524" cy="1224" r="2.4" opacity="0.10"/>
+  </g>
+
+  <!-- ================= 9. 暗角 ================= -->
+  <rect x="0" y="0" width="720" height="1280" fill="url(#vignette)"/>
+
+</svg>

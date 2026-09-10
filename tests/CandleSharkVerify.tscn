@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://dphdl26db7quq"]
+
+[ext_resource type="Script" path="res://tests/CandleSharkVerify.gd" id="1_script"]
+
+[node name="CandleSharkVerify" type="Node"]
+script = ExtResource("1_script")

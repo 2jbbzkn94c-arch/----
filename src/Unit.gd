@@ -63,6 +63,8 @@ var _tags_label: Label
 var _passive_border: Line2D
 var _passive_tween: Tween
 var _sel_border: Line2D = null   # 金色选中描边（选中时叠加在单位六边形上）
+var _atk_icon_center := Vector2.ZERO   # 攻击图标中心（_init 按棋盘缩算好，变身换图时复用）
+var _atk_icon_box := 0.0               # 攻击图标框大小（同上）
 var _acting_border: Line2D = null     # 敌方AI"正在行动"描边（红橙脉冲，区别于金色选中边）
 var _acting_tween: Tween
 var _action_dot: Label   # 本回合仍有行动的顶部标识（旧，保留兼容）
@@ -120,10 +122,11 @@ func _build_visual() -> void:
 	var hp_icon_w := num_icon_w * 1.0   # 爱心单独放大：比剑大 10%；想更大就加大系数并配合把 hp_c.x 往左调
 	var atk_c := Vector2(-hex_radius * 0.34, hex_radius * 0.6)
 	var hp_c := Vector2(hex_radius * 0.36, hex_radius * 0.6)   # 爱心中心（大爱心需稍左移避免出右边框）
-	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图
-	var atk_icon_path := DataRegistry.ICON_ATK_LOGISTICS if skills.has(DataRegistry.Skill.LOGISTICS) else (
-		DataRegistry.ICON_ATK_RANGED if attack_type == DataRegistry.AttackType.RANGED else DataRegistry.ICON_ATK)
-	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, num_icon_w)
+	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图。
+	# 位置/尺寸记到成员上，变身改了词条或攻击类型后 update_atk_icon() 才能就地换图不跑位。
+	_atk_icon_center = atk_c
+	_atk_icon_box = num_icon_w
+	var atk_icon := _make_stat_icon(_atk_icon_path(), atk_c, num_icon_w)
 	if atk_icon != null:
 		atk_icon.name = "AtkIcon"
 		add_child(atk_icon)
@@ -189,14 +192,18 @@ func _build_visual() -> void:
 
 # 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
 # 保持长宽比缩放到"外接框边长=box"内（宽高谁大以谁定基准），并把主体中心精确放到 center。
-func _make_stat_icon(path: String, center: Vector2, box: float) -> Sprite2D:
+# 生成/更新一个数值图标 Sprite：reuse=null 时新建，传已有节点则**就地换贴图与缩放**
+# （通用：攻击图标变身要换图，又必须保持原来的绘制次序，所以不能删了重建）
+func _make_stat_icon(path: String, center: Vector2, box: float, reuse: Sprite2D = null) -> Sprite2D:
 	var info := DataRegistry.stat_icon(path)
 	var tex: Texture2D = info.get("tex")
 	var bw := int(info.get("w", 0))
 	var bh := int(info.get("h", 0))
 	if tex == null or bw <= 0 or bh <= 0:
 		return null   # 资源未导入/缺失：退回无图标
-	var spr := Sprite2D.new()
+	var spr: Sprite2D = reuse
+	if spr == null:
+		spr = Sprite2D.new()
 	spr.texture = tex
 	var sc := box / float(maxi(bw, bh))
 	spr.scale = Vector2(sc, sc)
@@ -204,6 +211,28 @@ func _make_stat_icon(path: String, center: Vector2, box: float) -> Sprite2D:
 	spr.position = center - Vector2(float(info.get("cx", tsz.x / 2.0)) - tsz.x / 2.0,
 			float(info.get("cy", tsz.y / 2.0)) - tsz.y / 2.0) * sc
 	return spr
+
+# 攻击力图标按"当前词条 / 攻击类型"选：后勤=齿轮，其次远程=弩，最后近战=剑。
+# 抽成函数供 _init 与 update_atk_icon() 共用（变身会改这两者）。
+func _atk_icon_path() -> String:
+	if skills.has(DataRegistry.Skill.LOGISTICS):
+		return DataRegistry.ICON_ATK_LOGISTICS
+	if attack_type == DataRegistry.AttackType.RANGED:
+		return DataRegistry.ICON_ATK_RANGED
+	return DataRegistry.ICON_ATK
+
+# 刷新攻击力图标（古灵精怪变身/还原、词条或攻击类型变化后必须调用，否则图标还是旧英雄的）。
+# 已建则就地换贴图；原先缺资源没建起来时补建一个，并保持画在攻击数字下面。
+func update_atk_icon() -> void:
+	var spr := get_node_or_null("AtkIcon") as Sprite2D
+	var made := _make_stat_icon(_atk_icon_path(), _atk_icon_center, _atk_icon_box, spr)
+	if made == null:
+		return   # 目标贴图缺失：保持现状，不做半截替换
+	if spr == null:
+		made.name = "AtkIcon"
+		add_child(made)
+		if _atk_label != null:
+			move_child(made, _atk_label.get_index())   # 与 _init 的加入次序一致：图标在数字下面
 
 func _skill_tags() -> String:
 	var out := ""
@@ -245,15 +274,15 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		return
 	_was_counter_damage = counter   # 记录本次是否为反击伤害
 	# 圣盾：防止一次受到的伤害，消费后解除
-	if not ignore_shield and has_status("shield"):
+	if not ignore_shield and has_status(StatusDB.SHIELD):
 		_dmg_style = 0
-		remove_status("shield")
+		remove_status(StatusDB.SHIELD)
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -24, -46)
 		return
 	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（只减攻击伤害，猛毒/烧血/炸弹等非攻击伤害不减）
 	# 两者可共存，先加后减，最低为0——可完全免疫1点攻击
-	var dmg := amount + (1 if has_status("heavy") else 0)
-	if has_status("solid") and is_attack:
+	var dmg := amount + (1 if has_status(StatusDB.HEAVY) else 0)
+	if has_status(StatusDB.SOLID) and is_attack:
 		dmg = max(dmg - 1, 0)
 	# 塔盾：伤害结算前，相邻塔盾代替承受1点（队友实际伤害减1）
 	var battle_node := get_parent()
@@ -293,23 +322,24 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		die()
 
 # ---- 状态效果 ----
-# 负墟：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
+# 状态的"键名 / 中文名 / 是否负面 / 是否随回合末解除 / 显示"全部集中在 StatusDB（唯一真相表）。
+# 负墟（hero_44）：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
 # [附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
-func _is_negative_status(s: String) -> bool:
-	return s == "heavy" or s == "atkdown" or s == "freeze" or s == "silence" or s == "stun" or s == "poison" or s == "possess" or s == "thorn"
-
+#
+# 圣盾的语义：**挡住"那一次带伤害的攻击"**——伤害不结算，该次攻击附带的状态也不生效
+# （见 Battle._apply_attack 的 _shield_block_status）。而"纯状态施加"（雪拳移动后冰冻这种
+# 没有伤害的）用 pierce_shield=true 穿过圣盾：盾保留、状态照常挂上。
 func add_status(s: String, pierce_shield: bool = false) -> void:
-	# 圣盾：抵挡一次受到的伤害或异常状态——负面状态施加时也消费掉圣盾并抵消本次负面。
-	# 但"纯状态施加"(无伤害，如雪拳移动后冰冻)用 pierce_shield=true 穿过圣盾：
-	# 盾保留，目标照常获得状态。带伤害攻击施加的状态(默认 false)仍由盾整段挡下。
+	# 圣盾：负面状态施加时消费掉圣盾并抵消本次负面（不带伤害的"纯状态施加"用 pierce_shield 越过）
 	# 圣盾判定在负墟免疫之前：带盾的负墟被负面命中先被盾挡下，不算"被负面命中"，不触发 +1 攻
-	if _is_negative_status(s) and has_status("shield") and not pierce_shield:
-		remove_status("shield")
+	if StatusDB.is_negative(s) and has_status(StatusDB.SHIELD) and not pierce_shield:
+		remove_status(StatusDB.SHIELD)
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -32, -92)   # 文字抬高，避免压住伤害数字
 		return
 	# 负墟（hero_44）：免疫负面效果——不挂状态，改为"被负面攻击命中"计数 +1 攻击
 	# （一次攻击内连续施加多个负面只计一次：同帧去重）
-	if hero_id == "hero_44" and _is_negative_status(s):
+	# TODO(状态批次3)：这条"Unit 认识具体英雄"的硬编码应改成 HeroBase.immune_to_negative() 钩子
+	if hero_id == "hero_44" and StatusDB.is_negative(s):
 		_neg_immune_on_hit()
 		return
 	statuses[s] = true
@@ -380,10 +410,12 @@ func _ensure_tags_label() -> void:
 	_tags_label = tag_label
 
 func clear_temp_statuses() -> void:
-	# 注意：solid(坚固) 不在其中——它是装甲堡垒自己回合结束时挂的增益，
-	# 要撑过整个对方回合，由英雄自己 on_turn_start 在无回合开始时清除，不随回合末自动清。
-	for s in ["heavy", "atkdown", "freeze", "silence", "stun", "possess", "thorn"]:
-		statuses.erase(s)
+	# 哪些状态随回合末解除由 StatusDB.clears_on_turn_end 决定：
+	# 猛毒永久（不解除）；坚固(装甲堡垒)是自己回合开始时挂的增益、要撑过整个对方回合，
+	# 由英雄自己 on_turn_start 清理，故也不在此自动清。
+	for key in StatusDB.keys():
+		if StatusDB.clears_on_turn_end(key):
+			statuses.erase(key)
 	_update_status_label()
 
 # 有效攻击力（含 buff / ** / 冲锋加成；远程被贴身时：基础攻击压为1，buff 照常叠加）
@@ -398,15 +430,15 @@ func effective_atk() -> int:
 	if attack_type == DataRegistry.AttackType.RANGED and ranged_adjacent:
 		base = 1   # 远程被贴身：默认攻击力变为 1（buff 不受影响）
 	var a := base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff
-	if has_status("atkdown"):
+	if has_status(StatusDB.ATKDOWN):
 		a -= 1
 	return max(a, 0)
 
 func effective_move() -> int:
-	if has_status("stun") or has_status("thorn"):
+	if has_status(StatusDB.STUN) or has_status(StatusDB.THORN):
 		return 0
 	var m := move_range + move_buff + move_use_buff
-	if has_status("freeze"):
+	if has_status(StatusDB.FREEZE):
 		m -= 1
 	return max(m, 0)
 
@@ -418,14 +450,14 @@ func set_ranged_adjacent(adj: bool) -> void:
 	_update_atk_label()
 
 func can_move() -> bool:
-	return alive and not has_status("stun") and not has_status("thorn")
+	return alive and not has_status(StatusDB.STUN) and not has_status(StatusDB.THORN)
 
 func can_attack() -> bool:
-	return alive and not has_status("stun")
+	return alive and not has_status(StatusDB.STUN)
 
 func skill_allowed() -> bool:
 	# 眩晕：不能移动/攻击，也不能触发任何技能（回合开始/结束、登场、光环等）
-	return alive and not has_status("silence") and not has_status("stun")
+	return alive and not has_status(StatusDB.SILENCE) and not has_status(StatusDB.STUN)
 
 # 坠炮手"全场狙击"被动是否生效：仅在本单位存活且未被沉默/眩晕时。
 # 被沉默时退化为普通远程(射程2/受视线阻挡/受嘲讽约束,见 Battle 各判定处)，但仍能攻击。
@@ -438,37 +470,30 @@ func mortar_ignores_taunt() -> bool:
 	return mortar_active() and not ranged_adjacent
 
 func _update_status_label() -> void:
-	# 在单位牌面下加状态小字(减益紫 + 盾金,分开着色)
+	# 在单位牌面下加状态小字(减益紫 + 增益金 + 独立盾字)，单字/分组/顺序全部查 StatusDB，
+	# 本函数不再出现任何状态名硬编码。
 	var dtxt := ""
-	if has_status("poison"):
-		dtxt += "毒"
-	if has_status("heavy"):
-		dtxt += "伤"
-	if has_status("atkdown"):
-		dtxt += "麻"
-	if has_status("freeze"):
-		dtxt += "冻"
-	if has_status("silence"):
-		dtxt += "默"
-	if has_status("stun"):
-		dtxt += "晕"
-	if has_status("possess"):
-		dtxt += "附"
-	if has_status("thorn"):
-		dtxt += "荆"
+	var gtxt := ""
+	var shtxt := ""
+	for key in StatusDB.keys():
+		if not has_status(key):
+			continue
+		match StatusDB.group_of(key):
+			"shield":
+				shtxt += StatusDB.glyph(key)
+			"buff":
+				gtxt += StatusDB.glyph(key)
+			_:
+				dtxt += StatusDB.glyph(key)
 	if _status_label:
-		# 增益状态小字（坚固/圣盾）单独显示：与减益紫分开
-		var gtxt := ""
-		if has_status("solid"):
-			gtxt += "固"
 		_status_label.text = gtxt
 		_status_label.visible = gtxt != ""
 		if _debuff_label:
 			_debuff_label.text = dtxt
 			_debuff_label.visible = dtxt != ""
 		if _shield_label:
-			_shield_label.text = "盾" if has_status("shield") else ""
-			_shield_label.visible = has_status("shield")
+			_shield_label.text = shtxt
+			_shield_label.visible = shtxt != ""
 
 # 受击震屏：仅抖动六边形本体，不影响单位移动坐标
 func _shake() -> void:
