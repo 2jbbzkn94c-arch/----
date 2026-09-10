@@ -26,6 +26,8 @@ var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重�
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
 var _player_deaths: Label
 var _enemy_deaths: Label
+var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上角）
+var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
 var _last_pd := -1
 var _last_ed := -1
 var _end_btn: Button          # 结束回合（仅我方回合可点）
@@ -373,7 +375,7 @@ func _on_unit_card_overlay_input(ev: InputEvent) -> bool:
 
 # 等 PanelContainer 完成布局后按内容尺寸定位并收敛到屏内（overlay/panel 由成员引用，安全判空）
 func _position_unit_card(overlay: Control, panel: PanelContainer, vsize: Vector2) -> void:
-	var wait := get_tree().create_timer(0.05)
+	var wait := get_tree().create_timer(0.05, false)
 	await wait.timeout
 	if overlay == null or panel == null or not is_instance_valid(overlay) or not is_instance_valid(panel):
 		return   # 卡片已被关闭：安全退出
@@ -489,7 +491,7 @@ func _deploy_panel_shown_notice_gone() -> void:
 		_fade_close_first_notice()
 	else:
 		var wait := FIRST_NOTICE_MIN_SECONDS - elapsed
-		var timer := get_tree().create_timer(wait)
+		var timer := get_tree().create_timer(wait, false)
 		timer.timeout.connect(_fade_close_first_notice)
 
 func _on_first_notice_input(ev: InputEvent) -> void:
@@ -1283,10 +1285,20 @@ func _build() -> void:
 	_enemy_deaths.text = "☠☠☠ 敌方"
 	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_enemy_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_enemy_deaths.size = Vector2(vsize.x - 12, 32)
+	_enemy_deaths.size = Vector2(vsize.x - 12 - 58, 32)   # 右侧留出暂停键的位置
 	_enemy_deaths.position = Vector2(0, 11)
 	root.add_child(_enemy_deaths)
 	_refresh_deaths()
+
+	# 右上角暂停键（仅单机对局显示；联机不可暂停，见 _refresh_controls）
+	_pause_btn = Button.new()
+	_pause_btn.text = "暂停"
+	_pause_btn.add_theme_font_size_override("font_size", 15)
+	_pause_btn.custom_minimum_size = Vector2(50, 32)
+	_pause_btn.size = Vector2(50, 32)
+	_pause_btn.position = Vector2(vsize.x - 56, 11)
+	_pause_btn.pressed.connect(_on_pause_pressed)
+	root.add_child(_pause_btn)
 
 	# 按钮：结束回合 / 重开 / 返回选人（用明确的绝对坐标放置，避免锚点+坐标混搭导致错位）
 	var btn_row := HBoxContainer.new()
@@ -1740,6 +1752,8 @@ func _refresh_controls() -> void:
 		_end_btn.disabled = not my_turn
 	if _restart_btn != null:
 		_restart_btn.visible = not GameState.is_online
+	if _pause_btn != null:
+		_pause_btn.visible = not GameState.is_online   # 暂停仅单机（联机暂停会与对端不同步）
 	if _back_btn != null:
 		_back_btn.visible = true
 		_back_btn.text = "返回大厅" if GameState.is_online else "返回选人"
@@ -1788,6 +1802,80 @@ func _update_score_tooltip_pos() -> void:
 	pos.y = clampf(pos.y, 4, vs.y - th - 4)
 	_score_tooltip_wrap.position = pos
 
+# ---- 暂停（仅单机）：冻结整棵场景树，弹"已暂停"遮罩，可继续 ----
+func _on_pause_pressed() -> void:
+	if GameState.is_online:
+		return   # 联机不可暂停（会影响与对端的同步）
+	if _pause_overlay != null and is_instance_valid(_pause_overlay):
+		return   # 已暂停
+	var vsize := get_viewport().get_visible_rect().size
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	# 暂停后引擎不再处理 PAUSABLE 节点：遮罩与按钮必须能在暂停中工作
+	overlay.process_mode = Node.PROCESS_MODE_WHEN_PAUSED
+	add_child(overlay)
+	_pause_overlay = overlay
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.66)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(dim)
+	var panel := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.1, 0.12, 0.16, 0.99)
+	sb.set_corner_radius_all(12)
+	sb.set_border_width_all(2)
+	sb.border_color = Color(1.0, 0.85, 0.5)
+	sb.content_margin_left = 26.0
+	sb.content_margin_right = 26.0
+	sb.content_margin_top = 20.0
+	sb.content_margin_bottom = 20.0
+	panel.add_theme_stylebox_override("panel", sb)
+	overlay.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "已暂停"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var hint := Label.new()
+	hint.text = "对局已冻结（计时与动画都停下）"
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.75, 0.8, 0.9))
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(hint)
+	var resume := Button.new()
+	resume.text = "继续游戏"
+	resume.add_theme_font_size_override("font_size", 20)
+	resume.custom_minimum_size = Vector2(240, 50)
+	resume.pressed.connect(_on_resume_pressed)
+	vb.add_child(resume)
+	panel.reset_size()
+	var pw: float = clampf(maxf(panel.get_combined_minimum_size().x, 300.0), 300.0, maxf(vsize.x - 40.0, 300.0))
+	var ph: float = panel.get_combined_minimum_size().y
+	panel.size = Vector2(pw, ph)
+	panel.position = Vector2((vsize.x - pw) / 2.0, (vsize.y - ph) / 2.0)
+	get_tree().paused = true
+
+func _on_resume_pressed() -> void:
+	_resume()
+
+# 解除暂停（幂等）：收起遮罩并恢复场景树
+func _resume() -> void:
+	if _pause_overlay != null and is_instance_valid(_pause_overlay):
+		_pause_overlay.queue_free()
+	_pause_overlay = null
+	if get_tree() != null:
+		get_tree().paused = false
+
+# 场景退出兜底：若在暂停中离开（返回选人等），务必恢复，避免整个引擎一直暂停
+func _exit_tree() -> void:
+	if get_tree() != null:
+		get_tree().paused = false
+
 func _on_end_turn() -> void:
 	if battle and battle.state == Battle.State.PLAYER_INPUT:
 		battle.submit_end_turn()
@@ -1795,6 +1883,7 @@ func _on_end_turn() -> void:
 # redraft=true = 对局结束后"再战一局"（竞技场需重新 2 选 1 选人）；
 # 对局中的"重开"用默认 false（竞技场沿用同队伍，普通模式重新选卡组）。
 func _on_restart(redraft := false) -> void:
+	_resume()   # 若正处于暂停：先恢复，否则重开流程全被冻结
 	if _result_overlay != null:
 		# 关闭结算浮层（场景不卸载，需手动收起，否则遮住重开的选人/部署界面）
 		_result_overlay.queue_free()
@@ -1820,6 +1909,7 @@ func _on_restart(redraft := false) -> void:
 		get_tree().reload_current_scene()
 
 func show_result(win: bool) -> void:
+	_resume()   # 结算时确保不在暂停态（否则结算浮层按钮点不动）
 	if _result_overlay != null:
 		_result_overlay.queue_free()
 	var vsize := get_viewport().get_visible_rect().size
@@ -1882,7 +1972,7 @@ func _on_back_to_menu() -> void:
 		# 联机（含联机竞技场）：先通知对方"本端离开本局"，再断开并回联机大厅
 		if NetBus.is_online:
 			NetBus.send_all(JSON.stringify({ "type": "leave" }))
-			await get_tree().create_timer(0.2).timeout   # 给对方一点时间收包
+			await get_tree().create_timer(0.2, false).timeout   # 给对方一点时间收包
 		GameState.reset_online()
 		NetBus.stop()
 		get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")

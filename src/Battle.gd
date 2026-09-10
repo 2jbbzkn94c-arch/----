@@ -1949,7 +1949,7 @@ func _trigger_turn_start_all(faction: int) -> void:
 				u.flash_passive()
 				if get_tree() == null:
 					return   # 场景已释放（点击重开/reload）：安全退出，避免访问 null get_tree()
-				await get_tree().create_timer(0.35).timeout
+				await get_tree().create_timer(0.35, false).timeout
 
 # 回合结束：该阵营单位的回合结束技能（逐个触发，带触发边框闪烁
 func _trigger_turn_end_all(faction: int) -> void:
@@ -1962,7 +1962,7 @@ func _trigger_turn_end_all(faction: int) -> void:
 				u.flash_passive()
 				if get_tree() == null:
 					return   # 场景已释放：安全退出
-				await get_tree().create_timer(0.35).timeout
+				await get_tree().create_timer(0.35, false).timeout
 
 # 共鸣者（hero_47）：己方回合开始时，"攻击力增加所有队友攻击力之和"直到我方回合结束。
 # 先统一取样所有共鸣者的总和再逐个赋值（若有多名共鸣者，避免后者把前者的新加成又算进去）。
@@ -3583,7 +3583,7 @@ func _end_side(side: int) -> void:
 	GameState.end_current_side(_first_side)
 	# 换边停顿：让"上一方回合结束的演出"下一方回合开始被动的演出"之间
 	# 有可感知间隔，不会首尾相连。停顿在 _begin_side 之前，故也先于下回合被动触发
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.8, false).timeout
 	# 主机权威：先广播"新回合开（active_side 已推进、附当前回合号），再执行 _begin_side
 	# 即使 _begin_side 内部因替补等提前 return，客户端也能正确同步并进入等操作
 	if GameState.is_online and GameState.is_host:
@@ -5020,9 +5020,10 @@ func _run_enemy_turn() -> void:
 	var my_session := _session_id   # 记录本次回放所属会话，重开后会
 	if get_tree() == null:
 		return   # 场景已释放（点击重开/reload）：安全退
-	await get_tree().create_timer(0.5).timeout
+	await get_tree().create_timer(0.5, false).timeout
 	if my_session != _session_id:
 		return   # 已重开：本会话作废，安全退
+	await _wait_unpaused()   # 暂停中：等恢复再开始敌方行动（暂停期间不推进任何一步）
 	# 构建模拟快照（与 units 顺序一致，用于回放映射
 	var refs: Array = units.duplicate()
 	var descs: Array = []
@@ -5113,7 +5114,7 @@ func _run_enemy_turn() -> void:
 				print("[替补统计] 敌方回合结束：我可替补次数=%d" % _my_sub_quota())
 			GameState.end_current_side(_first_side)
 			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
-			await get_tree().create_timer(0.8).timeout
+			await get_tree().create_timer(0.8, false).timeout
 			_begin_side(GameState.SIDE_PLAYER)
 
 # 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
@@ -5137,6 +5138,7 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 		if get_tree() == null:
 			return
 		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
+		await _wait_unpaused()   # 暂停中：不推进敌方下一步（恢复后继续）
 		var idx: int = step["idx"]
 		if idx < 0 or idx >= refs.size():
 			continue
@@ -5167,6 +5169,11 @@ func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
 						await _wait_action_done()   # 等待攻击（含反击）演出完全结
 
 # 替补流程期间暂停敌方 AI 执行（轮询直到替补结束）
+# 暂停中：协程在此等待恢复（单机暂停用；联机不暂停，故几乎是空转）
+func _wait_unpaused() -> void:
+	while get_tree() != null and get_tree().paused:
+		await get_tree().process_frame
+
 func _wait_sub_done() -> void:
 	var my_session := _session_id
 	while state == State.SUBSTITUTING or state == State.PLACE_SUB:
@@ -5187,7 +5194,7 @@ func _wait_action_done() -> void:
 	action_finished.connect(func(): done[0] = true, CONNECT_ONE_SHOT)
 	if get_tree() == null:
 		return   # 已脱离场景树：直接返回
-	var limit := get_tree().create_timer(3.0)
+	var limit := get_tree().create_timer(3.0, false)
 	while not done[0] and not limit.time_left <= 0.0:
 		if my_session != _session_id:
 			return   # 已重开：安全退出
