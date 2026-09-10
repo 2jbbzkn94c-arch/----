@@ -37,36 +37,7 @@ class Projectile:
 		draw_arc(Vector2.ZERO, radius, 0.0, TAU, 40, Color(0.55, 0.32, 0.05), 2.0, true)
 		draw_circle(Vector2.ZERO, radius * 0.5, Color(1.0, 0.97, 0.82))
 
-# 长剑的剑气：一道弧形刃光沿直线飞出
-class SwordQi:
-	extends Node2D
-
-	func _draw() -> void:
-		# 防护：节点变换出现非有限值（NaN）时三角剖分会失败，直接跳过绘制
-		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
-			return
-		# 弧形剑气（朝 +X 方向，节点旋转后即随直线飞出
-		var blade := PackedVector2Array([
-			Vector2(0, -8),
-			Vector2(28, -5),
-			Vector2(50, 0),
-			Vector2(28, 5),
-			Vector2(0, 8),
-			Vector2(10, 0),
-		])
-		if _poly_ok(blade):
-			draw_colored_polygon(blade, Color(0.65, 0.95, 1.0, 0.85))
-		# 亮芯
-		draw_polyline(PackedVector2Array([Vector2(-4, 0), Vector2(46, 0)]), Color(1.0, 1.0, 0.95, 0.95), 2.0, true)
-		# 光晕
-		draw_circle(Vector2(24, 0), 22, Color(0.6, 0.9, 1.0, 0.12))
-
-	# 多边形可安全绘制？（顶点有限且能三角剖分，避免 C++ 层 triangulation failed 刷屏/中断）
-	func _poly_ok(poly: PackedVector2Array) -> bool:
-		for v in poly:
-			if not (is_finite(v.x) and is_finite(v.y)):
-				return false
-		return Geometry2D.triangulate_polygon(poly).size() > 0
+# 长剑的剑气：一道弧形刃光沿直线飞出（当前未使用）
 
 # 障碍受击冲击波：白色扩散圆环（障碍物被攻击时的命中演出）
 class RingFlash:
@@ -76,69 +47,6 @@ class RingFlash:
 	func _draw() -> void:
 		draw_arc(Vector2.ZERO, 22.0, 0.0, TAU, 32, color, 5.0)
 		draw_circle(Vector2.ZERO, 10.0, Color(1.0, 0.97, 0.9, 0.55))
-
-# 嬉皮死神的镰刀刃光：一道大而弯的紫黑色月牙刀刃，向目标横扫收割
-class ScytheBlade:
-	extends Node2D
-
-	func _draw() -> void:
-		# 防护：节点变换出现非有限值（NaN）时三角剖分会失败，直接跳过绘制
-		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
-			return
-		# 弯月镰刀刃（+X，外侧长、内侧短，弧刃更弯更大）
-		var blade := PackedVector2Array([
-			Vector2(0, 3), Vector2(30, -22), Vector2(64, -16), Vector2(84, 0),
-			Vector2(64, 16), Vector2(30, 22), Vector2(0, -3),
-		])
-		if _poly_ok(blade):
-			draw_colored_polygon(blade, Color(0.4, 0.12, 0.55, 0.95))
-		# 刃口亮紫弧线（刃尖亮、往刃柄渐暗
-		draw_polyline(PackedVector2Array([Vector2(4, 0), Vector2(80, 0)]), Color(1.0, 0.6, 1.0, 0.98), 3.0, true)
-		# 紫色拖尾刃气（内侧一束流光的弧；末点不再重复首点，避免退化多边形
-		var wisp := PackedVector2Array([
-			Vector2(10, 0), Vector2(46, -14), Vector2(76, -6), Vector2(46, 14),
-		])
-		if _poly_ok(wisp):
-			draw_colored_polygon(wisp, Color(0.7, 0.35, 0.9, 0.35))
-		# 光晕
-		draw_circle(Vector2(40, 0), 34, Color(0.55, 0.2, 0.7, 0.18))
-
-	# 多边形可安全绘制？（顶点有限且能三角剖分，避免 C++ 层 triangulation failed 刷屏/中断）
-	func _poly_ok(poly: PackedVector2Array) -> bool:
-		for v in poly:
-			if not (is_finite(v.x) and is_finite(v.y)):
-				return false
-		return Geometry2D.triangulate_polygon(poly).size() > 0
-
-# 长剑剑光：一道银蓝月弯型剑气(与镰刀同构但为剑光配色)，扫过直线并淡出
-class SwordCrescent:
-	extends Node2D
-
-	func _draw() -> void:
-		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
-			return
-		# 单层亮弧(宽刃),高端渐尖
-		_crescent_band(66.0, Color(0.92, 0.98, 1.0, 1.0), 15.0, 70.0)
-
-	func _crescent_band(radius: float, color: Color, base_w: float, half_deg: float) -> void:
-		# 沿弧线分 30 段,两端宽度递减到接近尖点,中间最宽;张角=2*half_deg
-		var a0 := deg_to_rad(-half_deg)
-		var a1 := deg_to_rad(half_deg)
-		var seg := 30
-		var prev := a0
-		for i in seg + 1:
-			var ang := lerpf(a0, a1, float(i) / float(seg))
-			var u := absf(lerpf(-1.0, 1.0, float(i) / float(seg)))
-			var w := maxf(0.8, base_w * (1.0 - 0.88 * u * u))   # 两端收敛到 ~0.12 宽度
-			draw_arc(Vector2.ZERO, radius, prev, ang, 2, color, w, true)
-			prev = ang
-
-	func _poly_ok(poly: PackedVector2Array) -> bool:
-		for v in poly:
-			if not (is_finite(v.x) and is_finite(v.y)):
-				return false
-		return Geometry2D.triangulate_polygon(poly).size() > 0
-
 
 var grid: HexGrid
 var board_view: BoardView
@@ -3361,10 +3269,10 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			return   # 捕获单位已释放（tween 回调期间free）：安全退
 	var dmg := _attack_damage(attacker) * _bonus_damage(attacker, target)
 	_attack_hp_before = target.hp   # 记录攻击前血量，供攻击后技能判定（古拉吸血等）
-	# 攻击者专属战斗特效（贴合英雄机制
-	if attacker.alive and attacker.hero_id == "hero_30" and target != null and is_instance_valid(target):
-		# 嬉皮死神：专属镰刀弧形收割（唯一特效，不叠加通用光环，突死神镰刀"
-		_spawn_scythe(attacker, target)
+	# 攻击者专属**出招特效**：由英雄脚本自己实现（见 HeroBase.play_attack_fx），
+	# Battle 只在"结算伤害之前"这一时机统一调用，不关心是哪个英雄。
+	if attacker.alive and target != null and is_instance_valid(target):
+		_hero(attacker).play_attack_fx(target)
 	if target.alive:
 		# 倍率型技能(嬉皮死神/小阴影/赏金猎人等 damage_mult>1)命中：本次伤害数字用大号样式
 		if attacker.alive and attacker.skill_allowed() and is_instance_valid(target) \
@@ -4102,7 +4010,6 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 	var step := t - a   # 目标相对攻击者的轴向基本步长（长剑为相邻攻击，步长为单步
 	if step == Vector2i.ZERO:
 		return
-	_spawn_sword_qi(u, step)
 	var cur := t + step   # 目标身后第一
 	for _i in 60:
 		var off := grid.offset_of(cur)
@@ -4113,40 +4020,6 @@ func _pierce_line(u: Unit, target_cell: Vector2i) -> void:
 			v.set_big_hit_style()
 			v.take_damage(u.effective_atk(), false, false, "被%s剑气穿透" % u.display_name, true)
 		cur += step
-
-# 剑气演出：一道银蓝月弯沿攻击者朝向直线扫到尽头后消失(月弯型)
-func _spawn_sword_qi(u: Unit, step: Vector2i) -> void:
-	var start := board_view.cell_world_center(u.cell)
-	var end_axial := grid.axial_of(u.cell) + step * 8
-	var end := board_view.cell_world_center(grid.offset_of(end_axial))
-	var dir := end - start
-	var qi := SwordCrescent.new()
-	qi.position = start
-	qi.rotation = dir.angle()
-	qi.scale = Vector2(1.5, 1.5)   # 放大便于看清
-	qi.z_index = 40
-	add_child(qi)
-	var dur := clampf(dir.length() * 0.022, 0.55, 1.2)   # 适中偏慢
-	var t := create_tween()
-	t.tween_property(qi, "position", end, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.tween_callback(qi.queue_free)
-
-# 嬉皮死神：镰刀弧形收割——一道弯月形紫黑色刀刃从死神扫向目标方向，划过弧线后淡出
-func _spawn_scythe(u: Unit, target: Unit) -> void:
-	var start := board_view.cell_world_center(u.cell)
-	var to := board_view.cell_world_center(target.cell)
-	var dir := to - start
-	var scy := ScytheBlade.new()
-	scy.position = start
-	scy.rotation = dir.angle()
-	add_child(scy)
-	var dur := clampf(dir.length() * 0.012, 0.22, 0.45)
-	var reach := dir.length() + hex_size * 0.6
-	var t := create_tween()
-	t.tween_property(scy, "position", start + dir.normalized() * reach, dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.parallel().tween_property(scy, "scale", Vector2(1.15, 0.7), dur)   # 收割时刀刃略微压
-	t.parallel().tween_property(scy, "modulate:a", 0.0, dur)
-	t.tween_callback(scy.queue_free)
 
 func _random_step(v: Unit) -> void:
 	var nbrs := grid.neighbors(v.cell)

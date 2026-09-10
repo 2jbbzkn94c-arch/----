@@ -58,6 +58,11 @@ func on_move() -> void:
 func on_attack(_target: Unit) -> void:
 	pass
 
+## 攻击**出招动画**阶段的专属特效（在结算伤害之前调用，用于"攻击动作"本身的演出：
+## 如嬉皮死神的镰刀横扫）。默认无。英雄专属特效一律写在自己的脚本里，Battle 只负责调用本钩子。
+func play_attack_fx(_target: Unit) -> void:
+	pass
+
 ## 攻击命中且目标被打死后触发（死于本次攻击）。
 func on_attack_dead(_target: Unit) -> void:
 	pass
