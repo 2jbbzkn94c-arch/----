@@ -17,7 +17,9 @@ func on_attack(target: Unit) -> void:
 	battle.sweep_obstacles_around(target.cell)   # 击退/击穿波及到的相邻障碍：各 -1 耐久
 
 func on_attack_dead(target: Unit) -> void:
-	if target == null or not target.alive:
+	# 注意：这里**不能**判 target.alive —— 本钩子就是因为"目标已被这一击打死"才被调用，
+	# 判了就等于整个函数是死代码（超新星打死人时既不击退/击穿其相邻敌人、也不波及障碍）。
+	if target == null or not is_instance_valid(target):
 		return
 	for v in battle._same_side_adjacent(target):
 		fx_on_target(v)

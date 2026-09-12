@@ -43,8 +43,14 @@ var _am_host := false        # 本次会话是否为开房主机
 var _auto_retry_done := false   # 本次会话是否已自动重连过一次（只试一次）
 var _session_started := false    # 本次会话是否已成功开房或连上（用于点亮"重新连接"）
 var _btn_reconnect: Button = null   # 手动重新连接按钮
+var _addr_history: OptionButton = null   # 历史主机地址下拉框（连成功过的地址）
+var _addrs: Array = []              # 历史主机地址（最近成功连接的排最前）
+
+const ADDR_SAVE_PATH := "user://net_addrs.cfg"   # 历史地址持久化（关游戏不丢）
+const ADDR_HISTORY_MAX := 8
 
 func _ready() -> void:
+	_load_addrs()
 	_build()
 	NetBus.packet_received.connect(_on_packet)
 	NetBus.connected.connect(_on_connected)
@@ -131,6 +137,13 @@ func _on_connected() -> void:
 	_session_started = true
 	_connecting_sec = 0.0
 	GameState.note_net_room(true, _last_join_addr, _last_join_port, NetBus.is_host)
+	if not NetBus.is_host and _last_join_addr != "":
+		# 以客户端身份**真的连上**了：把这个主机地址记进历史下拉框
+		# （端口是默认值时只记 IP，非默认才带 ":端口"，与手填格式一致）
+		var disp := _last_join_addr
+		if _last_join_port != NetBus.DEFAULT_PORT:
+			disp = "%s:%d" % [_last_join_addr, _last_join_port]
+		_remember_addr(disp)
 	if not NetBus.is_host:
 		NetBus.send_to(1, JSON.stringify({ "type": "hello", "ver": NET_VERSION }))
 	_refresh_ui()
@@ -295,6 +308,15 @@ func _build() -> void:
 	ip_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
 	vbox.add_child(ip_label)
 
+	# 历史地址下拉框：连成功过的主机地址存在这里，选一条即填进下面的输入框
+	# （填完仍可直接改端口再点「加入」；不选就照旧手填）
+	_addr_history = OptionButton.new()
+	_addr_history.custom_minimum_size = Vector2(0, 46)
+	_addr_history.add_theme_font_size_override("font_size", 18)
+	_addr_history.item_selected.connect(_on_history_picked)
+	vbox.add_child(_addr_history)
+	_refresh_addr_history()
+
 	_ip = LineEdit.new()
 	_ip.text = "127.0.0.1"
 	_ip.custom_minimum_size = Vector2(0, 54)
@@ -446,6 +468,11 @@ func _send_my_confirmation() -> void:
 # "准备/取消准备"（仅加入方；主机收到后才解锁「开始对局」）。普通模式与竞技场通用
 func _on_ready_toggle() -> void:
 	if not NetBus.is_online or NetBus.is_host:
+		return
+	# 还没和主机握手完成就点「准备」：这条消息发不出去（发出去也只是丢包 + ENet 报错），
+	# 所以这里只提示、不改本地准备状态，避免"本地显示已准备、主机那边一直没收到"。
+	if not NetBus.is_link_up():
+		_status.text = "还没连上主机，请稍等一下再点「准备」"
 		return
 	if _my_ready:
 		_my_ready = false
@@ -704,6 +731,55 @@ func _on_reconnect() -> void:
 		_status.text = "重连失败：%s" % NetBus.last_tick_error
 	_refresh_ui()
 
+# ---- 历史主机地址（连成功过的地址，持久化到 user://）----
+func _load_addrs() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(ADDR_SAVE_PATH) != OK:
+		return
+	var arr: Array = cfg.get_value("net", "addrs", [])
+	for a in arr:
+		var s := String(a).strip_edges()
+		if s != "" and not _addrs.has(s):
+			_addrs.append(s)
+
+func _save_addrs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("net", "addrs", _addrs)
+	var err := cfg.save(ADDR_SAVE_PATH)
+	if err != OK:
+		print("历史地址存档跳过（无法写入 user://）: ", err)
+
+# 记一条"连成功过"的地址：最近用的排最前、去重、最多 ADDR_HISTORY_MAX 条
+func _remember_addr(disp: String) -> void:
+	var s := disp.strip_edges()
+	if s == "":
+		return
+	_addrs.erase(s)
+	_addrs.push_front(s)
+	while _addrs.size() > ADDR_HISTORY_MAX:
+		_addrs.pop_back()
+	_save_addrs()
+	_refresh_addr_history()
+
+func _refresh_addr_history() -> void:
+	if _addr_history == null or not is_instance_valid(_addr_history):
+		return
+	_addr_history.clear()
+	_addr_history.add_item("历史地址（暂无）" if _addrs.is_empty() else "选择历史地址…")
+	for a in _addrs:
+		_addr_history.add_item(String(a))
+	_addr_history.select(0)
+
+# 选中历史地址 -> 直接填进输入框并把光标放到末尾（可接着改端口），同时聚焦便于直接输入
+func _on_history_picked(idx: int) -> void:
+	if idx <= 0 or idx > _addrs.size():
+		return   # 占位项：不填
+	_ip.text = String(_addrs[idx - 1])
+	_ip.caret_column = _ip.text.length()
+	_ip.grab_focus()
+	_status.text = "已填入 %s：可直接改端口，或点「加入」。" % _ip.text
+	_addr_history.select(0)   # 下拉框回到占位项，方便再选同一条重新填入
+
 func _maybe_start() -> void:
 	if _ver_mismatch:
 		return   # 版本不一致：禁止开始
@@ -731,7 +807,8 @@ func _on_start() -> void:
 	GameState.is_online = true
 	GameState.is_host = true
 	GameState.no_death_limit = false   # 联机正式规则：3 人判负
-	GameState.dual_control = false
+	GameState.dual_control = false     # 联机不是"自由部署双控"
+	GameState.clear_placement()        # 清掉"自由部署(测试)"残留摆放，避免联机沿用沙箱布阵
 	GameState.arena_mode = (_mode == "arena")
 	# 主机随机生成对局种子并广播：两端 Battle 同种子 -> 障碍/竞技场发牌/先后手确定性一致。
 	# 必须先 randomize()：全局 RNG 默认固定序列，不随机化则每局 seed 相同、先后手永远一样。
@@ -761,6 +838,13 @@ func _go_to_match_online() -> void:
 	# 两端用同一套卡组：主机操作蓝方、客户端操作红方（敌轮由客户端点击放置）。
 	GameState.is_online = true
 	GameState.is_host = false
+	# 客户端也必须和主机一样清掉"自由部署(测试)"沙箱残留：
+	# 带着 dual_control=true 进对局时，主机回合开始会走双控分支——弹"敌方回合（你操控）"，
+	# 还会把本端 state 设成 PLAYER_INPUT（主机回合本端能乱动，两端不同步）。
+	# no_death_limit / placement 残留同样会让联机按沙箱规则跑（不判 3 人阵亡、沿用沙箱摆放）。
+	GameState.dual_control = false
+	GameState.no_death_limit = false
+	GameState.clear_placement()
 	GameState.arena_mode = (_peer_mode == "arena")
 	# 普通模式：队伍由进战斗后的"选择卡组"面板确定（与单机一致）
 	GameState.pick_deck_in_battle = (_peer_mode == "normal")
@@ -877,6 +961,9 @@ func _refresh_ui() -> void:
 				_btn_ready.add_theme_stylebox_override("normal", hlr)
 				_btn_ready.add_theme_stylebox_override("hover", hlr_h)
 				_btn_ready.add_theme_stylebox_override("pressed", hlr_p)
+	# 开始按钮：只有主机能发起对局 —— 加入方（客房）不显示这个按钮，点「准备」等主机开战即可。
+	# 与上面的「准备」按钮对称：准备=仅加入方显示，开始=仅主机显示，两者都要求已联网（未联网时都不显示）。
+	_btn_start.visible = NetBus.is_online and my_is_host
 	# 开始按钮：主机 + 已连接 + 版本一致；两种模式都需"加入方已准备"
 	var start_ok := false
 	if _ver_mismatch:

@@ -42,6 +42,7 @@ const FIRST_NOTICE_MIN_SECONDS := 3.0     # 先手提示在普通模式下最少
 # 联机快捷喊话:左下角按钮 + 选言面板 + 顶部气泡
 var _chat_btn: Button = null
 var _chat_panel: PanelContainer = null
+var _chat_overlay: Control = null   # 选言面板的全屏透明层：点面板以外任意处收起
 var _chat_bubble: PanelContainer = null
 var _chat_bubble_tween: Tween = null
 
@@ -1187,7 +1188,15 @@ func _refresh_team_panel() -> void:
 	wrapbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(wrapbox)
 	var title := Label.new()
-	title.text = "选择替补上阵（点击英雄选中，再点击棋盘绿格落位）" if picking else "替补队伍"
+	if picking:
+		# 自由部署双控：可能是"敌方替补列表"（拖动敌方英雄撤下后弹出），标题要标明是谁的替补
+		var sub_txt: String = battle._sub_faction_txt()
+		if sub_txt != "":
+			title.text = "选择替补上阵（%s）：点击英雄选中，再点击棋盘绿格落位" % sub_txt
+		else:
+			title.text = "选择替补上阵（点击英雄选中，再点击棋盘绿格落位）"
+	else:
+		title.text = "替补队伍"
 	title.add_theme_font_size_override("font_size", 15)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5) if picking else Color(0.6, 0.85, 1.0))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1388,6 +1397,7 @@ const _CHAT_TAUNTS := [
 	"这步走得不太行哦",
 	"嘿嘿，别跑呀",
 	"胜负已定！",
+	"快点吧，我等的花儿都谢了",
 ]
 const _CHAT_FRIENDLY := [
 	"打得不错！",
@@ -1420,10 +1430,16 @@ func _build_chat_button(root: Control, vsize: Vector2) -> void:
 
 func _toggle_chat_panel() -> void:
 	if _chat_panel != null and is_instance_valid(_chat_panel):
-		_chat_panel.queue_free()
-		_chat_panel = null
+		_close_chat_panel()
 		return
 	var vsize := get_viewport().get_visible_rect().size
+	# 全屏透明层：点"面板以外"的任意位置即收起（面板内的点击由面板/按钮自己吃掉，不会传到这一层）
+	var overlay := Control.new()
+	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.gui_input.connect(_on_chat_overlay_input)
+	add_child(overlay)
+	_chat_overlay = overlay
 	var panel := PanelContainer.new()
 	panel.add_theme_stylebox_override("panel", _make_panel(Color(0.1, 0.1, 0.16, 0.96)))
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -1455,13 +1471,19 @@ func _toggle_chat_panel() -> void:
 	add_group.call("嘲讽", Color(1.0, 0.55, 0.5), _CHAT_TAUNTS)
 	add_group.call("友好", Color(0.5, 0.9, 0.6), _CHAT_FRIENDLY)
 	var pw := 220.0
-	panel.size = Vector2(pw, 0)
-	add_child(panel)
-	# 面板出现在左下角按钮上方
+	overlay.add_child(panel)
+	_chat_panel = panel   # 先登记：连点两下"喊话"不会叠出第二个面板
 	await get_tree().process_frame
-	var ph := panel.get_combined_minimum_size().y
-	panel.position = Vector2(10, vsize.y - 56 - 10 - ph - 6)
-	_chat_panel = panel
+	if not is_instance_valid(panel):   # 这一帧内已被收起（点外部/切阶段）：不再定位
+		return
+	# 面板尺寸与定位用**同一个高度**：先按内容最小高度定死尺寸，再以它往上推，
+	# 保证面板底边永远停在"喊话"按钮上沿之上（按钮高度受主题内边距影响，不硬编码）。
+	var pmin := panel.get_combined_minimum_size()
+	panel.size = Vector2(maxf(pw, pmin.x), pmin.y)
+	var btn_top := vsize.y - 56.0 - 10.0
+	if _chat_btn != null and is_instance_valid(_chat_btn):
+		btn_top = _chat_btn.position.y
+	panel.position = Vector2(10, maxf(6.0, btn_top - pmin.y - 6.0))
 
 func _send_chat(txt: String) -> void:
 	_close_chat_panel()
@@ -1473,6 +1495,17 @@ func _close_chat_panel() -> void:
 	if _chat_panel != null and is_instance_valid(_chat_panel):
 		_chat_panel.queue_free()
 	_chat_panel = null
+	if _chat_overlay != null and is_instance_valid(_chat_overlay):
+		_chat_overlay.queue_free()
+	_chat_overlay = null
+
+# 点选言面板以外的任意位置（全屏层拦到）即收起。
+# 与音量弹层一致：只处理鼠标左键——触摸在安卓/iOS 由 Godot 转成鼠标事件，再判触摸会双触发。
+func _on_chat_overlay_input(ev: InputEvent) -> void:
+	var mb := ev as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	_close_chat_panel()
 
 # 收到对端喊话 -> 对方气泡（顶部回合栏下方、靠敌方侧）
 func _show_peer_chat(txt: String) -> void:

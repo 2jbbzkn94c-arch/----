@@ -23,7 +23,9 @@ func on_attack(target: Unit) -> void:
 	battle.sweep_obstacles_around(target.cell)   # 散射波及到的相邻障碍：各 -1 耐久
 
 func on_attack_dead(target: Unit) -> void:
-	if target == null or not target.alive:
+	# 注意：这里**不能**判 target.alive —— 本钩子就是因为"目标已被这一击打死"才被调用，
+	# 判了就等于整个函数是死代码（白游侠打死人时不会散射/冰冻其相邻敌人、也不波及障碍）。
+	if target == null or not is_instance_valid(target):
 		return
 	# 死亡目标：仍冰冻其相邻敌人（目标本体已亡，不再冰冻自身）
 	for v in battle._same_side_adjacent(target):

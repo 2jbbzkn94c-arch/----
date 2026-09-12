@@ -171,6 +171,12 @@ func wants_turn_start_on_transform() -> bool:
 func runs_turn_end_while_silenced() -> bool:
 	return false
 
+## 己方回合开始时的**非技能**结算：不受沉默/眩晕影响，只用来清"跨回合账目"
+## （如锤头鲨的攻击力加成到本方回合开始即到期）。技能类的回合开始效果仍走 on_turn_start
+## ——那个被沉默就不触发，所以到期清理不能挂在它上面，否则被沉默时会漏清。
+func on_own_turn_start_always() -> void:
+	pass
+
 
 ## 阵营级回合开始同步（在"回合开始技"全部触发**之后**调用一次）。
 ## 用于需要先采样整队状态再统一赋值的英雄（如共鸣者按"所有队友攻击力之和"改写自己攻击力）。

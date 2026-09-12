@@ -10,6 +10,7 @@ class SimUnit:
 	var hero_id := ""
 	var cell := Vector2i.ZERO
 	var hp := 10
+	var hp0 := 10         # 本回合(快照)开始时的血量：用于评估"这一回合往同一目标叠了多少伤害"
 	var max_hp := 10
 	var atk := 4          # 基础攻击
 	var eatk := 4         # 有效攻击（含buff/冲锋/太阳斩/麻痹减攻）
@@ -83,6 +84,7 @@ class Sim:
 			cu.hero_id = u.hero_id
 			cu.cell = u.cell
 			cu.hp = u.hp
+			cu.hp0 = u.hp0
 			cu.max_hp = u.max_hp
 			cu.atk = u.atk
 			cu.eatk = u.eatk
@@ -117,6 +119,10 @@ class Sim:
 var grid: HexGrid
 var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
 var log_decisions := true   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
+## 单次搜索的思考时间上限（毫秒；<=0 = 不限）。
+## 它是**上限**而不是固定等待：搜完就返回。给足预算让 beam 能铺开，逼近最优路线；
+## 超时后剩下的单位改用贪心收尾（见 _greedy_finish），保证计划始终完整。
+var time_budget_ms := 10000
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -127,6 +133,20 @@ const BUFF_TAKE_WEIGHT := 3.0
 # 量级：普通一次攻击约 +2.5 分，击杀约 +25 起 —— 吃矿应明显优于"随手打一下"，但不该高于击杀。
 const GOLD_TAKE_VALUE := 26.0
 const GOLD_TAKE_VALUE_LOW := 34.0   # 攻击力 < GOLD_LOW_ATK 时更高（自身薄弱，成长更关键）
+# 威胁评估：对方"需要先移动才能打到"的那一份伤害按此折算（移动要花掉一次走位机会）。
+# 只看静态射程会把"离近战 2 格"误判成完全安全，只看可达又会让 AI 过度畏首畏尾。
+const THREAT_MOVE_DISCOUNT := 0.7
+# 击杀一个玩家单位的即时权重（"本回合击杀数 × 此值"）。
+# 量级参考：普通一次攻击约 +2.5 分、击杀一个 10 血单位本身约值 +20（单位价值消失）——
+# 击杀必须明显压过"随手多打一下"，否则 AI 会为了贪一点伤害放过必杀机会。
+const KILL_BONUS := 35.0
+# 集火推进权重：frac²×此值（frac = 本回合对同一目标已打掉的血 / 其回合开始血量）。
+# 作用在**中间层评分**上，防止 beam 在"还没打出击杀"时就把合力线剪掉。
+const FOCUS_FIRE_WEIGHT := 30.0
+# 未参战时的"压上"拉力（每格）：单位这一回合够不到任何敌人时，
+# 离"本回合可打击范围"每远 1 格就扣这么多分，逼它往战场压而不是在后方/出生点迂回。
+# 只在够不到敌人时生效，进入打击范围后归零（后半程交给威胁图与伤害评估权衡）。
+const ENGAGE_PULL_PER_CELL := 1.2
 
 # ---- 路网距离（把障碍/墓碑当墙的真步数）----
 # 走位评分不能只看直线：被墙隔开时"离敌人 2 格"可能实际要绕 6 格。
@@ -152,6 +172,7 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 		u.hero_id = d["hero"]
 		u.cell = d["cell"]
 		u.hp = d["hp"]
+		u.hp0 = u.hp   # 本回合起点血量：评估"本回合对同一目标累计伤害"的基准
 		u.max_hp = d["max_hp"]
 		u.atk = d["atk"]
 		u.eatk = d.get("eatk", d["atk"])
@@ -170,10 +191,13 @@ func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}
 		u.possessed_by = int(d.get("poss_by", -1))   # 已有宿魂附体绑定（真实残留）
 		u.immune_bombs = bool(d.get("immune_bombs", false))   # 由英雄脚本免疫钩子提供（炸弹人=true）
 		u.can_pickup_gold = bool(d.get("can_pickup_gold", false))   # 由英雄脚本金矿钩子提供（矿工=true）
-		# 坠炮手：全场射程 + 无视阻挡（与真实规则一致；atk_range 已由出生方置为 99）
+		# 坠炮手：全场射程 + 无视阻挡（与真实规则一致）。
+		# 被沉默/眩晕时"全场狙击"失效，射程退回 _effective_attack_range 的退化值 2
+		# （否则 AI 会以为沉默中的坠炮手仍能全场狙击，白白畏手畏脚）。
 		if u.hero_id == "hero_45":
-			u.atk_range = 99
-			u.ignore_los = true
+			var mortar_ok := not u.silenced and not u.stunned
+			u.atk_range = 99 if mortar_ok else 2
+			u.ignore_los = true   # 沉默时 _in_range 里的 `ignore_los and not silenced` 自会拦住
 		s.units.append(u)
 	# 统一 occupancy 值语义为 SimUnit 对象：外部传入的是 "cell -> idx"，这里转成 "cell -> 对象"，
 	# 与 _apply/_sim_swap_cells 等写入对象保持类型一致，避免部分状态 int、部分对象导致 cast 失败。
@@ -197,10 +221,16 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 
 	# 自由行动顺序：每层从"尚未行动"的敌人中任选一个扩展，让搜索能探索不同攻击顺序
 	# （如先近战贴脸、后远程收割残血），选出整体利益最大的方案。用 done 记录各状态已行动单位。
+	# 规模控制：deadline 决定"能搜多广"（见 time_budget_ms），beam 决定"每层保留多少条线"；
+	# 边扩边归并（只留 top 2×beam）——不把所有子状态同时驻留，内存不随候选总量膨胀。
+	var t0 := Time.get_ticks_msec()
+	var deadline := (t0 + time_budget_ms) if time_budget_ms > 0 else 0
+	var beam := _beam()
 	var states: Array = [{ "sim": sim, "path": [], "score": _evaluate(sim), "done": {} }]
 	while true:
 		var pending := false
-		var next: Array = []
+		var timed_out := false
+		var merged: Array = []
 		for st in states:
 			# 找出该状态尚未行动的敌人
 			var remaining: Array = []
@@ -208,28 +238,71 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 				if not (st["done"] as Dictionary).has(i):
 					remaining.append(i)
 			if remaining.size() == 0:
-				next.append(st)   # 已全部行动完，保留该完成态
+				merged.append(st)   # 已全部行动完，保留该完成态
 				continue
 			pending = true
 			for idx in remaining:
-				var a_list := _actions_for(st["sim"], idx)
-				for a in a_list:
+				for a in _actions_for(st["sim"], idx):
 					var s2: Sim = st["sim"].clone()
 					_apply(s2, idx, a)
 					var path: Array = (st["path"] as Array).duplicate()
 					path.append({ "idx": idx, "action": a })
 					var done2: Dictionary = (st["done"] as Dictionary).duplicate()
 					done2[idx] = true
-					next.append({ "sim": s2, "path": path, "score": _evaluate(s2) + _jitter(), "done": done2 })
+					merged.append({ "sim": s2, "path": path, "score": _evaluate(s2) + _jitter(), "done": done2 })
+				# 归并：只留最好的若干条（被丢掉的状态分数更低，之后不可能再回到前 beam）
+				if merged.size() > beam * 2:
+					merged.sort_custom(func(a, b): return a["score"] > b["score"])
+					merged = merged.slice(0, beam)
+				if deadline > 0 and Time.get_ticks_msec() >= deadline:
+					timed_out = true
+					break
+			if timed_out:
+				break
 		if not pending:
 			break
-		next.sort_custom(func(a, b): return a["score"] > b["score"])
-		states = next.slice(0, _beam())
+		merged.sort_custom(func(a, b): return a["score"] > b["score"])
+		states = merged.slice(0, beam)
+		if timed_out:
+			# 时间用尽：剩余单位改用贪心收尾（各自选一步内的最优动作），
+			# 保证"每个敌人都行动"、计划完整，且不再花时间做 beam 扩展。
+			# 只收尾最好的一小撮线（决赛只取 states[0]，尾部收益不值得再花时间）。
+			states = _greedy_finish(states.slice(0, mini(states.size(), 24)), enemy_idxs)
+			break
 	if states.size() == 0:
 		return []
 	if log_decisions:
 		_print_decision(sim, states[0])
 	return states[0]["path"]
+
+# 超时收尾：对每个候选状态，让尚未行动的敌人依次各自贪心选一步内的最优动作。
+# 这样即使没搜完也返回"每个敌人都行动过"的完整计划，不会出现有人站着不动。
+func _greedy_finish(states_in: Array, enemy_idxs: Array) -> Array:
+	var out: Array = []
+	for st in states_in:
+		var cur: Dictionary = st
+		for i in enemy_idxs:
+			if (cur["done"] as Dictionary).has(i):
+				continue
+			var best_score := -INF
+			var best_child: Dictionary = {}
+			for a in _actions_for(cur["sim"], i):
+				var s2: Sim = cur["sim"].clone()
+				_apply(s2, i, a)
+				var sc := _evaluate(s2)
+				if sc > best_score:
+					best_score = sc
+					var path: Array = (cur["path"] as Array).duplicate()
+					path.append({ "idx": i, "action": a })
+					var done2: Dictionary = (cur["done"] as Dictionary).duplicate()
+					done2[i] = true
+					best_child = { "sim": s2, "path": path, "score": sc, "done": done2 }
+			if best_child.is_empty():
+				continue
+			cur = best_child
+		out.append(cur)
+	out.sort_custom(func(a, b): return a["score"] > b["score"])
+	return out
 
 # 控制台输出本次敌方决策说明：总评分 + 每步行动的理由 + 每步得分变化（分析 AI 用）
 func _print_decision(sim: Sim, chosen: Dictionary) -> void:
@@ -294,13 +367,14 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 	txt += "\n===== 决策输出结束 ====="
 	print(txt)
 
-# 难度决定保留的状态数（困难=搜索更充分；波束越大越接近全局最优）
+# 难度决定保留的状态数（困难=搜索更充分；波束越大越接近全局最优）。
+# 现在有 deadline 兜底（搜得完就搜，搜不完就收窄），所以可以给足宽度去逼近最优路线。
 func _beam() -> int:
 	if difficulty >= 2:
-		return 110
+		return 800
 	if difficulty == 1:
-		return 60
-	return 20
+		return 300
+	return 50
 
 # 难度相关的随机抖动（简单=易失误，困难=纯最优）
 func _jitter() -> float:
@@ -401,6 +475,16 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 	var combos: Array = []
 	# 追加"原地不动"作为移动候选
 	move_cells.append(u.cell)
+	# 落点去重：同一格只保留一份（否则同一行动会被枚举多次、白占 beam 名额，
+	# 也让"能打到的落点"这类强制入选把候选表撑虚）
+	var uniq_cells: Array = []
+	var seen_cells := {}
+	for c in move_cells:
+		if seen_cells.has(c):
+			continue
+		seen_cells[c] = true
+		uniq_cells.append(c)
+	move_cells = uniq_cells
 
 	# 后勤：不能主动攻击
 	var can_attack := not u.skills.has(DataRegistry.Skill.LOGISTICS)
@@ -472,6 +556,28 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 				continue   # 丢弃这种“无谓后撤/退到够不着”
 		kept.append(combo)
 	combos = kept
+	# 远程"不贴脸"闸门：若某个目标存在"不被贴身也能打到"的落点，就把"贴脸打它"的候选直接剔除。
+	# 贴脸 = 基础攻击压 1 + 射程压 1 + 大概率被反击，几乎总是劣选；此前只能靠评分权衡，
+	# 常常与"射程边缘输出"打成平手、再被抖动翻盘（表现为"远程贴上去打 1 点"）。
+	if u.atk_type == DataRegistry.AttackType.RANGED and combos.size() > 1:
+		var safe_targets := {}   # 目标 idx -> 存在"不贴脸也能打到它"的落点
+		for combo in combos:
+			var ti := int(combo.get("atk", -1))
+			if ti < 0:
+				continue
+			var mc0: Vector2i = u.cell if combo.get("move") == null else combo["move"]
+			if not _sim_enemy_adjacent(sim, u, mc0):
+				safe_targets[ti] = true
+		if safe_targets.size() > 0:
+			var kept2: Array = []
+			for combo in combos:
+				var ti2 := int(combo.get("atk", -1))
+				if ti2 >= 0 and safe_targets.has(ti2):
+					var mc1: Vector2i = u.cell if combo.get("move") == null else combo["move"]
+					if _sim_enemy_adjacent(sim, u, mc1):
+						continue   # 有"不贴脸也能打到同一目标"的走法：不贴脸打
+				kept2.append(combo)
+			combos = kept2
 	if combos.size() == 0:
 		combos.append({ "move": null, "atk": -1 })
 	return combos
@@ -813,14 +919,19 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				t.shield = false
 			if dealt:
 				_sim_possess_mirror(sim, t, dmg)   # 宿魂受伤：附体目标镜像（死亡清除前）
-			# 锤头鲨：每当敌人受到一次伤害（非反击）-> 同阵营锤头鲨攻击力+1。
-			# 模拟中累积 eatk，让 AI 倾向"先队友攻击累积 buff、锤头鲨最后攻击"。
+			# 锤头鲨（新规则）：**我方回合**内每当敌人受到一次伤害（非反击）-> 同阵营锤头鲨攻击力+1，
+			# 加成撑到"对方回合结束"才消失。这里模拟的正是 AI 自己的回合，
+			# 所以"只在我方回合"这条天然满足；模拟中累积 eatk，
+			# 让 AI 倾向"先队友攻击累积 buff、锤头鲨最后攻击"。
+			# （上一轮留下的加成已在快照的 eatk 里带上，见 BattleSnapshot.unit_desc。）
 			if dealt:
 				for v in sim.units:
 					if v.alive and v.fn == u.fn and v.hero_id == "hero_37":
 						v.eatk += 1
-			# 特技（沉默：非关键词技能失效）——若目标为负墟则负面免疫（攻+1，见 helper）
-			if not u.silenced:
+			# 特技（沉默：非关键词技能失效）——若目标为负墟则负面免疫（攻+1，见 helper）。
+			# 注意 dealt：下面是"命中附加状态"的四个英雄（均有 applies_status_on_hit），
+			# 真实规则里"带状态的攻击打盾"只挡伤害与状态（技能不挡），所以这里跟 dealt 一致。
+			if not u.silenced and dealt:
 				if u.hero_id == "hero_03" and not _sim_neg_immunity(sim, t):   # 毒蛇淑女：猛毒
 					t.poisoned = true
 				if u.hero_id == "hero_12" and not _sim_neg_immunity(sim, t):   # 巨剑：重伤
@@ -833,9 +944,11 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 						t.frozen = true
 				if u.hero_id == "hero_34" and not _sim_neg_immunity(sim, t):   # 沉默术士：沉默
 					t.silenced = true
-			# 白游侠：远程命中后，先冰冻目标本体，再对目标相邻的敌人溅射等量伤害并冰冻
+			# 白游侠：远程命中后，先冰冻目标本体，再对目标相邻的敌人溅射等量伤害并冰冻。
+			# 圣盾**只挡伤害/挡状态**，不挡技能：打盾时散射照常打到相邻敌人（与真实规则一致），
+			# 只有"目标本体被冰冻"这条随 dealt 一起失效。
 			if not u.silenced and u.hero_id == "hero_10":
-				if t.alive and not _sim_neg_immunity(sim, t):
+				if dealt and t.alive and not _sim_neg_immunity(sim, t):
 					t.frozen = true
 				for k in sim.units.size():
 					var w: SimUnit = sim.units[k]
@@ -846,13 +959,15 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					_sim_hit_no_counter(sim, w, u.eatk)
 					if w.alive and not _sim_neg_immunity(sim, w):
 						w.frozen = true
-			t.hurt_times += 1
+			if dealt:
+				t.hurt_times += 1   # 被盾挡下不算"被打到"
 			if t.hp <= 0:
 				t.alive = false
 				sim.occ.erase(t.cell)
 				if t.fn != DataRegistry.Faction.ENEMY:
 					sim.killed_players += 1   # 本回合击杀玩家单位：记入即时奖励（驱动"先收残血"）
 			# 攻击后专属（真实顺序：先结算命中效果，再判定反击；目标死亡时部分技能仍对原位置生效）
+			# 注意：圣盾只挡伤害，不挡技能——打盾时下面这些技能照常触发（与真实规则一致）。
 			if not u.silenced:
 				if u.hero_id == "hero_21":
 					_sim_nova(sim, u, t)   # 超新星：目标相邻敌人击退/伤害
@@ -1224,7 +1339,8 @@ func _evaluate(sim: Sim) -> float:
 	score += float(player_dead) * 3.0
 	# 本回合内击杀玩家单位的即时重奖：让"能收残血就优先收"（把击杀前置），
 	# 避免搜索偏好"把另一人打残"而放过眼前能收的残血。
-	score += float(sim.killed_players) * 25.0
+	# 权重抬高：击杀是"3 人判负"节奏里最值钱的一步，宁可多给也不让 AI 放过必杀机会。
+	score += float(sim.killed_players) * KILL_BONUS
 	# 敌方单位死亡扣分（骷髅兵例外：其是回合结束即消失的消耗品，死亡不扣，已在上方排除）。
 	# 残局求稳：自己每多死一个，再死的代价非线性上升——
 	# 已经死 2 人（再死就输）时，AI 会避免"换命式"冒险，宁可保守保血线。
@@ -1235,6 +1351,20 @@ func _evaluate(sim: Sim) -> float:
 	score += _siege_bonus(sim)
 	# 威胁图：敌方格子的"来袭风险"（玩家单位能打该格多少伤害）
 	score += _threat_map(sim)
+	# 集火推进（凸性奖励）：对**同一目标**累计的本回合伤害越集中，越接近"合力必杀"。
+	# 为什么单靠"伤害线性项 + 末端击杀奖励"不够：3+3 分摊给两人 与 6 全压一人 同分，
+	# 于是 beam 在中间层就把"合击线"剪掉——最后谁也没死，表现为"三个人打不死一个、
+	# 总有一两个转头去摸别人"。这里用 frac² 让"往同一目标叠伤害"在**中间层**就明显更值钱：
+	# frac = 本回合已打掉的血 / 目标回合开始血量 → 0.3→0.09、0.6→0.36、1.0(打空)=1.0。
+	for i in sim.units.size():
+		var ft: SimUnit = sim.units[i]
+		if ft == null or ft.fn == DataRegistry.Faction.ENEMY or ft.hp0 <= 0:
+			continue   # 跳过己方、以及本回合开始前就已阵亡的单位（hp0=0）
+		var dealt := ft.hp0 - maxi(ft.hp, 0)
+		if dealt <= 0:
+			continue
+		var frac := float(dealt) / float(maxi(ft.hp0, 1))
+		score += FOCUS_FIRE_WEIGHT * frac * frac
 	# 集火：同一玩家单位本回合被多个敌方打过 -> 加分（保证击杀；提高权重增强攻击欲望）
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
@@ -1269,12 +1399,15 @@ func _evaluate(sim: Sim) -> float:
 	score += sim.buff_taken * BUFF_TAKE_WEIGHT
 	# 走位候选(见 _actions_for):矿工把可达金矿格排最前(d=-1),这里额外把"能走到金矿"纳入评分,
 	# 让"绕路去吃矿"也值得,而不只盯着当前占格。
-	# 搏命攻击激励：敌方单位本回合攻击过（即使之后被反死也保留 attacked 标记），且其所在格逃不掉。
-	# 这种单位注定会被玩家揍/击杀，死前攻击换血是划算的；给一个足够大的激励，
-	# 抵消"玩家反击/单位死亡"等扰动对攻击方案的压制。仅攻击过且逃不掉才加，避免激励错加到逃跑方案。
+	# 搏命攻击激励：敌方单位本回合攻击过（即使之后被反死也保留 attacked 标记），且**逃不掉且必死**。
+	# 这种单位注定会被击杀，死前攻击换血是划算的；给一个足够大的激励，
+	# 抵消"玩家反击/单位死亡"等扰动对攻击方案的压制。
+	# 判据必须是 _was_doomed（"当前格致命 + 所有可达格也致命"）——
+	# 早先这里只判了"当前格会被打到"，等于**只要停在会被打的位置就白拿 +6+1.5×攻击力**，
+	# 反而奖励了"贴脸打 1 点"（远程最差走法）。
 	for i in sim.units.size():
 		var u2: SimUnit = sim.units[i]
-		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked and _incoming_damage(sim, u2.cell, u2.fn) > 0.0:
+		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked and _was_doomed(sim, u2):
 			score += 6.0 + float(u2.eatk) * 1.5
 	# 玩家反应前瞻：预测玩家下一回合"走位逼近后"的最大反制（集火/击杀哪个敌方），
 	# 把它算作当前决策的长期代价——AI 会避开"只图眼前、给玩家留下破绽"的走法。
@@ -1359,9 +1492,9 @@ func _threat_map(sim: Sim) -> float:
 		if incoming <= 0.0:
 			s += 1.0   # 安全格：轻微奖励
 			continue
-		# 逃不掉（无论怎么移动都会被玩家攻击到）时，不再因"露头"扣威胁分——
-		# 站哪都会被揍，那不如留在能攻击的位置输出/换血，而不是无意义逃跑。
-		if _min_escape_incoming(sim, u) > 0.0:
+		# 只有"逃不掉且必死"才不因露头扣威胁分（站哪都会被带走，那不如留在能输出的位置）。
+		# 注意不能用"逃不掉会被攻击"当豁免：威胁已含玩家移动力后那几乎恒真，会把威胁图整个废掉。
+		if _was_doomed(sim, u):
 			continue
 		# 威胁按"对本单位血量占比"折算；被高输出单位盯上则更危险。
 		# 惩罚系数：3.0 适中偏低，鼓励进攻（过高会因怕暴露而不打，过低会送死）。
@@ -1369,7 +1502,10 @@ func _threat_map(sim: Sim) -> float:
 		s -= ratio * 3.0
 	return s
 
-# 某格下回合会被对立阵营单位造成的合计伤害（近似：区域内每单位按有效攻击计算）
+# 某格下回合会被对立阵营单位造成的合计伤害。
+# 对方的**移动力也算进去**：玩家下回合可以"走两步再打"，只看静态射程会把
+# "离近战 2 格"当成完全安全（AI 因此敢站在近战面前输出、残血也敢露头）。
+# 需要移动才能打到的那一份按 THREAT_MOVE_DISCOUNT 折算（移动要花掉一次走位机会）。
 func _incoming_damage(sim: Sim, cell: Vector2i, fn: int) -> float:
 	var total := 0.0
 	for i in sim.units.size():
@@ -1381,13 +1517,16 @@ func _incoming_damage(sim: Sim, cell: Vector2i, fn: int) -> float:
 		var range_at := t.atk_range
 		if t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell):
 			range_at = 1
-		if d >= 1 and d <= range_at:
-			var dmg := float(t.eatk)
-			if t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell):
-				# 远程被贴身：基础压为1、buff保留
-				var buff: int = maxi(t.eatk - t.atk, 0)
-				dmg = 1.0 + float(buff)
-			total += dmg
+		if d < 1 or d > range_at + maxi(t.emove, 0):
+			continue
+		var dmg := float(t.eatk)
+		if t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell):
+			# 远程被贴身：基础压为1、buff保留
+			var buff: int = maxi(t.eatk - t.atk, 0)
+			dmg = 1.0 + float(buff)
+		if d > range_at:
+			dmg *= THREAT_MOVE_DISCOUNT
+		total += dmg
 	return total
 
 # 该敌方单位是否"被迫死战"：当前被玩家威胁（会被打），且无法移动到不受攻击的格（逃不掉）。
@@ -1403,17 +1542,21 @@ func _min_escape_incoming(sim: Sim, u: SimUnit) -> float:
 			best = inc
 	return best
 
-# 该敌方单位是否"逃不掉且必死"：当前所在格会被玩家攻击，且所有可达格也都会被攻击。
+# 该敌方单位是否"逃不掉且必死"：当前所在格会被打到**致死**，且所有可达格也都会被致死。
+# 判据用"威胁 ≥ 当前血量"而不是"威胁 > 0"：后者在"威胁已含玩家移动力"之后几乎恒真
+# （小棋盘上玩家基本够得到任何格），会让"死亡不扣分/威胁不扣分/搏命奖励"三条全线失控。
 # 允许对已死亡的单位调用（死亡后 cell 仍保留，用于判定其是否注定损失）。
 func _was_doomed(sim: Sim, u: SimUnit) -> bool:
-	if _incoming_damage(sim, u.cell, u.fn) <= 0.0:
+	var lethal := maxf(float(u.hp), 1.0)
+	if _incoming_damage(sim, u.cell, u.fn) < lethal:
 		return false
-	return _min_escape_incoming(sim, u) > 0.0
+	return _min_escape_incoming(sim, u) >= lethal
 
 # 走位定位分（敌方视角）：
 #   - 坦克（嘲讽）：越靠近敌方半场（y 越大）越好 → 顶住
 #   - 后勤/支援（奶/光环）：缩在后方 → y 越小越好（保持安全距离）
 #   - 远程：与最近玩家距离恰好=射程边缘最佳（贴脸降攻/被贴身=灾难）
+#   - 未参战（本回合够不到任何敌人）：离可打击范围越远扣越多 → 压上参战，不在后方迂回
 #   - 每保留 1 格移动力 = 小价值（灵活走位）
 func _position_score(sim: Sim) -> float:
 	var s := 0.0
@@ -1429,23 +1572,23 @@ func _position_score(sim: Sim) -> float:
 			s += row / max_y * 4.0                     # 烛火：虽为后勤但要冲前线（靠移动后相邻AOE输出）
 		elif u.skills.has(DataRegistry.Skill.LOGISTICS):
 			s += (1.0 - row / max_y) * 3.0             # 后勤缩后
+		var near := _nearest_enemy_dist(sim, u)   # 到最近玩家的**路网**距离（场上无玩家 = 大数）
 		if u.atk_type == DataRegistry.AttackType.RANGED:
-			var near := _nearest_enemy_dist(sim, u)
 			if near == 1:
 				s -= 8.0                               # 被贴脸：远程大难（更重的惩罚，避免贴脸站位）
 			elif near == u.atk_range:
 				s += 2.0                               # 卡在射程边缘：安全又能打
-			elif near > u.atk_range and near <= u.emove:
-				s -= float(near - u.atk_range) * 0.4   # 超射程略减分（需再走一步才能开火）
-		elif not u.skills.has(DataRegistry.Skill.LOGISTICS) or _logistics_charges(u):
-			# 近战/坦克够不着时的贴近激励：离玩家越远减分越多，驱动尽量贴近；
-			# “靠近会吃多少伤害”由威胁图/落点威胁负责权衡，不会让它无脑踩雷。
-			# 烛火（后勤特例）同样吃这个激励：必须贴上去才能用移动AOE打到人。
-			var near_m := _nearest_enemy_dist(sim, u)
+		# 未参战压上（近战/远程/坦克/烛火都算；普通后勤另按上面的"缩后"项走）：
+		# 这一回合**够不到**任何敌人时，离"可打击范围"越远扣越多 —— 逼它往战场压，
+		# 而不是在后方/出生点原地迂回看戏（"队友已经打起来、它还在出生点晃悠"就是这条拉力太弱）。
+		# 关键：拉力只在 near > 移动+射程 时生效，一旦进了"本回合就能打到"的范围就归零，
+		# 后半程交给威胁图(_threat_map)与玩家反制前瞻(_player_reaction_threat)逐格权衡 ——
+		# 所以整体是"在尽量不挨打的前提下尽量靠近"：既不缩在后排，也不会为了靠近而撞进集火圈。
+		if not u.skills.has(DataRegistry.Skill.LOGISTICS) or _logistics_charges(u):
 			var engage := u.emove + u.atk_range   # 本回合全力后可够到的距离
-			if near_m > engage and near_m < (1 << 29):
-				# 场上已无存活对手时 near_m=INF，此时不给激励（否则杀最后一人会被判成天文负分）
-				s -= 0.8 * float(near_m - engage)
+			if near > engage and near < INF_DIST:
+				# 场上已无存活对手时 near=INF，此时不给拉力（否则杀最后一人会被判成天文负分）
+				s -= float(near - engage) * ENGAGE_PULL_PER_CELL
 		# 保留移动力 = 机动性价值
 		if not u.moved:
 			s += 0.5

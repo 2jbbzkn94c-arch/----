@@ -130,14 +130,36 @@ func _peer_active() -> bool:
 func send_to(peer_id: int, text: String) -> void:
 	if not _peer_active():
 		return
+	# 目标对端还没真正连上（主机刚开、客户端还在握手）→ 直接跳过。
+	# 否则 ENet 会报 "The multiplayer instance isn't currently connected to any server or client"。
+	if not _peer_connected(peer_id):
+		return
 	_peer.set_target_peer(peer_id)
 	_peer.put_packet(text.to_utf8_buffer())
 
 func send_all(text: String) -> void:
-	if not _peer_active():
-		return
+	if not _peer_active() or not is_link_up():
+		return   # 还没有可发的对象（主机无客户端 / 客户端仍在握手）：发了也是同样的错
 	_peer.set_target_peer(MultiplayerPeer.TARGET_PEER_BROADCAST)
 	_peer.put_packet(text.to_utf8_buffer())
+
+# 本端与对端是否**真正**连上了（可安全收发的前提）：
+#   主机：至少有一个客户端连进来（主机 create_server 后自身状态就是 CONNECTED，但不代表有人在）；
+#   客户端：与主机的握手已完成（CONNECTED）。中间态 CONNECTING 时发包会撞 ENet 的 ERR_UNCONFIGURED。
+func is_link_up() -> bool:
+	if not _peer_active():
+		return false
+	if is_host:
+		return _peer.get_peers().size() > 0
+	return _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
+# 指定对端是否已连上（主机侧看它在不在 ENet 的已连接列表里；客户端侧只认 peer 1 = 主机）
+func _peer_connected(peer_id: int) -> bool:
+	if not _peer_active():
+		return false
+	if is_host:
+		return _peer.get_peers().has(peer_id)
+	return _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 # ---- 停止/断开 ----
 func stop() -> void:

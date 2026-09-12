@@ -116,7 +116,9 @@ const _DRAG_THRESHOLD = 12.0
 var _pending_bomb_unit: Unit = null   # 炸弹人待放置（等待点选空地）
 var _charge_pending: Dictionary = {}   # 冲锋待结算：Unit -> 本次实际冲到的格数（移动动画播完才结算加成）
 var _pending_player_subs := 0     # 我方阵亡待替补名额数（可 >1：同时阵亡多人时逐个替补
+var _pending_opp_subs := 0        # 对方阵营的"手动替补"名额（仅自由部署双控：敌方也由本端点选）
 var _defer_side_skills := false   # 回合开始先补位：替补全部落位完成后才触发回合开始技
+var _defer_side := -1             # 上面那次"先补位"对应的行动方（双控时可能是敌方，技能要在该方回合重跑）
 var _waiting_side_skills_round := -1   # 联机等待端：行动方补位完成后广播 side_skills,收到后本端才执行回合开始技(同步 rng)
 var _in_begin_phase := false      # 回合开始演出期（技能逐个触发中）：此间阵亡先排队，演出结束再弹替补面板
 var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位（跳过即时光环补发，技能阶段会统一触发）
@@ -134,7 +136,15 @@ var _gold_tick_round := -1            # 已执行过金矿倒计时的回合号�
 # 坐标由玩家编号(左下角=[1,1],x 右起,y 上起)换算为代码坐标(y0=顶行)：
 # 玩家 [2,4][3,3][3,4][4,4] -> 代码 (1,3)(2,4)(2,3)(3,3)。
 var _opening_items_spawned := false
-const OPENING_ITEM_CELLS: Array = [Vector2i(1, 3), Vector2i(2, 4), Vector2i(2, 3), Vector2i(3, 3)]
+# 开局道具的固定落点（两枚，不再随机挑格）。坐标按用户视角"[列,行]、左下角为 [1,1]"，
+# 代码坐标换算：x = 列-1，y = 7-行。
+#   主落点 [2,4] -> (1,3)；主落点被占时退到备用 [3,3] -> (2,4)
+#   主落点 [4,4] -> (3,3)；主落点被占时退到备用 [3,4] -> (2,3)
+# "被占"= 障碍 / 单位 / 炸弹 / 墓碑 / 已有道具（复用 _opening_item_placeable）。
+const OPENING_ITEM_SLOTS: Array = [
+	{ "cell": Vector2i(1, 3), "alt": Vector2i(2, 4) },   # [2,4] → 备用 [3,3]
+	{ "cell": Vector2i(3, 3), "alt": Vector2i(2, 3) },   # [4,4] → 备用 [3,4]
+]
 const OPENING_ITEM_TYPES: Array = ["atk", "shield", "heal"]   # 攻击+1 / 圣盾 / 回复3血
 var reachable_map: Dictionary = {}   # cell -> true (可移
 var enemy_cells: Dictionary = {}     # cell -> true (可攻击高
@@ -180,6 +190,11 @@ func _ready() -> void:
 	_enemy_replay = EnemyReplay.new(self)   # 敌方计划回放器（无状态，重开不必重建）
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
+	# 新的一局：回合号先归零再进入开局阶段。
+	# 否则"选择卡组 / 部署选人"这段期间，顶部状态栏会沿用上一局的回合数
+	# （显示成"第 N 回合 · 部署选人"）；上一局若已过第 11 回合，开局的烧血火苗也会跟着亮。
+	# 正式的回合 1 由 _start_match() -> GameState.start_match() 开始。
+	GameState.round_number = 1
 	hex_size = _fit_hex_size()   # 视口铺满自适应:棋盘宽基本占满屏幕,棋子内容随之等比放大
 	grid = HexGrid.new(board_size.x, board_size.y, hex_size)
 	grid.top_cap_cols = TOP_CAP_COLS   # 5列棋盘顶帽行为居中 2 格(奇列 1,3),保持与下方偶列交错
@@ -279,7 +294,13 @@ func _process(dt: float) -> void:
 		_send_turn_time_left()
 	elif GameState.is_online and my_turn_live:
 		_time_sync_acc += dt
-	if state == State.PLAYER_INPUT and my_turn_live:
+	if state == State.ANIMATING and not _ending_side:
+		# 我方出招/移动的**演出期间**（攻击前冲、反击、移动滑行等）不去动行动标识：
+		# 此刻仍是我方回合、这一步的结果也还没结算完，整片熄灭再亮起会看着"闪一下"。
+		# 保持上一帧的点亮状态，等演出结束回到 PLAYER_INPUT 时再统一刷新。
+		# （回合结束的 ANIMATING 由 _ending_side 排除掉：那时已经不该再提示可行动。）
+		pass
+	elif state == State.PLAYER_INPUT and my_turn_live:
 		for u in units:
 			if u == null or not is_instance_valid(u):
 				continue
@@ -289,7 +310,8 @@ func _process(dt: float) -> void:
 				u.set_action_markers(not u.moved_this_turn and not u.attacked_this_turn and u.can_move(), not u.attacked_this_turn and _can_actively_attack(u))
 			else:
 				u.set_action_marker(false)   # 旧统一标识关闭，避免残留
-				u.set_action_markers(false, false)
+				# 对方单位：亮**红色**点 = 它这回合还能反击（打它会被还手；反击用完就熄灭）
+				u.set_action_markers(false, u.faction == _opp_faction() and _can_still_counter(u))
 				u.set_action_marker(false)
 	else:
 		for u in units:
@@ -873,9 +895,11 @@ func reset_match(redraft := false) -> void:
 	player_dead = 0
 	enemy_dead = 0
 	_pending_player_subs = 0
+	_pending_opp_subs = 0
 	_pending_enemy_sub = 0
 	_pending_sub = ""
 	_defer_side_skills = false   # 重开清除补位延标志（新局回合开始重走流程）
+	_defer_side = -1
 	_waiting_side_skills_round = -1   # 重开清除等待技能广播标记
 	_opening_items_spawned = false   # 重开新局开局道具重新刷一次
 	selected = null
@@ -1564,34 +1588,24 @@ func item_desc(type: String) -> String:
 			return "攻击+1（永久）、生命上限+3，并回复 3 点血（仅黄金矿工可拾取）"
 	return "增益道具"
 
-# 开局增益道具：开局时（首个行动方回合开始技执行点，两端同步同种子）在候选 4 格
-# 放 2 个随机道具，类型为 攻击+1 / 圣盾 / 回复3血。跳过障碍/单位/炸弹/墓碑格，
-# 保证不与障碍冲突；候选格被占不足 2 个时从其它空地补足（仍保证恰好 2 个且无冲突）。
+# 开局增益道具：**固定落点**，不再随机挑格（类型仍是随机的 攻击+1/圣盾/回复3血）。
+#   两枚主落点 = [2,4] 与 [4,4]；某一枚的主落点被占（障碍/单位/炸弹/墓碑/道具）时，
+#   该枚退到它配对的备用落点：[2,4]→[3,3]、[4,4]→[3,4]。
+#   两个位置都不可用时这一枚就不放（保持确定性，不再"从其它空地随机补足"）。
+# 落点全部在棋盘中央，与双方出生区无关；开局时（首个行动方回合开始技执行点，两端同种子）执行。
 func _spawn_opening_items() -> void:
 	if _opening_items_spawned:
 		return
 	_opening_items_spawned = true
-	var spots: Array = []
-	for c in OPENING_ITEM_CELLS:
-		if _opening_item_placeable(c):
-			spots.append(c)
-	_rng_shuffle(spots)
 	var placed := 0
-	while placed < 2 and spots.size() > 0:
-		var c: Vector2i = spots.pop_back()
+	for slot in OPENING_ITEM_SLOTS:
+		var c: Vector2i = slot["cell"]
+		if not _opening_item_placeable(c):
+			c = slot["alt"]   # 主落点被占：退到配对的备用落点
+		if not _opening_item_placeable(c):
+			continue          # 备用落点也被占：这一枚不放（不做随机补足）
 		buff_items[c] = OPENING_ITEM_TYPES[rng.randi() % OPENING_ITEM_TYPES.size()]
 		placed += 1
-	if placed < 2:
-		# 候选格不够空（被障碍/单位挤占，少见）：从棋盘其它空地补足到 2 个
-		var extra: Array = []
-		for cell in grid.all_cells():
-			if not OPENING_ITEM_CELLS.has(cell) and _opening_item_placeable(cell):
-				extra.append(cell)
-		_rng_shuffle(extra)
-		while placed < 2 and extra.size() > 0:
-			var c: Vector2i = extra.pop_back()
-			buff_items[c] = OPENING_ITEM_TYPES[rng.randi() % OPENING_ITEM_TYPES.size()]
-			placed += 1
 	if placed > 0:
 		log_message.emit("开局放置了 %d 个增益道具（攻击+1/圣盾/回复3血），走过即可拾取。" % placed)
 		_refresh_board()
@@ -1663,6 +1677,9 @@ func _spawn_unit(hero_id: String, faction: int, cell: Vector2i) -> Unit:
 	units.append(u)
 	occupancy[cell] = u
 	_sync_ranged_adjacent()   # 新单位上场：刷新远程被贴状
+	# 出生/落点上恰有增益道具（含金矿）时立刻拾取：与"移动落点拾取"同一套规则。
+	# 否则英雄（尤其替补）落在出生区里的道具上会白白踩过、拿不到。
+	_pickup_buff_at_cell(u)
 	return u
 
 func _start_match() -> void:
@@ -1715,23 +1732,32 @@ func _begin_side(side: int) -> void:
 	_sync_ranged_adjacent()   # 回合切换：敌方移换位后刷新远程被贴身状
 	_tick_statuses(side)   # 猛毒等：回合开始结
 	# —— 回合开始顺序：先完成上一方回合阵亡留下的替补，再触发各英雄回合开始技 ——
-	# 本端真人方（我方）的补位需要玩家点击选择，无法在此同步落位：
+	# 本端手动方（我方；自由部署双控=双方）的补位需要玩家点击选择，无法在此同步落位：
 	# 打开替补面板并把"回合开始技"顺延到全部补位完成后再触发（见 _resume_after_sub）。
 	# 必须走 _try_begin_next_sub 消费 1 个名额（否则落位完成后 more_subs 误判还有名额 → 重复弹面板）。
-	if side == _my_side() and _pending_player_subs > 0 and _my_roster().size() > 0:
+	var begin_fn := side_faction(side)
+	if _is_manual_sub_faction(begin_fn) and _pending_subs_of(begin_fn) > 0 and _roster_of(begin_fn).size() > 0:
 		# 先启动本端回合倒计时：等替补期间超时也能自动替补并结束回合（不会永久卡在面板）
 		turn_time_left = TURN_TIME_LIMIT
 		peer_turn_time_left = 0.0
 		_time_sync_acc = 0.0
 		if GameState.is_online:
 			_send_turn_time_left()
-		turn_banner.emit("你的回合")   # 即便要先进替补，也先弹回合切换提醒（否则只弹替补面板无回合提示）
-		action_info.emit("你的回合（第 %d 回合）：先为阵亡队友补位。" % GameState.round_number)
+		if side == _my_side():
+			turn_banner.emit("你的回合")   # 即便要先进替补，也先弹回合切换提醒（否则只弹替补面板无回合提示）
+			action_info.emit("你的回合（第 %d 回合）：先为阵亡队友补位。" % GameState.round_number)
+		else:
+			# 自由部署双控：敌方回合也由本端操控，但补位仍要玩家点选敌方替补
+			turn_banner.emit("敌方回合（你操控）")
+			action_info.emit("敌方回合（第 %d 回合·你来操控）：先为敌方阵亡英雄补位。" % GameState.round_number)
 		_defer_side_skills = true
-		_try_begin_next_sub()
+		_defer_side = side
+		_try_begin_next_sub(begin_fn)
 		return
 	# 单机敌方（AI）待补位：先自动落位，再统一触发技能（联机敌方为对端真人，按其补位节奏同步）
-	if not GameState.is_online and side != _my_side() and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
+	# 自由部署双控时敌方也归本端玩家手动点选，故不跑 AI 补位。
+	if not GameState.is_online and side != _my_side() and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
+			and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
 		_start_placing_subs = true
 		_place_enemy_sub()
 		_start_placing_subs = false
@@ -1768,6 +1794,12 @@ func _run_side_skills(side: int) -> void:
 				and _hero(u).wants_side_turn_start_sync():
 			_hero(u).on_side_turn_start(side_faction(side))
 			break
+	# 阵营级"非技能"回合开始结算（**不受沉默影响**）：清跨回合账目
+	# （锤头鲨的攻击力加成"对方回合结束消失"= 在本方回合开始这一刻到期）。
+	# 单独一趟循环：上面的 sync 每方只派发一次（整队取样类），不能被多个英雄共用。
+	for u in units:
+		if u != null and is_instance_valid(u) and u.alive and u.faction == side_faction(side):
+			_hero(u).on_own_turn_start_always()
 	# 让回合开始增益在牌面上可
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
@@ -1796,7 +1828,8 @@ func _run_side_skills(side: int) -> void:
 		if GameState.is_online:
 			peer_turn_time_left = TURN_TIME_LIMIT
 		# 敌方若有上一回合阵亡待替补：按阵亡数量在出生区自动落位，再开始敌方回
-		if _pending_enemy_sub > 0 and enemy_roster.size() > 0:
+		# （自由部署双控的敌方归本端玩家手动点选，不在此自动落位）
+		if not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
 			_place_enemy_sub()
 		if GameState.dual_control:
 			# 自由部署双控：敌方回合也由本端操控(不跑 AI)
@@ -1874,6 +1907,33 @@ func _opp_roster() -> Array:
 
 func _roster_of(fn: int) -> Array:
 	return player_roster if fn == DataRegistry.Faction.PLAYER else enemy_roster
+
+# 阵营 -> 行动方（side），与 side_faction 互逆
+func _faction_side(fn: int) -> int:
+	return GameState.SIDE_PLAYER if fn == DataRegistry.Faction.PLAYER else GameState.SIDE_ENEMY
+
+# 阵营视角文字（"我方"=本端人类方，"敌方"=对面）
+func _fn_txt(fn: int) -> String:
+	return "我方" if fn == _my_faction() else "敌方"
+
+# 该阵营的替补是否由本端玩家手动点选（而不是 AI 自动补位）：
+#  - 普通/联机：只有本端阵营手动（联机敌方是真人，由对端自己补）；
+#  - 自由部署双控：双方都由本端操控 → 双方替补都由本端点选。
+func _is_manual_sub_faction(fn: int) -> bool:
+	return fn == _my_faction() or GameState.dual_control
+
+# 某阵营"待手动替补"名额（本端阵营用 _pending_player_subs，双控下的对方用 _pending_opp_subs）
+func _pending_subs_of(fn: int) -> int:
+	return _pending_player_subs if fn == _my_faction() else _pending_opp_subs
+
+func _set_pending_subs_of(fn: int, n: int) -> void:
+	if fn == _my_faction():
+		_pending_player_subs = n
+	else:
+		_pending_opp_subs = n
+
+func _add_pending_sub(fn: int) -> void:
+	_set_pending_subs_of(fn, _pending_subs_of(fn) + 1)
 
 # 当前替补操作对应的替补席（HUD 选人面板用）
 func _sub_roster() -> Array:
@@ -2226,9 +2286,9 @@ func _handle_touch_gesture(event: InputEvent) -> void:
 			return
 		if not _press_active or _press_viewed:
 			return
-		# 位移超过阈值 -> 拖动（仅按住我方英雄时），否则视为滑动取消本次点击
+		# 位移超过阈值 -> 拖动（仅按住可操作方英雄时），否则视为滑动取消本次点击
 		if event.position.distance_to(_press_pos) > _PRESS_DRAG_PX:
-			if _press_unit != null and GameState.active_side == _my_side():
+			if _press_unit != null and GameState.active_side == _operable_side():
 				_begin_drag(_press_unit)
 				_press_drag_started = true
 				_drag_follow()
@@ -2435,6 +2495,18 @@ func _attack_damage(a: Unit) -> int:
 # 目标是否可被主动攻击（后勤不能主动攻击）
 func _can_actively_attack(a: Unit) -> bool:
 	return a.can_attack() and not _is_logistics(a)
+
+# 该单位这回合是否"还可以反击"（用于给对方单位亮红色行动点：打它会不会被还手）。
+# 单位侧门控与 _apply_attack 里 can_counter 完全一致：存活 + 未被眩晕 + 攻击力>0 +
+# 反击名额没用完（复仇者无限反击）。**不含**"是否相邻/在射程内"这类临场条件——
+# 那是真打起来才判的；这里只回答"它还有没有还手的机会"。
+# 后勤也算（后勤不能主动攻击，但本来就能反击），所以判 can_attack() 而非 _can_actively_attack()。
+func _can_still_counter(u: Unit) -> bool:
+	if u == null or not is_instance_valid(u) or not u.alive:
+		return false
+	if not u.can_attack() or u.effective_atk() <= 0:
+		return false
+	return not u.counter_used_this_turn or (u.skill_allowed() and _hero(u).infinite_counter())
 
 # ---- 嘲讽规则：若攻击范围内存在带嘲讽的对立单位，则只能攻击嘲讽单----
 func _taunters_in_range(a: Unit) -> Array:
@@ -3151,11 +3223,8 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 	if prev_move_buff > 0:
 		u.move_use_buff = maxi(u.move_use_buff - prev_move_buff, 0)
 		u.refresh_stats()
-	# 攻击道具的+1 只在攻击结算（主动攻击/反击）后消耗；后勤不能主动攻击，
-	# 其整回合行动=移动，移动完成即视为该道具作废清掉，避免无限残留到以后回合
-	if _is_logistics(u) and u.atk_use_buff > 0:
-		u.atk_use_buff = 0
-		u.refresh_stats()
+	# 攻击道具的 +1 是**一次性**的：只在攻击结算时消耗（主动攻击见 _finish_attack；反击见反击结算）。
+	# 移动**不消耗**它——后勤不能主动攻击，若移动就把它清掉，等于白捡一件道具（后勤移动后仍可反击）。
 	_clear_selection()
 	if for_enemy:
 		# 单机：action_finished 通知敌方 AI 回放循环继续下一招；
@@ -3263,7 +3332,11 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		# 长角未沉默：on_attack 统一结算基础伤害（击退倍，不能倍单次）
 		# 长角被沉默：只做基础攻击伤害（技能击退/2倍失效）
 		if not _hero(attacker).handles_base_damage() or not attacker.skill_allowed():
-			# 带状态的攻击命中带圣盾目标：圣盾挡下整次攻击——不扣血、后续状态也不生效
+			# 圣盾的语义：**只挡这一次攻击的伤害**（伤害由 take_damage 里的盾消费掉），
+			# 攻击者的技能照旧触发——长剑剑气穿透 / 超新星击退 / 白游侠散射 / 暗域换位 /
+			# 血锁拉人 / 宿魂附体 / 长角击退 都在 _trigger_on_attack 里，不受盾影响。
+			# 这里标记的只是"这次攻击**附带的状态**不生效"（带状态的攻击打盾：不扣血、状态也不挂），
+			# 由 _add_status_msg 读取；所以只对"命中附加状态"的英雄置位。
 			if target.has_status(StatusDB.SHIELD) and attacker.alive and _hero(attacker).applies_status_on_hit():
 				target._shield_block_status = true
 			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name, true)
@@ -3428,8 +3501,9 @@ func _is_done(u: Unit) -> bool:
 	return u.attacked_this_turn    # 普通单位：攻击是最后动作，攻击过=本回合完成
 
 func _has_remaining_player() -> bool:
+	# 双控时"可操作方"=当前行动方(敌方回合也要判敌方是否还有可行动英雄)
 	for u in units:
-		if u.alive and u.faction == _my_faction() and not _is_done(u):
+		if u.alive and u.faction == _operable_faction() and not _is_done(u):
 			return true
 	return false
 
@@ -3572,6 +3646,7 @@ func _is_isolated(target: Unit, attacker: Unit) -> bool:
 	return true
 
 # 攻击后的角色专属技能（target 可能null
+# 注意：圣盾只挡伤害，**不挡技能**——打盾时这里的技能照旧触发（见 _apply_attack 的说明）。
 func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 	if target == null or not target.alive:
 		if target != null and not u.skill_allowed():
@@ -3591,7 +3666,8 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 # （以前要在每个调用点再写一遍 "猛毒"/"冰冻"…，中文名因此存在 3 份拷贝）
 func _add_status_msg(u: Unit, status: String, pierce_shield: bool = false) -> void:
 	if u._shield_block_status:
-		# 本次攻击已被圣盾整段挡下：不再施加状态(盾的 [圣盾] 提示已由挡伤时显示)
+		# 这次攻击的伤害被圣盾挡下（不扣血）：**附带的状态**同样不生效
+		# （盾的 [圣盾] 提示已由挡伤时显示）。注意只影响状态，攻击者的技能照旧触发。
 		return
 	u.add_status(status, pierce_shield)
 	u.refresh_stats()   # 状态变化后刷新牌面数值（如麻痹导致攻击数字回落）
@@ -4013,7 +4089,9 @@ func _random_step(v: Unit) -> void:
 func _summon_skeletons(u: Unit) -> void:
 	var slots: Array = []
 	for n in grid.neighbors(u.cell):
-		if not occupancy.has(n):
+		# 召唤落点必须是"能站人"的格：障碍/墓碑不可停靠（与移动、击退、换位的落点规则一致）；
+		# 炸弹格**允许**（下方 _trigger_bomb 照常引爆，与其它强制位移统一）。
+		if grid.in_bounds(n) and not occupancy.has(n) and not obstacles.has(n) and not graves.has(n):
 			slots.append(n)
 	var count := mini(2, slots.size())
 	for i in count:
@@ -4030,6 +4108,11 @@ func _summon_skeletons(u: Unit) -> void:
 		units.append(s)
 		occupancy[slots[i]] = s
 		_trigger_bomb(s)   # 召唤到炸弹格：炸弹人以外即引
+		# 召唤落点上的增益道具（含金矿）同样拾取：与英雄占位一致——
+		# 先炸弹后拾取（同移动/强制位移的顺序），被炸死的骷髅不再拾取；
+		# 金矿仍按 can_pickup_gold() 判定（骷髅默认不捡，矿留在格上继续倒计时）。
+		if s.alive:
+			_pickup_buff_at_cell(s)
 		var st := create_tween()
 		st.tween_property(s, "modulate:a", 1.0, 0.3)
 		log_message.emit("召唤了骷髅兵")
@@ -4142,6 +4225,10 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	_hero(u).refresh_identity()
 	# 变身即生效的数值补算：由英雄脚本自己处理（共鸣者补算共鸣加成；其余默认清掉残留）
 	_hero(u).on_become_hero()
+	# 变身会换掉 attack_type/射程：必须重算"远程被贴身"标志。
+	# 否则"近战变远程时正贴着敌人"（或反向）会沿用变身前的旧标志——
+	# 攻击力照旧按全额结算、射程也不压 1，面板上看起来就是"变成远程被贴身却不减攻"。
+	_sync_ranged_adjacent()
 	# 变身后立即触发新英雄回合开效果（黄金矿工丢圣诞老人放道死灵法师召唤等）
 	# 原因：古灵精怪在本方回合开始阶段才变身，_trigger_turn_start_all 已处理过本单位，
 	# 若由外部再按 hero_id 触发会漏掉新英雄的回合开始技能
@@ -4158,9 +4245,11 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	u.refresh_stats()        # 攻击等数值也刷新
 	_notify_team()           # 变身改变卡组：刷新下方队
 # 我方“实际还需替补的次数”= 待补队列名额 + 当前正开着的替补面板（若有，队列名额已先消费）
-func _my_sub_quota() -> int:
-	var q := _pending_player_subs
-	if (_sub_faction == _my_faction() and (state == State.SUBSTITUTING or state == State.PLACE_SUB)):
+# fn 省略/null 时=本端阵营（兼容旧调用与测试）；自由部署双控可传入敌方查看其待补次数。
+func _my_sub_quota(fn: int = -1) -> int:
+	var f := fn if fn >= 0 else _my_faction()
+	var q := _pending_subs_of(f)
+	if _sub_faction == f and (state == State.SUBSTITUTING or state == State.PLACE_SUB):
 		q += 1
 	return q
 
@@ -4202,25 +4291,25 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	# 阵亡次数达标 -> 输赢（不补位
 	if _check_win():
 		return
-	# 替补：本我方"阵亡 -> 手动替补（联机我方是真人，单机玩家也是真人）
+	# 替补：本端手动方（我方；自由部署双控=双方）阵亡 -> 手动替补（联机我方是真人，单机玩家也是真人）
 	# 对方阵亡 -> 单机敌方AI，自动补位；联机敌方是真人，由对端自行补位（我方等待其补位指令）
-	if u.faction == _my_faction():
-		var my_roster: Array = _my_roster()
-		if my_roster.size() > 0:
-			if GameState.active_side == _my_side() and not _ending_side and not _in_begin_phase:
-				# 我方在回合行动中阵亡（如被反击击杀）：立即替补（回合开始演出期除外）
+	if _is_manual_sub_faction(u.faction):
+		var fn := u.faction
+		if _roster_of(fn).size() > 0:
+			if GameState.active_side == _faction_side(fn) and not _ending_side and not _in_begin_phase:
+				# 本方在回合行动中阵亡（如被反击击杀）：立即替补（回合开始演出期除外）
 				# 同时阵亡多人则计数，逐个替补（落位后自动开下一个面板）
-				_pending_player_subs += 1
+				_add_pending_sub(fn)
 				if _CONSOLE_SUB_LOG:
-					print("[替补] 我方%s 即时阵亡，待补名额=%d" % [u.display_name, _pending_player_subs])
-				_try_begin_next_sub()
+					print("[替补] %s%s 即时阵亡，待补名额=%d" % [_fn_txt(fn), u.display_name, _pending_subs_of(fn)])
+				_try_begin_next_sub(fn)
 			else:
 				# 对方回合 / 本方"结束回合-结算扣血"期间阵亡：不立即替补，等本方下回合开始再逐个补位
-				_pending_player_subs += 1
+				_add_pending_sub(fn)
 				if _CONSOLE_SUB_LOG:
-					print("[替补] 我方%s 延迟阵亡（敌回合/结算/回合开始演出期），待补名额=%d" % [u.display_name, _pending_player_subs])
+					print("[替补] %s%s 延迟阵亡（非本方回合/结算/回合开始演出期），待补名额=%d" % [_fn_txt(fn), u.display_name, _pending_subs_of(fn)])
 	elif not GameState.is_online:
-		# 单机：敌AI)阵亡 -> 自动按阵亡数量补
+		# 单机：敌(AI)阵亡 -> 自动按阵亡数量补位
 		if enemy_roster.size() > 0:
 			_pending_enemy_sub += 1   # 每阵亡一名，记录一个待补位名额（敌方回合开始才落位
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
@@ -4230,7 +4319,9 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 		var cause_txt2 := ""
 		if u != null and u.death_cause != "":
 			cause_txt2 = " 死因：%s" % u.death_cause
-		print("[替补统计] %s（%s）阵亡后%s：我可替补次数=%d" % [u.display_name, "我方" if u.faction == _my_faction() else "敌方", cause_txt2, _my_sub_quota()])
+		# 手动方（含双控敌方）打印它自己的待补次数；AI 敌方仍打印本端视角的待补次数
+		var quota_fn := u.faction if _is_manual_sub_faction(u.faction) else _my_faction()
+		print("[替补统计] %s（%s）阵亡后%s：我可替补次数=%d" % [u.display_name, _fn_txt(u.faction), cause_txt2, _my_sub_quota(quota_fn)])
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
@@ -4255,6 +4346,9 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 	var ai := BattleAI.new(grid)
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = false   # 这是补算的临时搜索，不重复打印决策说明
+	# 这次只搜"1 个新替补"的一步，跟常规整轮搜索不同量级：给个短预算，
+	# 别让回合中途的补算也占满 10 秒（那会让对局卡顿）。
+	ai.time_budget_ms = 1200
 	var sim := ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"])
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
@@ -4379,28 +4473,42 @@ func _best_enemy_sub_idx() -> int:
 var _pending_sub := ""   # 已选中的替hero_id（等待落位）
 
 # 尝试开始下一个替补名额（同时阵亡多人时逐个替补）。仅在空闲且有名有替补时消费 1 个
-func _try_begin_next_sub() -> void:
+func _try_begin_next_sub(fn: int = -1) -> void:
 	if GameState.match_over:
 		return   # 对局已结束：不再弹替补界
-	if _pending_player_subs <= 0 or _my_roster().size() <= 0:
+	# fn 省略=本端阵营（旧调用/测试不变）；自由部署双控下可传敌方，弹"敌方替补列表"
+	var f := fn if fn >= 0 else _my_faction()
+	if _pending_subs_of(f) <= 0 or _roster_of(f).size() <= 0:
 		return
 	if state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		return   # 替补面板已在进行：本次落位后会自动开启下一个替补名额
-	_pending_player_subs -= 1
+	_set_pending_subs_of(f, _pending_subs_of(f) - 1)
 	if _CONSOLE_SUB_LOG:
-		print("[替补面板] 开新面板：本次后待补=%d，替补席=%d" % [_pending_player_subs, _my_roster().size()])
-	_begin_substitution()
+		print("[替补面板] 开新面板（%s）：本次后待补=%d，替补席=%d" % [_fn_txt(f), _pending_subs_of(f), _roster_of(f).size()])
+	_begin_substitution(f)
 
-func _begin_substitution() -> void:
-	_sub_faction = _my_faction()
+func _begin_substitution(fn: int = -1) -> void:
+	var f := fn if fn >= 0 else _my_faction()
+	_sub_faction = f
 	state = State.SUBSTITUTING
 	sub_select_requested.emit()
-	action_info.emit("有英雄阵亡！从替补队伍中选择一名上阵")
+	if f == _my_faction():
+		action_info.emit("有英雄阵亡！从替补队伍中选择一名上阵")
+	else:
+		action_info.emit("敌方有英雄阵亡！从敌方替补列表中选择一名上阵")
+
+# HUD 用：当前替补面板是给哪一方的（"" = 本端阵营/无）
+func _sub_faction_txt() -> String:
+	if _sub_faction < 0 or _sub_faction == _my_faction():
+		return ""
+	return _fn_txt(_sub_faction)
 
 # 回合超时且卡在替补/落位面板：自动上替补席第 1 名（落本方墓碑优先，其次出生区空位），
 # 直到补完回到输入态，再由 _turn_expired 自动结束回合。
 func _auto_sub_on_timeout() -> void:
-	var roster := _my_roster()
+	# 当前正开着的替补面板属于哪一方（双控时可能是敌方），按该方替补席自动补位
+	var auto_fn := _sub_faction if _sub_faction >= 0 else _my_faction()
+	var roster := _roster_of(auto_fn)
 	if roster.size() <= 0:
 		# 没有替补可上：收掉面板直接恢复（超时结束仍由 _turn_expired 兜底）
 		_pending_sub = ""
@@ -4412,15 +4520,17 @@ func _auto_sub_on_timeout() -> void:
 		_on_sub_pick(roster[0])
 	if _pending_sub == "" or state != State.PLACE_SUB:
 		return
-	var cell := _auto_sub_cell()
+	var cell := _auto_sub_cell(auto_fn)
 	if cell.x == -99:
 		return   # 暂无可落位点：下一帧继续尝试（超时标记仍在）
 	_try_place_sub(cell)
 
-# 自动落位点：本方墓碑（含旧格式墓碑）优先，其次本方出生区空格
-func _auto_sub_cell() -> Vector2i:
-	var my_fn := _my_faction()
-	return _free_sub_cell_for(my_fn)
+# 自动落位点：该阵营墓碑（含旧格式墓碑）优先，其次该阵营出生区空格。
+# fn 传了就用它——双控自由部署时替补面板可能是**敌方**的，落点必须按敌方的墓碑/出生区算；
+# 没传（fn < 0）按本端阵营，兼容旧调用点。
+func _auto_sub_cell(fn: int = -1) -> Vector2i:
+	var target_fn := fn if fn >= 0 else _my_faction()
+	return _free_sub_cell_for(target_fn)
 
 # 通用：某阵营替补落位→ 优先该阵营自己的墓碑格(阵亡原地补)，其次该阵营出生区空格
 func _free_sub_cell_for(fn: int) -> Vector2i:
@@ -4486,11 +4596,11 @@ func _try_place_sub(cell: Vector2i) -> bool:
 	return true
 
 # 本次替补落位后，该阵营是否应清空剩余墓碑（= 无更多待补名额 或 替补席已空）。
-# 只由"负责端"（操作该阵营的那端）调用：其 _pending_player_subs 才是本阵营的真实待补计数。
+# 只由"负责端"（操作该阵营的那端）调用：其待补计数(_pending_subs_of(fn))才是本阵营的真实待补计数。
 func _sub_clear_side(fn: int, hid: String) -> bool:
 	var r: Array = _roster_of(fn).duplicate()
 	r.erase(hid)   # 本次即将上场的从替补席剔除后看还剩谁
-	return r.size() == 0 or _pending_player_subs <= 0
+	return r.size() == 0 or _pending_subs_of(fn) <= 0
 
 # 客户端点"放置"后先清理本地选中/高亮/关闭面板（等待主机广播重演，不在本地真正落位）
 func _apply_sub_ui_cleanup(fn: int) -> void:
@@ -4546,11 +4656,11 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	# 同时阵亡多名队友：本名额补完后若还有待补名额，继续弹下一个替补面板，而不是直接恢复回合
 	# 注意：连续替补期*不刷*常驻"替补队伍"面板（避免它和替补面板重叠）
 	# 常驻面板留到最后一个替补完成后再刷新
-	var more_subs := _pending_player_subs > 0 and fn == _my_faction() and _my_roster().size() > 0
-	if _CONSOLE_SUB_LOG and fn == _my_faction():
-		print("[替补面板] 落位完成：待补=%d 替补席=%d → 再开=%s" % [_pending_player_subs, _my_roster().size(), more_subs])
+	var more_subs := _pending_subs_of(fn) > 0 and _roster_of(fn).size() > 0
+	if _CONSOLE_SUB_LOG and _is_manual_sub_faction(fn):
+		print("[替补面板] %s落位完成：待补=%d 替补席=%d → 再开=%s" % [_fn_txt(fn), _pending_subs_of(fn), _roster_of(fn).size(), more_subs])
 	if more_subs:
-		_try_begin_next_sub()
+		_try_begin_next_sub(fn)
 	else:
 		_resume_after_sub()   # 恢复回合状（内部完成后刷新常驻队伍面板，避免与替补面板叠层）
 	# 只有"确实没有下一个替时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
@@ -4564,10 +4674,10 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 			fn_done = clear_side == 1
 		else:
 			fn_done = _roster_of(fn).size() == 0
-			if fn == _my_faction():
+			if _is_manual_sub_faction(fn):
 				if fn_done:
-					_pending_player_subs = 0   # 替补耗尽：清空剩余名额，避免残留
-				fn_done = fn_done or _pending_player_subs <= 0
+					_set_pending_subs_of(fn, 0)   # 替补耗尽：清空剩余名额，避免残留
+				fn_done = fn_done or _pending_subs_of(fn) <= 0
 		if fn_done and fn != _my_faction():   # 我方墓碑留到回合末清；其余阵营立即清
 			_clear_side_graves(fn)
 
@@ -4589,27 +4699,35 @@ func _resume_after_sub() -> void:
 		_defer_side_skills = false
 		_in_begin_phase = false   # 补位+技能演出期结束
 		state = State.ANIMATING
+		# 补位期间是"哪一方的回合"（双控敌方也会走这里）：技能要在该方回合上重跑，
+		# 否则敌方回合的回合开始技会被当成我方回合触发（横幅/计时也随之错位）。
+		var dside := _defer_side if _defer_side >= 0 else _my_side()
+		_defer_side = -1
 		# 联机：行动方补位全部完成,此刻才广播"回合开始技开始"让等待端同步执行
 		# (两端同一时点触发技能,避免 rng 分叉导致金矿/道具落点错位)
 		if GameState.is_online:
 			if GameState.is_host:
-				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": _my_side(), "round": GameState.round_number }))
+				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": dside, "round": GameState.round_number }))
 			else:
-				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": _my_side(), "round": GameState.round_number }))
+				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": dside, "round": GameState.round_number }))
 		# 技能演出 + 正式入场(计时/横幅/新阵亡再开面板)由 _run_side_skills 统一完成
-		await _run_side_skills(_my_side())
+		await _run_side_skills(dside)
 		# _run_side_skills 行动方分支尾部已处理"技能期间新阵亡再开面板"；
 		# 若它因还有待补而提前 return(开新面板),这里不再重复弹。
 		_notify_team()   # 先补位再技能流程全部完成：此刻才刷新常驻"替补队伍"（避免与替补面板叠层/吞点击）
 		return
-	# 恢复流程（回合中途换人）：本轮是否我方行动。是我方回合 -> 回到我方输入；否则等待对AI
-	if GameState.active_side == _my_side():
+	# 恢复流程（回合中途换人）：当前行动方=本端可操作方 -> 回到输入态；否则等待/跑 AI。
+	# 双控时 _operable_side() = 当前行动方(敌方回合也由本端操控)，故补位后仍回到可操作态。
+	if GameState.active_side == _operable_side():
 		state = State.PLAYER_INPUT
 		if _has_remaining_player():
 			action_info.emit("继续你的回合")
 		else:
 			# 所有英雄已行动完：不自动结束，提示玩家手动点「结束回合
-			action_info.emit("所有英雄已完成行动，点「结束回合」交给敌方")
+			if GameState.dual_control and GameState.active_side != _my_side():
+				action_info.emit("敌方英雄已全部完成行动，点「结束回合」交回我方")
+			else:
+				action_info.emit("所有英雄已完成行动，点「结束回合」交给敌方")
 	else:
 		state = State.ENEMY_TURN
 		if GameState.is_online:
@@ -4619,12 +4737,13 @@ func _resume_after_sub() -> void:
 			action_info.emit("敌方回合…")
 	_notify_team()   # 中途换人恢复后刷新常驻"替补队伍"面板
 
-# 主动撤下（提交入口，仅本端操作时调用）：校验后执行，联机走网令同步
+# 主动撤下（提交入口，仅本端操作时调用）：校验后执行，联机走网令同步。
+# 可撤下的阵营 = 本端当前可操作方（自由部署双控时敌方回合也能撤下敌方英雄）。
 func _withdraw_unit(u: Unit) -> void:
 	if state != State.PLAYER_INPUT:
 		return
-	if u == null or not u.alive or u.faction != _my_faction():
-		action_info.emit("请先选中一名我方英雄，再点击「撤下」")
+	if u == null or not u.alive or u.faction != _operable_faction():
+		action_info.emit("请先选中一名%s英雄，再点击「撤下」" % _fn_txt(_operable_faction()))
 		return
 	if not GameState.is_online:
 		_apply_withdraw(u)
@@ -4641,13 +4760,15 @@ func _withdraw_unit(u: Unit) -> void:
 		if w_idx >= 0:
 			NetBus.send_to(1, JSON.stringify({ "type": "withdraw", "u": w_idx }))
 
-# 撤下的权威执行（两端一致）：仅本端回合可触发本端英雄撤下；真正移除单位_on_unit_died
+# 撤下的权威执行（两端一致）：仅本端可操作回合可触发本端英雄撤下；真正移除单位_on_unit_died
 # 死亡方属于谁、由谁替补，_on_unit_died 的视角化逻辑保证两端一致
 func _apply_withdraw(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
 	log_message.emit("%s 被主动撤下（视为阵亡）。" % u.display_name)
-	var mine := u.faction == _my_faction()
+	var fn := u.faction
+	# 撤下的这一方是否由本端操作（双控敌方回合撤下敌方=本端操作；联机对端撤下=不是）
+	var mine := fn == _operable_faction()
 	if mine:
 		_clear_selection()
 		state = State.ANIMATING   # 仅撤下方需要锁输入；对端只是看到对方撤下，回合状态不
@@ -4660,11 +4781,15 @@ func _apply_withdraw(u: Unit) -> void:
 	# 撤下方收尾：_on_unit_died 在本方回合内已进入替补流程则直接返回，避免重复弹
 	if state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		return
-	if _my_roster().size() > 0:
-		_pending_player_subs += 1
-		_try_begin_next_sub()   # 撤下一人也算一个替补名额；不在替补流程中则直接开
+	if _roster_of(fn).size() > 0:
+		_add_pending_sub(fn)
+		# 撤下一人也算一个替补名额；不在替补流程中则直接开（双控敌方 -> 弹敌方替补列表）
+		_try_begin_next_sub(fn)
 	else:
-		action_info.emit("已无替补，本阵减少一名英雄")
+		if fn == _my_faction():
+			action_info.emit("已无替补，本阵减少一名英雄")
+		else:
+			action_info.emit("敌方已无替补，敌方减少一名英雄")
 		_resume_after_sub()
 
 # 按钮入口：撤下当前选中的我方英
@@ -4688,15 +4813,20 @@ func _drag_follow() -> void:
 		return
 	if not _dragging and get_global_mouse_position().distance_to(_drag_start_mouse) > _DRAG_THRESHOLD:
 		_dragging = true
-		action_info.emit("把英雄完全拖出棋盘下边框（整个六边形出去）再松开即撤下")
-		_show_drag_highlight()
+		var fn := _drag_unit.faction
+		action_info.emit("把英雄完全拖出棋盘%s边框（整个六边形出去）再松开即撤下" % _drag_dir_txt(fn))
+		_show_drag_highlight(fn)
 	if _dragging:
 		_drag_unit.position = get_global_mouse_position()
 
-func _show_drag_highlight() -> void:
-	# 高亮"本端我方"出生区（联机主机=客户红；单机=玩家），撤下到该区下方即可
+# 拖拽撤下的方向文字：该阵营出生区在屏幕上的哪一侧（下/上，随联机视角翻转自动适配）
+func _drag_dir_txt(fn: int) -> String:
+	return "下" if _withdraw_dir_of(fn) > 0 else "上"
+
+func _show_drag_highlight(fn: int) -> void:
+	# 高亮"被拖动英雄所属阵营"的出生区：该方撤下后替补就往这一侧登场
 	var pc := {}
-	for c in _spawn_cells(_my_faction()):
+	for c in _spawn_cells(fn):
 		pc[c] = Color(0.2, 0.9, 0.5, 0.85)
 	_preview_cells = pc
 	_apply_highlights()
@@ -4717,32 +4847,82 @@ func _finish_drag() -> void:
 	u.z_index = 2
 	_clear_drag_highlight()
 	if was_dragging:
-		# 整枚六边形完全越过棋盘下边框（最底行格子底边 + 单位自身半高）才撤下，
-		# 避免只拖过一半/贴边时误触撤下
-		if get_global_mouse_position().y >= _drag_release_y():
+		# 整枚六边形完全越过"该方那一侧"的棋盘外缘（最外行格子边 + 单位自身半高）才撤下，
+		# 避免只拖过一半/贴边时误触撤下。
+		# 方向按阵营取：我方拖出下边框；双控下的敌方要往"敌方方向"（战场上边框）拖出去。
+		if _dragged_out_of_board(u.faction):
 			u.position = _drag_orig_pos
 			_withdraw_unit(u)
 		else:
 			u.position = _drag_orig_pos
-			action_info.emit("未完全拖出棋盘，「撤下」已取消")
+			action_info.emit("未完全拖出棋盘%s边框，「撤下」已取消" % _drag_dir_txt(u.faction))
 	else:
 		# 没有拖动 -> 视为普通点击选中
 		_on_cell_clicked(u.cell)
 
-# 撤下判定线 y：棋盘整体在屏幕上的最低外缘（各格子六边形底边/翻转后的最下缘）
-# 再往下加"单位自身垂直半高"，保证松手时整个单位六边形已完全越过棋盘下边框。
-# cell_world_center 已含联机 180° 翻转，故对主机/客户端两种视角都取到屏幕最低边。
-func _drag_release_y() -> float:
+# 撤出方向：+1 = 屏幕下方（该阵营出生区在棋盘下侧），-1 = 屏幕上方。
+# 单机/联机主机：我方(PLAYER)在下、敌方(ENEMY)在上；联机客户端 180° 翻转后相反。
+# 故按"该阵营出生区中心相对棋盘中心的 Y 偏移"判定，不写死上下。
+func _withdraw_dir_of(fn: int) -> int:
+	return 1 if _spawn_zone_center_y(fn) >= _board_center_y() else -1
+
+# 该阵营出生区的几何中心（不含占位过滤：占位会让中心漂移，方向判定要稳定）
+func _spawn_zone_center_y(fn: int) -> float:
+	var cells := _spawn_zone_cells(fn)
+	if cells.size() == 0:
+		return 0.0
+	var sum := 0.0
+	for c in cells:
+		sum += board_view.cell_world_center(c).y
+	return sum / float(cells.size())
+
+func _board_center_y() -> float:
+	if grid == null:
+		return 0.0
+	var all := grid.all_cells()
+	if all.size() == 0:
+		return 0.0
+	var sum := 0.0
+	for c in all:
+		sum += board_view.cell_world_center(c).y
+	return sum / float(all.size())
+
+# 出生区格子（不做占位过滤，供方向/几何判定；落位可用格仍用 _spawn_cells）
+func _spawn_zone_cells(fn: int) -> Array:
+	if fn == DataRegistry.Faction.PLAYER:
+		return _spawn_cells(DataRegistry.Faction.PLAYER)
+	var out: Array = []
+	for c in [Vector2i(1, 0), Vector2i(0, 1), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1)]:
+		if grid != null and grid.in_bounds(c):
+			out.append(c)
+	return out
+
+# 该阵营的撤下判定线：其出生区那一侧的棋盘外缘（再往外让出单位自身垂直半高）
+func _drag_release_y_for(fn: int) -> float:
+	if grid == null:
+		return INF if _withdraw_dir_of(fn) > 0 else -INF
+	var dir := _withdraw_dir_of(fn)
 	var r := hex_size
-	var bottom := -INF
-	if grid != null:
-		var half_h := 0.8660254 * r   # 平顶六边形垂直半高（底边为最下缘）
-		for c in grid.all_cells():
-			bottom = maxf(bottom, board_view.cell_world_center(c).y + half_h)
-	if bottom == -INF:
-		return INF   # 理论上不会走到（对局必有棋盘）；无棋盘时不判定撤下
+	var half_h := 0.8660254 * r   # 平顶六边形垂直半高
+	var edge := -INF if dir > 0 else INF
+	for c in grid.all_cells():
+		var y := board_view.cell_world_center(c).y
+		edge = maxf(edge, y + half_h) if dir > 0 else minf(edge, y - half_h)
+	if edge == -INF or edge == INF:
+		return INF if dir > 0 else -INF   # 理论上不会走到（对局必有棋盘）
 	# 单位绘制半径 = hex*0.9，其垂直半高 = 0.866 * (0.9*hex)
-	return bottom + 0.8660254 * (0.9 * r)
+	return edge + float(dir) * 0.8660254 * (0.9 * r)
+
+# 松手位置是否已整枚越过该阵营那一侧的棋盘外缘。
+# y_now 省略(=NAN)时=当前鼠标位置（正式流程）；测试可传入指定 y 做无鼠标验证。
+func _dragged_out_of_board(fn: int, y_now: float = NAN) -> bool:
+	var y := get_global_mouse_position().y if is_nan(y_now) else y_now
+	var line := _drag_release_y_for(fn)
+	return y >= line if _withdraw_dir_of(fn) > 0 else y <= line
+
+# 兼容旧调用：本端阵营的撤下判定线（下边框）
+func _drag_release_y() -> float:
+	return _drag_release_y_for(_my_faction())
 
 func _cancel_drag() -> void:
 	if _drag_unit != null and is_instance_valid(_drag_unit):
@@ -4798,12 +4978,9 @@ func _spawn_cells(faction: int) -> Array:
 			if grid.in_bounds(cell):
 				out.append(cell)
 	else:
-		# 敌方出生区（顶部交错皇冠：row 0 顶帽 1,3 + row 1 偶列 0,2,4，共 5 格；删左右两列后的居中窄顶宽底）
-		var ecells: Array = [
-			Vector2i(1, 0), Vector2i(0, 1), Vector2i(2, 1), Vector2i(3, 0), Vector2i(4, 1),
-		]
-		for c in ecells:
-			if grid.in_bounds(c) and not occupancy.has(c):
+		# 敌方出生区（顶部交错皇冠，共 5 格）：几何取自 _spawn_zone_cells，此处只做占位过滤
+		for c in _spawn_zone_cells(DataRegistry.Faction.ENEMY):
+			if not occupancy.has(c):
 				out.append(c)
 	return out
 
