@@ -25,3 +25,29 @@ Thumbs.db
 
 # 本机测试用的 Godot 用户目录（APPDATA 重定向，避免污染仓库）
 /.godot_userdata/
+
+# ---- RL（强化学习 / 评估设施）----
+# 只提交"代码 + 脚本 + spec + 权重 + md 报告"，跑批产物一律不进仓库。
+# 1) 每格跑批产物：measure.csv / raw_lines.log / worker 输出，几万个文件
+RL/train/results/
+# 2) 同步脚本的暂存目录（里面是带 class_name 的副本，曾导致 Godot 抢全局类名）
+RL/train/_staging/
+# 3) 每个臂跑出来的候选权重（925 个，可按 spec 重新生成）
+RL/weights/cand_*.json
+# 4) 版本快照（本地回滚用，7 MB）
+RL/backups/
+# 5) 报告目录里的日志/调试产物与子目录（约 100 MB），只保留顶层的 *.md
+RL/reports/*/
+RL/reports/*.log
+RL/reports/*.out
+RL/reports/*.txt
+RL/reports/*.err
+RL/reports/*.jobpid
+RL/reports/*.pid
+RL/reports/*.bak
+RL/reports/*.translation
+# 6) AI 同步脚本产生的临时副本与旧版备份
+RL/ai/_new_*.gd
+RL/ai/_new_*.gd.uid
+RL/ai/_prev_*.gd
+RL/ai/_prev_*.gd.uid

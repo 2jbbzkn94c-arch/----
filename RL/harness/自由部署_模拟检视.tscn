@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://brl1eq00002bc"]
+
+[ext_resource type="Script" uid="uid://b52yqppg7h7pc" path="res://RL/harness/自由部署_模拟检视.gd" id="1_script"]
+
+[node name="自由部署_模拟检视" type="Node2D" unique_id=423772288]
+script = ExtResource("1_script")

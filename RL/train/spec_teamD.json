@@ -1,0 +1,493 @@
+{
+    "_readme":  "Training spec for RL/train/Train.ps1. ASCII-safe keys only (report prose lives in .md). Numbers here are the frozen protocol: opponent=base, beamA=1200/beamB=800, seed split, lineup pools, phases. 2026-09-15 tier redefinition: base_weights = RL/weights/噩梦.json now carries the TRAINED general weights for the in-game NIGHTMARE tier (difficulty 3) -- it is currently EMPTY (meta only, no keys) because no trained set exists yet, so the \u0027base\u0027 arm equals the HARD defaults. Hero-specialisation arms (HERO_hero_XX_*) now produce NIGHTMARE+ content (difficulty 4 = nightmare + hero sections, file RL/weights/噩梦+.json).",
+    "base_weights":  "RL/weights/噩梦.json",
+    "opponent":  "base",
+    "beam":  {
+                 "candidate":  200,
+                 "opponent":  200,
+                 "_comment":  "candidate training beam reduced 1200 -\u003e 400 per the measured beam sweep (26% less wall clock, no significant win-rate change on 8 paired games). Acceptance (phase 4) should still run at 1200. Individual configs may override with their own \"beam\" field (candidate side) or \"beam_opp\" field (opponent side); beam_opp defaults to this opponent value. The opponent side is the most expensive side of a game, so beam_opp is the lever to sweep first - see the oppbeam phase.",
+                 "_beam_opp_rule":  "beam_opp must be \u003e 0 and a multiple of 100 (validated at config resolve time, naming the offending config)."
+             },
+    "league":  {
+                   "_comment":  "Self-play mixing for coordinate ascent. A share of cells plays the PREVIOUS GENERATION instead of the fixed difficulty opponent, so improving the candidate also raises the bar it is measured against. Which cells are self-play is deterministic: sha256(run|config|seed|first) top 32 bits / 2^32 \u003c self_play_fraction (see Test-LeagueSelfPlay), so the same cells stay self-play every generation and paired comparisons stay valid. The checkpoint\u0027s sha12 is part of the cell key, so updating the checkpoint invalidates exactly the old self-play rows and re-measures them.",
+                   "enabled":  true,
+                   "self_play_fraction":  0,
+                   "checkpoint":  "RL/weights/league_current.json",
+                   "base_opp_beam":  100,
+                   "_checkpoint_rule":  "league.checkpoint MUST exist while self_play_fraction \u003e 0: the runner throws instead of silently falling back to opp=base. It is written by the coordinate-ascent loop at the end of an accepted round.",
+                   "_fraction_rule":  "self_play_fraction must be in [0,1]; 0 disables self-play and makes the run a plain fixed-opponent run (the [league] line then says so)."
+               },
+    "decks":  {
+                  "enemy":  "hero_28,hero_34,hero_42",
+                  "player":  "hero_28,hero_34,hero_42"
+              },
+    "seeds":  {
+                  "_comment":  "train and holdout are disjoint by construction; the script re-checks and refuses on overlap.",
+                  "train":  [
+                                10001,
+                                10002,
+                                10003,
+                                10004,
+                                10005,
+                                10006,
+                                10007,
+                                10008,
+                                10009,
+                                10010,
+                                10011,
+                                10012,
+                                10013,
+                                10014,
+                                10015,
+                                10016,
+                                10017,
+                                10018,
+                                10019,
+                                10020,
+                                10021,
+                                10022,
+                                10023,
+                                10024,
+                                10025,
+                                10026,
+                                10027,
+                                10028,
+                                10029,
+                                10030,
+                                10031,
+                                10032,
+                                10033,
+                                10034,
+                                10035,
+                                10036,
+                                10037,
+                                10038,
+                                10039,
+                                10040,
+                                10041,
+                                10042,
+                                10043,
+                                10044,
+                                10045,
+                                10046,
+                                10047,
+                                10048,
+                                10049,
+                                10050,
+                                10051,
+                                10052,
+                                10053,
+                                10054,
+                                10055,
+                                10056,
+                                10057,
+                                10058,
+                                10059,
+                                10060,
+                                10061,
+                                10062,
+                                10063,
+                                10064,
+                                10065,
+                                10066,
+                                10067,
+                                10068,
+                                10069,
+                                10070,
+                                10071,
+                                10072,
+                                10073,
+                                10074,
+                                10075,
+                                10076,
+                                10077,
+                                10078,
+                                10079,
+                                10080,
+                                10081,
+                                10082,
+                                10083,
+                                10084,
+                                10085,
+                                10086,
+                                10087,
+                                10088,
+                                10089,
+                                10090,
+                                10091,
+                                10092,
+                                10093,
+                                10094,
+                                10095,
+                                10096,
+                                10097,
+                                10098,
+                                10099,
+                                10100,
+                                10101,
+                                10102,
+                                10103,
+                                10104,
+                                10105,
+                                10106,
+                                10107,
+                                10108,
+                                10109,
+                                10110,
+                                10111,
+                                10112,
+                                10113,
+                                10114,
+                                10115,
+                                10116,
+                                10117,
+                                10118,
+                                10119,
+                                10120
+                            ],
+                  "holdout":  [
+                                  90001,
+                                  90002,
+                                  90003,
+                                  90004,
+                                  90005,
+                                  90006,
+                                  90007,
+                                  90008,
+                                  90009,
+                                  90010,
+                                  90011,
+                                  90012,
+                                  90013,
+                                  90014,
+                                  90015,
+                                  90016,
+                                  90017,
+                                  90018,
+                                  90019,
+                                  90020,
+                                  90021,
+                                  90022,
+                                  90023,
+                                  90024
+                              ]
+              },
+    "measurement":  {
+                        "_comment":  "first: p = player side moves first, e = enemy side moves first. a_side: which faction the candidate AI plays. Game count per config = |seeds| * |firsts| * |asides|.",
+                        "firsts":  [
+                                       "p",
+                                       "e"
+                                   ],
+                        "asides":  [
+                                       "e",
+                                       "p"
+                                   ]
+                    },
+    "lineups":  {
+                    "_comment":  "Deterministic round-robin 3v3 generator. round r = floor(seed/slots), slot j = seed mod slots, stride = train.strides[(r+j) mod n], members = (i*stride + r) mod pool_size for i=j,j+1,j+2. Every 49 consecutive slots sweep all 49 heroes; switching stride per round makes the train lineups cover every hero \u003e= 3 times. Holdout strides were searched so no holdout lineup collides with a train lineup. version=v2: each seed gets an anchor sharing NO hero with its generated lineup (v1 had 23/120 train seeds with the same hero on both sides); v1 is retained ONLY to reproduce historical runs (pilot / inj / beamsweep). Even seed -\u003e generated lineup takes the enemy side, odd seed -\u003e the player side.",
+                    "version":  "v2",
+                    "pool_size":  49,
+                    "slots":  12,
+                    "train":  {
+                                  "strides":  [
+                                                  11,
+                                                  3,
+                                                  29,
+                                                  19,
+                                                  37,
+                                                  15,
+                                                  39,
+                                                  25,
+                                                  45,
+                                                  27,
+                                                  31,
+                                                  1
+                                              ],
+                                  "_anchors_v2_comment":  "Small pools of low-HERO_VALUE heroes. The generator picks the first pool with no hero in common with the seed\u0027s generated lineup; a 2-hero pool against a 3-hero lineup always leaves at least one pool disjoint, so disjointness is guaranteed, not hoped for.",
+                                  "anchors_v2":  [
+                                                     [
+                                                         "hero_11",
+                                                         "hero_04"
+                                                     ],
+                                                     [
+                                                         "hero_49",
+                                                         "hero_07"
+                                                     ],
+                                                     [
+                                                         "hero_28",
+                                                         "hero_34"
+                                                     ]
+                                                 ]
+                              },
+                    "holdout":  {
+                                    "strides":  [
+                                                    1,
+                                                    29,
+                                                    39,
+                                                    33,
+                                                    25,
+                                                    15,
+                                                    9,
+                                                    31,
+                                                    17,
+                                                    47,
+                                                    3,
+                                                    13
+                                                ],
+                                    "anchors_v2":  [
+                                                       [
+                                                           "hero_11",
+                                                           "hero_07"
+                                                       ],
+                                                       [
+                                                           "hero_49",
+                                                           "hero_04"
+                                                       ],
+                                                       [
+                                                           "hero_28",
+                                                           "hero_34"
+                                                       ]
+                                                   ]
+                                },
+                    "anchors_v1_only":  [
+                                            {
+                                                "name":  "A",
+                                                "deck":  "hero_13,hero_12,hero_23"
+                                            },
+                                            {
+                                                "name":  "B",
+                                                "deck":  "hero_11,hero_22,hero_31"
+                                            },
+                                            {
+                                                "name":  "C",
+                                                "deck":  "hero_45,hero_06,hero_26"
+                                            }
+                                        ]
+                },
+    "params":  {
+                   "_comment":  "Sensitivity sweep grid. mode=rel uses factor, mode=add uses step, mode=set uses value. Scores are the 12 keys AI_Battle.set_weights accepts.",
+                   "MAX_MOVE_OPTIONS":  {
+                                            "base":  16,
+                                            "mode":  "set",
+                                            "values":  [
+                                                           8,
+                                                           32
+                                                       ]
+                                        },
+                   "HERO_hero_42_GOLD_LOW_ATK":  {
+                                                     "base":  4,
+                                                     "mode":  "add",
+                                                     "step":  2.0
+                                                 },
+                   "BUFF_TAKE_WEIGHT":  {
+                                            "base":  3.0,
+                                            "mode":  "rel",
+                                            "factor":  2.0
+                                        },
+                   "HERO_hero_42_GOLD_TAKE_VALUE":  {
+                                                        "base":  26.0,
+                                                        "mode":  "rel",
+                                                        "factor":  2.0
+                                                    },
+                   "HERO_hero_42_GOLD_TAKE_VALUE_LOW":  {
+                                                            "base":  34.0,
+                                                            "mode":  "rel",
+                                                            "factor":  2.0
+                                                        },
+                   "THREAT_MOVE_DISCOUNT":  {
+                                                "base":  0.7,
+                                                "mode":  "add",
+                                                "step":  0.25,
+                                                "min":  0.0,
+                                                "max":  1.0
+                                            },
+                   "FOCUS_FIRE_WEIGHT":  {
+                                             "base":  30.0,
+                                             "mode":  "rel",
+                                             "factor":  2.0
+                                         },
+                   "ENGAGE_PULL_PER_CELL":  {
+                                                "base":  1.2,
+                                                "mode":  "rel",
+                                                "factor":  2.0
+                                            },
+                   "OBSTACLE_DETOUR_WEIGHT":  {
+                                                  "base":  4.0,
+                                                  "mode":  "rel",
+                                                  "factor":  2.0
+                                              },
+                   "HERO_VALUE_group_core":  {
+                                                 "base":  "hero_22/hero_06/hero_47/hero_16/hero_33",
+                                                 "mode":  "hero_group",
+                                                 "heroes":  [
+                                                                "hero_22",
+                                                                "hero_06",
+                                                                "hero_47",
+                                                                "hero_16",
+                                                                "hero_33"
+                                                            ],
+                                                 "values":  [
+                                                                1.0,
+                                                                1.5
+                                                            ]
+                                             },
+                   "HERO_VALUE_group_tank":  {
+                                                 "base":  "hero_13/hero_49/hero_40/hero_01/hero_48",
+                                                 "mode":  "hero_group",
+                                                 "heroes":  [
+                                                                "hero_13",
+                                                                "hero_49",
+                                                                "hero_40",
+                                                                "hero_01",
+                                                                "hero_48"
+                                                            ],
+                                                 "values":  [
+                                                                0.7,
+                                                                1.15
+                                                            ]
+                                             }
+               },
+    "configs":  [
+                    {
+                        "name":  "t_ctrl",
+                        "note":  "mirror team D control",
+                        "theta":  {
+
+                                  },
+                        "beam":  200,
+                        "beam_opp":  200
+                    },
+                    {
+                        "name":  "t_tmd045",
+                        "note":  "mirror team D TMD 0.45",
+                        "theta":  {
+                                      "THREAT_MOVE_DISCOUNT":  0.45
+                                  },
+                        "beam":  200,
+                        "beam_opp":  200
+                    }
+                ],
+    "phases":  {
+                   "_comment":  "Design only. Budgets are game counts; wall clock assumes the measured pilot seconds/game.",
+                   "P1_sensitivity":  {
+                                          "goal":  "rank single-parameter effects, pick 3-8 real levers",
+                                          "seed_count":  8,
+                                          "firsts":  [
+                                                         "p",
+                                                         "e"
+                                                     ],
+                                          "asides":  [
+                                                         "e",
+                                                         "p"
+                                                     ],
+                                          "games_per_config":  32,
+                                          "configs":  26,
+                                          "control":  "base re-measured on an independent 8-seed block (10113..10120) as the noise floor"
+                                      },
+                   "P0_oppbeam":  {
+                                      "goal":  "pick the opponent-side beam before any theta work: the opponent side dominates wall clock, and 800 was never measured",
+                                      "seed_count":  8,
+                                      "firsts":  [
+                                                     "p",
+                                                     "e"
+                                                 ],
+                                      "asides":  [
+                                                     "e",
+                                                     "p"
+                                                 ],
+                                      "games_per_config":  32,
+                                      "configs":  4,
+                                      "workers":  6,
+                                      "arms":  [
+                                                   "opp_100",
+                                                   "opp_200",
+                                                   "opp_400",
+                                                   "opp_800"
+                                               ],
+                                      "control":  "opp_800 reproduces the spec default (beamB 800), so it doubles as the control/consistency check",
+                                      "decision":  "wall clock per game AND win rate per arm; keep the largest beam whose s/game is affordable and whose win rate does not move (a weaker opponent inflates the candidate\u0027s win rate - that is the trap)"
+                                  },
+                   "P2a_theta":  {
+                                     "goal":  "tune the 12 score keys with HERO_VALUE pinned to the base table",
+                                     "seed_count":  24,
+                                     "games_per_config":  96,
+                                     "configs":  20
+                                 },
+                   "P2b_hero":  {
+                                    "goal":  "tune HERO_VALUE only, theta frozen at the P2a winner",
+                                    "seed_count":  24,
+                                    "games_per_config":  96,
+                                    "configs":  20
+                                },
+                   "P3_joint":  {
+                                    "goal":  "joint micro-tuning of the surviving theta + hero coefficients",
+                                    "seed_count":  48,
+                                    "games_per_config":  192,
+                                    "configs":  8
+                                },
+                   "P4_acceptance":  {
+                                         "goal":  "one-shot holdout examination of the single frozen winner",
+                                         "seed_count":  24,
+                                         "games_per_config":  96,
+                                         "configs":  1,
+                                         "gate":  "Wilson 95% lower bound \u003e 0.5 on the holdout seed set AND the holdout lineup pool"
+                                     }
+               },
+    "acceptance":  {
+                       "metric":  "win rate with draws counted as half a win (18W/14L/0D -\u003e Wilson lo 0.3997; the 8W/6L baseline -\u003e 0.3259)",
+                       "rule":  "rate_lo95 \u003e 0.5 on the holdout seed set using the holdout lineup pool",
+                       "baseline_reference":  "N=14, 8W 6L, +10.6 pts/game, win rate 57.1%, Wilson lo 0.3277 (not significant)"
+                   },
+    "phases_v2_design":  {
+                             "_status":  "DESIGN ONLY - not yet executed. Written 2026-09-14 for user review at breakfast.",
+                             "_why":  "Old plan tuned 61 knobs against a single fixed opponent (base difficulty-2). Two problems measured tonight: (a) opponent beam 100..800 makes no measurable difference to the candidate win rate (53.1/56.2/53.1/56.2 over 32 games each), so the fixed opponent is not what caps us - and a fixed opponent with a wrong forward model teaches the trainer to exploit its blind spots; (b) a fixed opponent saturates the signal once we pass it, while self-play always sits near 50%.",
+                             "step0_fix_signal_first":  {
+                                                            "goal":  "clean the residual diff family that biases the score signal itself (damage over-predicted by 1..4; counter-attack predicted then absent)",
+                                                            "evidence":  "monitor round 7: ~7 of ~11 events are this family",
+                                                            "gate":  "after the fix, rerun the full -All gate and the long random scan"
+                                                        },
+                             "step1_opponent_pool":  {
+                                                         "goal":  "replace \u0027fixed base opponent\u0027 with a league",
+                                                         "mix":  {
+                                                                     "self_play_vs_previous_checkpoint":  0.7,
+                                                                     "base_difficulty2_beam100":  0.3
+                                                                 },
+                                                         "needs_code":  "RlTrain.ps1 currently takes ONE global opponent (spec.opponent). League = per-cell opponent selection + -wB injection for the cand-vs-cand path (opp=cand already supported by 对局.gd). No frozen file needs editing.",
+                                                         "gate":  "small equivalence run: same cells serial vs parallel, and a 2-arm sanity run (self-play vs base) before any long run"
+                                                     },
+                             "step2_search":  {
+                                                  "goal":  "screening then coordinate ascent, not 61 knobs at once",
+                                                  "phase_screen":  "P1 arms (22 configs x 32 games) -\u003e keep only 3..6 levers whose paired delta-pts CI excludes 0",
+                                                  "phase_ascent":  "each round moves 1..2 parameters only, 96 games, accept only if paired delta-pts CI excludes 0; 10..20 rounds; every accepted step is a new named config (auditable)",
+                                                  "hero_coefficients":  "grouped by role (tank/dps/support) + a few high-impact heroes, never all 49 at once",
+                                                  "primary_metric":  "paired delta-pts per game (information per game ~3-5x that of win/loss); win rate is display only"
+                                              },
+                             "league_ascent":  {
+                                                   "goal":  "coordinate ascent against an opponent that gets stronger with us, instead of a fixed opponent we can overfit",
+                                                   "round_structure":  "each round: 70% of cells self-play vs league.checkpoint, 30% vs the fixed difficulty arm (opp=base, beam_opp=100); accept a step only if paired delta-pts CI excludes 0 against BOTH arms",
+                                                   "checkpoint_update":  "after the round, write the accepted candidate weights to RL/weights/league_current.json (that file is what the next round\u0027s self-play cells read)",
+                                                   "why_deterministic_split":  "which cells are self-play is sha256(run|config|seed|first)-derived, so the same cells stay self-play across generations and the paired comparison stays valid; the checkpoint\u0027s sha12 enters the cell key, so a new checkpoint invalidates exactly the old self-play measurements",
+                                                   "cost_note":  "self-play cells run opp=cand, i.e. both sides at beamA=400; the fixed arm runs opp=base at beam_opp=100 and is much cheaper, so a 70/30 round costs more per game than a P1 arm"
+                                               },
+                             "step3_acceptance_panel":  {
+                                                            "goal":  "one-shot holdout against a panel, not just the base opponent",
+                                                            "panel":  [
+                                                                          "base difficulty2 beam800 (production truth)",
+                                                                          "base difficulty2 beam100 (weakened, overfit probe)",
+                                                                          "previous generation of ourselves",
+                                                                          "mirror self-play (expect ~0.50)"
+                                                                      ],
+                                                            "gate":  "Wilson 95% lower bound \u003e 0.5 against both base arms AND \u003e 0.5 against our own previous generation (the anti-self-deception check)",
+                                                            "holdout_discipline":  "holdout seed set + holdout lineup pool are still touched exactly once (existing guard)"
+                                                        },
+                             "beam_decisions_measured":  {
+                                                             "candidate_side":  400,
+                                                             "candidate_evidence":  "200/400/600/1200 all within noise (50.0/56.2/53.6/50.0, N=24..32)",
+                                                             "opponent_side":  100,
+                                                             "opponent_evidence":  "100/200/400/800 all within noise (53.1/56.2/53.1/56.2, N=32 each); injection proven by 14/10/10 of 32 games differing plus the pre-patch 800 arm matching 28/28"
+                                                         }
+                         },
+    "_weight_training":  "2026-09-17 权重训练专用 spec：候选 beam=对手 beam=200（与困难档同步），两边同一套英雄 deck（hero_06,hero_17,hero_26）⇒ 唯一变量 = 权重。判据：候选胜率必须 \u003e 50% 才算有意义的权重。",
+    "_round2":  "2026-09-17 round 2：基线 = 噩梦.json（含已确认的 THREAT_MOVE_DISCOUNT=0.45）。镜像同队伍、beam 200/200 ⇒ 唯一变量=权重。控制臂 r2_ctrl = 新基线。",
+    "_multiteam_D":  "跨队伍复测（用户提问）：镜像同队伍、beam 200/200，队伍 hero_28,hero_34,hero_42。判据 = 候选胜率 \u003e 50% 且与其它队伍同向。"
+}

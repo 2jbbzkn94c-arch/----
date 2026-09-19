@@ -1,0 +1,16 @@
+{
+  "_说明": "基数权重 = 单机『困难』档现状（原版硬编码常量）。训练就是在这张表上找更好的值。",
+  "_来源": "src/BattleAI.gd 的 const 块（未修改，仅抄录）",
+  "KILL_BONUS": 35.0,
+  "FOCUS_FIRE_WEIGHT": 30.0,
+  "GOLD_TAKE_VALUE": 26.0,
+  "GOLD_TAKE_VALUE_LOW": 34.0,
+  "GOLD_LOW_ATK": 4,
+  "BUFF_TAKE_WEIGHT": 3.0,
+  "THREAT_MOVE_DISCOUNT": 0.7,
+  "OBSTACLE_DETOUR_WEIGHT": 4.0,
+  "ENGAGE_PULL_PER_CELL": 1.2,
+  "MAX_MOVE_OPTIONS": 16,
+  "BEAM": 800,
+  "JITTER": 0.0
+}

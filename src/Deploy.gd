@@ -118,7 +118,24 @@ func _enemy_pick() -> void:
 	if finished:
 		return
 	if enemy_pool.size() > 0 and enemy_deployed.size() < DEPLOY:
-		var hid: String = enemy_pool.pop_front()
+		# 【2026-09-18 改·用户第 1 条】原来是 `enemy_pool.pop_front()` —— **按池子顺序拿第一个**，
+		# 也就是说敌方先发阵容**完全随机/固定**：不看强度、不看配合、不看对面站了谁。
+		# 现在按 `DataRegistry` 里现成的三张表精确挑一个（0 新参数）：
+		#   单人评分 + 与己方已选协同 + 对玩家已选**净克制** + 职能配比，
+		# 并且**带 <替补> 标签的英雄不主动首发**（它的技能只在替补登场时触发，首发等于浪费
+		# —— 这条口径与 `src/Battle.gd::_enemy_deploy()` 一致）。
+		var best_i := 0
+		var best_sc := -1e9
+		for i in enemy_pool.size():
+			var cand: String = enemy_pool[i]
+			var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
+			var is_bench: bool = cd != null and cd.skills.has(DataRegistry.Skill.BENCH)
+			var sc: float = _enemy_candidate_value(cand) if not is_bench else -1e8
+			if sc > best_sc:
+				best_sc = sc
+				best_i = i
+		var hid: String = enemy_pool[best_i]
+		enemy_pool.remove_at(best_i)
 		enemy_deployed.append(hid)
 		if enemy_deployed.size() == DEPLOY and player_deployed.size() == DEPLOY:
 			_start_battle()
@@ -129,6 +146,14 @@ func _enemy_pick() -> void:
 			# 我方先满，但敌方还需补选（不应发生，因交替）
 			pass
 		_refresh()
+
+# 【2026-09-18 新增·用户第 1 条】敌方候选价值（0 新参数，全部来自 DataRegistry 现成表）：
+#   单人评分 + 与己方已选协同 + 对玩家已选**净克制**（`battle_unit_value_parts` 的 counter 就是净额）
+#   + 职能配比（避免"全体脆皮/双坦克"）。
+func _enemy_candidate_value(cand: String) -> float:
+	var parts: Dictionary = DataRegistry.battle_unit_value_parts(cand, enemy_deployed, player_deployed, null)
+	return float(parts["solo"]) + float(parts["synergy"]) + float(parts["counter"]) \
+			+ DataRegistry.role_balance_bonus(enemy_deployed, cand)
 
 func _refresh() -> void:
 	_turn_label.text = ("轮到我方选择" if current_side == 0 else "轮到敌方选择") + "   场次：我方 %d/3 · 敌方 %d/3" % [player_deployed.size(), enemy_deployed.size()]

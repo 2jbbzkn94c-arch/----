@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/harness/身价探针.gd" id="1"]
+
+[node name="身价探针" type="Node"]
+script = ExtResource("1")

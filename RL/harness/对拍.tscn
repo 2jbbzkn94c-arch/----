@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://brl1eq00001aa"]
+
+[ext_resource type="Script" path="res://RL/harness/对拍.gd" id="1_script"]
+
+[node name="对拍" type="Node"]
+script = ExtResource("1_script")

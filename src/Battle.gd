@@ -157,8 +157,28 @@ const DEFAULT_DECK_SIZE := 5
 # 控制台日志分类开关（Godot 输出面板）：
 # _CONSOLE_SUB_LOG = 替补流程日志（阵亡→待补→面板→落位→统计）：检查替补用，默认开
 # _CONSOLE_AI_LOG  = AI 行为决策日志（行动方案评分/竞技场选人/首发部署/敌方AI替补上人）：默认关，避免刷屏
-const _CONSOLE_SUB_LOG := true
+const _CONSOLE_SUB_LOG := false
 const _CONSOLE_AI_LOG := false
+
+# ---- 噩梦 / 噩梦+ 难度：敌方 AI 换成 RL 候选 src/BattleAI.gd 的分叉 ----
+# 难度 0/1/2 完全照旧走 BattleAI（这里的常量只在难度 >= 3 的分支里被用到）；
+# 候选刻意没有 class_name，只能按路径 load，接收变量不写类型，别改成 BattleAI。
+# 【2026-09-15 第二次定稿·五档】3 = 噩梦（注入**训练出来的通用权重**）；
+#   4 = 噩梦+（= 噩梦 + **按英雄的逐项特化**，即再叠加一层 hero_XX 段）。
+#   两份权重表都"只写与下一层不同的部分"，按顺序叠加：默认(困难) → 噩梦.json → 噩梦+.json。
+const NIGHTMARE_DIFFICULTY := 3                          # 与 GameState.AI_DIFFICULTY_MAX 对应
+const NIGHTMARE_PLUS_DIFFICULTY := 4                     # 第 5 档：噩梦 + 英雄特化
+const AI_CANDIDATE_PATH := "res://RL/ai/AI_Battle.gd"    # 候选（带保真修正 + 可注入权重）
+const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦档：训练出来的通用权重
+const AI_NIGHTMARE_PLUS_WEIGHTS_PATH := "res://RL/weights/噩梦+.json"  # 噩梦+：只写 hero_XX 段（与噩梦不同处）
+# 取证日志（默认零输出，保留）：确认"噩梦档这一局到底用了哪个 AI、权重读进来没有、BEAM 是多少"。
+#   怎么开：启动前设环境变量 ZB_NIGHTMARE_DEBUG=1（任意非空值），再进难度=3 的对局。
+#           例：set ZB_NIGHTMARE_DEBUG=1 && godot.exe --path "<项目>" --log-file <绝对路径日志>
+#   会打什么（敌方每回合建 AI 时一行；难度 0/1/2 不打）：
+#     [噩梦档] AI=res://RL/ai/AI_Battle.gd | 权重文件=res://RL/weights/噩梦.json | 注入键数=17 | BEAM=1200 | JITTER=0.0
+#   为什么得靠它：换没换 AI、权重文件有没有读进去，从游戏表现上**看不出来**（权重改坏也只是一样地打）。
+#   不想要：把 _NIGHTMARE_DEBUG 改 false（只关日志），或删本行 + _make_battle_ai() 里那行 print。
+const _NIGHTMARE_DEBUG := true
 
 # 敌方回放的节奏（起手/英雄之间/招式之间的停顿）随回放器搬到 src/EnemyReplay.gd：
 # HERO_GAP / STEP_GAP / TELL_GAP —— 嫌敌回合太慢就调那里的 HERO_GAP。
@@ -208,6 +228,8 @@ func _ready() -> void:
 	board_view.buff_items = buff_items
 	board_view.graves = graves
 	board_view.gold_left = gold_left
+	# 地块木纹铺法：联机两端必须一致（都用联机种子）；单机每局随机换一种铺法
+	board_view.set_tile_seed(GameState.online_seed if GameState.is_online else randi())
 	# 酒馆木地板背景（垫在棋盘下层；必须忽略鼠标，否则会吃掉棋盘点击）
 	var wood := WoodFloor.new()
 	var wsize := get_viewport().get_visible_rect().size
@@ -252,6 +274,9 @@ func _ready() -> void:
 
 # 每帧刷新"仍有行动英雄"的顶部标识（仅本端我方回合、且仅本端我方单位显示）
 func _process(dt: float) -> void:
+	# 出生区色罩（我方淡蓝 / 敌方淡红）只在**部署英雄阶段**亮；部署完由木纹接管，整局不再染色
+	if board_view != null:
+		board_view.set_spawn_zones(state == State.DEPLOY or state == State.PLACE_DEPLOY)
 	# 开局选人限时：本端三轮共用一个共享预算；预算耗尽 -> 自动随机补人（每次补一人，换回本侧轮继续补到满
 	if state == State.DEPLOY or state == State.PLACE_DEPLOY:
 		if deploy_budget_active:
@@ -564,6 +589,16 @@ func _counter_player_note(hid: String) -> String:
 			parts.append("%s+%.1f" % [nm.display_name if nm != null else pid, cr])
 	return "、".join(parts)
 
+# 【2026-09-18 新增·用户第 1 条】候选对"玩家已首发（`player_deployed`）"的**净克制**：
+#   我克他（`counter_bonus(cand, pid)`） − 他克我（`counter_bonus(pid, cand)`）。
+# 与 `_counter_player_score()`（竞技场阶段、读 `_arena_picked`、只算单向）口径的区别就在这两点：
+# 这里是首发部署阶段、读 `player_deployed`、**双向净额**（避免选出一个"能打人但更怕挨打"的英雄）。
+func _counter_deployed_score(hid: String) -> float:
+	var s := 0.0
+	for pid in player_deployed:
+		s += DataRegistry.counter_bonus(hid, pid) - DataRegistry.counter_bonus(pid, hid)
+	return s
+
 # 敌方轮：敌方自动个候选里个，个进玩家卡组
 # 策略：与敌方已选卡组协同更高、且单体更强"的留给自己，把弱/难配合的让给玩家
 # 同时结合一点随机性（top 1 若不够强则仍保前二），避免每次都拿同一批
@@ -594,14 +629,16 @@ func _action_arena_enemy_pick() -> void:
 		var tot_a: float = _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + rb_a
 		var tot_b: float = _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + rb_b
 		var pick_name := DataRegistry.get_hero(en_hid).display_name
-		print("\n[AI竞技场选人] 敌方选人 第 %d/%d 轮（敌方此前已有 %d 名：前4轮玩家未选的自动归敌方）" % [_arena_enemy_rounds + 1, ARENA_PICKS_PER_SIDE, _arena_enemy.size()])
+		if _CONSOLE_AI_LOG:
+			print("\n[AI竞技场选人] 敌方选人 第 %d/%d 轮（敌方此前已有 %d 名：前4轮玩家未选的自动归敌方）" % [_arena_enemy_rounds + 1, ARENA_PICKS_PER_SIDE, _arena_enemy.size()])
 		var note_a := _deck_synergy_note(_arena_enemy, a)
 		var note_b := _deck_synergy_note(_arena_enemy, b)
 		var cnt_note_a := _counter_player_note(a)
 		var cnt_note_b := _counter_player_note(b)
-		print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_a, DataRegistry.hero_role_name(a), _hero_strength(a), _deck_synergy(_arena_enemy, a), ("(" + note_a + ")") if note_a != "" else "", _counter_player_score(a), ("(" + cnt_note_a + ")") if cnt_note_a != "" else "", rb_a, tot_a])
-		print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_b, DataRegistry.hero_role_name(b), _hero_strength(b), _deck_synergy(_arena_enemy, b), ("(" + note_b + ")") if note_b != "" else "", _counter_player_score(b), ("(" + cnt_note_b + ")") if cnt_note_b != "" else "", rb_b, tot_b])
-		print("[AI竞技场选人] → 敌方选择 %s（另一张 %s 归玩家）" % [pick_name, DataRegistry.get_hero(give_player).display_name])
+		if _CONSOLE_AI_LOG:
+			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_a, DataRegistry.hero_role_name(a), _hero_strength(a), _deck_synergy(_arena_enemy, a), ("(" + note_a + ")") if note_a != "" else "", _counter_player_score(a), ("(" + cnt_note_a + ")") if cnt_note_a != "" else "", rb_a, tot_a])
+			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_b, DataRegistry.hero_role_name(b), _hero_strength(b), _deck_synergy(_arena_enemy, b), ("(" + note_b + ")") if note_b != "" else "", _counter_player_score(b), ("(" + cnt_note_b + ")") if cnt_note_b != "" else "", rb_b, tot_b])
+			print("[AI竞技场选人] → 敌方选择 %s（另一张 %s 归玩家）" % [pick_name, DataRegistry.get_hero(give_player).display_name])
 	_arena_enemy.append(en_hid)
 	_arena_picked.append(give_player)   # 敌方没拿的归
 	for c in _arena_pending:
@@ -1238,6 +1275,12 @@ func _auto_deploy_random() -> void:
 # 约束目标：① 别一次上两个坦克 ② 别全脆皮——前 3 首发要“输出+生存/控制”成组。
 func _deploy_candidate_value(cand: String, deployed: Array) -> float:
 	var s := _hero_strength(cand) + _deck_synergy(deployed, cand) + DataRegistry.role_balance_bonus(deployed, cand)
+	# 【2026-09-18 新增·用户第 1 条「同时能解对面的队伍」】
+	# 候选对**玩家已首发**的**净克制**（我克他 − 他克我）。这张表一直都在
+	# （`DataRegistry.counter_bonus`，竞技场路径 `_counter_player_score` 早就在用），
+	# 但**首发部署这条路径从来没看过对面** ⇒ 敌方首发只求"自己配合"，完全不知道玩家站了谁。
+	# 0 新参数：纯用角色列表里已有的 克制/被克制 关系。
+	s += _counter_deployed_score(cand)
 	var def := DataRegistry.get_hero(cand)
 	if def == null:
 		return s
@@ -1313,11 +1356,14 @@ func _enemy_deploy() -> void:
 				var sc2 := _deploy_candidate_value(cand2, enemy_deployed) if not is_bench else _hero_strength(cand2)
 				rows.append({ "n": cd2.display_name if cd2 != null else cand2, "role": DataRegistry.hero_role_name(cand2), "sc": sc2, "b": is_bench })
 			rows.sort_custom(func(x, y): return x["sc"] > y["sc"])
-			print("\n[AI首发部署] 第 %d 名首发（敌方，剩余 %d 人）" % [enemy_deployed.size() + 1, enemy_pool.size()])
+			if _CONSOLE_AI_LOG:
+				print("\n[AI首发部署] 第 %d 名首发（敌方，剩余 %d 人）" % [enemy_deployed.size() + 1, enemy_pool.size()])
 			for r in rows.slice(0, mini(4, rows.size())):
 				var mark := "（带<替补>标签，不首发）" if r["b"] else ""
-				print("  - %s[%s]  价值%.1f%s" % [r["n"], r["role"], float(r["sc"]), mark])
-			print("[AI首发部署] → 上阵 %s" % DataRegistry.get_hero(hid).display_name)
+				if _CONSOLE_AI_LOG:
+					print("  - %s[%s]  价值%.1f%s" % [r["n"], r["role"], float(r["sc"]), mark])
+			if _CONSOLE_AI_LOG:
+				print("[AI首发部署] → 上阵 %s" % DataRegistry.get_hero(hid).display_name)
 		enemy_pool.remove_at(best_i)
 		enemy_deployed.append(hid)
 		var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
@@ -1730,6 +1776,13 @@ func _begin_side(side: int) -> void:
 			u._update_tags_label()
 			u.refresh_stats()
 	_sync_ranged_adjacent()   # 回合切换：敌方移换位后刷新远程被贴身状
+	# 阵营级"非技能"回合开始结算（**不受沉默影响**）：清跨回合账目。
+	# 必须放在 _tick_statuses **之前**：猛毒就是"回合开始结算的伤害"，对锤头鲨这类
+	# "敌人受伤就涨攻击力"的英雄属于**本回合的新增**；若放在后面（原来挂在回合开始技之后），
+	# 这份新增会被"上一轮加成到期"一并减掉，表现就是"吃不到中毒伤害的加成"。
+	for u in units:
+		if u != null and is_instance_valid(u) and u.alive and u.faction == side_fn:
+			_hero(u).on_own_turn_start_always()
 	_tick_statuses(side)   # 猛毒等：回合开始结
 	# —— 回合开始顺序：先完成上一方回合阵亡留下的替补，再触发各英雄回合开始技 ——
 	# 本端手动方（我方；自由部署双控=双方）的补位需要玩家点击选择，无法在此同步落位：
@@ -1794,12 +1847,6 @@ func _run_side_skills(side: int) -> void:
 				and _hero(u).wants_side_turn_start_sync():
 			_hero(u).on_side_turn_start(side_faction(side))
 			break
-	# 阵营级"非技能"回合开始结算（**不受沉默影响**）：清跨回合账目
-	# （锤头鲨的攻击力加成"对方回合结束消失"= 在本方回合开始这一刻到期）。
-	# 单独一趟循环：上面的 sync 每方只派发一次（整队取样类），不能被多个英雄共用。
-	for u in units:
-		if u != null and is_instance_valid(u) and u.alive and u.faction == side_faction(side):
-			_hero(u).on_own_turn_start_always()
 	# 让回合开始增益在牌面上可
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
@@ -3260,6 +3307,14 @@ func _continue_after_move(u: Unit) -> void:
 
 # ---- 攻击（含近战反击---
 func _do_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
+	# 防御（与 _do_move / _do_attack_obstacle 同款，这两处本来就有、这里漏了）：
+	# 攻击者或目标**已被释放**时直接跳过——阵亡后 0.3s 淡出结束会 queue_free，而回放器在
+	# "走位→出手"那一拍 await 之后局面可能已经变了。
+	# 2026-09-15 实战崩过：Invalid type in function '_do_attack' ... argument 1 (previously freed)。
+	if attacker == null or not is_instance_valid(attacker):
+		return
+	if target == null or not is_instance_valid(target):
+		return
 	state = State.ANIMATING
 	_clear_selection()
 	AudioManager.play("attack")
@@ -4033,8 +4088,12 @@ func _pull_to(u: Unit, target: Unit) -> bool:
 	occupancy.erase(target.cell)
 	target.cell = best
 	occupancy[best] = target
-	_trigger_bomb(target)   # 被拉近到炸弹格：炸弹人以外即引爆
-	_pickup_buff_at_cell(target)   # 被拉近到增益/金矿格：同样拾取
+	# 位移记账照旧（已死的目标也要跟着搬，否则墓碑会落在旧格）；
+	# 但落到新格的**副作用只对活人生效**：尸体不该引爆炸弹，也不该吃掉这一格的道具/金矿。
+	# （与 _random_step / _summon_skeletons 的"先炸弹后拾取、被炸死的不再拾取"同一口径）
+	if target.alive:
+		_trigger_bomb(target)   # 被拉近到炸弹格：炸弹人以外即引爆
+		_pickup_buff_at_cell(target)   # 被拉近到增益/金矿格：同样拾取
 	log_message.emit("血锁把 %s 拉到面前（%s）。" % [target.display_name, str(best)])
 	return true
 
@@ -4253,7 +4312,7 @@ func _my_sub_quota(fn: int = -1) -> int:
 		q += 1
 	return q
 
-func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
+func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = true) -> void:
 	if u == null or not is_instance_valid(u):
 		return   # 单位已释放：安全退
 	var cause_txt := ""
@@ -4262,8 +4321,12 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 	log_message.emit("%s 阵亡%s。" % [u.display_name, cause_txt])
 	# 阵亡：清掉未结算的冲锋记账（移动被炸弹炸死等中途终止的情况）
 	_charge_pending.erase(u)
-	# 专属阵亡效果（红帽扑街等
-	_hero(u).on_died()
+	# 专属阵亡效果（红帽扑街等）。主动撤下时改走 on_withdrawn()：
+	# 只做"离场清理"（风语者收回移动光环），**不发动**阵亡技能（红帽自爆、死灵法师骷髅随主消散）。
+	if run_death_hook:
+		_hero(u).on_died()
+	else:
+		_hero(u).on_withdrawn()
 	if occupancy.get(u.cell) == u:
 		occupancy.erase(u.cell)
 	# 阵亡留下墓碑：替补可选择在该格落位（骷髅兵等召唤物不立碑；主动撤下不立碑。
@@ -4321,7 +4384,8 @@ func _on_unit_died(u: Unit, leave_grave: bool = true) -> void:
 			cause_txt2 = " 死因：%s" % u.death_cause
 		# 手动方（含双控敌方）打印它自己的待补次数；AI 敌方仍打印本端视角的待补次数
 		var quota_fn := u.faction if _is_manual_sub_faction(u.faction) else _my_faction()
-		print("[替补统计] %s（%s）阵亡后%s：我可替补次数=%d" % [u.display_name, _fn_txt(u.faction), cause_txt2, _my_sub_quota(quota_fn)])
+		if _CONSOLE_SUB_LOG:
+			print("[替补统计] %s（%s）阵亡后%s：我可替补次数=%d" % [u.display_name, _fn_txt(u.faction), cause_txt2, _my_sub_quota(quota_fn)])
 	_notify_team()   # 阵亡改变卡组：刷新下方队伍
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
@@ -4333,6 +4397,80 @@ func _skeleton_owner_gone(s: Unit) -> void:
 # 直接上线会导致它"站着不动"白站一轮。这里单独给它补算一手，追加到正在回放的计划尾部。
 # 做法：只建"新替补 + 场上玩家"的极小局面（1 个 AI 单位），搜索出来的一步就是它的动作；
 # 引用表同步登记新替补，计划里的 idx 即它在引用表中的下标。
+## 把"用**子集**快照搜出来的动作"里的**目标下标**换算成 `_enemy_refs` 的下标。
+## 为什么必须换算：动作里的 `atk` 是**快照 descs 的下标**（`BattleSnapshot.collect` 的 descs 顺序 = 传进去的 pool 顺序），
+## 而回放（EnemyReplay）是按 `_enemy_refs` 解析目标的——两张表的编号根本不是一回事。
+## 不换算的后果（2026-09-15 发现并修，用户实测反馈的现象之一）：敌方替补中途补算的那一手目标指数指到别人身上，
+## 被"必须是玩家方 / 必须在射程内"的检查丢掉 → **刚上场的替补白站一回合**（或更糟：打错人）。
+## `move` / `atk_obs` 存的是格子（Vector2i），不涉及下标，原样保留。
+func _remap_action_targets(action: Dictionary, pool: Array) -> Dictionary:
+	if not action.has("atk"):
+		return action
+	var ti := int(action["atk"])
+	if ti < 0:
+		return action                                  # -1 = 不攻击 / -2 = 只打障碍：没有目标下标
+	if ti >= pool.size():
+		var fallback := action.duplicate()
+		fallback["atk"] = -1                           # 越界（不该发生）：退化成"只移动"，绝不乱打
+		return fallback
+	var tgt: Unit = pool[ti]
+	if tgt == null or not is_instance_valid(tgt):
+		var fb2 := action.duplicate()
+		fb2["atk"] = -1
+		return fb2
+	var out := action.duplicate()
+	# 按"单位身份"在 refs 里找下标。不用 Array.find：refs 里可能留着**已释放**的旧单位，
+	# 逐项比较时先过 is_instance_valid，避免跟已释放实例做比较。
+	var idx := -1
+	for ri in _enemy_refs.size():
+		var r = _enemy_refs[ri]
+		if r != null and is_instance_valid(r) and r == tgt:
+			idx = ri
+			break
+	if idx < 0:
+		_enemy_refs.append(tgt)                        # 回合中途才出现的单位（替补）→ 补登记
+		idx = _enemy_refs.size() - 1
+	out["atk"] = idx
+	return out
+
+## 【2026-09-15 用户批准 A+B】回放中"这一步失效了"（计划里的目标已经死了 / 被推出射程 / 够不到了）
+## → 就地为这个单位**重搜一次**（按真实局面），而不是让它白站一回合。
+## 与 `_plan_enemy_late_sub` 同一套路（同一处快照打包、同一套短预算、同一套下标换算），差别只有两点：
+##   ① 快照要带上该单位**本回合已移动/已攻击**的旗标（`BattleSnapshot.unit_desc` 不带这三个字段），
+##      否则模拟会以为它还没动，可能排出"再走一次 / 再打一下"这种真实规则不允许的动作；
+##   ② 返回的是**动作**（不追加计划条目），由 EnemyReplay 就地执行。
+## 只在"想打但没打成"时调用（见 EnemyReplay.run），所以不会给每个走位步都白跑一次搜索。
+func _replan_enemy_action(u: Unit) -> Dictionary:
+	if u == null or not is_instance_valid(u) or not u.alive:
+		return {}
+	if GameState.match_over:
+		return {}
+	if u.attacked_this_turn:
+		return {}                                      # 本回合已经出过手：真实规则下不能再攻击，重搜没意义
+	var pool: Array = [u]
+	for pu in units:
+		if pu != null and is_instance_valid(pu) and pu.alive and pu.faction != DataRegistry.Faction.ENEMY:
+			pool.append(pu)
+	var snap := BattleSnapshot.collect(self, pool)
+	var descs: Array = snap["descs"]
+	for i in mini(descs.size(), pool.size()):          # 见上面 ①：补齐每回合旗标
+		var pu2: Unit = pool[i]
+		descs[i]["moved"] = pu2.moved_this_turn
+		descs[i]["attacked"] = pu2.attacked_this_turn
+		descs[i]["counter_used"] = pu2.counter_used_this_turn
+	var ai = _make_battle_ai()                          # 噩梦档=候选（权重在此注入；本函数在主线程跑，文件 IO 安全）
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false                            # 临时补算，不重复打印决策说明
+	ai.time_budget_ms = 1200                            # 回合中途的小补算：别占满 10 秒（与 late_sub 同口径）
+	var sim = ai.build_state(descs, snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"])
+	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+	if plan.is_empty():
+		return {}
+	if _CONSOLE_AI_LOG:
+		print("[补算] %s 原计划失效，就地重搜一招：%s" % [u.display_name, str(plan[0]["action"])])
+	return _remap_action_targets(plan[0]["action"], pool)
+
 func _plan_enemy_late_sub(nu: Unit) -> void:
 	if not _enemy_plan_running or nu == null or not is_instance_valid(nu) or not nu.alive:
 		return
@@ -4343,19 +4481,20 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 		if u != null and is_instance_valid(u) and u.alive and u.faction != DataRegistry.Faction.ENEMY:
 			pool.append(u)
 	var snap := BattleSnapshot.collect(self, pool)   # 快照打包与常规回合共用同一处
-	var ai := BattleAI.new(grid)
+	var ai = _make_battle_ai()   # 噩梦档=候选（权重在此注入；本函数在主线程跑，文件 IO 安全），其余=生产 BattleAI
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = false   # 这是补算的临时搜索，不重复打印决策说明
 	# 这次只搜"1 个新替补"的一步，跟常规整轮搜索不同量级：给个短预算，
 	# 别让回合中途的补算也占满 10 秒（那会让对局卡顿）。
 	ai.time_budget_ms = 1200
-	var sim := ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"])
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return
 	_enemy_refs.append(nu)
-	_ai_plan.append({ "idx": _enemy_refs.size() - 1, "action": plan[0]["action"] })
+	# ⚠️ 动作里的目标下标是"子集快照(descs)的编号"，而回放按 `_enemy_refs` 解析 → 必须换算（2026-09-15 修）。
+	_ai_plan.append({ "idx": _enemy_refs.size() - 1, "action": _remap_action_targets(plan[0]["action"], pool) })
 	if _CONSOLE_SUB_LOG:
 		print("[替补] 敌方替补 %s 中途落位，本回合补上一手：%s" % [nu.display_name, str(plan[0]["action"])])
 
@@ -4364,6 +4503,10 @@ func _place_enemy_sub() -> void:
 	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
 		var next_id: String = enemy_roster.pop_at(_best_enemy_sub_idx())
 		var cell := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
+		# 规则 C（SUB_JOIN_RULE，**默认关闭**）：在同一批合法落点里挑"能立刻参战"的那一格。
+		# 关掉时这一行只多一次布尔判断（开关缓存），落点选法与改动前**逐位相同**。
+		if _sub_join_rule_on():
+			cell = _sub_cell_by_rule_c(next_id, cell)
 		if cell.x == -99 and cell.y == -99:
 			enemy_roster.push_front(next_id)   # 出生区满了，留到下一轮再
 			_pending_enemy_sub = 0
@@ -4414,16 +4557,29 @@ func _best_enemy_sub_idx() -> int:
 			if occupancy.has(n) and occupancy[n].faction == DataRegistry.Faction.ENEMY:
 				player_near = true
 				break
+	# 【身价统一 · 用户 2026-09-15】替补"值不值得上"改用**唯一身价实现**
+	# （角色列表"总评分" + 与我方队友的配合分 + 克制分，见 DataRegistry.battle_unit_value()）。
+	# 以前这里是遗留的 `攻击×1.6 + 血上限×0.9`（外加 远程+2.5）：那是**按静态数值另算一份身价**，
+	# 与"总评分"里的 属性评分/特性评分 重复计价，口径也和噩梦档不同。
+	# 队友 = 场上存活的本方(此处为敌方阵营 AI)单位（替补补进这一队），对手 = 场上存活的玩家单位。
+	# 注意：替补选人是**规则级**决策（不是 AI 的偏好项）→ 用 DataRegistry 的默认系数、不接受权重注入；
+	# 必须与 `RL/ai/AI_Battle.gd::_sim_best_sub_idx` 逐条一致（那函数是本规则的模拟镜像）。
+	var sub_ally: Array = []
+	var sub_foe: Array = []
+	for au in units:
+		if au == null or not is_instance_valid(au) or not au.alive:
+			continue
+		if au.faction == DataRegistry.Faction.ENEMY:
+			sub_ally.append(au.hero_id)
+		else:
+			sub_foe.append(au.hero_id)
 	for i in enemy_roster.size():
 		var hid: String = enemy_roster[i]
 		var def := DataRegistry.get_hero(hid)
 		if def == null:
 			continue
-		var s := float(def.atk) * 1.6 + float(def.max_hp) * 0.9
+		var s: float = DataRegistry.battle_unit_value(hid, sub_ally, sub_foe)
 		var why: Array[String] = []
-		if def.attack_type == DataRegistry.AttackType.RANGED:
-			s += 2.5
-			why.append("远程")
 		if not has_taunt and def.skills.has(DataRegistry.Skill.TAUNT):
 			s += 11.0   # 缺前排：嘲讽坦克优先补位
 			why.append("缺前排坦克")
@@ -4544,6 +4700,52 @@ func _free_sub_cell_for(fn: int) -> Vector2i:
 			return c
 	return Vector2i(-99, -99)
 
+# ---------- 规则 C「替补落点要能直接参战」（2026-09-15 用户定；默认关闭）----------
+# 用户原话：「已在交战时，替补落点应能直接加入战斗，而不是白浪费一回合」。
+# 关闭时（= 权重里没打开）：`_free_sub_cell_for()` 只挑"本方墓碑格 → 出生区第一个空格"，**完全不看战斗**。
+# 打开后：把**同一批合法落点**整批交给 AI 侧打分（它手里有模拟与路网距离），选"能立刻打到人 / 打到谁最疼 /
+# 离战场近 / 下回合更安全"的那一格。⚠️ 只改"选哪格"，不改"能不能落下"：拿不到模拟/选不出来一律退回原格。
+var _sub_join_rule_cache := -1   # -1 = 还没读过权重；0 = 关；1 = 开
+
+func _sub_join_rule_on() -> bool:
+	if _sub_join_rule_cache < 0:
+		_sub_join_rule_cache = 0
+		var probe = _make_battle_ai()
+		if probe != null:
+			probe.difficulty = GameState.ai_difficulty
+			if float(probe.w_sub_join_rule) > 0.0:
+				_sub_join_rule_cache = 1
+	return _sub_join_rule_cache == 1
+
+func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
+	if fallback.x == -99 and fallback.y == -99:
+		return fallback
+	var cells: Array = []
+	for c in graves.keys():
+		var gd = graves[c]
+		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == DataRegistry.Faction.ENEMY
+		if mine and not occupancy.has(c):
+			cells.append(c)
+	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
+		if not occupancy.has(c) and not graves.has(c):
+			cells.append(c)
+	if cells.is_empty():
+		return fallback
+	var ai = _make_battle_ai()
+	if ai == null:
+		return fallback
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false
+	var snap := BattleSnapshot.collect(self)
+	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"])
+	var pick: Vector2i = ai.pick_sub_cell(sim, hero_id, cells)
+	if pick.x == -99 and pick.y == -99:
+		return fallback
+	if _CONSOLE_SUB_LOG:
+		print("[替补·规则C] %s 落点按‘能否立刻参战’选：%s（原规则为 %s）" % [hero_id, str(pick), str(fallback)])
+	return pick
+
 func _on_sub_pick(hero_id: String) -> void:
 	if _CONSOLE_SUB_LOG:
 		print("[subclick-battle] 收到点击 %s state=%d sub_faction=%d roster=%s" % [hero_id, state, _sub_faction, str(_roster_of(_sub_faction))])
@@ -4555,6 +4757,13 @@ func _on_sub_pick(hero_id: String) -> void:
 	# 高亮可在出生地放置的格子 + **本方**墓碑格（不能落在对方墓碑上）
 	var pc := {}
 	for c in _spawn_cells(_sub_faction):
+		if occupancy.has(c):
+			continue   # 已被单位占着：点了也落不下，别画绿
+		if graves.has(c):
+			var gd0 = graves[c]
+			var my_g0: bool = typeof(gd0) != TYPE_DICTIONARY or int(gd0.get("fn", -1)) == _sub_faction
+			if not my_g0:
+				continue   # 敌方墓碑压在出生格上：不是落位点，别画绿（避免"看着能放、点了没反应"）
 		pc[c] = Color(0.2, 0.85, 0.5, 0.7)
 	for c in graves.keys():
 		var gd = graves[c]
@@ -4574,6 +4783,11 @@ func _try_place_sub(cell: Vector2i) -> bool:
 		var gd = graves[cell]
 		on_grave = typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == _sub_faction
 	if not on_grave and not _in_spawn_cell(cell, _sub_faction):
+		return false
+	# 出生区判定只看"格子在不在出生区"，**不看格上有没有碑**：敌方墓碑压在我方出生格上时，
+	# 上面那条会放行（on_grave=false 因为是人家的碑，但 _in_spawn_cell=true），必须在这里补一刀，
+	# 否则替补会落在对方墓碑上（对方墓碑不能作为登场点）。
+	if graves.has(cell) and not on_grave:
 		return false
 	if occupancy.has(cell):
 		return false
@@ -4745,6 +4959,11 @@ func _withdraw_unit(u: Unit) -> void:
 	if u == null or not u.alive or u.faction != _operable_faction():
 		action_info.emit("请先选中一名%s英雄，再点击「撤下」" % _fn_txt(_operable_faction()))
 		return
+	# 召唤物不能撤下：召唤物没有替补席名额，撤下会被当阵亡而白送一个替补名额
+	# （骷髅兵等衍生物；同 _on_unit_died 的召唤物判定）。拖拽撤下也走这里，一并拦住。
+	if DataRegistry.summons.has(u.hero_id):
+		action_info.emit("%s是召唤物，不能撤下。" % u.display_name)
+		return
 	if not GameState.is_online:
 		_apply_withdraw(u)
 		return
@@ -4765,6 +4984,12 @@ func _withdraw_unit(u: Unit) -> void:
 func _apply_withdraw(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
+	# 召唤物撤下 = 直接消失，且**不给替补名额**：_on_unit_died 对召唤物会提前 return
+	# （不立碑/不计胜负/不补位），若这里继续走下面的补位逻辑就会凭空多出一个替补名额。
+	if DataRegistry.summons.has(u.hero_id):
+		u.alive = false
+		_on_unit_died(u, false, false)   # 撤下：不立碑、不发动阵亡技能
+		return
 	log_message.emit("%s 被主动撤下（视为阵亡）。" % u.display_name)
 	var fn := u.faction
 	# 撤下的这一方是否由本端操作（双控敌方回合撤下敌方=本端操作；联机对端撤下=不是）
@@ -4773,7 +4998,7 @@ func _apply_withdraw(u: Unit) -> void:
 		_clear_selection()
 		state = State.ANIMATING   # 仅撤下方需要锁输入；对端只是看到对方撤下，回合状态不
 	u.alive = false
-	_on_unit_died(u, false)   # 主动撤下：不立墓碑；补位/胜负_on_unit_died 处理
+	_on_unit_died(u, false, false)   # 主动撤下：不立墓碑、**不发动阵亡技能**；补位/胜负仍按阵亡处理
 	if state == State.ENDED:
 		return
 	if not mine:
@@ -5008,6 +5233,61 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	_trigger_on_enter(u)
 	# 共鸣者不在此触发：回合开始由英雄脚本的 on_side_turn_start 统一结算，回合中间替补不触发
 
+# ---- 噩梦难度：建敌方 AI（难度 0/1/2 完全照旧走生产 BattleAI，一个字不改） ----
+# 候选的 w_beam / w_jitter 也在权重文件里注入：默认 800/0.0 = 生产困难档同值。
+# 本函数只在**主线程、建实例时**调用一次（文件 IO 不进后台线程）；线程里只 build_state/search。
+# 任何异常（文件缺失/非字典/load 失败/候选构造失败）都安全降级：用生产 AI 或候选默认权重。
+func _make_battle_ai() -> Variant:
+	var diff: int = GameState.ai_difficulty
+	if diff < NIGHTMARE_DIFFICULTY:   # 0 简单 / 1 普通 / 2 困难：生产路径原样
+		return BattleAI.new(grid)
+	# 3 = 噩梦（训练权重）；4 = 噩梦+（噩梦 + 英雄特化段）。两份表按"只写增量"顺序叠加。
+	var w := _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
+	var used_files := AI_NIGHTMARE_WEIGHTS_PATH
+	if diff >= NIGHTMARE_PLUS_DIFFICULTY:
+		var wp := _load_weights_json(AI_NIGHTMARE_PLUS_WEIGHTS_PATH, "噩梦+")
+		for k in wp.keys():
+			w[k] = wp[k]          # 同名键以 噩梦+ 为准（hero_XX 段整体覆盖）
+		used_files += " + " + AI_NIGHTMARE_PLUS_WEIGHTS_PATH
+	var script = load(AI_CANDIDATE_PATH)
+	if script == null:
+		push_warning("噩梦档：%s 加载失败，本局降级为生产困难档 AI。" % AI_CANDIDATE_PATH)
+		return BattleAI.new(grid)
+	var cand = script.new(grid)
+	if cand == null or not (cand is Object):
+		push_warning("噩梦档：候选 AI 实例化失败，本局降级为生产困难档 AI。")
+		return BattleAI.new(grid)
+	var w_keys := 0
+	if not w.is_empty():
+		cand.set_weights(w)      # 候选自带 set_weights：未知键忽略，类型非数字跳过
+		w_keys = w.size()
+	if _NIGHTMARE_DEBUG and OS.get_environment("ZB_NIGHTMARE_DEBUG") != "":
+		print("[噩梦档] 难度=%d | AI=%s | 权重文件=%s | 注入键数=%d | BEAM=%s | JITTER=%s" % [
+			diff, AI_CANDIDATE_PATH, used_files, w_keys,
+			str(cand.w_beam), str(cand.w_jitter)])
+	return cand
+
+# 读一份权重表：不存在/解析失败/不是字典 → 返回空字典（该层退回下一层的值，安全降级）
+func _load_weights_json(path: String, tag: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		push_warning("%s档：权重文件缺失（%s），本层不覆盖。" % [tag, path])
+		return {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		push_warning("%s档：权重文件打不开（%s），本层不覆盖。" % [tag, path])
+		return {}
+	var txt := f.get_as_text()
+	f.close()
+	var parsed = JSON.parse_string(txt)
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_warning("%s档：权重文件解析失败（%s），本层不覆盖。" % [tag, path])
+		return {}
+	return parsed
+
+# 兼容壳：旧名字（只读噩梦.json）。保留给可能的外部调用点。
+func _load_nightmare_weights() -> Dictionary:
+	return _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
+
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
 	var my_session := _session_id   # 记录本次回放所属会话，重开后会
@@ -5022,7 +5302,7 @@ func _run_enemy_turn() -> void:
 	var refs: Array = units.duplicate()
 	var snap := BattleSnapshot.collect(self)
 
-	var ai := BattleAI.new(grid)
+	var ai = _make_battle_ai()   # 噩梦档返回候选实例（已注入权重），其余难度返回生产 BattleAI
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = _CONSOLE_AI_LOG   # AI 行动方案评分输出跟随 AI 行为日志总开关（默认关）
 	# 后台线程搜索：AI 计算期间主线程保持响应（可点英雄查看属性），算完再回放。
@@ -5070,8 +5350,10 @@ func _run_enemy_turn() -> void:
 			_begin_side(GameState.SIDE_PLAYER)
 
 # 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
-func _enemy_ai_worker(ai: BattleAI, snap: Dictionary) -> void:
-	var sim := ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+# ai 形参类型是 RefCounted（不是 BattleAI）：噩梦档传进来的是 RL 候选（另一份脚本，extends RefCounted），
+# 写死 BattleAI 会让线程启动失败（"Cannot convert argument 1"）。RefCounted 对生产 AI 与候选都成立。
+func _enemy_ai_worker(ai: RefCounted, snap: Dictionary) -> void:
+	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"])
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()

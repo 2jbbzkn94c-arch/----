@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://dm1ntj03mdfq3"
+
+[deps]
+
+files=["res://RL/reports/多阵容_比例池.round.translation", "res://RL/reports/多阵容_比例池.candidate.translation", "res://RL/reports/多阵容_比例池.combo.translation", "res://RL/reports/多阵容_比例池.mean.translation", "res://RL/reports/多阵容_比例池.ci.translation", "res://RL/reports/多阵容_比例池.ci.translation", "res://RL/reports/多阵容_比例池.lineups.translation", "res://RL/reports/多阵容_比例池.min.translation", "res://RL/reports/多阵容_比例池.max.translation"]
+
+source_file="res://RL/reports/多阵容_比例池.csv"
+dest_files=["res://RL/reports/多阵容_比例池.round.translation", "res://RL/reports/多阵容_比例池.candidate.translation", "res://RL/reports/多阵容_比例池.combo.translation", "res://RL/reports/多阵容_比例池.mean.translation", "res://RL/reports/多阵容_比例池.ci.translation", "res://RL/reports/多阵容_比例池.ci.translation", "res://RL/reports/多阵容_比例池.lineups.translation", "res://RL/reports/多阵容_比例池.min.translation", "res://RL/reports/多阵容_比例池.max.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true
