@@ -1,5 +1,7 @@
 extends HeroBase
 ## 血锁：己方回合内，你的射程+2，但只能沿直线攻击（仍视为近战攻击）。攻击时将敌人拉到面前一格。
+## **致死也会把尸体拉到面前（墓碑因此立在血锁面前那格）**：位移本身不判生死，只有落点的
+## 炸弹/道具副作用才分死活（见 Battle._pull_to）。
 ## 拉人的**位移规则**在 Battle._pull_to()（公共原语）；本脚本只负责血锁专属的钩爪演出。
 class_name HeroBloodlock
 
@@ -10,6 +12,10 @@ const CHAIN_COLOR := Color(0.95, 0.16, 0.28)        # 链环主色（鲜红）
 const HOOK_METAL := Color(0.894, 0.918, 0.965)      # 钩体金属亮面
 const HOOK_OUTLINE := Color(0.094, 0.039, 0.055)    # 钩体深色描边（任何底色上都看得清轮廓）
 const HOOK_BLOOD := Color(0.784, 0.118, 0.227)      # 钩根血环（与链子衔接）
+# ---- 被拉者"拖回"的时序（只影响被拉者的位移动画；钩爪本身的三段节奏不受影响）----
+const HOOK_DRAG_TIME := 0.18         # 活人：等钩子咬住（0.16s）后开拖，0.18s 拖到新格（与收链 0.16→0.34 同步）
+const HOOK_DEAD_DRAG_DELAY := 0.06   # 已死目标：起拖提前到 0.06s——尸体 0.3s 就淡完，仍等 0.16s 才动就看不见了
+const HOOK_DEAD_DRAG_TIME := 0.20    # 已死目标：0.06s 起拖 → 0.26s 拖到新格，赶在尸体被释放（0.3s）之前收尾
 
 ## 血锁的钩爪：钩根连着一串链环，从血锁**飞出去**咬住目标，再收链把目标拖到面前。
 ## head_dist 由 _play_hook_fx 的 tween 驱动（0=未出钩 → 咬住 → 收到近身=拉回完成）。
@@ -73,6 +79,24 @@ func refresh_identity() -> void:
 func skips_lunge_anim() -> bool:
 	return true
 
+# ---- 射程 +2 的沉默/眩晕退化（照坠炮手的 suppressed_attack_range 那套）----
+# 为什么需要它：on_spawn() 把 +2 硬写进了 unit.attack_range（出生一次性），
+# 但"射程+2"是技能效果、会随沉默/眩晕失效；直接改 attack_range 会让它永久生效。
+# 这里声明退化值 1（= 基础近战射程），Battle._effective_range_at / _effective_attack_range
+# 在 `not u.mortar_active()` 时会取本钩子（Battle.gd:2435-2443 / 2463-2471），
+# 于是沉默/眩晕期间实际射程读数为 1（够不到 2~3 格外的目标），解控后自动恢复 3（field 未被改动，无需还原）。
+#
+# 为什么与 Unit.gd 的字段注释不冲突：那条注释说的是"<射程2>且只能直线攻击是身份"，
+# 其中**身份部分是 branch_override（只能直线攻击）**——它继续由 refresh_identity() 维持、不受沉默影响；
+# 而"额外 +2 射程"是从钩爪技能来的加成，与坠炮手"全场射程是身份但被沉默时退化为 2"同一处理口径。
+# 参照 precedent：Unit.mortar_active() 把"存活 + 身份位 + skill_allowed()"三者一起判。
+func suppressed_attack_range() -> int:
+	if unit == null or not is_instance_valid(unit):
+		return -1
+	if unit.skill_allowed():
+		return -1   # 技能有效：用 unit.attack_range（出生时已 +2 = 3）
+	return 1        # 被[沉默]/[眩晕]：退回基础近战射程
+
 # 每回合结束 _clear_statuses 会清掉 branch_override，故本回合开始时必须重新激活，
 # 否则血锁从第二回合起不再受限（能攻击直线外目标）。
 func on_turn_start() -> bool:
@@ -80,10 +104,20 @@ func on_turn_start() -> bool:
 	return false
 
 func on_attack(target: Unit) -> void:
-	if target == null or not target.alive:
+	_pull_with_hook(target)
+
+## 目标**被这一击打死**时也要拉：尸体照样被拉到面前，墓碑因此立在血锁面前那格。
+## 必须挂在这里——Battle._trigger_on_attack 对已死目标是走 on_attack_dead 的（不走 on_attack），
+## 只去掉 on_attack 里的存活守卫并不会让致死拉人生效。
+func on_attack_dead(target: Unit) -> void:
+	_pull_with_hook(target)
+
+# 拉人 + 钩爪演出的公共实现（活人 / 致死同一条路径）。
+# 位移规则在 Battle._pull_to（它本身不判生死）；真的拉动了才播钩爪，致死也照常播（钩住→拖回）。
+func _pull_with_hook(target: Unit) -> void:
+	if target == null:
 		return
 	var from_cell: Vector2i = target.cell   # 记下目标旧格：钩子朝这里飞
-	# 位移规则（公共原语，不含演出）：真的拉动了才播钩爪
 	if not battle._pull_to(unit, target):
 		return
 	_play_hook_fx(from_cell, target)
@@ -121,10 +155,14 @@ func _play_hook_fx(from_cell: Vector2i, target: Unit) -> void:
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	t.parallel().tween_property(hook, "modulate:a", 0.0, 0.18)
 	t.tween_callback(hook.queue_free)
-	# 目标被拖回：等钩子咬住后再动，与收链节奏对齐
+	# 目标被拖回：等钩子咬住后再动，与收链节奏对齐。
+	# **已死目标例外**：尸体节点 0.3s 就淡完（随后被释放），若仍等 0.16s（收链开始）才动，
+	# "拖尸"几乎看不见（0.16s 时 alpha≈0.47）。所以已死时把起拖提前到 HOOK_DEAD_DRAG_DELAY、
+	# 并在释放前拖完；**钩爪本身的三段（飞出 0→0.12 / 咬住 0.12→0.16 / 收链 0.16→0.34）一个字不变**。
 	if target != null and is_instance_valid(target):
 		var dest: Vector2 = bv.cell_world_center(target.cell)
+		var dying: bool = not target.alive
 		var tt := target.create_tween()
-		tt.tween_interval(HOOK_FLY_TIME)
-		tt.tween_property(target, "position", dest, 0.18) \
+		tt.tween_interval(HOOK_DEAD_DRAG_DELAY if dying else HOOK_FLY_TIME)
+		tt.tween_property(target, "position", dest, HOOK_DEAD_DRAG_TIME if dying else HOOK_DRAG_TIME) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)

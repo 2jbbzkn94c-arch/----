@@ -48,7 +48,6 @@ var summon_owner := ""         # 召唤者的单位 id（死灵法师召唤的�
 var behavior: HeroBase = null  # 该单位所属英雄的行为脚本（HeroRegistry 创建），技能逻辑分发用
 var los_ignore := false    # 坠炮手(hero_45)：攻击弹道无视障碍/单位/墓碑阻挡
 var grave_moved := false  # 暗域占据死亡格时：墓碑已回退到暗域原格，避免在死亡格重复立碑
-var _neg_immune_frame := -1    # 负墟：免疫负面时记录处理帧，同一帧（同一次攻击的多个负面）只计一次
 
 var hex_radius := 44.0
 
@@ -323,8 +322,8 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 
 # ---- 状态效果 ----
 # 状态的"键名 / 中文名 / 是否负面 / 是否随回合末解除 / 显示"全部集中在 StatusDB（唯一真相表）。
-# 负墟（hero_44）：所有负面效果对其无效。判定用状态 key（与 add/remove 同 key）。
-# [附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
+# 负面免疫由英雄脚本自己声明（HeroBase.immune_to_negative），Unit 不认识具体英雄；
+# 判定用状态 key（与 add/remove 同 key）。[附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
 #
 # 圣盾的语义：**挡住"那一次带伤害的攻击"**——伤害不结算，该次攻击附带的状态也不生效
 # （见 Battle._apply_attack 的 _shield_block_status）。而"纯状态施加"（雪拳移动后冰冻这种
@@ -336,23 +335,13 @@ func add_status(s: String, pierce_shield: bool = false) -> void:
 		remove_status(StatusDB.SHIELD)
 		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -32, -92)   # 文字抬高，避免压住伤害数字
 		return
-	# 负墟（hero_44）：免疫负面效果——不挂状态，改为"被负面攻击命中"计数 +1 攻击
-	# （一次攻击内连续施加多个负面只计一次：同帧去重）
-	# TODO(状态批次3)：这条"Unit 认识具体英雄"的硬编码应改成 HeroBase.immune_to_negative() 钩子
-	if hero_id == "hero_44" and StatusDB.is_negative(s):
-		_neg_immune_on_hit()
+	# 负面免疫（负墟 hero_44 等）：规则全在英雄脚本自己的钩子里，这里只负责问一句、通知一声。
+	# 免疫者同样不挂状态；on_negative_blocked() 由英雄决定收益（负墟：同帧去重后攻击力+1）。
+	if behavior != null and StatusDB.is_negative(s) and behavior.immune_to_negative():
+		behavior.on_negative_blocked()
 		return
 	statuses[s] = true
 	_update_status_label()
-
-func _neg_immune_on_hit() -> void:
-	var f := Engine.get_process_frames()
-	if f == _neg_immune_frame:
-		return   # 同一帧（同一次攻击的多个负面）只算一次
-	_neg_immune_frame = f
-	atk_buff += 1
-	refresh_stats()
-	_float_text("免疫负面 攻+1", Color(0.8, 0.75, 1.0), -22, -48)
 
 func remove_status(s: String) -> void:
 	statuses.erase(s)

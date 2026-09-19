@@ -90,6 +90,50 @@ func hero_strength(id: String) -> float:
 				s += 1.0
 	return s
 
+# ---- 身价评分（战斗 AI 唯一实现）：一个单位"值不值得打 / 值不值得保"由三项加权合成 ----
+#   solo    : 单人评分 hero_strength(id)（角色列表"总评分"优先，否则数值/词条加权）
+#   synergy : 与我方**其他单位**的协同分之和（引用 SYNERGY 表 + 角色列表"配合"/"协同英雄"列）
+#   counter : 我克制对面之和 − 对面克制我之和（引用角色列表"克制"/"被克制"两列）
+# 权重可被外部（RL 训练器 / 权重文件）用 coef 覆盖；不给就用下面这套官方默认比例。
+# 注意：这里只算"原始身价"，**眩晕/沉默的折减不在这里做** —— 那是"受控折减"，
+# 只对**对面**的单位生效（我方英雄被晕不该让 AI 觉得"不值得保"），由调用方施加。
+const VALUE_SOLO_W_DEFAULT := 1.0
+const VALUE_SYNERGY_W_DEFAULT := 0.6
+const VALUE_COUNTER_W_DEFAULT := 0.6
+
+# 身价三项原始分量（**不带权重**，权重交给调用方，便于各 AI 用自己的比例）。
+# cache：一次评估内复用的记忆表（键 = "p:" + hero_id）。
+# 因为键只有 hero_id，同一张表只能在 ally_ids/enemy_ids 都不变的一轮评估里复用。
+func battle_unit_value_parts(hero_id: String, ally_ids: Array, enemy_ids: Array, cache = null) -> Dictionary:
+	if cache != null:
+		var ck := "p:" + hero_id
+		if cache.has(ck):
+			return cache[ck]
+	var solo := hero_strength(hero_id)
+	var syn := 0.0
+	for a in ally_ids:
+		var aid := String(a)
+		if aid == hero_id:
+			continue
+		syn += synergy_bonus(hero_id, aid)
+	var cnt := 0.0
+	for e in enemy_ids:
+		var eid := String(e)
+		if eid == hero_id:
+			continue
+		cnt += counter_bonus(hero_id, eid) - counter_bonus(eid, hero_id)
+	var out := { "solo": solo, "synergy": syn, "counter": cnt }
+	if cache != null:
+		cache["p:" + hero_id] = out
+	return out
+
+# 加权身价（浮点，便捷入口）。coef 缺省用官方比例；cache 同 battle_unit_value_parts。
+func battle_unit_value(hero_id: String, ally_ids: Array, enemy_ids: Array, coef: Dictionary = {}, cache = null) -> float:
+	var p := battle_unit_value_parts(hero_id, ally_ids, enemy_ids, cache)
+	return float(p["solo"]) * float(coef.get("solo", VALUE_SOLO_W_DEFAULT)) \
+			+ float(p["synergy"]) * float(coef.get("synergy", VALUE_SYNERGY_W_DEFAULT)) \
+			+ float(p["counter"]) * float(coef.get("counter", VALUE_COUNTER_W_DEFAULT))
+
 # 职能分类（给 AI 组队配比用）：替补标签>嘲讽坦克>后勤功能>其余输出
 func hero_role_name(id: String) -> String:
 	var def: HeroDef = heroes.get(id, null)

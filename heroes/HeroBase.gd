@@ -162,6 +162,17 @@ func bomb_place_cells() -> Array:
 func immune_to_bombs() -> bool:
 	return false
 
+## 是否免疫一切负面状态（默认否）。返回 true 的英雄：Unit.add_status 拒绝挂上该负面状态
+## （毒/重伤/麻痹/冰冻/沉默/眩晕/附体/荆棘），改为回调 on_negative_blocked()。
+## 判定在圣盾之后（带盾者先被盾挡下，不算"被负面命中"，走不到这里）。
+func immune_to_negative() -> bool:
+	return false
+
+## 一次负面状态被免疫挡下时回调（默认无事发生；负墟借此"被负面命中"计数 +1 攻）。
+## 同一次攻击内连续施加多个负面，Unit 会逐个询问，是否只计一次由英雄自己决定。
+func on_negative_blocked() -> void:
+	pass
+
 ## 变身为该英雄后，是否补触发一次"回合开始技"（默认补触发）。
 ## 古灵精怪变回自身时不补，避免重复触发自己的回合开效果。
 func wants_turn_start_on_transform() -> bool:
@@ -235,6 +246,12 @@ func on_someone_damaged(_target: Unit, _amount: int) -> void:
 
 ## 自身阵亡时触发（红帽扑街等）。
 func on_died() -> void:
+	pass
+
+## 被**主动撤下**（撤下/换替补）时触发。与 on_died 分开是有意的：
+##   "阵亡才发动"的技能（红帽扑街自爆）在撤下时**不该发动**；
+##   而"离场清理"（风语者收回移动光环）必须照做——那类英雄覆写本钩子即可。
+func on_withdrawn() -> void:
 	pass
 
 ## 出生/上场时的数值修正（大骑士冲锋、血锁射程等）。spawn 时调用。

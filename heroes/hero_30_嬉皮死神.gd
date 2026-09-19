@@ -48,8 +48,13 @@ func damage_mult(target: Unit) -> int:
 		return 2
 	return 1
 
-# 出招特效钩子（Battle 在结算伤害前调用）：播专属镰刀横扫
+# 出招特效钩子（Battle 在结算伤害前调用）：播专属镰刀横扫。
+# 被[沉默]/[眩晕]时技能失效（语义见 Unit.skill_allowed()），**不再播技能专属演出**：
+# 与 Battle.gd:3349-3351 把"倍率技的大号伤害数字"也放在 attacker.skill_allowed() 之后同一口径。
+# 注意本钩子只在存活单位出手时被调，且单位存活时 skill_allowed() 与沉默/眩晕判定等价。
 func play_attack_fx(target: Unit) -> void:
+	if not unit.skill_allowed():
+		return
 	if target == null or not is_instance_valid(target):
 		return
 	_spawn_scythe(target)

@@ -252,9 +252,17 @@ func show_unit_card(u: Unit) -> void:
 	var move_txt := "%d" % u.effective_move()
 	if battle != null and is_instance_valid(battle) and battle._hero(u).shows_infinite_move():
 		move_txt = "∞"
-	var range_txt := "%d" % u.attack_range
+	# 卡面射程取"有效射程"：被[沉默]/[眩晕]时被动失效的英雄（血锁的射程+2）要显示退化值。
+	# 与 Battle 取用 suppressed_attack_range() 的口径完全一致（Battle.gd:2435-2443 / 2463-2471：
+	# -1 = 用原始 attack_range，>=0 = 用该返回值），避免卡面与实际不符（用户实机反馈）。
+	var shown_range: int = u.attack_range
+	if battle != null and is_instance_valid(battle):
+		var sup := battle._hero(u).suppressed_attack_range()
+		if sup >= 0:
+			shown_range = sup
+	var range_txt: String = "%d" % shown_range
 	if battle != null and is_instance_valid(battle) and battle._hero(u).shows_infinite_range():
-		range_txt = "∞"
+		range_txt = "∞"   # 坠炮手"全场射程"特例仍然优先（不受上面退化值影响）
 	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt]
 	stats.add_theme_font_size_override("font_size", 17)
 	stats.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))

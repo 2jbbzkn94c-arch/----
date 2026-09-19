@@ -4,21 +4,31 @@ extends HeroBase
 ## 已有盾的目标不消耗次数（通常是同一次受伤已被另一名圣光先加上盾），名额留给下一位伤者。
 ## 给盾延迟到本次攻击整体结算完成（下一帧）再发：否则盾会赶在同一次攻击后续附加的状态
 ## （毒蛇的猛毒等）之前被套上，把本该中的状态也挡掉了。
+## 被[眩晕]/[沉默]时不触发（skill_allowed()）：触发判定与下一帧的发盾各自判一次
+## （猎颅者登场技是"先伤害、后眩晕"，圣光可能在受伤那一刻还没被晕，发盾时已经晕了）。
+##
+## "一回合限一次"计的是**真正发出去的盾**，不是"触发次数"：触发时仍先立即占位
+## （once_this_turn = true，用来挡住同一帧内多个受伤实例各自排一次 grant 导致双发），
+## 但 grant 里只要最终没发出盾（被 skill_allowed() 挡下、自己或目标已死/失效、已不同阵营、
+## 目标此刻已有盾），就把名额**退还**（once_this_turn = false），留给本回合后面的伤者。
+## "目标已有盾不消耗次数"仍在触发判定处直接 return（连占位都不做），语义不变。
 class_name HeroLight
 
 func on_someone_damaged(target: Unit, _amount: int) -> void:
 	if target == null or not target.alive:
 		return
+	if not unit.skill_allowed():
+		return   # 被[眩晕]/[沉默]：技能失效，不给盾
 	if target.faction != unit.faction:
 		return   # 只护己方
 	# 只在**敌方回合**触发：当前行动方与本单位所属阵营相同时 = 己方回合，不给盾
 	if battle.side_faction(GameState.active_side) == unit.faction:
 		return
 	if unit.once_this_turn:
-		return   # 一回合限一次
+		return   # 一回合限一次（占位未退：等已排队的那次 grant 发出或退还后再轮到这里）
 	if target.has_status(StatusDB.SHIELD):
 		return   # 目标已有盾：本次不消耗次数，留给下一位伤者
-	unit.once_this_turn = true
+	unit.once_this_turn = true   # 先占位：挡同帧双发；最终没发出去时由下面的 grant 退还
 	# 延迟到本次攻击整体结算完成(下一帧)再给盾：否则盾会赶在同一次攻击
 	# 后续附加的状态(毒蛇的猛毒等)之前被套上，把本该中的状态也挡掉了。
 	# 用实例id捕获，避免 lambda 捕获的单位先被释放导致 "capture was freed" 报错。
@@ -28,10 +38,18 @@ func on_someone_damaged(target: Unit, _amount: int) -> void:
 	var grant := func():
 		var m := instance_from_id(my_id) as Unit
 		var t := instance_from_id(tgt_id) as Unit
-		var btl := instance_from_id(btl_id)
-		if m == null or t == null or not m.alive or not t.alive or t.faction != m.faction:
+		# 任何"最终发不出盾"的情形都要退还本回合名额（拿到 m 就能退）
+		if m == null:
 			return
+		if t == null or not m.alive or not t.alive or t.faction != m.faction or t.has_status(StatusDB.SHIELD):
+			m.once_this_turn = false   # 单位已死/已失效/不再是队友/此刻已有盾：退还名额
+			return
+		if not m.skill_allowed():
+			m.once_this_turn = false   # 下一帧前被[眩晕]/[沉默]：技能失效，退还名额
+			return
+		var btl := instance_from_id(btl_id)
 		if btl == null or not is_instance_valid(btl):
+			m.once_this_turn = false   # 节点已释放（场景退出/换场）：退还名额
 			return
 		t.add_status(StatusDB.SHIELD)
 		# 授予演出克制不遮挡伤害数字：仅外扩细光环 + 高处小字(不做中心白闪/粒子)

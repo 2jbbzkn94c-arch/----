@@ -9,6 +9,14 @@ func on_turn_start() -> bool:
 
 ## 阵亡：自己召唤的骷髅兵一起消散（骷髅都带召唤者 id summon_owner，逐个淡出离场）
 func on_died() -> void:
+	_skeletons_vanish()
+
+## 被主动撤下（换替补）：同样让他召唤的骷髅一起消散——
+## 撤下不发动"阵亡技能"，但这是"离场清理"（骷髅靠 summon_owner 绑定主人），必须照做
+func on_withdrawn() -> void:
+	_skeletons_vanish()
+
+func _skeletons_vanish() -> void:
 	if unit == null or not is_instance_valid(unit):
 		return
 	for s in battle.units.duplicate():

@@ -230,6 +230,8 @@ func _build() -> void:
 	diff.add_item("简单")
 	diff.add_item("普通")
 	diff.add_item("困难")
+	diff.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练出来的权重（见 src/Battle.gd）
+	diff.add_item("噩梦+")   # 第 5 档：噩梦 + 按英雄的逐项特化
 	diff.select(GameState.ai_difficulty)
 	diff.custom_minimum_size = Vector2(0, 36)
 	diff.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -797,6 +799,8 @@ func _ask_arena_difficulty() -> void:
 	add.call("简单", 0)
 	add.call("普通", 1)
 	add.call("困难", 2)
+	add.call("噩梦", 3)    # 第 4 档：RL 候选 AI + 训练权重（同上）
+	add.call("噩梦+", 4)   # 第 5 档：噩梦 + 英雄特化
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)

@@ -11,9 +11,14 @@ extends HeroBase
 ## 避免把对方当成 AI 自动放、或两边各自乱放。
 class_name HeroBomber
 
-## 有放雷能力（联机 bomb 指令的合法性预检）
+## 有放雷能力（联机 bomb 指令的合法性预检）。
+## 被[沉默]/[眩晕]时技能失效（语义见 Unit.skill_allowed()），不再具备放雷能力。
+## 保险：放雷窗口本来就只由已被闸的 on_move() 打开，这里是第二道——
+## 联机 bomb 指令（Battle 的指令重演）与落点复检都会问本钩子，多这一道可防"其它入口"绕过。
 func can_place_bomb() -> bool:
-	return true
+	if unit == null or not is_instance_valid(unit):
+		return false
+	return unit.skill_allowed()
 
 ## 自己放的雷不炸自己：经过/停在炸弹格都安然无恙
 func immune_to_bombs() -> bool:
@@ -22,9 +27,13 @@ func immune_to_bombs() -> bool:
 ## 可放炸弹的空地：自己周围 6 格里**地形合法**的格。
 ## 地形合法性交给 Battle 的 bomb_cell_ok（界内、无单位/障碍/已有炸弹/增益道具/金矿），
 ## 保证与 UI 橙色高亮、落点复检、联机回放用的是同一套规则。
+## 被[沉默]/[眩晕]时同样失效（返回空数组）：Battle 的落点复检 _apply_bomb_placement
+## 会因此拒绝该次放置——两端单位状态一致，故判定在主机与回放端也一致，不会两端不同步。
 func bomb_place_cells() -> Array:
 	var out: Array = []
 	if unit == null or not is_instance_valid(unit) or not unit.alive:
+		return out
+	if not unit.skill_allowed():
 		return out
 	for n in battle.grid.neighbors(unit.cell):
 		if battle.bomb_cell_ok(n):

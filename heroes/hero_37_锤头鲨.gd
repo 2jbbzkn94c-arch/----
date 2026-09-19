@@ -11,6 +11,11 @@ class_name HeroHammerhead
 var bonus := 0
 
 func on_someone_damaged(target: Unit, _amount: int) -> void:
+	# 防回退保险：Battle._on_unit_damaged 的派发处已判 `s.alive and s.skill_allowed()`，
+	# 这里再自判一次（与分发层重复是有意的）：万一那行被改动/回退，被[沉默]/[眩晕]的锤头鲨
+	# 仍不会在对方回合里照常累积攻击力。语义见 Unit.skill_allowed()。
+	if not unit.skill_allowed():
+		return
 	if target == null or not target.alive:
 		return
 	if target.faction == unit.faction:

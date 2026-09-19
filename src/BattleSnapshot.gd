@@ -29,6 +29,21 @@ static func unit_desc(battle, u: Unit, poss_by: int = -1) -> Dictionary:
 		"poss_by": poss_by,
 		"immune_bombs": hb.immune_to_bombs(),
 		"can_pickup_gold": hb.can_pickup_gold(),
+		# 一次性道具的"持有量"：eatk/emove 是把它们**算进去之后**的实时值，
+		# 光看 eatk/emove 无法知道"用掉之后该回落多少"。AI 的模拟要按真实公式
+		# （`effective_atk() = base + atk_buff + ramble_bonus + sun_bonus + atk_use_buff − 麻痹`、
+		#   `effective_move() = move_range + move_buff + move_use_buff − 冰冻`）记账，
+		# 所以把这两项单独带出来；不读这两个键的调用方行为不变。
+		"atk_use_buff": u.atk_use_buff,
+		"move_use_buff": u.move_use_buff,
+		# [麻痹]ATKDOWN / [荆棘]THORN 的**状态存在性**（与上两项同类：eatk/emove 里已经含了它们的
+		# 效果——麻痹降攻、荆棘移动清零——但"这个状态在不在"看不出来）。判定来源与真实侧同源
+		# （Unit.has_status），供模拟/检视器按状态比对；不读这两个键的调用方行为不变。
+		"atkdown": u.has_status(StatusDB.ATKDOWN),
+		"thorn": u.has_status(StatusDB.THORN),
+		# 共鸣者(hero_47)的 echo 状态：`echo_set >= 0` 时 `effective_atk()` 会**直接 return** 它
+		# （攻击力=队友攻击力之和，**覆盖**一切 buff/道具/被贴身），模拟侧要据此让"攻击道具 +1"不生效。
+		"echo_set": u.echo_set,
 	}
 
 ## 打包一份完整快照。pool 为空 = 取 battle.units 全部（顺序即 descs/occ 的下标顺序）。
@@ -68,4 +83,10 @@ static func collect(battle, pool: Array = []) -> Dictionary:
 	return {
 		"descs": descs, "occ": occ,
 		"gold": gold, "buff": buff, "grave": grave, "obstacle": obstacle, "bomb": bomb,
+		# 【RL 修正·用户已批准】双方**替补席**英雄 id 列表（battle.player_roster / battle.enemy_roster；
+		# 生产侧替补流程见 src/Battle.gd:118-125、4338(_pending_enemy_sub += 1)、4388(_place_enemy_sub)、
+		# 4413(_best_enemy_sub_idx)、4561(_free_sub_cell_for 优先本方墓碑格)）。RL 的 sim 需要它才能预测
+		# "某一招窗口内替补登场"的选人与登场效果（如波盾 on_enter 给己方全体盾），把那类块从"不可比"变成可比。
+		# 纯读取、不改游戏行为；与 atk_use_buff/move_use_buff/atkdown/thorn/echo_set 同批同类，只被 RL 的 sim/harness 消费。
+		"rosters": { DataRegistry.Faction.PLAYER: battle.player_roster.duplicate(), DataRegistry.Faction.ENEMY: battle.enemy_roster.duplicate() },
 	}

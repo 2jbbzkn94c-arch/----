@@ -60,24 +60,67 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 				u.set_acting_ring(false)
 			return   # 已重开/场景已释放：安全退出
 		var a: Dictionary = step["action"]
+		# ⚠️ 每一处 await 之后都必须**重新验一次**单位引用：这一拍里单位可能已经被打死并走完
+		# 死亡淡出（`Battle._on_unit_died` 里 `u.call_deferred("queue_free")`，淡出 0.3s）。
+		# 踩炸弹离场、被反击、被强制位移都会在这期间发生；把"已释放的对象"递给 Battle 会直接崩：
+		#   Invalid type in function '_do_attack' ... argument 1 (previously freed)
+		# （2026-09-15 玩家实战崩在此处：新引擎会算出"踩炸弹换人头"这类走法，命中率明显变高。）
+		if not _unit_ok(u):
+			continue   # 本步作废：跳过这名单位剩下的动作，继续回放下一条
+		# 【2026-09-15 A+B】这一步"想打但没打成"时要能就地补一招 —— 先记下它本来想做什么：
+		#   wanted = 计划里带了一次攻击（打人 atk>=0 或 打障碍 atk_obs），acted = 这一击真的打出去了。
+		# 走位类步骤（计划里本来就没有攻击）不触发补算，避免每个走位步都白跑一次搜索。
+		var wanted: bool = (a.has("atk") and int(a["atk"]) >= 0) or a.has("atk_obs")
+		var acted := false
 		if a.has("move") and a["move"] != null:
 			battle._do_move(u, a["move"], true)
 			await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
 		if a.has("atk_obs"):
-			if is_instance_valid(u):
-				await _gap(STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
-				battle._do_attack_obstacle(u, a["atk_obs"])
-				await _wait_action_done()
+			await _gap(STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
+			if not _unit_ok(u):
+				continue
+			battle._do_attack_obstacle(u, a["atk_obs"])
+			acted = true
+			await _wait_action_done()
 		if a.has("atk") and int(a["atk"]) >= 0:
 			var t_idx := int(a["atk"])
-			if t_idx >= 0 and t_idx < refs.size() and is_instance_valid(refs[t_idx]):
+			if t_idx >= 0 and t_idx < refs.size() and _unit_ok(refs[t_idx]):
 				var t: Unit = refs[t_idx]
-				if t.alive and t.faction != DataRegistry.Faction.ENEMY and is_instance_valid(u):
+				if t.faction != DataRegistry.Faction.ENEMY and _unit_ok(u):
 					# 只允许攻击当前射程内的目标（防御 AI 计划偏差/移动失败导致越界攻击）
 					if battle._in_attack_range(u, t):
 						await _gap(STEP_GAP)   # 走位与出手之间留一拍，读得出"先走再打"
-						battle._do_attack(u, t, true)
-						await _wait_action_done()   # 等待攻击（含反击）演出完全结束
+						# 这一拍里出手方与被打方都可能死掉/被释放（炸弹、反击、位移）→ 出手前再验一次；
+						# 射程也重新判一次：这一拍里目标可能被击退到射程外。
+						if _unit_ok(u) and _unit_ok(t) and battle._in_attack_range(u, t):
+							battle._do_attack(u, t, true)
+							acted = true
+							await _wait_action_done()   # 等待攻击（含反击）演出完全结束
+		# 【2026-09-15 A+B·用户批准】想打却没打成（目标已死 / 被推出射程 / 这一步本来安排的攻击不存在了）
+		# → 让 Battle 就地为这个单位**重搜一招**（用真实局面），把这一手补上，而不是让它白站一回合。
+		# 为什么会失效：计划是回合开始时按"预测的残局"一次性排好的（预测与真实结算哪怕差一点，
+		# 后面针对同一目标的步骤就会落空）。补算在主线程跑一次短搜索（1.2s 预算），结果同样要过合法性检查。
+		if wanted and not acted and _unit_ok(u) and not u.attacked_this_turn:
+			if my_session != battle._session_id or battle.get_tree() == null:
+				return   # 已重开/场景已释放：不再补算
+			await _gap(STEP_GAP)   # 补算前留一拍，别让"原本那一招"和"补的这一招"粘成一段
+			var alt: Dictionary = battle._replan_enemy_action(u)
+			if not alt.is_empty() and _unit_ok(u) and not u.attacked_this_turn:
+				if alt.get("move", null) != null:
+					battle._do_move(u, alt["move"], true)
+					await _wait_action_done()
+				if alt.has("atk_obs") and _unit_ok(u):
+					await _gap(STEP_GAP)
+					battle._do_attack_obstacle(u, alt["atk_obs"])
+					await _wait_action_done()
+				var alt_atk := int(alt.get("atk", -1))
+				if alt_atk >= 0 and alt_atk < refs.size() and _unit_ok(refs[alt_atk]) and _unit_ok(u):
+					var t2: Unit = refs[alt_atk]
+					if t2.faction != DataRegistry.Faction.ENEMY and battle._in_attack_range(u, t2):
+						await _gap(STEP_GAP)
+						if _unit_ok(u) and _unit_ok(t2) and battle._in_attack_range(u, t2):
+							battle._do_attack(u, t2, true)
+							await _wait_action_done()
 		# 本英雄行动结束：熄灭行动描边（下一名英雄出手前会重新亮起，交接不拖影）
 		if is_instance_valid(u):
 			u.set_acting_ring(false)
@@ -129,3 +172,14 @@ func _gap(sec: float) -> void:
 	if sec <= 0.0 or battle.get_tree() == null:
 		return   # 已脱离场景树：不停顿直接返回
 	await battle.get_tree().create_timer(sec, false).timeout
+
+## 单位引用是否还能安全递给 Battle —— 回放里**每次 await 之后**都要复检一次：
+## 既没被释放（阵亡后 0.3s 淡出结束会 queue_free），也还活着。
+## 为什么这层防御必须留在回放器：计划只是"预测"，玩家侧的反击/炸弹/位移会真实改变局面，
+## 任何一次 await 都是"局面可能变了"的窗口；漏验一次就是把已释放对象递给 Battle（崩）。
+func _unit_ok(x) -> bool:
+	if x == null or not is_instance_valid(x):
+		return false
+	if not (x is Unit):
+		return false
+	return (x as Unit).alive
