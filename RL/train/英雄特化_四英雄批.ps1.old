@@ -1,0 +1,33 @@
+﻿# 英雄特化_四英雄批.ps1 —— 【2026-09-19】A 档剩余 4 个英雄的**第 1 轮**臂扫描，依次跑。
+#
+# 口径（与 `英雄特化搜索.ps1` 一致）：
+#   候选 = 英雄世代.json + 本臂的**一个英雄的一个键** ／ 陪练 = 英雄世代.json 本身
+#   （league.checkpoint + self_play_fraction=1.0）· 镜像同队伍 · 同一个 spec 里多臂并排 ⇒ 完全配对。
+#   每个英雄第一臂是**恒等对照**（把键设成引擎默认值）⇒ 那一行的 pts/胜率就是噪声地板。
+#
+# 键的量纲依据（见 RL/ai/AI_Battle.gd 里的实现）：
+#   POISON_TICK_VALUE   猛毒每跳（最多 4 跳）× min(目标HP,4)：1 跳≈1 点真实伤害 ⇒ 1.0~5.0 覆盖"值 1~4 点伤害"
+#   LEECH_TRIGGER_W     古拉这一击触发吸血（自身回血）的**定额**加分：吸血≈1~2 HP ⇒ 3~15
+#   POSSESS_TARGET_W    附体 = 挨打时目标同伤，分按 `目标身价/20` 计 ⇒ 1~8
+#   SOLID_HOLD_W        没移动 ⇒ 下回合[坚固]（受攻击 −1）≈ 4 分/次 ⇒ 2~10
+$ErrorActionPreference = 'Stop'
+$s = Join-Path $PSScriptRoot '英雄特化搜索.ps1'
+
+$rounds = @(
+    @{ hero = 'hero_03'; decks = @('hero_42,hero_03,hero_17')
+       arms = @('POISON_TICK_VALUE=0', 'POISON_TICK_VALUE=1.0', 'POISON_TICK_VALUE=2.5', 'POISON_TICK_VALUE=5.0') },
+    @{ hero = 'hero_14'; decks = @('hero_42,hero_14,hero_26')
+       arms = @('LEECH_TRIGGER_W=0', 'LEECH_TRIGGER_W=3', 'LEECH_TRIGGER_W=8', 'LEECH_TRIGGER_W=15') },
+    @{ hero = 'hero_46'; decks = @('hero_42,hero_46,hero_11')
+       arms = @('POSSESS_TARGET_W=0', 'POSSESS_TARGET_W=1', 'POSSESS_TARGET_W=3', 'POSSESS_TARGET_W=8') },
+    @{ hero = 'hero_48'; decks = @('hero_48,hero_03,hero_22')
+       arms = @('SOLID_HOLD_W=0', 'SOLID_HOLD_W=2', 'SOLID_HOLD_W=5', 'SOLID_HOLD_W=10') }
+)
+
+foreach ($r in $rounds) {
+    Write-Host ''
+    Write-Host ('################ 英雄特化 第1轮：{0} ################' -f $r.hero)
+    & $s -Hero $r.hero -Decks $r.decks -Arms $r.arms -Seeds 16 -Beam 100 -Workers 6 -Tag r1
+}
+Write-Host ''
+Write-Host '################ 四英雄批结束 ################'

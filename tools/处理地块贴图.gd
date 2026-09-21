@@ -45,6 +45,12 @@ const JOBS := [
 		"out": "res://assets/美术资源/道具爱心.png",
 		"max_w": 384,
 	},
+	{
+		"kind": "plain",
+		"src": "D:/Game creating/战旗/log/_move_wings_src.png",
+		"out": "res://assets/美术资源/道具移动.png",
+		"max_w": 512,
+	},
 ]
 
 func _initialize() -> void:

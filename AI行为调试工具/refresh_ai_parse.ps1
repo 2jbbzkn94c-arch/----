@@ -8,8 +8,22 @@
 # 由 PowerShell 传同样的参数则正常，所以 bat 只负责把活交给这里。
 
 param(
-  [string]$Godot = "C:\Users\79076\Desktop\Godot_v4.7.1-stable_win64.exe"
+  [string]$Godot = ""   # 留空=自动找：桌面 godot.exe / 桌面 Godot*.exe / 文档里的 Godot 目录
 )
+
+# 引擎路径可能被移动/改名（如桌面 Godot_v4.7.1-stable_win64.exe → godot.exe），这里按候选依次找
+function Resolve-GodotPath {
+  $cands = @(
+    (Join-Path $env:USERPROFILE 'Desktop\godot.exe'),
+    (Join-Path $env:USERPROFILE 'Desktop\Godot_v4.7.1-stable_win64.exe'),
+    (Join-Path $env:USERPROFILE 'Documents\Godot_v4.7.1-stable_win64.exe\Godot_v4.7.1-stable_win64.exe')
+  )
+  foreach ($c in $cands) { if (Test-Path $c) { return $c } }
+  $hit = Get-ChildItem (Join-Path $env:USERPROFILE 'Desktop') -Filter 'Godot*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($hit) { return $hit.FullName }
+  return ''
+}
+if ([string]::IsNullOrWhiteSpace($Godot)) { $Godot = Resolve-GodotPath }
 
 $ErrorActionPreference = 'Continue'
 # 项目根目录：从本脚本所在目录往上找 project.godot —— 这样脚本放哪儿都能用

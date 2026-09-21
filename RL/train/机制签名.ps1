@@ -38,6 +38,11 @@ foreach ($r in $Runs) {
         $foeDead  = @($g | ForEach-Object { [int]$_.killsA })
         $rounds   = @($g | ForEach-Object { [int]$_.rounds })
         $hpDiff   = @($g | ForEach-Object { [double]$_.hpA - [double]$_.hpB })
+        # 【2026-09-19 加】伤害账（口径 A"别冲进对方射程"的直接签名）：
+        #   `dmgA` = 候选打出的总伤害；`dmgB` = 候选**承受**的总伤害（核对过一行：候选输的那局 dmgA=38 < dmgB=56）。
+        #   "冲上去"最直接的结构后果就是 **承受伤害变高**（还没赢），所以这两个数比胜率先动。
+        $dmgOut   = @($g | ForEach-Object { [double]$_.dmgA })
+        $dmgIn    = @($g | ForEach-Object { [double]$_.dmgB })
         $wins     = @($g | Where-Object { $_.res -eq 'W' })
         $zero     = @($g | Where-Object { $_.res -eq 'W' -and [int]$_.killsB -eq 0 })
         $wipe     = @($g | Where-Object { [int]$_.killsB -ge 3 })
@@ -50,6 +55,8 @@ foreach ($r in $Runs) {
             Wiped = [Math]::Round($wipe.Count / [double]$g.Count, 4)
             Rounds = [Math]::Round(($rounds | Measure-Object -Average).Average, 1)
             HpDiff = [Math]::Round(($hpDiff | Measure-Object -Average).Average, 2)
+            DmgIn = [Math]::Round(($dmgIn | Measure-Object -Average).Average, 1)
+            DmgNet = [Math]::Round(((($dmgOut | Measure-Object -Average).Average) - (($dmgIn | Measure-Object -Average).Average)), 1)
         }
     }
 }
@@ -72,6 +79,8 @@ $agg = $all | Group-Object Arm | ForEach-Object {
         Wiped = [Math]::Round((($g | Measure-Object Wiped -Average).Average), 4)
         Rounds = [Math]::Round((($g | Measure-Object Rounds -Average).Average), 1)
         HpDiff = [Math]::Round((($g | Measure-Object HpDiff -Average).Average), 2)
+        DmgIn = [Math]::Round((($g | Measure-Object DmgIn -Average).Average), 1)
+        DmgNet = [Math]::Round((($g | Measure-Object DmgNet -Average).Average), 1)
         PerTeam = (($g | Sort-Object Run | ForEach-Object { ('{0}:{1}' -f $_.Run, $_.WinRate) }) -join ' ')
     }
 } | Sort-Object Arm
@@ -91,6 +100,8 @@ if ($Control) {
                 dWiped = [Math]::Round($_.Wiped - $c.Wiped, 4)
                 dRounds = [Math]::Round($_.Rounds - $c.Rounds, 1)
                 dHpDiff = [Math]::Round($_.HpDiff - $c.HpDiff, 2)
+                dDmgIn = [Math]::Round($_.DmgIn - $c.DmgIn, 1)
+                dDmgNet = [Math]::Round($_.DmgNet - $c.DmgNet, 1)
             }
         } | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
     } else {

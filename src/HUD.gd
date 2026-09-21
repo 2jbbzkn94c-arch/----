@@ -69,17 +69,7 @@ func _on_battle_disconnected() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ovly.add_child(dim)
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.18, 0.98)
-	sb.corner_radius_top_left = 10
-	sb.corner_radius_top_right = 10
-	sb.corner_radius_bottom_left = 10
-	sb.corner_radius_bottom_right = 10
-	sb.content_margin_left = 24.0
-	sb.content_margin_right = 24.0
-	sb.content_margin_top = 22.0
-	sb.content_margin_bottom = 22.0
-	panel.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	ovly.add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
@@ -168,7 +158,7 @@ func show_item_info(type: String) -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", _make_panel(Color(0.12, 0.12, 0.18, 0.92)))
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png），不再单独覆盖样式
 	overlay.add_child(panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 6)
@@ -222,12 +212,7 @@ func show_unit_card(u: Unit) -> void:
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 点击穿透给 overlay 处理关闭
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
-	var pn := _make_panel(Color(0.12, 0.12, 0.18, 0.92))
-	pn.content_margin_left = 12.0
-	pn.content_margin_right = 12.0
-	pn.content_margin_top = 10.0
-	pn.content_margin_bottom = 10.0
-	panel.add_theme_stylebox_override("panel", pn)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	overlay.add_child(panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 5)
@@ -442,19 +427,7 @@ func _show_first_side_notice(text: String) -> void:
 	add_child(overlay)
 	_notice_overlay = overlay
 	var box := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.1, 0.16, 0.92)
-	sb.corner_radius_top_left = 10
-	sb.corner_radius_top_right = 10
-	sb.corner_radius_bottom_left = 10
-	sb.corner_radius_bottom_right = 10
-	sb.set_border_width_all(1)
-	sb.border_color = Color(1.0, 0.85, 0.5)
-	sb.content_margin_left = 20.0
-	sb.content_margin_right = 20.0
-	sb.content_margin_top = 10.0
-	sb.content_margin_bottom = 10.0
-	box.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	box.mouse_filter = Control.MOUSE_FILTER_STOP   # 框体可点击关闭，但不挡棋盘
 	box.gui_input.connect(_on_first_notice_input)
 	overlay.add_child(box)
@@ -694,12 +667,7 @@ func _ensure_score_tooltip() -> PanelContainer:
 	var wrap_box := PanelContainer.new()
 	wrap_box.visible = false
 	wrap_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var sb := _make_panel(Color(0.07, 0.07, 0.11, 0.96))
-	sb.content_margin_left = 16.0
-	sb.content_margin_right = 16.0
-	sb.content_margin_top = 14.0
-	sb.content_margin_bottom = 14.0
-	wrap_box.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）：不再覆盖样式
 	wrap_box.z_index = 100   # 置于最顶，避免被下方队伍面板盖住
 	add_child(wrap_box)
 	_score_tooltip_wrap = wrap_box
@@ -996,16 +964,8 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	add_child(overlay)
 	_deck_pick_overlay = overlay
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.08, 0.09, 0.14, 0.55)   # 半透明：能透出下方棋盘
-	sb.border_color = Color(1.0, 0.85, 0.5, 0.85)
-	sb.set_border_width_all(2)
-	sb.set_corner_radius_all(10)
-	sb.content_margin_left = 18.0
-	sb.content_margin_right = 18.0
-	sb.content_margin_top = 14.0
-	sb.content_margin_bottom = 14.0
-	panel.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）；
+	# ⚠️ 原来这块面板是半透明"透出棋盘"的，换成牌子后变成不透明（弹窗更聚焦）。
 	overlay.add_child(panel)
 	_deck_pick_panel = panel
 	var wrapbox := VBoxContainer.new()
@@ -1449,7 +1409,7 @@ func _toggle_chat_panel() -> void:
 	add_child(overlay)
 	_chat_overlay = overlay
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", _make_panel(Color(0.1, 0.1, 0.16, 0.96)))
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 4)
@@ -1855,17 +1815,7 @@ func _on_pause_pressed() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.16, 0.99)
-	sb.set_corner_radius_all(12)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(1.0, 0.85, 0.5)
-	# 全黑背景之上，"已暂停"面板不铺满：保持紧凑居中
-	sb.content_margin_left = 26.0
-	sb.content_margin_right = 26.0
-	sb.content_margin_top = 20.0
-	sb.content_margin_bottom = 20.0
-	panel.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	overlay.add_child(panel)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 14)
@@ -1903,13 +1853,16 @@ func _resume() -> void:
 	if _pause_overlay != null and is_instance_valid(_pause_overlay):
 		_pause_overlay.queue_free()
 	_pause_overlay = null
-	if get_tree() != null:
+	if is_inside_tree():
 		get_tree().paused = false
 
-# 场景退出兜底：若在暂停中离开（返回选人等），务必恢复，避免整个引擎一直暂停
+# 场景退出兜底：若在暂停中离开（返回选人等），务必恢复，避免整个引擎一直暂停。
+# 这里**不能**用 get_tree()：节点被判离场景树时 get_tree() 会报 Parameter "data.tree" is null，
+# 拿不到 SceneTree 就恢复不了暂停。Engine.get_main_loop() 与节点是否在树里无关，始终有效。
 func _exit_tree() -> void:
-	if get_tree() != null:
-		get_tree().paused = false
+	var loop := Engine.get_main_loop()
+	if loop is SceneTree:
+		(loop as SceneTree).paused = false
 
 func _on_end_turn() -> void:
 	if battle and battle.state == Battle.State.PLAYER_INPUT:

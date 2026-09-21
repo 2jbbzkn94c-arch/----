@@ -670,24 +670,6 @@
                         "beam":  400
                     },
                     {
-                        "name":  "k_ft_lo",
-                        "note":  "key-effect: FOCUS_TIMES_WEIGHT 5 -> 2.5",
-                        "theta":  {
-                                      "FOCUS_TIMES_WEIGHT":  2.5
-                                  },
-                        "beam_opp":  100,
-                        "beam":  400
-                    },
-                    {
-                        "name":  "k_ft_hi",
-                        "note":  "key-effect: FOCUS_TIMES_WEIGHT 5 -> 10",
-                        "theta":  {
-                                      "FOCUS_TIMES_WEIGHT":  10.0
-                                  },
-                        "beam_opp":  100,
-                        "beam":  400
-                    },
-                    {
                         "name":  "k_ti_lo",
                         "note":  "key-effect: THREAT_INCOMING_W 0.12 -> 0.06",
                         "theta":  {
@@ -797,7 +779,7 @@
                     },
                     {
                         "name":  "r_fire0",
-                        "note":  "isolation: FOCUS_FIRE_WEIGHT=0 only (FOCUS_TIMES stays 5)",
+                        "note":  "isolation: FOCUS_FIRE_WEIGHT=0 only (FOCUS_TIMES 已随键删除)",
                         "theta":  {
                                       "FOCUS_FIRE_WEIGHT":  0
                                   },
@@ -805,30 +787,19 @@
                         "beam":  400
                     },
                     {
-                        "name":  "r_times0",
-                        "note":  "isolation: FOCUS_TIMES_WEIGHT=0 only (FOCUS_FIRE stays 30)",
-                        "theta":  {
-                                      "FOCUS_TIMES_WEIGHT":  0
-                                  },
-                        "beam_opp":  100,
-                        "beam":  400
-                    },
-                    {
                         "name":  "r_ft0",
-                        "note":  "FOCUS terms retired: FOCUS_FIRE_WEIGHT=0 + FOCUS_TIMES_WEIGHT=0 (rule A still off)",
+                        "note":  "FOCUS_FIRE retired: FOCUS_FIRE_WEIGHT=0 (rule A still off); FOCUS_TIMES 已随键删除",
                         "theta":  {
-                                      "FOCUS_FIRE_WEIGHT":  0,
-                                      "FOCUS_TIMES_WEIGHT":  0
+                                      "FOCUS_FIRE_WEIGHT":  0
                                   },
                         "beam_opp":  100,
                         "beam":  400
                     },
                     {
                         "name":  "r_A_ft0",
-                        "note":  "rule A in its intended seat: FOCUS terms retired (=0) + FOCUS_KILL_RULE=1",
+                        "note":  "rule A in its intended seat: FOCUS_FIRE_WEIGHT=0 + FOCUS_KILL_RULE=1 (FOCUS_TIMES 已随键删除)",
                         "theta":  {
                                       "FOCUS_FIRE_WEIGHT":  0,
-                                      "FOCUS_TIMES_WEIGHT":  0,
                                       "FOCUS_KILL_RULE":  1
                                   },
                         "beam_opp":  100,

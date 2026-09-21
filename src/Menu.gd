@@ -24,10 +24,13 @@ var _team_back_btn: Button = null
 const PICK_COUNT := 8   # 整支队伍人数上限（前 3 名上阵，其余为替补）
 const MIN_PICK := 5     # 至少选择 5 名英雄
 const DEPLOY_COUNT := 3
+const MENU_BTN_W := 400.0   # 主菜单按钮长度（宽度）；原来顶满整行 540，改窄并居中
 const CARD_GAP_SCALE := 0.96   # 选人池卡牌绘制半径/间距半径：1.0=边贴边无空隙，调小=空隙增大
 # 封面背景候选：按顺序取【第一个能加载的】——换封面只需把想用的那张挪到最前。
-# 源文件在 assets/美术资源/背景/*.svg，改完用 tools/RenderCover 重新出 PNG（缺图自动退回纯色底）
+# 源文件在 assets/美术资源/背景/（*.svg 用 tools/RenderCover 出 PNG；*.jpg 是直接投放的位图）。
+# 缺图自动退回纯色底（WoodFloor）。
 const COVER_BG_CANDIDATES := [
+	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",   # 六角地砖 + 灯笼/骰子/剑盾（暗调，UI 界面用）
 	"res://assets/美术资源/背景/酒桌封面.png",   # 方案B：酒桌俯视，桌面刻着六边形棋盘
 	"res://assets/美术资源/背景/酒馆封面.png",   # 方案A：酒馆内景·吧台
 ]
@@ -230,8 +233,7 @@ func _build() -> void:
 	diff.add_item("简单")
 	diff.add_item("普通")
 	diff.add_item("困难")
-	diff.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练出来的权重（见 src/Battle.gd）
-	diff.add_item("噩梦+")   # 第 5 档：噩梦 + 按英雄的逐项特化
+	diff.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练权重（**英雄特化段也在同一份权重文件里**，见 src/Battle.gd）
 	diff.select(GameState.ai_difficulty)
 	diff.custom_minimum_size = Vector2(0, 36)
 	diff.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -306,16 +308,17 @@ func _build_main_menu() -> void:
 
 	var title := Label.new()
 	title.text = "酒馆纷争"
-	title.add_theme_font_size_override("font_size", 48)
+	# 主标题字号：72（原 48）。描边同步放大到 9，否则字变大后黑边显得太细、压在背景上不清晰。
+	title.add_theme_font_size_override("font_size", 72)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	title.add_theme_constant_override("outline_size", 6)
+	title.add_theme_constant_override("outline_size", 9)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 	var sub := Label.new()
-	sub.text = "六边形棋盘PVP战旗游戏"
+	sub.text = "战棋PVP"
 	sub.add_theme_font_size_override("font_size", 16)
-	sub.add_theme_color_override("font_color", Color(0.0, 0.902, 0.0, 1.0))
+	sub.add_theme_color_override("font_color", Color(1, 0.85, 0.5))   # 与主标题「酒馆纷争」同色
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(sub)
 	vbox.add_child(_spacer(8))
@@ -324,12 +327,14 @@ func _build_main_menu() -> void:
 		var b := Button.new()
 		b.text = txt
 		b.add_theme_font_size_override("font_size", 22)
-		b.custom_minimum_size = Vector2(0, 58)
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		# 按钮长度：原来 SIZE_EXPAND_FILL 会顶满整行（720 - 左右各 90 = 540），显得太长。
+		# 改成固定宽度 + 居中（SHRINK_CENTER），想再长/短就调 MENU_BTN_W 一个数。
+		b.custom_minimum_size = Vector2(MENU_BTN_W, 58)
+		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		b.pressed.connect(cb)
 		vbox.add_child(b)
-	add_mode_btn.call("普通模式", _show_team_view)
-	add_mode_btn.call("竞技场模式", _go_arena)
+		_attach_hover_dice(b)
+	add_mode_btn.call("单机模式", _ask_single_mode)
 	add_mode_btn.call("联机模式", _go_net)
 	add_mode_btn.call("自由部署（测试）", _go_test_deploy)
 	add_mode_btn.call("游戏说明", _open_help)
@@ -338,10 +343,11 @@ func _build_main_menu() -> void:
 	var quit_btn := Button.new()
 	quit_btn.text = "退出游戏"
 	quit_btn.add_theme_font_size_override("font_size", 18)
-	quit_btn.custom_minimum_size = Vector2(0, 46)
-	quit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	quit_btn.custom_minimum_size = Vector2(MENU_BTN_W, 46)
+	quit_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	quit_btn.pressed.connect(func(): get_tree().quit())
 	vbox.add_child(quit_btn)
+	_attach_hover_dice(quit_btn)
 	_main_msg = Label.new()
 	_main_msg.add_theme_font_size_override("font_size", 14)
 	_main_msg.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
@@ -366,6 +372,41 @@ func _build_main_menu() -> void:
 	qq.offset_bottom = -20.0
 	qq.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_main_view.add_child(qq)
+
+# 悬浮骰子：鼠标移到按钮上时，在按钮**前部（左侧）**淡入一颗六点骰子（纯装饰，不接收鼠标）
+const HOVER_DICE_PATH := "res://theme/dice_6.png"
+const DICE_INSET_X := 14.0   # 骰子距按钮左边缘的像素（= 牌子边框那一圈，不会压到中间的字）
+var _dice_tex: Texture2D = null
+
+func _attach_hover_dice(btn: Button) -> void:
+	if _dice_tex == null and ResourceLoader.exists(HOVER_DICE_PATH):
+		_dice_tex = load(HOVER_DICE_PATH) as Texture2D
+	if _dice_tex == null:
+		return   # 缺图：整段效果跳过，按钮本身不受影响
+	var dice := TextureRect.new()
+	dice.texture = _dice_tex
+	dice.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	dice.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	dice.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不能吃掉按钮的悬浮/点击
+	dice.modulate.a = 0.0
+	dice.visible = false
+	btn.add_child(dice)
+	var place := func() -> void:
+		var d := clampf(btn.size.y - 22.0, 18.0, 36.0)
+		dice.size = Vector2(d, d)
+		dice.position = Vector2(DICE_INSET_X, (btn.size.y - d) * 0.5)
+	btn.resized.connect(place)
+	place.call()
+	btn.mouse_entered.connect(func():
+		dice.visible = true
+		var tw := dice.create_tween()
+		tw.tween_property(dice, "modulate:a", 1.0, 0.12))
+	btn.mouse_exited.connect(func():
+		if not is_instance_valid(dice):
+			return
+		var tw := dice.create_tween()
+		tw.tween_property(dice, "modulate:a", 0.0, 0.12)
+		tw.tween_callback(func(): dice.visible = false))
 
 func _show_main_menu() -> void:
 	_main_view.visible = true
@@ -478,12 +519,7 @@ func _build_tooltip() -> void:
 	_tooltip = PanelContainer.new()
 	_tooltip.visible = false
 	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var tpn := _make_panel(Color(0.08, 0.1, 0.16, 0.97))
-	tpn.content_margin_left = 16.0
-	tpn.content_margin_right = 16.0
-	tpn.content_margin_top = 14.0
-	tpn.content_margin_bottom = 14.0
-	_tooltip.add_theme_stylebox_override("panel", tpn)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png），这里不再单独覆盖样式
 	layer.add_child(_tooltip)
 	_tooltip_box = VBoxContainer.new()
 	_tooltip_box.add_theme_constant_override("separation", 8)
@@ -514,17 +550,6 @@ func _set_tooltip_zones(zones: Array) -> void:
 		lb.custom_minimum_size = Vector2(380, 0)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_tooltip_box.add_child(lb)
-
-func _make_panel(bg: Color) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.corner_radius_top_left = 8
-	sb.corner_radius_top_right = 8
-	sb.corner_radius_bottom_left = 8
-	sb.corner_radius_bottom_right = 8
-	sb.set_border_width_all(1)
-	sb.border_color = Color(1.0, 0.85, 0.5)
-	return sb
 
 func _process(_delta: float) -> void:
 	if _tooltip != null and _tooltip.visible:
@@ -747,6 +772,78 @@ func _build_deck_preview(ids: Array) -> void:
 func _go_test_deploy() -> void:
 	get_tree().change_scene_to_file("res://scenes/QuickTest.tscn")
 
+# ---- 单机模式入口：把「普通模式 / 竞技场模式」合并成一个按钮，点开再选玩法 ----
+# 两个玩法各自的流程一个字没改，只是入口从"主菜单两个平级按钮"变成"一个按钮 + 弹出选择"：
+#   普通模式 → 原来的 _show_team_view()（编队页）；竞技场模式 → 原来的 _go_arena()（接着弹"选择 AI 难度"）。
+var _single_mode_overlay: Control = null
+
+func _ask_single_mode() -> void:
+	if _single_mode_overlay != null and is_instance_valid(_single_mode_overlay):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_single_mode_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	# 居中交给 CenterContainer：面板尺寸由内容决定，容器自己算位置。
+	# 不再手算 (vsize - panel.size)/2 —— 那个写法依赖 reset_size() 之后的尺寸，内容一多就会顶偏/顶出屏幕。
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(minf(430.0, vsize.x * 0.78), 0.0)   # 窄屏也不会超出屏幕
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "单机模式 · 选择玩法"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	# 每个玩法：一个大按钮 + 一行小字说明（区别写清楚，免得合并后看不出两者差异）
+	var add := func(txt: String, hint: String, cb: Callable) -> void:
+		var b := Button.new()
+		b.text = txt
+		b.custom_minimum_size = Vector2(0, 56)
+		b.add_theme_font_size_override("font_size", 22)
+		b.pressed.connect(cb)
+		box.add_child(b)
+		var h := Label.new()
+		h.text = hint
+		h.add_theme_font_size_override("font_size", 14)
+		h.add_theme_color_override("font_color", Color(0.72, 0.78, 0.88))
+		h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		box.add_child(h)
+	add.call("普通模式", "预设卡组三选一", _single_mode_normal)
+	add.call("竞技场模式", "局内二选一构筑卡组", _single_mode_arena)
+	var cancel := Button.new()
+	cancel.text = "返回"
+	cancel.custom_minimum_size = Vector2(0, 48)
+	cancel.add_theme_font_size_override("font_size", 18)
+	cancel.pressed.connect(_close_single_mode)
+	box.add_child(cancel)
+
+func _close_single_mode() -> void:
+	if _single_mode_overlay != null and is_instance_valid(_single_mode_overlay):
+		_single_mode_overlay.queue_free()
+	_single_mode_overlay = null
+
+func _single_mode_normal() -> void:
+	_close_single_mode()
+	_show_team_view()
+
+func _single_mode_arena() -> void:
+	_close_single_mode()
+	_go_arena()   # 竞技场：紧接着弹「选择 AI 难度」
+
 # 竞技场模式：先选 AI 难度，再进入对局（随机2选1构建双方卡组）
 func _go_arena() -> void:
 	_ask_arena_difficulty()
@@ -766,22 +863,16 @@ func _ask_arena_difficulty() -> void:
 	dim.color = Color(0, 0, 0, 0.6)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ov.add_child(dim)
+	# 居中交给 CenterContainer（同「单机模式」弹窗）：不手算坐标，面板多大都居中、不会顶出屏幕。
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.18, 0.98)
-	sb.corner_radius_top_left = 10
-	sb.corner_radius_top_right = 10
-	sb.corner_radius_bottom_left = 10
-	sb.corner_radius_bottom_right = 10
-	sb.content_margin_left = 26.0
-	sb.content_margin_right = 26.0
-	sb.content_margin_top = 24.0
-	sb.content_margin_bottom = 24.0
-	panel.add_theme_stylebox_override("panel", sb)
-	ov.add_child(panel)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
+	center.add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
-	box.custom_minimum_size = Vector2(430, 0)
+	box.custom_minimum_size = Vector2(minf(430.0, vsize.x * 0.78), 0.0)
 	panel.add_child(box)
 	var title := Label.new()
 	title.text = "竞技场模式 · 选择 AI 难度"
@@ -799,8 +890,7 @@ func _ask_arena_difficulty() -> void:
 	add.call("简单", 0)
 	add.call("普通", 1)
 	add.call("困难", 2)
-	add.call("噩梦", 3)    # 第 4 档：RL 候选 AI + 训练权重（同上）
-	add.call("噩梦+", 4)   # 第 5 档：噩梦 + 英雄特化
+	add.call("噩梦", 3)    # 第 4 档（最后一档）：RL 候选 AI + 训练权重（英雄特化段同文件，同上）
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)
@@ -810,8 +900,6 @@ func _ask_arena_difficulty() -> void:
 			_arena_dif_overlay.queue_free()
 			_arena_dif_overlay = null)
 	box.add_child(cancel)
-	panel.reset_size()
-	panel.position = Vector2((vsize.x - panel.size.x) / 2.0, (vsize.y - panel.size.y) / 2.0)
 
 func _start_arena(dif: int) -> void:
 	if _arena_dif_overlay != null:
@@ -845,19 +933,7 @@ func _open_help() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.16, 0.99)
-	sb.corner_radius_top_left = 12
-	sb.corner_radius_top_right = 12
-	sb.corner_radius_bottom_left = 12
-	sb.corner_radius_bottom_right = 12
-	sb.set_border_width_all(2)
-	sb.border_color = Color(1.0, 0.85, 0.5)
-	sb.content_margin_left = 18.0
-	sb.content_margin_right = 18.0
-	sb.content_margin_top = 14.0
-	sb.content_margin_bottom = 14.0
-	panel.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	overlay.add_child(panel)
 	panel.size = Vector2(minf(vsize.x - 48, 640), vsize.y - 120)
 	panel.position = Vector2((vsize.x - panel.size.x) / 2.0, 60)
@@ -908,16 +984,7 @@ func _open_stats() -> void:
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.add_child(dim)
 	var panel := PanelContainer.new()
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.12, 0.16, 0.99)
-	sb.set_corner_radius_all(12)
-	sb.set_border_width_all(2)
-	sb.border_color = Color(1.0, 0.85, 0.5)
-	sb.content_margin_left = 18.0
-	sb.content_margin_right = 18.0
-	sb.content_margin_top = 14.0
-	sb.content_margin_bottom = 14.0
-	panel.add_theme_stylebox_override("panel", sb)
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	overlay.add_child(panel)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 12)

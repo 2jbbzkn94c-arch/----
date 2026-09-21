@@ -15,8 +15,35 @@ $script:RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not (Test-Path -LiteralPath (Join-Path $script:RepoRoot 'project.godot'))) {
     throw "Repo root not detected from $PSScriptRoot (no project.godot in $script:RepoRoot)"
 }
-$script:GodotExe = 'C:\Users\79076\Desktop\Godot_v4.7.1-stable_win64.exe'
-$script:KnownEditorPid = 25124          # user's open editor window; never counted as a conflict
+# 【2026-09-19 改·用户批准"自动"】Godot 可执行文件**自动探测**（原来写死桌面路径；
+#   用户把 Godot 移到 Documents 后整条训练链直接跑不了）。顺序：
+#     ① 环境变量 `DSH_GODOT_EXE` / `GODOT_EXE`（最高优先，方便临时指向别的版本）
+#     ② 常见位置：Documents / Desktop / Downloads / D:\Software / C:\ / D:\
+#        每个位置既看"顶层 exe"，也看"同名子目录里的 exe"（官方 zip 解压后就是那种形态）
+#     ③ 排除 `*_console.exe`（控制台版是伴生程序，不能当编辑器/主程序用）
+#     ④ 多个候选时按文件名倒序（版本号大的优先）
+#   找不到就抛错并提示可用环境变量指定 —— 不再静默失败。
+function Find-GodotExe {
+    foreach ($v in @($env:DSH_GODOT_EXE, $env:GODOT_EXE)) {
+        if ($v -and (Test-Path -LiteralPath $v)) { return (Resolve-Path -LiteralPath $v).Path }
+    }
+    $roots = @("$env:USERPROFILE\Documents", "$env:USERPROFILE\Desktop", "$env:USERPROFILE\Downloads", 'D:\Software', 'C:\', 'D:\')
+    $hits = @()
+    foreach ($r in $roots) {
+        if (-not (Test-Path -LiteralPath $r)) { continue }
+        $hits += @(Get-ChildItem -LiteralPath $r -Filter 'Godot*.exe' -File -ErrorAction SilentlyContinue)
+        $hits += @(Get-ChildItem -LiteralPath $r -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -Filter 'Godot*.exe' -File -ErrorAction SilentlyContinue })
+    }
+    $cand = @($hits | Where-Object { $_.Name -notlike '*_console*' } | Sort-Object Name -Descending)
+    if ($cand.Count -gt 0) { return $cand[0].FullName }
+    return $null
+}
+$script:GodotExe = Find-GodotExe
+if (-not $script:GodotExe) {
+    throw "Godot executable not found (searched Documents/Desktop/Downloads/D:\Software/C:\/D:\). Set env DSH_GODOT_EXE to point at it."
+}
+$script:KnownEditorPid = 0              # 仅日志用；冲突判据已改成"有没有窗口标题"（见 Wait-GodotSlot）
 
 # The harness / opponent files have CJK names. Rather than embed those characters in this script
 # (PS 5.1 decodes a BOM-less .ps1 as ANSI and would corrupt them), identify them by content.
@@ -274,34 +301,40 @@ function Get-OrderedScoreKeys {
     #   THREAT_DEAD_FOLD    调低 −6.48（CI 上界 +0.23）⇒ 它**有效果**，最优值未定 ⇒ 值得训
     #   THREAT_INCOMING_W   调到 0.5 → +4.83 但 sd 57（全场最大）⇒ 影响大、方向不定 ⇒ 值得训
     #   BUFF_TAKE_WEIGHT    历史唯一出现过显著（别调低），但在 94 对上翻正 ⇒ 不稳健 ⇒ 值得训
-    # ⚠️ 2026-09-18（用户批准）：`ENGAGE_PULL_PER_CELL` **移出搜索空间** —— 它已在
-    #   `src/BattleAI.gd` 里被**写死成 const**（镜像同队伍 64 局 sd 0.05，一局都没变），
-    #   留着它只会生成"设了也无效"的空臂。⇒ 训练空间 7 → **6**。
+    # 【2026-09-20 用户要求·解 const】`ENGAGE_PULL_PER_CELL` **移回搜索空间** —— 它在 `src/BattleAI.gd`
+    #   里已从 `const` 改回 `var w_engage_pull`（默认仍 = 1.2 ⇒ 不注入时逐位不变）。
+    #   当初把它移出的唯一理由是"写死成 const ⇒ 留着只会生成'设了也无效'的空臂"，那个理由已消失。
+    #   它仍是**弱依据**的键（镜像同队伍 64 局 sd 0.05），但方向确实还没定：它是「进圈拉力」这条链上
+    #   唯一还活着的斜率旋钮（另一半是 `ENGAGE_STANDOFF` 停止线）⇒ 训练空间 6 → **7**。
     # 其余移入 Get-PinnedScoreKeys（不进搜索、但仍可在 theta 里显式点名）：OBSTACLE_DETOUR_WEIGHT /
-    #   FOCUS_TIMES_WEIGHT / BEAM / JITTER；另有 5 个已写死（见该函数的说明）。
+    #   BEAM / JITTER；另有 4 个已写死（见该函数的说明）。
+    # 【2026-09-19 用户同意】`FOCUS_TIMES_WEIGHT` 已**整项从引擎删除**（键 + 评分项 + `hurt_times`）⇒
+    #   它既不在这里、也不在 Pinned 里；权重文件/theta 里再写它会被 `set_weights` 静默忽略。
     # 2026-09-15: the six GOLD_* keys are hero_42-only specialisation -> flat form HERO_hero_42_GOLD_*.
     return @('FOCUS_FIRE_WEIGHT',
              'HP_VALUE_W',
              'THREAT_MOVE_DISCOUNT',
              'THREAT_DEAD_FOLD',
-             'THREAT_INCOMING_W',
-             'BUFF_TAKE_WEIGHT')
+             'BUFF_TAKE_WEIGHT',
+             # 2026-09-20 解 const 移回（"进圈拉力"每格分；默认 1.2）
+             'ENGAGE_PULL_PER_CELL')
 }
 
 function Get-PinnedScoreKeys {
     # 被 set_weights 接受、**不进自动搜索**、但**允许在 theta 里显式点名**的键（2026-09-17 精简）。
     # 它们都已被实验判定为"改了几乎不改结果"或"不是评分旋钮"：
     #   OBSTACLE_DETOUR_WEIGHT(4.0) 探针零翻盘；p1_obst 臂无显著
-    #   FOCUS_TIMES_WEIGHT(5.0) 方向确定"越小越好"（→0 +1.02 / →2.5 +2.12 / →10 −8.53），
-    #                          但幅度小、且**绝不能连带删 FOCUS_FIRE_WEIGHT**（那是承重项）
     #   BEAM(200) / JITTER(0)  不是评分项：归难度定义（简单 50/100/200、±8/±1.5/0）
-    # ⚠️ 2026-09-18（用户批准"写死依据强的 5 个"）：`VALUE_SOLO_W` / `VALUE_RELATION_W` /
-    #   `PLAYER_VALUE_MULT` / `ENGAGE_PULL_PER_CELL` / `MAX_MOVE_OPTIONS` **已从本清单移出** ——
+    # 【2026-09-19 用户同意】`FOCUS_TIMES_WEIGHT` 已整项删除（不是钉住、是**不存在**）。
+    # ⚠️ 2026-09-18（用户批准"写死依据强的"）：`VALUE_SOLO_W` / `VALUE_RELATION_W` /
+    #   `PLAYER_VALUE_MULT` / `MAX_MOVE_OPTIONS` **已从本清单移出** ——
     #   它们在 `src/BattleAI.gd` 里变成了 `const`，权重文件再写也会被忽略（值恒为 const）。
-    #   依据见 BattleAI.gd 顶部"5 个键退出可调表"块（探针 + 多批游戏臂的实测数字）。
+    #   依据见 BattleAI.gd 顶部"键退出可调表"块（探针 + 多批游戏臂的实测数字）。
+    #   ⚠️ 【2026-09-20 解 const】`ENGAGE_PULL_PER_CELL` 已回到 `Get-OrderedScoreKeys`（搜索空间），
+    #   所以它既不在本清单里、也不是写死的。
     #   代价：那批历史 run（p1_*、k_pv_*、shj_* 等）里的这些键从此**静默失效**——
     #   它们本来就是历史留档，复跑会得到与旧记录不同的结果（重新测才准）。
-    return @('OBSTACLE_DETOUR_WEIGHT', 'FOCUS_TIMES_WEIGHT', 'BEAM', 'JITTER')
+    return @('OBSTACLE_DETOUR_WEIGHT', 'BEAM')
 }
 
 function New-CandidateWeights {
@@ -891,9 +924,15 @@ function Wait-GodotSlot {
     if ($env:RL_SLOT_SLEEP_S) { $SleepSeconds = [int]$env:RL_SLOT_SLEEP_S }
     for ($i = 1; $i -le $MaxRounds; $i++) {
         $all = @(Get-Process -Name 'Godot*' -ErrorAction SilentlyContinue)
-        $foreign = @($all | Where-Object { $_.Id -ne $script:KnownEditorPid })
+        # 【2026-09-19 改·用户批准"自动"】原来靠一个**写死的**"用户编辑器 pid"（25124，早就失效）
+        #   来把它排除在冲突之外。现在改成**动态判据**：`MainWindowTitle` 非空的 Godot =
+        #   用户的编辑器 / 正在跑的游戏窗口（不抢槽位、只在日志里报告）；无窗口的 =
+        #   我们自己的 headless 跑批（算冲突）。好处：编辑器什么时候开、换了 pid 都不影响。
+        $userWin = @($all | Where-Object { $_.MainWindowTitle -and ([string]$_.MainWindowTitle).Length -gt 0 })
+        $foreign = @($all | Where-Object { -not ($_.MainWindowTitle -and ([string]$_.MainWindowTitle).Length -gt 0) })
         if ($foreign.Count -eq 0) {
-            Write-Host ('[slot] free (round ' + $i + '); editor pid ' + $script:KnownEditorPid + ' alive: ' + (@($all | Where-Object { $_.Id -eq $script:KnownEditorPid }).Count -gt 0))
+            $uw = ($userWin | ForEach-Object { [string]$_.Id + ':' + $_.MainWindowTitle }) -join ' ; '
+            Write-Host ('[slot] free (round ' + $i + '); user windows ignored: ' + $(if ($uw) { $uw } else { '(none)' }))
             return $true
         }
         $desc = ($foreign | ForEach-Object { [string]$_.Id + ':' + $_.MainWindowTitle }) -join ' ; '
@@ -1150,7 +1189,12 @@ function Get-FrozenScoreKeys {
     # 探针只在 ×2.5 以上、且只对带控阵容才偶发翻盘，臂 shj_nofold 无显著（生产三档仍 0.4/0.6）。
     # 它们仍要进**权重指纹**（下面 Get-WeightsFingerprint 会把两份清单合起来算），
     # 否则"只差这些键的两个权重文件"会被当成同一份。
-    return @('KILL_BONUS', 'SELF_DEATH_W', 'VALUE_STUN_FOLD', 'VALUE_SILENCE_FOLD')
+    # 【2026-09-19 变更·用户批准】`KILL_BONUS` / `SELF_DEATH_W` **已从引擎整项删除**（冗余计价，见 §14#108），
+    #   所以冻结清单 4 → **2**：只剩两个状态折减（它们仍是「噩梦/噩梦+ 设 1.0、生产三档 0.4/0.6」的分档手段）。
+    # 【2026-09-19 变更·用户决定】VALUE_STUN_FOLD / VALUE_SILENCE_FOLD **也已从引擎整项删除**
+    #   （用户原话：「噩梦没有的，那三个档位也不应该有」）⇒ 冻结清单 **2 → 0**，这份清单现在为空。
+    #   保留本函数是为了指纹与 -notcontains 判断的形状一致；将来若又出现'只许文件写、不许臂改'的键，往这里加。
+    return @()
 }
 
 function Get-RuleScoreKeys {
@@ -1161,23 +1205,25 @@ function Get-RuleScoreKeys {
     # 2026-09-18 追加 VALUE_IMPORTANCE_POW：身价乘法化（用户：「身价得是乘法吧？加法会被其他分数给稀释…
     #   身价一点都不重要。但我觉得身价非常重要」）。默认 0 = 关闭 ⇒ 生产三档逐位不变；
     #   它是**连续参数**（要扫 0/1/2/3），所以走"显式点名"这条通道，不进自动搜索。
-    return @('FOCUS_KILL_RULE', 'FOCUS_NET_MARGIN', 'MOVE_ACCEPT_DAMAGE',
-             'EVADE_NETWORK_BONUS', 'NEXT_TURN_THREAT_W', 'SUB_JOIN_RULE',
-             'VALUE_IMPORTANCE_POW',
+    # 【2026-09-20 用户拍板·已删】原 'FOCUS_KILL_RULE' / 'FOCUS_NET_MARGIN'（规则 A：合力可杀净收益）、
+    #   'EVADE_NETWORK_BONUS' / 'NEXT_TURN_THREAT_W'（规则 B 的另两条）—— 四个都判死，键与代码一起删除。
+    return @('MOVE_ACCEPT_DAMAGE',
+             'SUB_JOIN_RULE',
              # 2026-09-18 追加：结局量（用户第 2/3 条「本回合输出与下回合被输出的最优平衡」
              # 「被输出尽量分摊、优先保护核心、用肉盾抗伤害」）。都默认 0 = 关闭 ⇒ 生产逐位不变。
-             # TERMINAL_W = 终局项（判负线凸曲线）· RISK_W = 风险集中度（max 型瓶颈量）
-             # RISK_CORE_POW = 风险里的"核心系数"指数（0 = 不区分核心）。
+             # TERMINAL_W = 终局项（判负线凸曲线）· RISK_W = ⑦位置暴露（max 型）· RISK_CORE_POW = 其中的核心指数
+             # ⑦ 于 2026-09-20 第三轮随分摊族删过，2026-09-21 按用户拍板 A 恢复（输入换成「挨打合计」）。
              'TERMINAL_W', 'RISK_W', 'RISK_CORE_POW',
-             # 2026-09-18 追加：核心系数的来源（0 = 静态身价，1 = 动态威胁）。
+             # 2026-09-21 追加：**"我方挨打按血量池折算"**（用户：「一个 2 的坦克不敢打 4 攻的输出，
+             #   但实际坦克的血多，不一定亏」）⇒ 倍率 = 1 + INCOMING_POOL_W × (20 ÷ 当前血 − 1)，
+             #   只作用在 ③血量账的**我方掉血**那一侧（打出去那侧已有 ④集火 frac² 计价）。默认 0 = 关。
+             'INCOMING_POOL_W',
              # 用户：「如何确定核心，靠的是这个公式」+ 探针实测"那条公式三项里两项是空的" ⇒
              # 核心改由**威胁**算（`_outgoing_threat_on`，0 手写表）。默认 0 = 现状。
-             'CORE_BY_THREAT',
              # 2026-09-19 追加（学棋类/围棋 AI 的架构）：判负线意识 + **对手最优反击一层**。
              #   RISK_DEATH_MULT = 判负线乘子（乘在风险罚上：我方存活 3/2/1 ⇒ ×1/×(1+m)/×(1+2m)）
              #   REPLY_TOPK / REPLY_W = 束搜索收敛后对**最终候选前 K 条**做"对手贪心一层"推演并重排
              # 都默认 0 = 关闭 ⇒ 生产三档逐位不变。
-             'RISK_DEATH_MULT', 'REPLY_TOPK', 'REPLY_W',
              # 2026-09-19 追加（今晚的**主杠杆**）：**并列裁决层**。
              # 探针实测：83% 的局面"最优 vs 次优"分差 < 0.5、中位 margin = 0.000 ⇒
              # AI 的行为大半由"并列时怎么破"决定，而现有裁决只有规则 A（+0.20 n.s.）。
@@ -1187,7 +1233,85 @@ function Get-RuleScoreKeys {
              #   ROLLOUT_TOPK = 束搜索收敛后对最终候选前 K 条做**玩家一整回合的顺序推演**（K=0 关闭）
              #   ROLLOUT_MODE = 1 字典序（存活数→血量→推演后评分）/ 2 加法（对照臂）
              # 都默认 0 = 关闭 ⇒ 生产三档逐位不变。
-             'ROLLOUT_TOPK', 'ROLLOUT_MODE')
+             'ROLLOUT_TOPK', 'ROLLOUT_MODE',
+             # 2026-09-19 追加：**吃矿的机会成本系数**（用户选的口径）。
+             #   `矿的净价值 = 矿分 − GOLD_OPPORTUNITY_W × (这一手若改为攻击能造成的价值)`；
+             #   只有能捡矿的单位（hero_42 黄金矿工）会走这段，但键放在通用表里方便注入。
+             #   默认 0 = 关 ⇒ 生产三档逐位不变。
+             'GOLD_OPPORTUNITY_W',
+             # 2026-09-19 追加：A 档英雄特化项（毒蛇/宿魂/装甲堡垒/古拉），全默认 0 = 关
+             'POISON_TICK_VALUE',
+             # 2026-09-20 追加（T6）：**『这一击新挂上毒』的动作收益**（只在目标原本没毒时计数 +1）。
+             #   与 POISON_TICK_VALUE（计价『敌人身上有毒』这个状态）互补：一个付状态钱、一个付动作钱。默认 0 = 关。
+             'POISON_APPLY_W', 'POSSESS_TARGET_W', 'SOLID_HOLD_W',
+             # 【2026-09-21 追加·B 档英雄特化（用户拍板：做沉默 / 荆棘树人打远程后勤 / 战锤克毒蛇）】
+             #   三个键都是**动作量**：由 `_apply` 在我方命中那一刻累加（`sim.silence_val` / `pin_val` /
+             #   `paralyze_val`）、`_evaluate` 直接入账，价钱按**施加者**英雄段覆盖读（`_wh`）⇒
+             #   值写在 `噩梦.json` 的 `hero_34` / `hero_49` / `hero_25` 段里，扁平键只是兜底（默认 0 = 关）。
+             #   为什么要新键：⑥⑦ 估的是「它这回合能打出多少伤害」，而这三件事关掉的是**结构上读不到的那部分**
+             #   （放不出技能 / 走不动 / 攻击力归零导致命中附带机制失效）⇒ 详见 `src/BattleAI.gd` 的
+             #   `const SILENCE_VALUE_W` 那块说明。规则键 22 → 26。
+             'SILENCE_VALUE_W', 'THORN_PIN_SUP_W', 'THORN_PIN_RANGED_W', 'PARALYZE_ZERO_W',
+             # 【2026-09-20·用户拍板】原 'LEECH_TRIGGER_W'（古拉 hero_14 的"触发吸血补一笔"）**已判死删除**：
+             #   3 队 × 3 个值的棋力批越调越负（−0.56 / −1.83 / −3.70，胜率 0.39→0.33）⇒ 连引擎代码一起
+             #   删干净（规则键 41 → 40）。权重文件 / theta 里再写它会落到 `set_weights` 的未知键分支、静默忽略。
+             # 2026-09-19 追加：**推进停止线**（口径 A，用户选）—— 用户实测「开局 AI 不顾一切往前冲，
+             # 冲到前面，到我的回合可以给他重创」。0 = 关（默认，逐位不变）/ 1 = 拉力只推到"对方下回合
+             # 够不到"的那一格（`opp_reach + 1`）为止，只有这一回合真能打到人时才进威胁圈。0 参数规则。
+             # 2026-09-19 追加：**终选抽签**（用户设计）—— 剪枝保持纯评分，只在终选那一下：
+             #   若第 2..K 名与第 1 名分差 ≤ T，就在「够接近」的线里随机抽一条（K/T 两个数当难度旋钮）。
+             #   默认 K=0 = 关。⚠️ 抽签用**专用 RNG + 局面哈希播种** ⇒ 同一局面同一签、整局可复现
+             #   （不像 JITTER 用全局 randf()，跨进程不可复现）。
+             # 【2026-09-20 用户拍板·已删】原 'LOTTERY_K', 'LOTTERY_T', 'LOTTERY_STRICT', 'LOTTERY_SEED'
+             #   （终选抽签）：用户实测「设置 L 和 T 没让 AI 变弱，反倒胜率还增加了」⇒ 当难度旋钮无效，
+             #   键与 `_lottery_pick()` 一起从引擎删除（规则键 39 → 35）。
+             # 2026-09-19 追加：**难度档「概率性弱化」**（用户设计：「我希望简单难度和普通难度也有概率
+             #   可以打出最好的操作。就是概率的多少问题」）。与抽签/抖动那一族**本质不同**：那些都在
+             #   "评分分不出来的并列区"里动手脚（实测全部无效）；这一条是**两个强度不同的引擎按概率混合**
+             #   ⇒ `期望棋力 = p × 满血 + (1−p) × 弱化`，p 本身就是一个单调的难度旋钮。
+             #   WEAK_MODE = 0 关 / 1 每单位独立贪心 / 2 关威胁预判整层 / 3 两者都弱化；
+             #   WEAK_P = 这一回合走弱化引擎的概率；WEAK_SEED = 抽签种子（用局面哈希播种 ⇒ 可复现）。
+             #   默认 0 ⇒ 生产三档与噩梦逐位不变。
+             'WEAK_MODE', 'WEAK_P', 'WEAK_SEED',
+             # 2026-09-19 追加：替补「收尾优先」（用户：「战局中主动撤下英雄来收尾」）。
+             #   对面只剩 1 个存活单位时（打死它 = 直判负对方）：落点优先能打到/打死它，选人优先补
+             #   「上来就能收官」的那个。默认 0 = 关 ⇒ 生产三档与噩梦逐位不变。
+             'SUB_FINISH_W',
+             # 2026-09-19 追加：**判负线硬闸门**（用户实机：「敌人死了两人还去打人、被反击致死」）。
+             #   走完这一步我方非召唤物存活 = 0（= 直接判负）的候选线直接丢弃 —— 用支配关系而不是罚分，
+             #   因为罚分会被平坦评分地形淹掉。默认 0 = 关 ⇒ 生产三档逐位不变。
+             'NO_LOSS_FILTER',
+             # 2026-09-20 追加：**位移技能威胁**（用户「我有暗域，把敌人换位他就受巨额伤害」；探针证实
+             # AI 落点评分完全不认 ⇒ 12 次能打人的决策里 11 次贴到暗域旁边）。默认 0 = 关 ⇒ 生产逐位不变。
+                  # 2026-09-20 追加：**低档"只用弱化旋钮"**（用户实测「我觉得现在简单和普通太离谱了。
+             #   你再简单再弱智，能打的时候你得打吧，而不是能打敌人的时候跑开，或者敲一下障碍」）。
+             #   1 = `_beam()`/`_jitter()` 回到 `w_beam`/`w_jitter`（默认 200 / 0），不再吃难度自带的
+             #   "简单 50 + 抖动 ±8 · 普通 100 + 抖动 ±1.5" —— 抖动是**逐候选**加的随机数，而决策分差
+             #   中位 0.000 ⇒ 在平地上等于掷骰子（能打不打、敲墙、后退）。默认 0 = 关 ⇒ 困难/噩梦逐位不变。
+             # 2026-09-20 追加：**「原地不动」候选**（用户实机日志：装甲堡垒 `[本步 Δ-3.3]` 还动）。
+             #   根因：`_actions_for()` 里所有"纯移动"分支都写了 `if mc != u.cell` ⇒ 候选表**从来没有**
+             #   "原地不动、什么都不做"这一项（只有原地攻击/原地拆墙；no-op 兜底只在 `combos.size()==0`）
+             #   ⇒ **AI 每个单位每回合被迫移动**，装甲堡垒 hero_48 因此永远拿不到[坚固]（机制：回合结束
+             #   没移动 ⇒ 获得坚固）。1 = 允许"不动"进候选表。默认 0 = 关 ⇒ 全档逐位不变。
+             'STAY_OPTION',
+             # 【2026-09-20 第三轮 · 已删】原 TEAM_THREAT_W（⑪队级威胁）与 THREAT_ALLOC_W（⑮分摊记账）
+             #   —— 用户拍板整族删除（「下回合挨打太难了…可以删掉吗」）。依据：剂量批 2.0−关掉 = −0.20
+             #   [−9.40, +8.99]、3.0−关掉 = −5.58 [−15.65, +4.49] ⇒ 风格旋钮不是强度旋钮（§14#174）。
+             #   替代：⑮只剩必死折（THREAT_DEAD_FOLD，判据换成「挨打合计」）+ ⑥MOVE_ACCEPT_DAMAGE + 终选层 T13。
+             # 2026-09-20 追加：**"站着能打到人却不打"的代价**（用户实测：`不攻击（原地够得到3个）`
+             #   却退开）。根因是**"放弃一次出手"在评分里没有成本**（只有真打出去的伤害有钱）。
+             #   ⚠️ 同一位置的旧注（TEAM_THREAT_W / THREAT_ALLOC_W / THREAT_SUM_CAP 三段）已随键删除。
+             #   ⚠️ 见上面那三行 2026-09-20 第三轮说明。
+             # 2026-09-20 追加：**威胁求和上限**（用户实测诊断：「AI 的该格挨打是不是计算的不对，
+             #   加起来都超过对方总伤害了，然后挨打扣分大部分时候比伤害加分高，所以就会退」）。
+             #   旧口径 `_incoming_damage` / `_incoming_plain` 都是**逐敌人求和**（每个够得着的敌人都按
+             #   满伤算一次），而每个 AI 单位各算一遍 ⇒ 对面 3 人时全队合计 = 真实总输出的 **3 倍**。
+             #   N>0 = 只累加最疼的 N 个（现实里同一格不可能被所有人同时打到）。0 = 关（旧口径、逐位不变）。
+                  # 2026-09-20 追加：**"站着能打到人却不打"的代价**（用户实测：`不攻击（原地够得到3个）`
+             #   却退开）。根因是**"放弃一次出手"在评分里没有成本**（只有真打出去的伤害有钱）。
+             #   本键 = 本回合没攻击、但它移动前站在原位就够得到人 ⇒ 罚该分（价钱不是硬规则）。
+             #   判据在**动作层**算（`_evaluate` 看不到"移动前"）。默认 0 = 关 ⇒ 逐位不变。
+             'IDLE_HIT_PENALTY')
 }
 
 function Get-WeightsMeta([string]$Path, [int]$Beam, [int]$BeamOpp = 0, [string]$Opp = 'base', [string]$WBSha = '') {

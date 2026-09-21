@@ -239,12 +239,37 @@ var _peer_mode := "normal"
 var _last_start: Dictionary = {}
 
 # ---- UI ----
+# 界面背景贴图（与主菜单同一张）：按顺序取【第一个能加载的】；全缺图 ⇒ 返回 null ⇒ 只剩纯色底。
+# 换图只需把想用的那张挪到最前（或直接替换文件内容）。
+const COVER_BG_CANDIDATES := [
+	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",
+]
+
+func _make_cover_bg() -> TextureRect:
+	for path in COVER_BG_CANDIDATES:
+		if not ResourceLoader.exists(path):
+			continue
+		var tex := load(path) as Texture2D
+		if tex == null:
+			continue
+		var r := TextureRect.new()
+		r.texture = tex
+		r.set_anchors_preset(Control.PRESET_FULL_RECT)
+		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED   # 等比裁切铺满，不变形
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE               # 不能吃掉按钮点击
+		return r
+	return null
+
 func _build() -> void:
-	# 背景：酒馆木地板 + 轻微压暗（两层都不接收鼠标）
+	# 背景：纯色底 → 界面背景贴图（等比裁切铺满）→ 轻微压暗（三层都不接收鼠标）
 	var bg := WoodFloor.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
+	var cover := _make_cover_bg()
+	if cover != null:
+		add_child(cover)
 	var dim := ColorRect.new()
 	dim.color = Color(0, 0, 0, 0.12)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -943,24 +968,9 @@ func _refresh_ui() -> void:
 		else:
 			_btn_ready.disabled = not NetBus.is_online
 			_btn_ready.text = "准备"
-			if NetBus.is_online:
-				# 高亮提醒点击准备（橙色边框）
-				var hlr := StyleBoxFlat.new()
-				hlr.bg_color = Color(0.24, 0.28, 0.38, 0.6)
-				hlr.corner_radius_top_left = 8
-				hlr.corner_radius_top_right = 8
-				hlr.corner_radius_bottom_left = 8
-				hlr.corner_radius_bottom_right = 8
-				hlr.set_border_width_all(3)
-				hlr.border_color = Color(1.0, 0.7, 0.2)
-				var hlr_h: StyleBoxFlat = hlr.duplicate()
-				hlr_h.border_color = Color(1.0, 0.82, 0.35)
-				hlr_h.set_border_width_all(4)
-				var hlr_p: StyleBoxFlat = hlr.duplicate()
-				hlr_p.border_color = Color(0.9, 0.55, 0.1)
-				_btn_ready.add_theme_stylebox_override("normal", hlr)
-				_btn_ready.add_theme_stylebox_override("hover", hlr_h)
-				_btn_ready.add_theme_stylebox_override("pressed", hlr_p)
+			# 【2026-09-20】原来这里给「准备」按钮单独套了一套橙框灰底的 StyleBoxFlat 做"提醒"，
+			# 结果它和其它按钮（主题里那款黑色金属牌）长得不一样 —— 用户反馈"样式没同步"。
+			# 现在删掉这层自定义样式：准备按钮与全游戏按钮同款，提醒改由上面的状态文字承担。
 	# 开始按钮：只有主机能发起对局 —— 加入方（客房）不显示这个按钮，点「准备」等主机开战即可。
 	# 与上面的「准备」按钮对称：准备=仅加入方显示，开始=仅主机显示，两者都要求已联网（未联网时都不显示）。
 	_btn_start.visible = NetBus.is_online and my_is_host

@@ -107,6 +107,14 @@ const _PRESS_LONG_MS := 450       # 长按判定时长
 const _PRESS_DRAG_PX := 14.0      # 位移超过该值判定为拖动
 var _last_attacked: Unit = null   # 最近一次攻击的目标（供攻击后技能使用）
 var _attack_hp_before := 0   # 最近一次攻击结算前目标的生命值（攻击后技能用攻击前血量判定，如古拉吸血
+# 【演出·大伤害震屏】单次**攻击/反击**实际打掉的血量 ≥ SHAKE_HIT_MIN 时，屏幕震一下。
+# 判定用"实际掉血"而不是面板伤害：被圣盾格挡、被坚固完全防住（0 伤）时目标没掉血，就不震。
+# 只挂在攻击结算点上（普攻 / 长角自己结算的基础伤害 / 近战反击 / 远程反击），
+# 技能（剑气穿透、散射、击穿、自爆、附体等）、持续伤害（猛毒、烧血）、炸弹一律不震。
+const SHAKE_HIT_MIN := 6         # 达到这个伤害（含 6 点）就震
+const SHAKE_PX := 7.0            # 震动幅度（像素，基于 720×1280 基准分辨率）
+var _shake_cam: Camera2D = null  # 专用"零偏移相机"：只抖它的 offset，不动任何节点坐标
+var _shake_tween: Tween = null
 # 拖拽撤下：按住己方英雄拖到出生点
 var _drag_unit: Unit = null
 var _drag_start_mouse := Vector2.ZERO
@@ -158,24 +166,43 @@ const DEFAULT_DECK_SIZE := 5
 # _CONSOLE_SUB_LOG = 替补流程日志（阵亡→待补→面板→落位→统计）：检查替补用，默认开
 # _CONSOLE_AI_LOG  = AI 行为决策日志（行动方案评分/竞技场选人/首发部署/敌方AI替补上人）：默认关，避免刷屏
 const _CONSOLE_SUB_LOG := false
-const _CONSOLE_AI_LOG := false
+# 【2026-09-20 临时打开·用户要求（他选 a）】查"为什么雪拳走那一格"用：
+#   控制台会逐条打出 AI 每一步的**落点理由 + 本步 Δ分**（`BattleAI._print_decision`），
+#   这次还补了「吃道具值多少分 / 该格下回合挨打多少 / 规则B 罚多少」三项（原来不打印）。
+#   ⚠️ 会刷屏（每回合每个单位一条 + 竞技场选人/首发部署/替补上人），**查完请改回 false**。
+const _CONSOLE_AI_LOG := true
 
-# ---- 噩梦 / 噩梦+ 难度：敌方 AI 换成 RL 候选 src/BattleAI.gd 的分叉 ----
+# ---- 噩梦 难度：敌方 AI 换成 RL 候选 src/BattleAI.gd 的分叉 ----
 # 难度 0/1/2 完全照旧走 BattleAI（这里的常量只在难度 >= 3 的分支里被用到）；
 # 候选刻意没有 class_name，只能按路径 load，接收变量不写类型，别改成 BattleAI。
-# 【2026-09-15 第二次定稿·五档】3 = 噩梦（注入**训练出来的通用权重**）；
-#   4 = 噩梦+（= 噩梦 + **按英雄的逐项特化**，即再叠加一层 hero_XX 段）。
-#   两份权重表都"只写与下一层不同的部分"，按顺序叠加：默认(困难) → 噩梦.json → 噩梦+.json。
+# 【2026-09-20 用户拍板·改为四档】3 = 噩梦 = 注入 `噩梦.json`（**通用权重 + hero_XX 英雄特化段在同一份文件里**）。
+#   原来还多一档 4 = 噩梦+（第二份表 `噩梦+.json` 只写 hero_XX 段）；用户决定"没必要再分一层"⇒
+#   英雄段整体搬进 `噩梦.json`、第 5 档删除（手写 4 会被 `>= NIGHTMARE_DIFFICULTY` 当噩梦处理）。
 const NIGHTMARE_DIFFICULTY := 3                          # 与 GameState.AI_DIFFICULTY_MAX 对应
-const NIGHTMARE_PLUS_DIFFICULTY := 4                     # 第 5 档：噩梦 + 英雄特化
 const AI_CANDIDATE_PATH := "res://RL/ai/AI_Battle.gd"    # 候选（带保真修正 + 可注入权重）
-const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦档：训练出来的通用权重
-const AI_NIGHTMARE_PLUS_WEIGHTS_PATH := "res://RL/weights/噩梦+.json"  # 噩梦+：只写 hero_XX 段（与噩梦不同处）
+const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦档：训练权重 + 英雄段
+# 【2026-09-20 新增·默认零变化】低档权重文件通道（用户 2026-09-20 定的难度梯度）：
+#   简单(0) = RL/weights/简单.json（`WEAK_MODE=5` 贪心+关集火 · `WEAK_P=0.70` ⇒ 好操作概率 30%）
+#   普通(1) = RL/weights/普通.json（`WEAK_MODE=5` 同上         · `WEAK_P=0.40` ⇒ 好操作概率 60%）
+#   ⚠️ **下面这两行的值以权重文件为准**（2026-09-21 更正：这里原先写着 简单 0.85 / 普通 `MODE=4`·0.50，
+#      而两份 json 实际一直是 5/0.70 与 5/0.40 —— 注释过期了，已对齐；只改注释，行为零变化）。
+#   ⚠️ **文件不存在 ⇒ 完全不注入 ⇒ 与改动前逐位相同**；困难(2) 永不走这条路（锚点）。实测见
+#   RL/reports/难度体检_6队_20260919.md（简单 = 胜率 0.2292 / 普通(只关集火) = Δpts −7.31 CI[−13.23,−1.38]）。
+#   2026-09-21 复测（`难度体检 -Mode weakp2`，6 队 × 4 种子）：两档对困难只有 −6.11 / −4.57（CI 跨 0）⇒
+#   **梯度仍嫌太浅**，见 `RL/reports/难度体检_T1_低档棋力落点_20260921.md`。
+#   另：简单档还有一条**选人层面**的弱化（2026-09-21）——`SIMPLE_PICK_SCORE_W` / `_pick_weight()`
+#   把"敌方卡组组建 + 竞技场 2选1"从按评分挑改成大幅拉平的加权随机（只影响难度 0）。
+const AI_LOW_TIER_WEIGHTS_PATH := {
+	0: "res://RL/weights/简单.json",
+	1: "res://RL/weights/普通.json",
+}
 # 取证日志（默认零输出，保留）：确认"噩梦档这一局到底用了哪个 AI、权重读进来没有、BEAM 是多少"。
 #   怎么开：启动前设环境变量 ZB_NIGHTMARE_DEBUG=1（任意非空值），再进难度=3 的对局。
 #           例：set ZB_NIGHTMARE_DEBUG=1 && godot.exe --path "<项目>" --log-file <绝对路径日志>
 #   会打什么（敌方每回合建 AI 时一行；难度 0/1/2 不打）：
-#     [噩梦档] AI=res://RL/ai/AI_Battle.gd | 权重文件=res://RL/weights/噩梦.json | 注入键数=17 | BEAM=1200 | JITTER=0.0
+#     [噩梦档] 难度=3 | AI=res://RL/ai/AI_Battle.gd | 权重文件=res://RL/weights/噩梦.json | 注入键数=17 | BEAM=200
+#     （2026-09-21 更正：这里原先的示例还带 `JITTER=0.0`，而抖动机制与 `JITTER` 键**早已从引擎删除** ⇒
+#      实际打印只有"难度 / AI / 权重文件 / 注入键数 / BEAM"五个字段，示例已对齐真实 print。）
 #   为什么得靠它：换没换 AI、权重文件有没有读进去，从游戏表现上**看不出来**（权重改坏也只是一样地打）。
 #   不想要：把 _NIGHTMARE_DEBUG 改 false（只关日志），或删本行 + _make_battle_ai() 里那行 print。
 const _NIGHTMARE_DEBUG := true
@@ -230,14 +257,30 @@ func _ready() -> void:
 	board_view.gold_left = gold_left
 	# 地块木纹铺法：联机两端必须一致（都用联机种子）；单机每局随机换一种铺法
 	board_view.set_tile_seed(GameState.online_seed if GameState.is_online else randi())
-	# 酒馆木地板背景（垫在棋盘下层；必须忽略鼠标，否则会吃掉棋盘点击）
+	# 战斗背景（垫在棋盘下层；必须忽略鼠标，否则会吃掉棋盘点击）：
+	# 纯色底（WoodFloor）兜底 → 酒馆木地板贴图等比裁切铺满。缺图自动退回纯色，不影响启动。
+	# 两层都四边外扩 BG_BLEED：震屏抖动的是相机，画面整体平移，不外扩就会在边缘露出底色条。
+	var wsize := get_viewport().get_visible_rect().size + Vector2(BG_BLEED, BG_BLEED) * 2.0
 	var wood := WoodFloor.new()
-	var wsize := get_viewport().get_visible_rect().size
-	wood.position = Vector2.ZERO
+	wood.position = -Vector2(BG_BLEED, BG_BLEED)
 	wood.size = wsize
 	wood.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(wood)
+	var battle_bg := _make_battle_bg(wsize)
+	if battle_bg != null:
+		add_child(battle_bg)
 	add_child(board_view)
+	# 【演出·大伤害震屏】专用相机：anchor=固定左上 + position=0 时视野与"没有相机"逐像素一致，
+	# 平时 offset 恒为 0（画面完全不变），只有大伤害时抖一下 offset。
+	# 为什么用相机而不是挪节点坐标：相机只改画面映射，不动棋盘/单位的坐标，
+	# 输入回查（get_global_mouse_position）会跟着相机一起偏移，不会出现"抖动期间点歪格子"。
+	# HUD 是 CanvasLayer，不受相机影响（只震战场，不震界面）。
+	_shake_cam = Camera2D.new()
+	_shake_cam.anchor_mode = Camera2D.ANCHOR_MODE_FIXED_TOP_LEFT
+	_shake_cam.position = Vector2.ZERO
+	_shake_cam.offset = Vector2.ZERO
+	add_child(_shake_cam)
+	_shake_cam.make_current()
 	if GameState.is_online:
 		# 联机对局：两端使NetLobby 广播的同一随机种子（确定性）；使用双方选择的卡组（为空才用默认），
 		# 走与单机一致的 _begin_deployment 轮流部署（敌轮改为等待对端真人发部署指令）
@@ -447,13 +490,134 @@ func _maybe_start_online_deploy() -> void:
 func _start_with_player_deck(player_ids: Array) -> void:
 	GameState.pick_deck_in_battle = false
 	var want := randi_range(5, 8)
-	var enemy := _synergy_pick_enemy(want)
+	# 【2026-09-21 L1+L2+L3】把玩家阵容传进去（L1 的克制项要用它）；回来记一笔"最近用过"（避免连着同一支队）
+	var enemy := _synergy_pick_enemy(want, player_ids)
+	if not enemy.is_empty():
+		_recent_enemy_decks.push_front(str(enemy))
+		while _recent_enemy_decks.size() > PICK_RECENT_MAX:
+			_recent_enemy_decks.pop_back()
 	GameState.set_decks(_order_deck(player_ids), _order_deck(enemy))
 	deck_pick_done.emit()   # 通知 HUD 收起"选择卡组"面板（无论走哪条选择路径都收）
 	_begin_deployment()
 
+# 【2026-09-21 用户拍板】简单档的"选人"大幅拉平：**不再按评分挑最优，改成加权随机**
+#   权重 = `1 + SIMPLE_PICK_SCORE_W × max(评分, 0)` ⇒ 好英雄仍略占优（最优/最差大约 3~4 倍），
+#   但远达不到"总是挑最优"。**只作用于赛前两处选人**（用户口径 A）：
+#     ① 敌方卡组组建（`_synergy_pick_enemy`，单机普通模式的敌方队伍）
+#     ② 竞技场 2选1 的敌方选择（`_action_arena_enemy_pick`，改成按权重的掷签而不是取最优）
+#   **战斗内的选人不在此列**（开局部署选人 / 替补选人照旧按评分）—— 那两处被真实/模拟两侧的
+#   "选人规则镜像"共用，改了会破坏对拍。
+#   普通(1)/困难(2)/噩梦(3) 一律走原口径 ⇒ 逐位不变。调"乱"的程度只要动这一个常数。
+const SIMPLE_PICK_SCORE_W := 0.1
+
+func _pick_weight(sc: float) -> float:
+	if GameState.ai_difficulty == 0:   # 0 = 简单
+		return 1.0 + SIMPLE_PICK_SCORE_W * maxf(sc, 0.0)
+	return maxf(sc, 0.0) + 1.0         # 普通/困难/噩梦：现行口径（权重下限 1，任何英雄都有机会）
+
+# ============ 【2026-09-21 用户拍板】标准单机的"选队伍强化"三层（L1+L2+L3）============
+# 用户原话：「**普通模式我可以L1 2 3都做吗？竞技场模式我觉得还是按照现在的玩法，毕竟竞技场
+#   开局选人的随机性也是一部分**」⇒ 本段**只作用于标准单机的敌方组队**（`_synergy_pick_enemy`）；
+#   **竞技场（`_action_arena_enemy_pick` / `_begin_arena_draft`）一行不动**（除了上面那条简单档掷签）。
+#
+# 为什么做（用户的第 1 条目标「上场的英雄队伍强度高，自己队伍配合，同时能解对面的队伍」）：
+#   现状 = 「单人总评分 + 静态协同表 + 职能配比」加权随机 ⇒ ① 那个总评分是手填列、从没和实战校准过
+#   ② **组队那一步完全不知道玩家选了什么**（竞技场才有 `_counter_player_score`）③ 组队是唯一还没用上的难度杠杆。
+#
+# 三层合成一条链（**运行时零额外机时**，L1/L3 都是现成公式、L2 是离线算好的池子）：
+#   L1 针对性：评分里加 `TARGET_W × 对玩家阵容的净克制`（现成 `DataRegistry.battle_unit_value_parts().counter`）
+#   L2 队伍池：`res://RL/weights/队伍池.json` 里"离线车轮战排出来的队"，按难度取档（弱/中/强）
+#   L3 在线挑队：对候选集算**在线分**（整队 solo + 队内协同 + L1 的克制），取前 `PICK_POOL_TOPK` 支再**随机抽一支**
+# 任何一环缺失（池子文件没有 / 该档为空 / `TARGET_W=0` 且无池子）⇒ **逐位退回现在的行为**（安全降级）。
+const PICK_TARGET_W := { 0: 0.0, 1: 0.5, 2: 1.0, 3: 1.0 }   # 按难度：简单不针对 · 普通半针对 · 困难/噩梦全针对（改成 0 即恢复原样）
+# 池子档位键用 **ASCII**（`weak`/`mid`/`strong`）：队池 JSON 由 `RL\train\队伍车轮战.ps1` 生成，
+#   全 ASCII 的键能彻底避开"PowerShell 写中文 → 编码事故"这一类坑（本项目已踩过 7 次引号/编码问题）。
+const PICK_POOL_TIER := { 0: "weak", 1: "mid", 2: "strong", 3: "strong" }
+const PICK_POOL_PATH := "res://RL/weights/队伍池.json"
+const PICK_POOL_TOPK := 8      # 在线分排序后取前 k 支随机抽（1 = 永远挑最优、∞ = 退化成纯随机）
+const PICK_RECENT_MAX := 3     # 最近 N 局用过的队不再出（避免连着遇到同一支）
+var _pick_pool: Dictionary = {}       # 档位名 -> Array[Array[String]]（空 = 没池子 ⇒ 回退）
+var _pick_pool_tried := false
+var _recent_enemy_decks: Array = []
+
+## 读队伍池（只读一次；文件缺失/解析失败/结构不对 ⇒ 保持空 ⇒ 回退旧行为）。纯容错，不抛错。
+func _load_pick_pool() -> void:
+	if _pick_pool_tried:
+		return
+	_pick_pool_tried = true
+	if not FileAccess.file_exists(PICK_POOL_PATH):
+		return
+	var f := FileAccess.open(PICK_POOL_PATH, FileAccess.READ)
+	if f == null:
+		return
+	var parsed = JSON.parse_string(f.get_as_text())
+	f.close()
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return
+	for key in PICK_POOL_TIER.values():
+		var tier := String(key)
+		if not (parsed as Dictionary).has(tier):
+			continue
+		var arr = (parsed as Dictionary)[tier]
+		if typeof(arr) != TYPE_ARRAY or (arr as Array).is_empty():
+			continue
+		var decks: Array = []
+		for d in (arr as Array):
+			if typeof(d) == TYPE_ARRAY and (d as Array).size() > 0:
+				var one: Array = []
+				for hid in (d as Array):
+					one.append(String(hid))
+				decks.append(one)
+		if not decks.is_empty():
+			_pick_pool[tier] = decks
+
+## 整队在线分（L1+L3 共用）：队内 solo 之和 + 队内协同之和 + TARGET_W × 对玩家阵容的净克制之和
+func _enemy_deck_score(deck: Array, player_ids: Array) -> float:
+	var sc := 0.0
+	for hid in deck:
+		var parts: Dictionary = DataRegistry.battle_unit_value_parts(String(hid), deck, player_ids, null)
+		sc += float(parts["solo"]) + float(parts["counter"]) * float(PICK_TARGET_W.get(GameState.ai_difficulty, 0.0))
+	for i in deck.size():
+		for j in range(i + 1, deck.size()):
+			sc += DataRegistry.synergy_bonus(String(deck[i]), String(deck[j]))
+	return sc
+
+## L3：把候选队按在线分排序 → 取前 k 支 → 在"最近没用过"的里面随机抽一支（都抽过就放宽）
+func _pick_from_candidates(cands: Array, player_ids: Array) -> Array:
+	if cands.is_empty():
+		return []
+	var scored: Array = []
+	for c in cands:
+		scored.append({ "deck": c, "sc": _enemy_deck_score(c, player_ids) })
+	scored.sort_custom(func(a, b): return float(a["sc"]) > float(b["sc"]))
+	var k: int = mini(PICK_POOL_TOPK, scored.size())
+	var fresh: Array = []
+	for i in k:
+		if not _recent_enemy_decks.has(str(scored[i]["deck"])):
+			fresh.append(scored[i]["deck"])
+	if fresh.is_empty():
+		for i in k:
+			fresh.append(scored[i]["deck"])
+	return fresh[randi() % fresh.size()]
+
 # 按协同随机组建敌方卡组（与菜单选人同口径：强度 + 已选协同 + 职能配比加权抽取）
-func _synergy_pick_enemy(want: int) -> Array:
+# 【2026-09-21 L1+L2+L3】见上面 `PICK_TARGET_W` 那一大段说明。本函数现在的完整流程：
+#   ① **L2**：若该难度有队伍池档位（`队伍池.json`）⇒ 候选集 = 那一档的全部队（**人数以池子为准**，忽略 want），
+#      走 ③ 的在线挑队；池子缺失/该档为空 ⇒ 走 ②。
+#   ② **现算候选**（原逻辑 + L1）：逐个按 `单人评分 + 已选协同 + 职能配比 + TARGET_W×对玩家净克制` 加权抽，
+#      抽满 `want` 支 ⇒ 得到 1 支候选队。
+#   ③ **L3**：若候选多于 1 支（池子路径），按整队在线分取前 `PICK_POOL_TOPK` 支、在其中随机抽一支。
+# `player_ids` = 玩家已选卡组（L1 的克制项要用；竞技场路径不传 ⇒ 退化为 0）。
+func _synergy_pick_enemy(want: int, player_ids: Array = []) -> Array:
+	# ---- L2：优先用离线队伍池 ----
+	_load_pick_pool()
+	var tier := String(PICK_POOL_TIER.get(GameState.ai_difficulty, ""))
+	if _pick_pool.has(tier):
+		var picked := _pick_from_candidates((_pick_pool[tier] as Array).duplicate(), player_ids)
+		if not picked.is_empty():
+			return picked
+	# ---- ②：池子缺失 ⇒ 现算一支（原逻辑 + L1 克制项）----
+	var tw := float(PICK_TARGET_W.get(GameState.ai_difficulty, 0.0))
 	var cand: Array = DataRegistry.heroes.keys().duplicate()
 	var chosen: Array = []
 	while chosen.size() < want and cand.size() > 0:
@@ -465,7 +629,11 @@ func _synergy_pick_enemy(want: int) -> Array:
 			for c in chosen:
 				sc += DataRegistry.synergy_bonus(c, id)
 			sc += DataRegistry.role_balance_bonus(chosen, id)
-			var w := maxf(sc, 0.0) + 1.0
+			# 【L1】针对玩家阵容：净克制（现成 counter 块；TARGET_W=0 ⇒ 这一项恒 0 ⇒ 逐位不变）
+			if tw != 0.0 and not player_ids.is_empty():
+				var parts: Dictionary = DataRegistry.battle_unit_value_parts(String(id), chosen, player_ids, null)
+				sc += tw * float(parts["counter"])
+			var w := _pick_weight(sc)   # 【2026-09-21】简单档在这里被大幅拉平（见 `SIMPLE_PICK_SCORE_W`）
 			wins.append(w)
 			ids.append(id)
 			total += w
@@ -615,8 +783,14 @@ func _action_arena_enemy_pick() -> void:
 	var sc_a := _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + DataRegistry.role_balance_bonus(_arena_enemy, a)
 	var sc_b := _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + DataRegistry.role_balance_bonus(_arena_enemy, b)
 	# 轻微随机：两个候选价值接近（差< 1.5）时随机决定，避免完全可预测
+	# 【2026-09-21 用户拍板】简单档：**改成按（拉平后的）权重掷签**，不再取最优 ——
+	#   两张分值相近时约等于五五开，分值拉开时也只是略偏（见 `SIMPLE_PICK_SCORE_W`）。
 	var en_hid: String
-	if abs(sc_a - sc_b) <= 1.5:
+	if GameState.ai_difficulty == 0:   # 0 = 简单
+		var w_a := _pick_weight(sc_a)
+		var w_b := _pick_weight(sc_b)
+		en_hid = a if rng.randf() * (w_a + w_b) < w_a else b
+	elif abs(sc_a - sc_b) <= 1.5:
 		en_hid = a if rng.randi() % 2 == 0 else b
 	else:
 		en_hid = a if sc_a >= sc_b else b
@@ -1422,6 +1596,31 @@ func _setup_hud() -> void:
 	hud.bind(self)
 	add_child(hud)
 
+# ---- 战斗背景贴图 ----
+# 候选按顺序取【第一个能加载的】；全缺图 ⇒ 返回 null ⇒ 只剩 WoodFloor 纯色底（不影响启动/联机）。
+# 换背景：把想用的那张放到最前（或直接替换文件内容）。
+const BATTLE_BG_CANDIDATES := [
+	"res://assets/美术资源/背景/战斗背景_酒馆木地板.jpg",
+]
+const BG_BLEED := 24.0   # 背景四周外扩像素：震屏时画面整体平移，不留外扩就会露底色条
+
+func _make_battle_bg(rect_size: Vector2) -> TextureRect:
+	for path in BATTLE_BG_CANDIDATES:
+		if not ResourceLoader.exists(path):
+			continue
+		var tex := load(path) as Texture2D
+		if tex == null:
+			continue
+		var r := TextureRect.new()
+		r.texture = tex
+		r.position = -Vector2(BG_BLEED, BG_BLEED)
+		r.size = rect_size
+		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED   # 等比裁切铺满，不变形
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE               # 不能吃棋盘点击
+		return r
+	return null
+
 # ---- 棋盘自适应缩放:让 5 列棋盘宽基本占满屏幕宽度(同时高度不压到底部按钮)----
 # 用 hex=1 的探针网格精确测量棋盘世界包围盒,按视口反推 hex(棋子文字随 hex 等比放大)
 func _fit_hex_size() -> float:
@@ -1995,8 +2194,8 @@ func _trigger_turn_start_all(faction: int) -> void:
 		if u.alive and u.faction == faction:
 			if _trigger_turn_start(u):
 				u.flash_passive()
-				if get_tree() == null:
-					return   # 场景已释放（点击重开/reload）：安全退出，避免访问 null get_tree()
+				if not is_inside_tree():
+					return   # 已脱离场景树（点击重开/reload/切场景）：安全退出
 				await get_tree().create_timer(0.35, false).timeout
 
 # 回合结束：该阵营单位的回合结束技能（逐个触发，带触发边框闪烁
@@ -2008,8 +2207,8 @@ func _trigger_turn_end_all(faction: int) -> void:
 		if u.alive and u.faction == faction:
 			if _trigger_turn_end(u):
 				u.flash_passive()
-				if get_tree() == null:
-					return   # 场景已释放：安全退出
+				if not is_inside_tree():
+					return   # 已脱离场景树：安全退出
 				await get_tree().create_timer(0.35, false).timeout
 
 # 共鸣者（hero_47）：己方回合开始时，"攻击力增加所有队友攻击力之和"直到我方回合结束。
@@ -2041,7 +2240,7 @@ func _clear_statuses(faction: int) -> void:
 # 原因：_end_side 是主机权威只在主机跑；若客户端不补，主机端骷髅消失而客户端端残留，
 # 导致两端骷髅数量/占位不同步，进而后续召唤与行动全部错位。
 func _apply_turn_end_sync(faction: int) -> void:
-	if faction < 0 or get_tree() == null:
+	if faction < 0 or not is_inside_tree():
 		return   # 场景已释放/无效：安全退
 	await _trigger_turn_end_all(faction)
 	if GameState.match_over:
@@ -3364,6 +3563,25 @@ func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		proj.queue_free()
 		_apply_attack(attacker, target, for_enemy))
 
+# 【演出·大伤害震屏】一次完整震动约 0.23 秒：5 段递减抖动 + 回中。
+# 连续两下大伤害（先挨打、再被反击）时重开一次，而不是把两次抖动叠在一起。
+# 随机数用全局 randf_range（与 Unit 的粒子演出同一约定），**不碰 battle.rng**——那是联机同步用的确定性随机源。
+func _shake_once(dealt: int) -> void:
+	if dealt < SHAKE_HIT_MIN:   # 6 点起就震（含 6）
+		return
+	if _shake_cam == null or not is_instance_valid(_shake_cam):
+		return
+	if _shake_tween != null and _shake_tween.is_valid():
+		_shake_tween.kill()
+	var t := create_tween()
+	_shake_tween = t
+	var steps := 5
+	for i in steps:
+		var k := 1.0 - float(i) / float(steps)   # 幅度递减：先猛后收
+		t.tween_property(_shake_cam, "offset",
+				Vector2(randf_range(-SHAKE_PX, SHAKE_PX) * k, randf_range(-SHAKE_PX, SHAKE_PX) * k), 0.03)
+	t.tween_property(_shake_cam, "offset", Vector2.ZERO, 0.08)
+
 func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	if attacker == null or not is_instance_valid(attacker) or target == null or not is_instance_valid(target):
 		if for_enemy:
@@ -3394,7 +3612,9 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			# 由 _add_status_msg 读取；所以只对"命中附加状态"的英雄置位。
 			if target.has_status(StatusDB.SHIELD) and attacker.alive and _hero(attacker).applies_status_on_hit():
 				target._shield_block_status = true
+			var hp_before := target.hp
 			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name, true)
+			_shake_once(hp_before - target.hp)   # 【演出】这一击实际打掉 ≥6 点血：屏幕震一下
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
@@ -3465,7 +3685,9 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			return   # 反击者在演出期间被释放：跳过反击，正常收尾
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
+			var chp_before := attacker.hp
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
+			_shake_once(chp_before - attacker.hp)   # 【演出】反击同样算攻击：实际打掉 ≥6 点血也震一下
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -3498,7 +3720,9 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		proj.queue_free()
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
+			var chp_before := attacker.hp
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
+			_shake_once(chp_before - attacker.hp)   # 【演出】远程反击同样算攻击：实际打掉 ≥6 点血也震一下
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -4501,7 +4725,15 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 # 敌方替补：按阵亡数量在出生区自动落位（我方回合结束时、敌方回合开始前触发）
 func _place_enemy_sub() -> void:
 	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
-		var next_id: String = enemy_roster.pop_at(_best_enemy_sub_idx())
+		# 【2026-09-19 新增·默认关】收尾优先：`SUB_FINISH_W > 0` 且对面只剩 1 个存活单位时
+		#   （3 人阵容 ⇒ 打死它 = 直接判负玩家），把"选谁"交给 AI 侧挑"补上来就能收官"的那个。
+		#   默认 0（`_sub_finish_w()` 恒 0）⇒ `idx_pick` 就是原来的 `_best_enemy_sub_idx()` ⇒ 逐位不变。
+		var idx_pick := _best_enemy_sub_idx()
+		if _sub_finish_w() > 0.0 and _foe_alive_count() == 1:
+			var fc := _sub_finish_hero_pick(_sub_legal_cells_for_ai())
+			if fc >= 0:
+				idx_pick = fc
+		var next_id: String = enemy_roster.pop_at(idx_pick)
 		var cell := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
 		# 规则 C（SUB_JOIN_RULE，**默认关闭**）：在同一批合法落点里挑"能立刻参战"的那一格。
 		# 关掉时这一行只多一次布尔判断（开关缓存），落点选法与改动前**逐位相同**。
@@ -4706,6 +4938,10 @@ func _free_sub_cell_for(fn: int) -> Vector2i:
 # 打开后：把**同一批合法落点**整批交给 AI 侧打分（它手里有模拟与路网距离），选"能立刻打到人 / 打到谁最疼 /
 # 离战场近 / 下回合更安全"的那一格。⚠️ 只改"选哪格"，不改"能不能落下"：拿不到模拟/选不出来一律退回原格。
 var _sub_join_rule_cache := -1   # -1 = 还没读过权重；0 = 关；1 = 开
+# 【2026-09-19 新增·默认关】替补「收尾优先」的权重缓存（AI 侧 `SUB_FINISH_W`，默认 0 = 关）。
+# 与 `_sub_join_rule_cache` 同一套探针读法：`_make_battle_ai()` + 读 AI 实例的 `w_sub_finish_w`
+# ⇒ 只有会注入权重文件的档位（噩梦）才可能非 0，生产三档恒 0 ⇒ **逐位不变**。
+var _sub_finish_cache := -1.0
 
 func _sub_join_rule_on() -> bool:
 	if _sub_join_rule_cache < 0:
@@ -4720,15 +4956,7 @@ func _sub_join_rule_on() -> bool:
 func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
 	if fallback.x == -99 and fallback.y == -99:
 		return fallback
-	var cells: Array = []
-	for c in graves.keys():
-		var gd = graves[c]
-		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == DataRegistry.Faction.ENEMY
-		if mine and not occupancy.has(c):
-			cells.append(c)
-	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
-		if not occupancy.has(c) and not graves.has(c):
-			cells.append(c)
+	var cells: Array = _sub_legal_cells_for_ai()
 	if cells.is_empty():
 		return fallback
 	var ai = _make_battle_ai()
@@ -4745,6 +4973,71 @@ func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
 	if _CONSOLE_SUB_LOG:
 		print("[替补·规则C] %s 落点按‘能否立刻参战’选：%s（原规则为 %s）" % [hero_id, str(pick), str(fallback)])
 	return pick
+
+# ---------- 【2026-09-19 新增·默认关】替补「收尾优先」（用户：「战局中主动撤下英雄来收尾」这条线的 1b 步）----------
+# 用户场景：「我方已经死了 2 人，剩下 1 人被打残血了，而 AI 只死了 1 人。他可以替补一个人来收尾，但他不会」。
+# 3 人阵容、死 3 判负 ⇒ **打死对面最后 1 个存活单位 = 直接获胜**，而选人逻辑原本完全不知道这件事。
+# 判据全在 AI 侧（`SUB_FINISH_W`，默认 0 = 关；只有噩梦会注入非 0 值）⇒ 生产三档逐位不变。
+func _sub_legal_cells_for_ai() -> Array:
+	# 替补的合法落点整批：本方墓碑格（顶碑落位）+ 出生区空格。规则 C 与「收尾选人」共用同一份口径。
+	var cells: Array = []
+	for c in graves.keys():
+		var gd = graves[c]
+		var mine := typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == DataRegistry.Faction.ENEMY
+		if mine and not occupancy.has(c):
+			cells.append(c)
+	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
+		if not occupancy.has(c) and not graves.has(c):
+			cells.append(c)
+	return cells
+
+func _sub_finish_w() -> float:
+	if _sub_finish_cache < 0.0:
+		_sub_finish_cache = 0.0
+		var probe = _make_battle_ai()
+		if probe != null:
+			probe.difficulty = GameState.ai_difficulty
+			# ⚠️ 必须用 `get()` + **判 null**：`RL/ai/AI_Battle.gd`（fork）是另一份独立文件，
+			#   若它还没同步到带 `w_sub_finish_w` 的版本，`get()` 会返回 **null**，
+			#   而 `float(null)` 在 Godot 里会报 `Invalid call. Nonexistent 'float' constructor`
+			#   （用户实测：`Battle.gd:4823`，而且那个报错会**打断 `_place_enemy_sub()`**，
+			#   导致敌方这次替补直接落不了位）⇒ 读不到就保持 0.0，机制整体不启用。
+			var v: Variant = probe.get("w_sub_finish_w")
+			if v != null:
+				_sub_finish_cache = maxf(float(v), 0.0)
+	return _sub_finish_cache
+
+# 对面（玩家方）场上还活着几个单位 —— 3 人阵容里"只剩 1 个"就是收官局面。
+func _foe_alive_count() -> int:
+	var n := 0
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != DataRegistry.Faction.ENEMY:
+			n += 1
+	return n
+
+# 收尾选人：把候选名单 + 合法落点交给 AI 侧，选"补上来就能打到/打死那个残血单位"的那个。
+# 返回 -1 = 不改（AI 拿不到模拟、或选不出）⇒ 调用方退回原来的 `_best_enemy_sub_idx()`。
+func _sub_finish_hero_pick(cells: Array) -> int:
+	if enemy_roster.is_empty() or cells.is_empty():
+		return -1
+	var ai = _make_battle_ai()
+	if ai == null:
+		return -1
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false
+	var snap := BattleSnapshot.collect(self)
+	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"])
+	var hid: String = ai.pick_sub_hero(sim, enemy_roster, cells)
+	var i := enemy_roster.find(hid)
+	if i < 0:
+		return -1
+	if _CONSOLE_SUB_LOG:
+		print("[替补·收尾] 对面仅剩 1 人 ⇒ 选人交给「能直接收官」那一个：%s（原规则会选 %s）"
+				% [hid, enemy_roster[_best_enemy_sub_idx()]])
+	return i
 
 func _on_sub_pick(hero_id: String) -> void:
 	if _CONSOLE_SUB_LOG:
@@ -5239,16 +5532,23 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 # 任何异常（文件缺失/非字典/load 失败/候选构造失败）都安全降级：用生产 AI 或候选默认权重。
 func _make_battle_ai() -> Variant:
 	var diff: int = GameState.ai_difficulty
-	if diff < NIGHTMARE_DIFFICULTY:   # 0 简单 / 1 普通 / 2 困难：生产路径原样
-		return BattleAI.new(grid)
-	# 3 = 噩梦（训练权重）；4 = 噩梦+（噩梦 + 英雄特化段）。两份表按"只写增量"顺序叠加。
+	if diff < NIGHTMARE_DIFFICULTY:   # 0 简单 / 1 普通 / 2 困难
+		var ai_low := BattleAI.new(grid)
+		# 【2026-09-20 新增·默认零变化】低档权重文件通道，见文件上方 `AI_LOW_TIER_WEIGHTS_PATH`。
+		#   文件不存在 ⇒ 一步都不做 ⇒ **与改动前逐位相同**；困难档不在表里 ⇒ 锚点不变。
+		var low_path: String = String(AI_LOW_TIER_WEIGHTS_PATH.get(diff, ""))
+		if low_path != "" and FileAccess.file_exists(low_path):
+			var wl := _load_weights_json(low_path, "低档")
+			if not wl.is_empty():
+				ai_low.set_weights(wl)
+				if _NIGHTMARE_DEBUG and OS.get_environment("ZB_NIGHTMARE_DEBUG") != "":
+					print("[低档权重] 难度=%d | 文件=%s | 注入键数=%d" % [diff, low_path, wl.size()])
+		return ai_low
+	# 3+ = 噩梦（训练权重 + hero_XX 英雄段，同一份 `噩梦.json`）。
+	# 【2026-09-20 用户拍板】第 5 档「噩梦+」已删除：`噩梦.json` 里现在既有通用键也有 hero_XX 段，
+	#   `set_weights` 会把 `hero_XX` 字典自动转发给 `set_hero_weights` ⇒ 一次注入就够，不再叠第二份表。
 	var w := _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
 	var used_files := AI_NIGHTMARE_WEIGHTS_PATH
-	if diff >= NIGHTMARE_PLUS_DIFFICULTY:
-		var wp := _load_weights_json(AI_NIGHTMARE_PLUS_WEIGHTS_PATH, "噩梦+")
-		for k in wp.keys():
-			w[k] = wp[k]          # 同名键以 噩梦+ 为准（hero_XX 段整体覆盖）
-		used_files += " + " + AI_NIGHTMARE_PLUS_WEIGHTS_PATH
 	var script = load(AI_CANDIDATE_PATH)
 	if script == null:
 		push_warning("噩梦档：%s 加载失败，本局降级为生产困难档 AI。" % AI_CANDIDATE_PATH)
@@ -5262,9 +5562,9 @@ func _make_battle_ai() -> Variant:
 		cand.set_weights(w)      # 候选自带 set_weights：未知键忽略，类型非数字跳过
 		w_keys = w.size()
 	if _NIGHTMARE_DEBUG and OS.get_environment("ZB_NIGHTMARE_DEBUG") != "":
-		print("[噩梦档] 难度=%d | AI=%s | 权重文件=%s | 注入键数=%d | BEAM=%s | JITTER=%s" % [
+		print("[噩梦档] 难度=%d | AI=%s | 权重文件=%s | 注入键数=%d | BEAM=%s" % [
 			diff, AI_CANDIDATE_PATH, used_files, w_keys,
-			str(cand.w_beam), str(cand.w_jitter)])
+			str(cand.w_beam)])
 	return cand
 
 # 读一份权重表：不存在/解析失败/不是字典 → 返回空字典（该层退回下一层的值，安全降级）
@@ -5291,8 +5591,11 @@ func _load_nightmare_weights() -> Dictionary:
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
 	var my_session := _session_id   # 记录本次回放所属会话，重开后会
-	if get_tree() == null:
-		return   # 场景已释放（点击重开/reload）：安全退
+	# 【别写成 get_tree() == null】节点在"重开/切场景/退出"时会被**先移出场景树、再释放**：
+	# 夹在这一帧里的协程恢复后调 get_tree()，引擎会报 `Parameter "data.tree" is null`（node.h:559，
+	# 用户实机见过）。is_inside_tree() 对"已脱离场景树"返回 false 且不做任何引擎侧取值，无副作用。
+	if not is_inside_tree():
+		return   # 已脱离场景树（点击重开/reload）：安全退
 	await get_tree().create_timer(0.5, false).timeout
 	if my_session != _session_id:
 		return   # 已重开：本会话作废，安全退
@@ -5316,7 +5619,7 @@ func _run_enemy_turn() -> void:
 	_ai_thread.start(_enemy_ai_worker.bind(ai, snap))
 	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
 	while true:
-		if get_tree() == null or my_session != _session_id:
+		if not is_inside_tree() or my_session != _session_id:
 			return   # 场景已释放/已重开：安全退出（线程结果作废）
 		_ai_mutex.lock()
 		var finished := _ai_done
@@ -5332,7 +5635,7 @@ func _run_enemy_turn() -> void:
 		var plan: Array = _ai_plan
 		_ai_mutex.unlock()
 		await _replay_enemy_plan(plan, refs, my_session)
-		if my_session != _session_id or get_tree() == null:
+		if my_session != _session_id or not is_inside_tree():
 			return
 		if not _check_win():
 			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
@@ -5388,6 +5691,6 @@ func _drain_pending_deaths() -> void:
 				break
 		if not pending:
 			return
-		if get_tree() == null or my_session != _session_id or Time.get_ticks_msec() > deadline:
+		if not is_inside_tree() or my_session != _session_id or Time.get_ticks_msec() > deadline:
 			return   # 场景已释放/已重开/超时：安全退出
 		await get_tree().process_frame

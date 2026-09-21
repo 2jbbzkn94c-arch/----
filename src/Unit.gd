@@ -413,8 +413,15 @@ var ranged_adjacent := false
 
 func effective_atk() -> int:
 	# 共鸣者：攻击力"变为"队友攻击力之和(echo_set>=0),覆盖自身基础/加成,直到回合结束
+	# 【2026-09-20 修 bug·用户报「共鸣者吃攻击buff无效」】原来这里是 `return max(echo_set, 0)` ⇒ **把
+	#   `atk_use_buff` 短路掉了**：共鸣者吃【攻击】道具伤害不变，而 `Battle._finish_attack` 照样把它清零
+	#   ⇒ **吃了白吃、道具白白浪费**。现在把"下一次攻击 +1"这份**一次性道具加成**叠在共鸣值上 ——
+	#   道具的语义是"这一下更疼"，不是"改我的攻击力面板"，所以不该被"攻击力 = 队友之和"覆盖。
+	#   而 `atk_buff` / `ramble_bonus` / `sun_bonus` / 远程被贴身压 1 / 麻痹 仍然**照旧被覆盖**：
+	#   那些才是"自身攻击力"的修正，符合「共鸣值覆盖自身基础与加成」这句话。
+	#   回退：把下面这行改回 `return max(echo_set, 0)`。
 	if echo_set >= 0:
-		return max(echo_set, 0)
+		return max(echo_set + atk_use_buff, 0)
 	var base := atk
 	if attack_type == DataRegistry.AttackType.RANGED and ranged_adjacent:
 		base = 1   # 远程被贴身：默认攻击力变为 1（buff 不受影响）

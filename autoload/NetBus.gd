@@ -93,6 +93,7 @@ func host_match(port: int = DEFAULT_PORT) -> void:
 		var err := cand.create_server(p, 2)
 		if err == OK:
 			_peer = cand
+			_track_peers(cand)   # 主机侧"有没有客户端连进来"只能靠信号自己记账（见 _track_peers）
 			active_port = p
 			is_host = true
 			is_online = true
@@ -115,9 +116,23 @@ func join_match(address: String, port: int = DEFAULT_PORT) -> void:
 		push_error(last_tick_error)
 		_peer = null
 		return
+	_track_peers(_peer)
 	is_host = false
 	is_online = true
 	client_connected.emit()
+
+# 记录"当前已连上的对等方"。
+# 【2026-09-20 修复】ENetMultiplayerPeer **没有** get_peers()（只有 get_peer(id)，且对不存在的 id 会
+# 直接抛 "Condition !peers.has(p_id) is true" 的引擎错误），所以不能用它来判断"主机有没有客户端"。
+# 实测：不接 MultiplayerAPI、只手动 poll() 时，ENetMultiplayerPeer **自己**会发 peer_connected /
+# peer_disconnected（peer id 是随机大整数，不能靠 2/3/4 猜）。所以接这两个信号维护 _peers 即可。
+func _track_peers(p: ENetMultiplayerPeer) -> void:
+	_peers.clear()
+	p.peer_connected.connect(func(id: int) -> void:
+		if not _peers.has(id):
+			_peers.append(id))
+	p.peer_disconnected.connect(func(id: int) -> void:
+		_peers.erase(id))
 
 # ---- 发送 ----
 # 底层实例是否仍活跃（连接已建立且未被销毁）。断线/对端离开后 ENet 可能已不可用，
@@ -150,7 +165,7 @@ func is_link_up() -> bool:
 	if not _peer_active():
 		return false
 	if is_host:
-		return _peer.get_peers().size() > 0
+		return _peers.size() > 0   # 主机：至少有一个客户端连进来（create_server 后自身就是 CONNECTED，不代表有人在）
 	return _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 # 指定对端是否已连上（主机侧看它在不在 ENet 的已连接列表里；客户端侧只认 peer 1 = 主机）
@@ -158,7 +173,7 @@ func _peer_connected(peer_id: int) -> bool:
 	if not _peer_active():
 		return false
 	if is_host:
-		return _peer.get_peers().has(peer_id)
+		return _peers.has(peer_id)
 	return _peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 # ---- 停止/断开 ----

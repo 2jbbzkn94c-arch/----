@@ -35,8 +35,9 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			return   # 已重开：安全退出，避免访问已释放单位
 		if not is_instance_valid(battle):
 			return   # Battle 已被释放：协程恢复后立即退出，不再触碰任何引擎调用
-		if battle.get_tree() == null:
-			return
+		if not battle.is_inside_tree():
+			return   # 已脱离场景树：安全退出（**不能写成 battle.get_tree() == null**：
+			# 节点被移出场景树后调 get_tree()，引擎会报 Parameter "data.tree" is null）
 		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
 		await wait_unpaused()    # 暂停中：不推进敌方下一步（恢复后继续）
 		var idx: int = step["idx"]
@@ -55,7 +56,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		# 亮边后先停一拍再出手：让玩家先定位到这名英雄，再接它的动作
 		await _gap(TELL_GAP if first else HERO_GAP)
 		first = false
-		if my_session != battle._session_id or battle.get_tree() == null:
+		if my_session != battle._session_id or not battle.is_inside_tree():
 			if is_instance_valid(u):
 				u.set_acting_ring(false)
 			return   # 已重开/场景已释放：安全退出
@@ -101,7 +102,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		# 为什么会失效：计划是回合开始时按"预测的残局"一次性排好的（预测与真实结算哪怕差一点，
 		# 后面针对同一目标的步骤就会落空）。补算在主线程跑一次短搜索（1.2s 预算），结果同样要过合法性检查。
 		if wanted and not acted and _unit_ok(u) and not u.attacked_this_turn:
-			if my_session != battle._session_id or battle.get_tree() == null:
+			if my_session != battle._session_id or not battle.is_inside_tree():
 				return   # 已重开/场景已释放：不再补算
 			await _gap(STEP_GAP)   # 补算前留一拍，别让"原本那一招"和"补的这一招"粘成一段
 			var alt: Dictionary = battle._replan_enemy_action(u)
@@ -125,26 +126,28 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		if is_instance_valid(u):
 			u.set_acting_ring(false)
 	# 全部行动结束：留一拍再进回合末结算（避免最后一招与回合结束演出首尾相连）
-	if my_session != battle._session_id or battle.get_tree() == null:
+	if my_session != battle._session_id or not battle.is_inside_tree():
 		return
 	await _gap(STEP_GAP)
 
 ## 暂停中不推进任何一步（单机暂停用；联机不暂停，故几乎是空转）
 func wait_unpaused() -> void:
-	while battle.get_tree() != null and battle.get_tree().paused:
+	while battle.is_inside_tree() and battle.get_tree().paused:
 		await battle.get_tree().process_frame
 
 # ---- 内部等待原语 ----
 
 # 替补流程期间暂停敌方 AI 执行（轮询直到替补结束）
 func _wait_sub_done() -> void:
+	if not is_instance_valid(battle):
+		return   # Battle 已释放：直接结束轮询
 	var my_session: int = battle._session_id
-	while battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB:
+	# 有效性写进循环条件：本函数是跨帧协程，每一帧回到这里时 Battle 都可能已被释放/已脱离场景树
+	while is_instance_valid(battle) \
+			and (battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB):
 		if my_session != battle._session_id:
 			return   # 已重开：安全退出
-		if not is_instance_valid(battle):
-			return   # Battle 已释放：直接结束轮询
-		if battle.get_tree() == null:
+		if not battle.is_inside_tree():
 			return   # 已脱离场景树：停止轮询，避免访问 null get_tree()
 		await battle.get_tree().process_frame
 
@@ -152,10 +155,12 @@ func _wait_sub_done() -> void:
 # 正常情况下 Battle._finish_move/_finish_attack 会发射 action_finished，立即返回；
 # 若防御路径漏发射（单位被释放、异常提前返回等），3s 超时兜底，避免回放永久挂起。
 func _wait_action_done() -> void:
+	if not is_instance_valid(battle):
+		return   # Battle 已释放：停止等待
 	var my_session: int = battle._session_id
 	var done := [false]   # 用数组承载：lambda 改元素不触发"重赋值捕获"混淆
 	battle.action_finished.connect(func(): done[0] = true, CONNECT_ONE_SHOT)
-	if battle.get_tree() == null:
+	if not battle.is_inside_tree():
 		return   # 已脱离场景树：直接返回
 	var limit: SceneTreeTimer = battle.get_tree().create_timer(3.0, false)
 	while not done[0] and not limit.time_left <= 0.0:
@@ -163,13 +168,13 @@ func _wait_action_done() -> void:
 			return   # 已重开：安全退出
 		if not is_instance_valid(battle):
 			return   # Battle 已释放：停止等待
-		if battle.get_tree() == null:
+		if not battle.is_inside_tree():
 			return   # 已脱离场景树：停止轮询
 		await battle.get_tree().process_frame
 
 # 回放中的节奏停顿（可被重开安全打断；process_always=false 故跟随暂停一起停）
 func _gap(sec: float) -> void:
-	if sec <= 0.0 or battle.get_tree() == null:
+	if sec <= 0.0 or not battle.is_inside_tree():
 		return   # 已脱离场景树：不停顿直接返回
 	await battle.get_tree().create_timer(sec, false).timeout
 

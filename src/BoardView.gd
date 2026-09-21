@@ -13,8 +13,10 @@ var gold_left: Dictionary = {}     # cell -> 金矿剩余回合数（右下角�
 var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可选择在此落位）
 var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 兜底底色（木纹贴图缺失时才用）
 var _cell_line := Color(0, 0, 0, 0.85)   # 六边形格线：黑色，清楚显示格子边界
-var _side_zone_player := Color(0.10, 0.2, 0.35, 0.8)
-var _side_zone_enemy := Color(0.30, 0.12, 0.12, 0.75)
+# 【已删 2026-09-19（用户同意）】原 `_side_zone_player` / `_side_zone_enemy` 两个颜色常量：
+#   木纹贴图上线后，出生区改用下面的"半透明色罩"（`_zone_player_overlay` / `_zone_enemy_overlay`），
+#   这两个旧常量在全项目**再无任何引用** ⇒ Godot 启动时报 `UNUSED_PRIVATE_CLASS_VARIABLE`
+#   （`BoardView.gd:16`）⇒ 直接删掉，控制台恢复干净。
 # 木纹贴上后，出生区/高亮改成"半透明色罩"盖在木纹上（否则会把木纹整块盖住看不见）
 var _zone_player_overlay := Color(0.10, 0.45, 0.85, 0.42)
 var _zone_enemy_overlay := Color(0.85, 0.2, 0.18, 0.38)
@@ -24,10 +26,12 @@ var enemy_zone_cells: Array = []
 const GOLD_TEX := preload("res://assets/美术资源/金矿.png")
 # 障碍物素材（2026-09-14 用户提供酒桶图；已去白底、去右下角水印、裁到桶身边界）
 const OBSTACLE_TEX := preload("res://assets/美术资源/障碍.png")
-# 道具素材：圣盾=用户提供的盾牌图；攻击/回血用已有图案（去了白底、裁到图案边界的副本）
+# 道具素材：圣盾=用户提供的盾牌图；攻击/回血/移动用已有图案或用户提供的图
+# （都去了白底、裁到图案边界；见 tools/处理地块贴图.gd）
 const SHIELD_TEX := preload("res://assets/美术资源/圣盾.png")
 const ITEM_ATK_TEX := preload("res://assets/美术资源/道具攻击.png")
 const ITEM_HEAL_TEX := preload("res://assets/美术资源/道具爱心.png")
+const ITEM_MOVE_TEX := preload("res://assets/美术资源/道具移动.png")
 # 酒桶尺寸：桶高 = 格高 × 这个系数。0.78 左右桶正好整个落在六边形格子里（不会压到相邻格）；
 # 想更大/更小就改这一个数。
 const OBSTACLE_H := 0.60
@@ -112,6 +116,8 @@ func _draw() -> void:
 				tex = ITEM_ATK_TEX      # 攻击力：已有的攻击图案
 			"heal":
 				tex = ITEM_HEAL_TEX     # 回血：已有的爱心图案
+			"move":
+				tex = ITEM_MOVE_TEX     # 移动力：用户提供的翅膀图
 			"shield":
 				tex = SHIELD_TEX        # 圣盾：用户提供的盾牌图
 			"gold":
@@ -119,8 +125,9 @@ func _draw() -> void:
 		if tex != null:
 			_draw_cell_icon(tex, center, grid.hex_size * 0.75)
 		else:
+			# 防御：将来新增道具类型没配贴图时，画个黄点提示，别整格空着
 			draw_circle(center, grid.hex_size * 0.26, Color(0.25, 0.2, 0.08, 0.9))
-			draw_circle(center, grid.hex_size * 0.16, Color(0.5, 0.85, 1.0))   # 移动：蓝
+			draw_circle(center, grid.hex_size * 0.16, Color(1.0, 0.9, 0.3))
 		# 金矿：右下角显示剩余回合数（3→2→1，到0消失），与障碍耐久同一套画法
 		if st == "gold" and gold_left.has(cell):
 			_draw_cell_digit(center, str(int(gold_left[cell])))
