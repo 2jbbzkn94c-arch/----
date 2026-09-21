@@ -298,6 +298,18 @@ const MAX_MOVE_OPTIONS := 16
 const GOLD_LOW_ATK := 4
 # 吃增益道具的评分权重：本回合拾取的道具按价值 × 该权重计入评估，驱动 AI 主动绕路去吃
 const BUFF_TAKE_WEIGHT := 3.0
+# ---- 【2026-09-21 新增·默认关】**"治疗"计价**（`HEAL_CREDIT_W`）----
+# 用户提问：「捡血量buff加分，回血也加分，是不是重复了」→ 答：不重复（③ 只算掉血、夹到 ≥0 ⇒ 回血不进那笔账），
+#   但顺着这个问题暴露出一处**真的不对称**：**技能治疗（医护兵/风语者/古拉/梅林）在评分里一分都不加** ——
+#   因为"回血"这件事原本**只有捡道具**那条路有钱（⑧ 按道具类型固定 1.2 × 权重）。
+#   ⇒ AI 天生不看重治疗单位（奶一口 3 点 = 0 分，而打一下 = +3.8）。
+# 本键 = **按实际回血量计价**（1 血 = W 分，**含溢出**），与 ③血量账同一趟循环、同一口径
+#   （只算本回合开始时已存在的单位 `hp0 > 0`；本回合新召唤/替补登场的不算，见 `_sim_spawn_sub`）：
+#   我方回血 **+**、对面回血 **−**（对称：给对面奶回来是坏事）。
+# ⚠️ **与 ⑧ 的关系（避免重复计价）**：`HEAL_CREDIT_W > 0` 时，⑧ 的 `heal` 那一份**自动归 0**
+#   （见 `_buff_value()`）⇒ 捡回血道具改由本项按"实际回了 3 血"计 3 分，**同一件事只算一次**。
+# 0 = 关（默认 ⇒ 生产三档逐位不变）· 噩梦 = 1.0（= 1 血 1 分，与 `HP_VALUE_W` 同价）。
+const HEAL_CREDIT_W := 0.0
 # 黄金矿工吃到 1 枚金矿的评分（永久 +1 攻 / +3 血上限，滚雪球）。
 # 量级：普通一次攻击约 +2.5 分，击杀约 +25 起 —— 吃矿应明显优于"随手打一下"，但不该高于击杀。
 const GOLD_TAKE_VALUE := 26.0
@@ -411,6 +423,26 @@ const STAY_OPTION := 0
 #   ⚠️ 判据只能在**动作层**算（`_evaluate` 只看最终状态，看不到"移动前本来就够得到"）⇒ 见 `search()`。
 # 0 = 关（默认 ⇒ 逐位不变）· 推荐 2.0~3.0。
 const IDLE_HIT_PENALTY := 0.0
+# ---- 【2026-09-21 新增·默认关】**两项"队形"评分**（`FORM_COHESION_W` / `FORM_ESCAPE_W`）----
+# 用户原话：「现在有没有什么评分会让 AI 保持一个不错的队形。现在 AI 有个问题，他会因为某些格子的
+#   能打的伤害高或者被伤害少而站得四分五裂，然后被玩家隔离，逐个击破。远程也有可能因为这个原因
+#   走进死胡同，或者选择贴墙，最后被玩家包夹」
+# 先回答"现在有没有"：**没有**。现有项里没有任何一项看"队友之间离多远"——
+#   ⑥规则B / ⑦核心风险 / ⑮必死折 都是"**我这个单位**会不会挨打"的**个人**罚分，三者合力恰好就是
+#   "各躲各的、谁能躲多远躲多远"；⑧道具还主动把单位拉去捡东西。唯一带整队味道的 ⑦ 是 **max 型**
+#   （只罚最危险的那一个）⇒ 它管得住"某个人站太前"，管不住"三个人摊开成三块"。
+#   ⇒ 这个病**必须新增项**，靠调现有键的数值是治不了的（调大 ⑦ 只会让大家躲得更散）。
+# ① `FORM_COHESION_W`（抱团）：每个我方非召唤物单位至少要有一个队友在 `FORM_RADIUS` 格内，
+#    没有队友就罚 1 点。**只罚"孤立"、不罚"挤在一起"** ⇒ 不会把队伍逼成一坨去吃 AoE。
+# ② `FORM_ESCAPE_W`（退路/被夹）：每个我方单位的 6 个邻格里"能走的"还剩几个，少于
+#    `FORM_ESCAPE_MIN` 就罚差额（治"贴墙、死胡同"）；再加「相邻敌人数 − 相邻队友数」的正数部分
+#    （治"被包夹"——身边敌人比队友多，就是被夹住了）。
+# 两项都是**纯局面量**（只看位置与占位，不需要任何新数据、不看对面怎么走），代价 O(单位数×6)。
+# 默认 0 ⇒ 生产三档逐位不变；噩梦档的初值写在 `RL/weights/噩梦.json`，要调只动那两个数。
+const FORM_COHESION_W := 0.0
+const FORM_ESCAPE_W := 0.0
+const FORM_RADIUS := 2          # 抱团半径（六向格距；2 = 一步能回援 = "互相够得着"）
+const FORM_ESCAPE_MIN := 2      # 每个单位至少留 2 个可走邻格（1 个 = 只剩一条路；0 = 死胡同）
 # 【已删 2026-09-20·用户拍板】原 `const LEECH_TRIGGER_W := 0.0`（古拉 hero_14 的"触发吸血补一笔"）。
 # 删除依据：3 队 × 3 个值的棋力批**越调越负**（−0.56 / −1.83 / −3.70，胜率 0.39→0.33）⇒ 判死。
 # 那笔账本来就已在③血量账里（吸血 = 自己回血），再补一笔属于重复计价。整条链已连代码一起删干净：
@@ -713,6 +745,8 @@ const OBSTACLE_DETOUR_WEIGHT := 4.0    # 每个"被墙挡出来的代价"的分�
 # 2026-09-20 就是这么把 `ENGAGE_PULL_PER_CELL` 恢复回来的（可参照它的三处改动）。
 var w_gold_low_atk := GOLD_LOW_ATK
 var w_buff_take := BUFF_TAKE_WEIGHT
+# 【2026-09-21·默认关】治疗计价（1 血 = W 分，含溢出），见 `const HEAL_CREDIT_W` 处说明。
+var w_heal_credit := HEAL_CREDIT_W
 var w_gold_take := GOLD_TAKE_VALUE
 var w_gold_take_low := GOLD_TAKE_VALUE_LOW
 # 【2026-09-19 新增·默认 0 = 关】吃矿的机会成本系数（见 `GOLD_OPPORTUNITY_W` 的说明）
@@ -735,6 +769,9 @@ var w_stay_option := STAY_OPTION
 #   `DISPLACE_THREAT_W` —— 见文件上方「整族删除」说明（键 + 分支 + 唯一读者一起删）。
 # 【2026-09-20·默认关】"站着能打到人却不打"的代价，见 `const IDLE_HIT_PENALTY` 处说明。
 var w_idle_hit_penalty := IDLE_HIT_PENALTY
+# 【2026-09-21·默认关】两项队形评分（抱团 / 退路被夹），见 `const FORM_COHESION_W` 处说明。
+var w_form_cohesion := FORM_COHESION_W
+var w_form_escape := FORM_ESCAPE_W
 var w_threat_discount := THREAT_MOVE_DISCOUNT
 var w_focus_fire := FOCUS_FIRE_WEIGHT
 var w_obstacle_detour := OBSTACLE_DETOUR_WEIGHT
@@ -903,6 +940,8 @@ func set_weights(t: Dictionary) -> void:
 			# ⚠️ 【2026-09-20 解 const】`ENGAGE_PULL_PER_CELL` 已**移回可调表**（见下方新分支）
 			#   —— 上面那份名单现在只剩 4 个。
 			"BUFF_TAKE_WEIGHT": w_buff_take = float(v)
+			# 【2026-09-21·默认关】治疗计价（见 const HEAL_CREDIT_W 处说明）
+			"HEAL_CREDIT_W": w_heal_credit = float(v)
 			"THREAT_MOVE_DISCOUNT": w_threat_discount = float(v)
 			"FOCUS_FIRE_WEIGHT": w_focus_fire = float(v)
 			"OBSTACLE_DETOUR_WEIGHT": w_obstacle_detour = float(v)
@@ -968,8 +1007,10 @@ func set_weights(t: Dictionary) -> void:
 			"STAY_OPTION": w_stay_option = int(v)
 			# 【2026-09-20 已删·用户拍板】`THREAT_SUM_CAP`（见文件上方「整族删除」说明）。
 			# 【2026-09-20·默认关】"站着能打到人却不打"的代价（见 const IDLE_HIT_PENALTY 处说明）
-			"IDLE_HIT_PENALTY": w_idle_hit_penalty = float(v)
-			# 【2026-09-20 删除·用户拍板】原来这里还有 `"LEECH_TRIGGER_W"`（古拉吸血触发）⇒ 判死删除，
+			# 【2026-09-21·默认关】两项队形评分：抱团（孤立罚）/ 退路被夹，见 const FORM_COHESION_W 处说明
+			"FORM_COHESION_W": w_form_cohesion = float(v)
+			"FORM_ESCAPE_W": w_form_escape = float(v)
+			"IDLE_HIT_PENALTY": w_idle_hit_penalty = float(v)			# 【2026-09-20 删除·用户拍板】原来这里还有 `"LEECH_TRIGGER_W"`（古拉吸血触发）⇒ 判死删除，
 			# 现在权重文件/theta 里再写这个键会被下面的 `_` 分支静默忽略。
 			# 【2026-09-15 删除·用户决定】"SIEGE_BASE" / "SIEGE_OVER" 两个键随 `_siege_bonus()` 一起删除
 			# （与 `ENGAGE_PULL_PER_CELL` 重复，用户选 B）→ 可调键 20 → 18。
@@ -1945,12 +1986,12 @@ func _term_defs() -> Array:
 	return [
 		["①障碍绕路", "−Σ 被墙挡出的绕路代价 × OBSTACLE_DETOUR_WEIGHT(%.1f)" % w_obstacle_detour],
 		["②身价", "Σ_我方 身价 − Σ_对面 身价×PLAYER_VALUE_MULT(%.2f)（单位一死整项消失 = 击杀那笔钱）" % PLAYER_VALUE_MULT],
-		["③血量账", "Σ (对面掉血 − 我方掉血) × HP_VALUE_W(%.2f)" % w_hp_value],
+		["③血量账", "`+HP_VALUE_W(%.2f) × 对面掉血 − HP_VALUE_W × 我方掉血×血量池倍率`（掉血**夹 ≥ 0** ⇒ 回血不进这一侧）；`HEAL_CREDIT_W(%.2f)`>0 时再追加**回血侧**：`+HEAL_CREDIT_W × 我方回血 − HEAL_CREDIT_W × 对面回血`（含溢出；与 ⑧ 的 `heal` 互斥，避免重复计价）" % [w_hp_value, w_heal_credit]],
 		["④集火frac²", "Σ_对面 FOCUS_FIRE_WEIGHT(%.1f) × (本回合已打掉血 ÷ 其回合初血)²" % w_focus_fire],
 		["⑤位置拉力", "−Σ_我方(本回合够不到任何敌人时) (near − gate) × ENGAGE_PULL_PER_CELL(%.2f)；gate=移动力+射程" % w_engage_pull],
 		["⑥规则B", "`MOVE_ACCEPT_DAMAGE(%d)` = **软扣分**：**未交战**时 `−Σ_我方 max(**挨打合计** − 阈值, 0) × HP_VALUE_W(%.2f)`；**交战中不生效**（那时由 ③血量账（本回合输出 + 被反击）/ ⑦核心风险 / ⑮下回合挨打 权衡）。⚠️ **比较用的是「挨打合计」= 下回合会挨到的总伤害**（按目标求和、**不打移动折减**）：① 能打到他的每个对手各一次**真实单击** ② **移动后触发的技能伤害**（烛火/末日/涌电技师） ③ **毒 tick 1 点** ④ 含 嘲讽门 / 重伤+1 / 坚固−1 / 塔盾代扛−1，**盾（现有的 + 本回合末要发的）整次免伤并抵消最大的一次**（2026-09-20 用户口径定稿：**不是**单次最高一击、也**不是** ⑮ 的分摊值）。⚠️ **「交战」= 我方有单位进了敌方的「射程＋移动力」威胁圈**（= 它下回合走上来就能打到我；`_engaged()`，**判据时机 = 本回合行动前**、整回合不变；2026-09-20 用户口径：**不看有没有掉过血**）。候选表**不受阈值影响**（带增益道具的格子照旧可选）" % [w_move_accept_damage, w_hp_value]],
 		["⑦核心风险", "−RISK_W(%.2f) × max_我方[ 「**挨打合计**」÷ 当前血 × 核心系数^RISK_CORE_POW(%.2f) ]（**max 型**：只罚最危险的那一个 ⇒ 不制造『人人各自躲』）。数值来源 = `_incoming_total_on()` —— 与 ⑥规则B / 撤退过滤 / ⑮必死折**同一把尺子**。⚠️ 2026-09-21 用户拍板恢复：删族后实测『远程会绕到敌人背后』（一个能开火的单位站在哪分数完全一样）；**与旧版的差别 = 输入换成「挨打合计」**（旧版读分摊向量），同一权重下比旧版强约 2~4 倍" % [w_risk, w_risk_core_pow]],
-		["⑧道具", "buff_taken × BUFF_TAKE_WEIGHT(%.1f)；已按阵营定符号（我方拾取 + / 对面拾取 −），回血满血时值 0" % w_buff_take],
+		["⑧道具", "buff_taken × BUFF_TAKE_WEIGHT(%.1f)；已按阵营定符号（我方拾取 + / 对面拾取 −）；类型价 = atk 1.0 / move 0.7 / shield 1.2（已有盾 0）/ **heal 1.2，但 `HEAL_CREDIT_W`>0 时归 0**（回血改由 ③ 按实际回复量计价，避免一件事算两遍）" % w_buff_take],
 		["⑨搏命激励", "Σ 我方「必死且本回合已攻击」 + 6.0 + 1.5×吃攻"],
 		["⑩终局项", "TERMINAL_W(%.2f) × 存活数凸曲线（我方 3/2/1/0 → 0/−10/−100/−1000；对面 → 0/+10/+100/+1000）" % w_terminal],
 		["⑮必死折", "−Σ_我方[「**挨打合计**」≥ 当前血 ⇒ 身价 × THREAT_DEAD_FOLD(%.2f)]（与 ⑦ 共用同一份 `_incoming_incs()`）（「下回合会被打掉」的唯一罚分；判据与 ⑥规则B / 撤退过滤**同一把尺子**：`_incoming_total_on()` = 按目标求和的真实单击 + 移动后技能 + 毒 + 盾修正）。⚠️ 2026-09-20 用户拍板：原来的**分摊总量**（`THREAT_ALLOC_W` × Σ分到的伤害 × 核心系数）与 ⑦核心风险（`RISK_W`/`RISK_CORE_POW`）**整族删除** —— 那本账要手工建模「对手能打到几个人（走位）+ 各技能」，永远算不全（实测它在棋力层中性，§14#174）；而「下回合会不会挨打」现在由**必死折 + ⑥规则B + 终选层的 T13 真推演**覆盖" % [w_threat_dead_fold]],
@@ -1958,6 +1999,8 @@ func _term_defs() -> Array:
 		["⑬附体(宿魂)", "宿魂(hero_46)：敌方被[附体]的单位 +POSSESS_TARGET_W(%.2f) × 身价/20。**值按施加者（宿魂）英雄覆盖读**（`_wh`）" % w_possess_target],
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且被敌人够得着 ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取）" % w_solid_hold],
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
+	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ 半径 %d 格内一个队友都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起 ⇒ 不会把队伍逼成一坨吃 AoE）" % [w_form_cohesion, FORM_RADIUS]],
+	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 相邻敌数 − 相邻队友数) ]（治贴墙/死胡同/被包夹）" % [w_form_escape, FORM_ESCAPE_MIN]],
 	]
 
 ## 【2026-09-20 新增·诊断专用】把 `_evaluate()` 的每一项**单独算出来**，供逐项打印。
@@ -1984,6 +2027,11 @@ func _eval_breakdown(sim: Sim) -> Dictionary:
 		# 【2026-09-21 修 bug】夹到 ≥ 0：回血道具**可溢出血量上限**（真实规则）⇒ 治疗后 `hp > hp0`，
 		# 不夹的话 `hp0 − hp` 是**负数** ⇒ 会把"满血吃到回血道具"记成"我方掉了一笔血"（反而扣分）。
 		var lost := maxf(float(hu.hp0) - float(maxi(hu.hp, 0)), 0.0)
+		# 【2026-09-21 新增·默认关】回血计价（与 `_evaluate()` 同口径 ⇒ Σ 自校验才对得上）
+		if w_heal_credit != 0.0:
+			var gained2 := maxf(float(hu.hp) - float(hu.hp0), 0.0)
+			if gained2 > 0.0:
+				hp += (w_heal_credit * gained2) if hu.fn == DataRegistry.Faction.ENEMY else (-w_heal_credit * gained2)
 		if lost == 0.0:
 			continue
 		# 说明：`VALUE_IMPORTANCE_POW`（已判废、默认 0）会再乘一个身价比的幂；它开着时这里按 1.0 算
@@ -2025,6 +2073,11 @@ func _eval_breakdown(sim: Sim) -> Dictionary:
 			d["⑮必死折"] = _dead_fold(sim, incs_bd)
 	if w_poison_apply != 0.0 or _any_hero_key(["POISON_APPLY_W"]):
 		d["⑯猛毒新挂"] = sim.poison_apply_val
+	# 【2026-09-21 新增·默认关】⑳抱团 / ㉑退路被夹（与 `_evaluate()` 末尾那两行同口径 ⇒ Σ 自校验才对得上）
+	if w_form_cohesion != 0.0 or w_form_escape != 0.0:
+		var fp3: Vector2 = _formation_parts(sim)
+		d["⑳抱团"] = -w_form_cohesion * fp3.x
+		d["㉑退路/被夹"] = -w_form_escape * fp3.y
 	# 【2026-09-21 新增·默认关】B 档英雄特化三个动作项（⑰沉默计价 / ⑱荆棘封锁 / ⑲麻痹零攻）也要逐项列出来，
 	# 否则它们会落在「其它(未列)」里看不懂。口径与 `_evaluate()` 里那一段**逐行对应**（同一条 if、同一个公式）。
 	if w_silence != 0.0 or _any_hero_key(["SILENCE_VALUE_W"]):
@@ -2666,6 +2719,11 @@ func _buff_value(_sim: Sim, u: SimUnit, btype: String) -> float:
 			# ⇒ **满血也有实打实的 3 点价值**（多扛一口气），原来那句 `if u.hp < u.max_hp else 0.0` 是错的。
 			# 量纲：1.2 × BUFF_TAKE_WEIGHT(3.0) = 3.6 分；换算成血量 = +3 血点 × HP_VALUE_W(1.0) = 3.0 分
 			# （略高一点是给"这条命更耐打"的溢价；觉得太爱跑去吃就调 BUFF_TAKE_WEIGHT）。
+			# 【2026-09-21 晚·避免重复计价】`HEAL_CREDIT_W > 0` 时这里返回 **0**：回血改由 ③ 按
+			#   **实际回复量**计价（1 血 = `HEAL_CREDIT_W` 分）⇒ "捡回血道具"与"技能治疗"走同一条通道、
+			#   同一把尺子，不会同一件事算两遍（用户问过"捡血量buff加分、回血也加分是不是重复了"）。
+			if w_heal_credit > 0.0:
+				return 0.0
 			return 1.2
 	return 0.0
 
@@ -3592,6 +3650,12 @@ func _sim_spawn_sub(sim: Sim, fn: int, hid: String, cell: Vector2i) -> void:
 		return
 	nu.max_hp = def.max_hp
 	nu.hp = def.max_hp
+	# 【2026-09-21 修 bug】替补/召唤**登场那一刻**的血量要记进 `hp0`（= 本回合起点血量）。
+	#   原来漏了这一步 ⇒ `hp0` 停在 `SimUnit` 的默认值 **10**：max_hp < 10 的替补一上场就被 ③血量账
+	#   记成"我方掉了 10 − max_hp 血"（凭空扣分）；max_hp > 10 的替补前 10 点伤又完全看不见。
+	#   改成"入场即起点"后，两种偏差都没了 —— 也是下面 `HEAL_CREDIT_W`（按 hp − hp0 算回血）不会
+	#   把"满血替补上场"误记成"回了一大口血"的前提。
+	nu.hp0 = nu.hp
 	nu.atk = def.atk
 	nu.eatk = def.atk
 	# 【RL 修正】出生数值必须走真实的"生成期加成"入口（`autoload/DataRegistry.gd:770 spawn_move`
@@ -4217,6 +4281,69 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 ## 否则一次清障（耐久 3）在前两下拿不到任何分，波束搜索根本走不到"第三下拆掉"的那一步。
 ## 于是：拆挡路的墙 -> 局面分上升（且按耐久给部分分）；拆不挡路的墙 -> 代价为 0，不涨分。
 ## 开销：每个敌方单位只查一次（走 soft_route_cost 的缓存），对搜索速度影响很小。
+## 【2026-09-21 新增·默认关】两项"队形"评分（见 `const FORM_COHESION_W` 处说明）的唯一实现。
+## 返回 `Vector2(抱团罚分, 退路罚分)`，**都是正数**（由 `_evaluate` 取负）。只算我方（AI 侧）非召唤物存活单位。
+##   · 抱团：某单位在 `FORM_RADIUS` 格内一个队友都没有 ⇒ +1（**只罚孤立**）
+##   · 退路：`max(0, FORM_ESCAPE_MIN − 可走邻格数)` + `max(0, 相邻敌数 − 相邻队友数)`（贴墙/死胡同/被包夹）
+## 口径细节：墓碑与障碍都算"走不了"（真实规则两者都挡路）；被单位占住的邻格不算可走；
+##   出界的邻格不算（贴边 = 少一条退路，正好是我们要罚的）。
+## ⚠️ **性能要求**：本函数在 `_evaluate()` 里 ⇒ 一次决策被调 **上万次**。所以：
+##   ① 返回 `Vector2`（不分配 Array）② 方向表是 `const`（不每次新建）③ 不建临时 `ours` 数组（直接两趟扫 `sim.units`）。
+##   实测（2 局 beam=100 冒烟）：带两项 `search_ms_max` 1472 → 2222 ms；优化成现在这版后 ≈1.5×以内（见 §14#226）。
+const FORM_DIRS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1),
+		Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
+
+func _formation_parts(sim: Sim) -> Vector2:
+	var coh := 0.0
+	var esc := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if DataRegistry.summons.has(u.hero_id):
+			continue
+		# ① 抱团：半径内有没有队友（第二趟扫，不建临时数组；**找到一个就跳出** —— 最常见的"已经抱团"
+		#   局面只花 1 次 `grid.distance`）。
+		var buddy := 0
+		for j in sim.units.size():
+			var v: SimUnit = sim.units[j]
+			if v == null or not v.alive or v == u or v.fn != DataRegistry.Faction.ENEMY:
+				continue
+			if DataRegistry.summons.has(v.hero_id):
+				continue
+			if grid.distance(u.cell, v.cell) <= FORM_RADIUS:
+				buddy += 1
+				break
+		if buddy == 0:
+			coh += 1.0
+		# ② 退路/被夹：数可走邻格 + 相邻敌友
+		var free_n := 0
+		var adj_foe := 0
+		var adj_friend := 0
+		var ax := grid.axial_of(u.cell)
+		for d in FORM_DIRS:
+			var off := grid.offset_of(ax + d)
+			if not grid.in_bounds(off):
+				continue
+			if sim.obstacles.has(off) or sim.graves.has(off):
+				continue
+			if sim.occ.has(off):
+				# ⚠️ `sim.occ` 的值是 **SimUnit 对象**（不是下标）：见 `sim.occ[mc] = u` 那些写入点，
+				#   以及 2519 行 `(sim.occ[c] as SimUnit).sim_index` 的读法。（类字段注释写成 "cell -> idx"
+				#   是旧注释，别照它写 —— 我第一版照注释写了 `int(sim.occ[off])`，实机每次评估都抛
+				#   `Nonexistent 'int' constructor`：2 局刷了 23k 条报错、`search_ms_max` 被拖到 9.9 秒。）
+				var ou: SimUnit = sim.occ[off]
+				if ou != null and ou.alive:
+					if ou.fn == u.fn:
+						adj_friend += 1
+					else:
+						adj_foe += 1
+				continue
+			free_n += 1
+		esc += float(maxi(0, FORM_ESCAPE_MIN - free_n))
+		esc += float(maxi(0, adj_foe - adj_friend))
+	return Vector2(coh, esc)
+
 func _obstacle_detour(sim: Sim) -> float:
 	if sim.obstacles.is_empty():
 		return 0.0   # 没墙就恒为 0（绝大多数局面走这条快路）
@@ -4355,6 +4482,15 @@ func _evaluate(sim: Sim) -> float:
 		# 【2026-09-21 修 bug】夹到 ≥ 0：回血道具**可溢出血量上限**（真实规则）⇒ 治疗后 `hp > hp0`，
 		# 不夹的话 `hp0 − hp` 是**负数** ⇒ 会把"满血吃到回血道具"记成"我方掉了一笔血"（反而扣分）。
 		var lost := maxf(float(hu.hp0) - float(maxi(hu.hp, 0)), 0.0)
+		# 【2026-09-21 新增·默认关】回血计价（`HEAL_CREDIT_W`>0 才生效，见 const 说明）：与"掉血"同一趟、
+		#   同一口径（只算 hp0 > 0 的单位、**含溢出**）；我方回血 **+**、对面回血 **−**。
+		if w_heal_credit != 0.0:
+			var gained := maxf(float(hu.hp) - float(hu.hp0), 0.0)
+			if gained > 0.0:
+				if hu.fn == DataRegistry.Faction.ENEMY:
+					score += w_heal_credit * gained
+				else:
+					score -= w_heal_credit * gained
 		if lost == 0.0:
 			continue
 		if hu.fn == DataRegistry.Faction.ENEMY:
@@ -4577,6 +4713,13 @@ func _evaluate(sim: Sim) -> float:
 	# 【2026-09-18 新增·默认关闭】终局项（判负线凸曲线）：`w_terminal` = 0 时这一行不执行 ⇒ 逐位不变。
 	if w_terminal != 0.0:
 		score += w_terminal * _terminal_value(sim)
+	# 【2026-09-21 新增·默认关】两项"队形"评分（见 `const FORM_COHESION_W` 处说明）：
+	#   ⑳抱团（每个我方单位至少一个队友在 FORM_RADIUS 内）· ㉑退路/被夹（可走邻格 / 邻敌多于邻友）。
+	#   两项都是纯局面量、纯罚分（永远 ≤ 0）⇒ 它们只把"散开/钻死胡同"的走法往下压，不奖励任何具体站位。
+	if w_form_cohesion != 0.0 or w_form_escape != 0.0:
+		var fp := _formation_parts(sim)
+		score -= w_form_cohesion * fp.x
+		score -= w_form_escape * fp.y
 	return score
 
 # 【2026-09-18 新增·默认关闭】终局项：把"死 3 个判负"这条线变成单调且**越近越陡**的分。

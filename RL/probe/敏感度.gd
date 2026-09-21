@@ -40,6 +40,9 @@ const KEY_VAR := {
 	# ---- 2026-09-19 并列裁决层（主杠杆）----
 	"TIEBREAK_MODE": "w_tiebreak_mode",
 	"TIEBREAK_EPS": "w_tiebreak_eps",
+	# ---- 【2026-09-21 新增】两项"队形"评分：⑳抱团（孤立罚）/ ㉑退路被夹；默认 0 = 关 ----
+	"FORM_COHESION_W": "w_form_cohesion",
+	"FORM_ESCAPE_W": "w_form_escape",
 }
 const INT_KEYS := ["BEAM", "TIEBREAK_MODE"]
 const FACTORS := [0.5, 2.0]
