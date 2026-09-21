@@ -22,6 +22,8 @@ var _deck_pick_tabs: Dictionary = {}       # slot -> Button（卡组1/2/3 切换
 var _deck_pick_preview: Control = null     # 当前卡组的队伍预览宿主
 var _deck_pick_info: Label = null          # 当前卡组信息行（人数/不足提示）
 var _deck_pick_start_btn: Button = null     # 用当前卡组出战
+# 【2026-09-21 用户定】选卡组限时大字（读 `battle.deck_pick_time_left`，15 秒，超时随机选一个）
+var _deck_pick_timer_label: Label = null
 var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重算尺寸定位）
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
 var _player_deaths: Label
@@ -977,6 +979,16 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrapbox.add_child(title)
+	# 【2026-09-21 用户定】限时大字：15 秒内不选 ⇒ 随机选一个可用卡组（Battle 侧 `_deck_pick_timeout()`）。
+	# 样式与部署轮/竞技场那两处大字同一套（金 → ≤5 秒转红，见 `_update_deck_pick_timer`）。
+	_deck_pick_timer_label = Label.new()
+	_deck_pick_timer_label.add_theme_font_size_override("font_size", 32)
+	_deck_pick_timer_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
+	_deck_pick_timer_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_deck_pick_timer_label.add_theme_constant_override("outline_size", 5)
+	_deck_pick_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_deck_pick_timer_label.text = ""
+	wrapbox.add_child(_deck_pick_timer_label)
 	# 卡组1/2/3 切换行（同编辑页 deck_bar 布局：tabs 占满整行，右侧放按钮）
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 8)
@@ -1115,6 +1127,7 @@ func _close_deck_pick_panel() -> void:
 	_deck_pick_preview = null
 	_deck_pick_info = null
 	_deck_pick_start_btn = null
+	_deck_pick_timer_label = null   # 【2026-09-21】限时大字随面板一起释放
 	_deck_pick_tabs.clear()
 	_deck_pick_decks = []
 	_set_score_tooltip_visible(false)
@@ -1333,11 +1346,15 @@ func _build_edge_warning(root: Control, vsize: Vector2) -> void:
 	_warn_holder.visible = false
 	root.add_child(_warn_holder)
 	var edge := 24.0   # 边缘条厚度
+	# 【2026-09-21 修·四个角红色重叠】原来上/下两条是**整屏宽**、左/右两条是**整屏高** ⇒
+	# 四个角各被"横条 + 竖条"叠了两次，alpha 0.5 叠成 0.75，四个角出现更深的红方块（用户报的现象）。
+	# 现在左/右两条只占**扣掉上下条之后**的那段高度：四角不叠、也不留缝，整圈 alpha 一致。
+	var mid_h := maxf(vsize.y - edge * 2.0, 0.0)
 	var bars := [
 		[Vector2(0, 0), Vector2(vsize.x, edge)],               # 上
 		[Vector2(0, vsize.y - edge), Vector2(vsize.x, edge)],  # 下
-		[Vector2(0, 0), Vector2(edge, vsize.y)],               # 左
-		[Vector2(vsize.x - edge, 0), Vector2(edge, vsize.y)],  # 右
+		[Vector2(0, edge), Vector2(edge, mid_h)],              # 左（避开上下条，不再压角）
+		[Vector2(vsize.x - edge, edge), Vector2(edge, mid_h)],  # 右（同上）
 	]
 	for b in bars:
 		var rect := ColorRect.new()
@@ -1649,6 +1666,7 @@ func _process(_dt: float) -> void:
 	_update_turn_timer()
 	_update_arena_pick_timer()
 	_update_deploy_pick_timer()
+	_update_deck_pick_timer()
 	_update_score_tooltip_pos()
 	_update_arena_touch_hold()   # 竞技场触屏：按住不动超时 -> 转为查看模式（长按）
 
@@ -1666,6 +1684,21 @@ func _update_deploy_pick_timer() -> void:
 			Color(1.0, 0.3, 0.25) if secs <= 5 else Color(1.0, 0.9, 0.4))
 	else:
 		_deploy_timer_label.visible = false
+
+# 【2026-09-21 用户定】选卡组面板的限时大字：读 `battle.deck_pick_time_left`（15 秒，超时随机选一个）。
+# 已选定（联机在等对端）或面板不在 DECK_PICK ⇒ 清空不显示。
+func _update_deck_pick_timer() -> void:
+	if _deck_pick_timer_label == null or not is_instance_valid(_deck_pick_timer_label):
+		return
+	if battle == null or not is_instance_valid(battle):
+		return
+	if battle.state != Battle.State.DECK_PICK or battle.deck_pick_time_left <= 0.0:
+		_deck_pick_timer_label.text = ""
+		return
+	var secs := int(ceil(battle.deck_pick_time_left))
+	_deck_pick_timer_label.text = "%d 秒（超时随机选一个卡组）" % secs
+	_deck_pick_timer_label.add_theme_color_override("font_color",
+		Color(1.0, 0.3, 0.25) if secs <= 5 else Color(1.0, 0.9, 0.4))
 
 # 选人面板上方的大字倒计时：仅当本端正在 2 选 1（battle.arena_pick_time_left >= 0）
 func _update_arena_pick_timer() -> void:

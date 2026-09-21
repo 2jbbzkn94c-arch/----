@@ -2325,6 +2325,31 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 						continue   # 有"不贴脸也能打到同一目标"的走法：不贴脸打
 				kept2.append(combo)
 			combos = kept2
+	# 【2026-09-21 用户反馈「为了集火有点病态了：远程宁愿去贴身集火，也不愿意把更高的伤害打到其他人身上」】
+	#   远程单位的一条候选若**在贴身处开火**（射程压 1、**基础攻击压为 1**，buff 照常），
+	#   则**只有这一击能击杀目标**才保留；否则删掉 ⇒ 免得它为了给集火补最后 1 点，
+	#   放弃"退到远处打满额伤害"（用户原话：「如果差远程那一点贴身伤害能击杀，那我可以理解，但现在不是」）。
+	#   只影响"带攻击"的候选；纯移动候选不受影响（走位照旧）。
+	# ⚠️ **2026-09-21 深夜修·第二版（实机"远程站那儿发呆"）**：第一版是"贴身处开火一律删（除非击杀）"，
+	#   而**远程被贴身时射程被压到 1** ⇒ 它当时**所有**能打的候选都在贴身处；一旦它无处可退
+	#   （被围住/被障碍挡住），第一版会把它的攻击候选**全部删光** ⇒ 这个单位这一回合**干脆不出手**
+	#   （`combos` 空时只补一条"原地不动"）⇒ 实机看起来就是"远程站那儿发呆"。
+	#   现在改成**只有存在"非贴身处、伤害更高"的替代方案时才删**（`alt_best` = 非贴身候选里的最高伤害，
+	#   由调用方算出）：能打 3 就绝不为了 1 点去贴身；只能打 1 时照打（1 点 > 0）。
+	var kept_ranged: Array = []
+	if u.atk_type == DataRegistry.AttackType.RANGED and combos.size() > 1:
+		var alt_best := 0
+		for combo in combos:
+			if int(combo.get("atk", -1)) < 0:
+				continue
+			var mc2: Vector2i = u.cell if combo.get("move") == null else combo["move"]
+			if not _sim_enemy_adjacent(sim, u, mc2):
+				alt_best = maxi(alt_best, u.eatk)
+		if alt_best > 0:
+			for combo in combos:
+				if _ranged_pinned_shot_ok(sim, u, combo, alt_best):
+					kept_ranged.append(combo)
+			combos = kept_ranged
 	if combos.size() == 0:
 		combos.append({ "move": null, "atk": -1 })
 	# 【2026-09-20 新增·默认关】把"原地不动"补成**正当选项**（见 `const STAY_OPTION` 处的说明）。
@@ -2465,6 +2490,34 @@ func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool
 		return false)
 
 # 模拟里某格是否有相邻的对立单位（用于远程被贴身判定）
+## 【2026-09-21 用户反馈「远程宁愿贴身集火，也不愿意把更高的伤害打到其他人身上」】
+##   远程单位"**在贴身处开火**"这条候选要不要保留：贴身 ⇒ 射程压 1、**基础攻击压为 1**（buff 照常，
+##   口径与 `_sim_sync_pins` 同一套）⇒ 只有**这一击能击杀目标**时才值得；
+##   否则删掉（用户原话：「如果差远程那一点贴身伤害能击杀，那我可以理解，但现在不是」）。
+##   非远程 / 不带攻击 / 开火时不贴身 ⇒ 一律保留（这些情况行为完全不变）。
+func _ranged_pinned_shot_ok(sim: Sim, u: SimUnit, combo: Dictionary, alt_best: int = 0) -> bool:
+	if u.atk_type != DataRegistry.AttackType.RANGED:
+		return true
+	var ti := int(combo.get("atk", -1))
+	if ti < 0 or ti >= sim.units.size():
+		return true
+	var fc: Vector2i = u.cell
+	var mv: Variant = combo.get("move")
+	if mv != null:
+		fc = mv
+	if not _sim_enemy_adjacent(sim, u, fc):
+		return true                     # 开火时不贴身 ⇒ 正常满额攻击
+	var t: SimUnit = sim.units[ti]
+	if t == null or not t.alive:
+		return true
+	# 贴身后这一击的伤害：基础攻击压为 1、buff/道具照常（与 `_sim_sync_pins` 里那行 `obs_atk` 同式）
+	var pinned_atk := 1 + maxi(u.eatk - u.atk, 0)
+	if t.hp <= pinned_atk:
+		return true                     # 这一击能击杀 ⇒ 保留（用户认可的情形）
+	# 【2026-09-21 深夜修·第二版】只有**存在更高的非贴身伤害**时才否决（`alt_best` 由 `_actions_for` 传入）。
+	#   原来无条件否决 ⇒ 被围住的远程会被删光攻击候选 ⇒ 整回合不出手（"发呆"）。
+	return alt_best <= pinned_atk
+
 func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]

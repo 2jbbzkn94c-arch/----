@@ -917,26 +917,34 @@ function Get-SeedLineupSummary([object]$Spec, [int]$Seed) {
 # ============================ process control ============================
 
 function Wait-GodotSlot {
-    param([int]$MaxRounds = 20, [int]$SleepSeconds = 30, [string]$Tag = '')
+    param([int]$MaxRounds = 20, [int]$SleepSeconds = 30, [string]$Tag = '', [int]$MaxSlots = 0)
     # Overridable via env so a long experiment can wait through several of another tool's shorter
     # runs instead of aborting after a fixed 20 rounds (default stays 20 x 30s = 10 min).
     if ($env:RL_SLOT_ROUNDS) { $MaxRounds = [int]$env:RL_SLOT_ROUNDS }
     if ($env:RL_SLOT_SLEEP_S) { $SleepSeconds = [int]$env:RL_SLOT_SLEEP_S }
+    # 【2026-09-21 用户批准「多开几个线程」】原来这里是**全局单槽**：只要还有**任何一个**无窗口
+    #   Godot 在跑就不放行 ⇒ 8 条并行链被串行化，全机同时只有 1 个在算（实测 1.5 配对/分钟，
+    #   而 8 条链本该 8 倍）。现在改成**多槽**：并发数 < `MaxSlots` 就放行。
+    #   `MaxSlots` 取值顺序：显式参数 → `$env:RL_SLOT_MAX` → **1**（= 改动前的行为，逐位不变）。
+    #   要提速就设 `RL_SLOT_MAX=<并发数>`（8 条链 ⇒ 设 8~10；12 核机器建议 ≤10，给用户留核）。
+    if ($MaxSlots -le 0) {
+        if ($env:RL_SLOT_MAX) { $MaxSlots = [int]$env:RL_SLOT_MAX } else { $MaxSlots = 1 }
+    }
     for ($i = 1; $i -le $MaxRounds; $i++) {
         $all = @(Get-Process -Name 'Godot*' -ErrorAction SilentlyContinue)
         # 【2026-09-19 改·用户批准"自动"】原来靠一个**写死的**"用户编辑器 pid"（25124，早就失效）
         #   来把它排除在冲突之外。现在改成**动态判据**：`MainWindowTitle` 非空的 Godot =
         #   用户的编辑器 / 正在跑的游戏窗口（不抢槽位、只在日志里报告）；无窗口的 =
-        #   我们自己的 headless 跑批（算冲突）。好处：编辑器什么时候开、换了 pid 都不影响。
+        #   我们自己的 headless 跑批（算冲突）。
         $userWin = @($all | Where-Object { $_.MainWindowTitle -and ([string]$_.MainWindowTitle).Length -gt 0 })
         $foreign = @($all | Where-Object { -not ($_.MainWindowTitle -and ([string]$_.MainWindowTitle).Length -gt 0) })
-        if ($foreign.Count -eq 0) {
+        if ($foreign.Count -lt $MaxSlots) {
             $uw = ($userWin | ForEach-Object { [string]$_.Id + ':' + $_.MainWindowTitle }) -join ' ; '
-            Write-Host ('[slot] free (round ' + $i + '); user windows ignored: ' + $(if ($uw) { $uw } else { '(none)' }))
+            Write-Host ('[slot] free (round ' + $i + '; running ' + $foreign.Count + '/' + $MaxSlots + '); user windows ignored: ' + $(if ($uw) { $uw } else { '(none)' }))
             return $true
         }
         $desc = ($foreign | ForEach-Object { [string]$_.Id + ':' + $_.MainWindowTitle }) -join ' ; '
-        Write-Host ('[slot] round ' + $i + '/' + $MaxRounds + ' busy -> ' + $desc + ' ; sleeping ' + $SleepSeconds + 's ' + $Tag)
+        Write-Host ('[slot] round ' + $i + '/' + $MaxRounds + ' busy (' + $foreign.Count + '/' + $MaxSlots + ') -> ' + $desc + ' ; sleeping ' + $SleepSeconds + 's ' + $Tag)
         Start-Sleep -Seconds $SleepSeconds
     }
     return $false
@@ -1574,6 +1582,14 @@ function Remove-MeasureRowsForSeed([string]$Run, [string]$Config, [int]$Seed, [s
     $fk = Get-FirstKey $First
     $kept = @($rows | Where-Object { -not (([string]$_.config -eq $Config) -and ([int]$_.seed -eq $Seed) -and ((Get-FirstKey ([string]$_.first)) -eq $fk)) })
     if ($kept.Count -eq $rows.Count) { return }
+    if ($kept.Count -eq 0) {
+        # 【2026-09-21 修·单批 run 掉表头】一行都不留时**删掉整份表**，不要写空表：
+        # `@() | Export-Csv -NoTypeInformation` 只留 3 字节 BOM、没有表头，而 Add-MeasureRows
+        # 只在"文件不存在"时补表头 ⇒ 单批 run（池子每格就是 1 批）会产出无表头 measure.csv，
+        # 紧接着的 completeness 门禁 Import-Csv 直接抛错、整批报失败。删掉 ⇒ 下一批重建带表头的表。
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        return
+    }
     # Export-Csv handles quote escaping correctly. Hand-rolled "join with commas" corrupts any field
     # that contains a comma (lineup_used does), so never build CSV text by hand here.
     $kept | Select-Object (Get-MeasureColumns) | Export-Csv -LiteralPath $p -NoTypeInformation -Encoding UTF8
@@ -1657,7 +1673,13 @@ function Add-MeasureRows([string]$Run, [object[]]$Rows) {
     $header = Get-MeasureHeader
     $cols = @($header -split ',')
     $lines = @()
-    if (-not (Test-Path -LiteralPath $p)) { $lines += $header }
+    # 【2026-09-21 修·单批 run 掉表头】判空不能只看 Test-Path：`@() | Export-Csv -NoTypeInformation`
+    # 会留下一个**只有 BOM（3 字节）**的文件（Remove-MeasureRowsForSeed 把行全删光时就是这样），
+    # 于是这里以为"表已存在"而跳过表头 ⇒ measure.csv 变成无表头表 ⇒ 之后所有 Import-Csv
+    # （completeness 门禁 / 排名 / compare）都抛 "成员已存在"。⇒ 长度 ≤ 3 也算空，补表头。
+    $empty = $true
+    if (Test-Path -LiteralPath $p) { $empty = ((Get-Item -LiteralPath $p).Length -le 3) }
+    if ($empty) { $lines += $header }
     foreach ($r in $Rows) {
         $vals = @()
         foreach ($c in $cols) {

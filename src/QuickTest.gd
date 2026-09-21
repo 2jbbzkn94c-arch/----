@@ -46,6 +46,13 @@ func _build_tooltip() -> void:
 	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
 	layer.add_child(_tooltip)
 	_tooltip_box = VBoxContainer.new()
+	# 【2026-09-21 修·右下角属性框闪烁】内层容器/标签**必须**也 IGNORE：
+	#   `mouse_filter` 是**逐控件**判定的 —— 外层设 IGNORE 只代表"外层自己不接收"，
+	#   子控件默认是 STOP，照样会被鼠标命中。属性框一旦吃了鼠标，被它盖住的那张英雄卡
+	#   就会收到 `mouse_exited`（见 `HexCard` 的 hovered 信号）⇒ 属性框隐藏 ⇒ 鼠标又落回卡片
+	#   ⇒ `mouse_entered` ⇒ 再弹出 …… 每帧一次 = 一闪一闪。右下角必现，因为那里的
+	#   边界夹取会把属性框**正好推到鼠标底下**（见 `_process` 里的定位）。
+	_tooltip_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tooltip_box.add_theme_constant_override("separation", 8)
 	_tooltip.add_child(_tooltip_box)
 
@@ -63,6 +70,7 @@ func _set_tooltip_zones(zones: Array) -> void:
 			lnsb.color = Color(1.0, 0.85, 0.5, 0.3)
 			lnsb.thickness = 1
 			sep.add_theme_stylebox_override("separator", lnsb)
+			sep.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 属性框整层不接收鼠标（见 _build_tooltip 的说明）
 			_tooltip_box.add_child(sep)
 		var lb := Label.new()
 		lb.text = zones[i]
@@ -71,6 +79,7 @@ func _set_tooltip_zones(zones: Array) -> void:
 		lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lb.custom_minimum_size = Vector2(380, 0)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.mouse_filter = Control.MOUSE_FILTER_IGNORE       # 同上：标签默认 STOP 会吃掉鼠标 ⇒ 闪烁
 		_tooltip_box.add_child(lb)
 
 func _show_detail(id: String) -> void:
@@ -98,13 +107,24 @@ func _on_hex_hovered(id: String) -> void:
 	else:
 		_show_detail(id)
 
-# 属性框跟随鼠标（贴右下 14px，靠屏幕边缘时自动收回屏内）
+# 属性框跟随鼠标（默认贴右下 14px；右边/下边放不下时**翻到另一侧**，再收敛到屏内）
+# 【2026-09-21 修·右下角闪烁】原来是"贴右下 + 越界就 minf 硬夹回屏内"：在右下角两处夹取同时生效，
+#   属性框会被推到**正好压在鼠标底下**，于是鼠标落进属性框 ⇒ 卡片 `mouse_exited` ⇒ 隐藏 ⇒
+#   鼠标又回到卡片 ⇒ `mouse_entered` ⇒ 再弹出 —— 每帧一次。改成"HUD 属性浮层"那套做法：
+#   先翻到鼠标左上，再夹进屏内（夹取带 8px 边距），正常情况下框的右下缘离指针 14px ⇒ 不会压住指针。
 func _process(_delta: float) -> void:
 	if _tooltip != null and _tooltip.visible:
 		var vs := get_viewport().get_visible_rect().size
-		var pos := get_viewport().get_mouse_position() + Vector2(14, 14)
-		pos.x = minf(pos.x, vs.x - _tooltip.size.x - 8.0)
-		pos.y = minf(pos.y, vs.y - _tooltip.size.y - 8.0)
+		var mp := get_viewport().get_mouse_position()
+		var tw := _tooltip.size.x
+		var th := _tooltip.size.y
+		var pos := mp + Vector2(14, 14)
+		if pos.x + tw > vs.x - 8.0:
+			pos.x = mp.x - tw - 14.0     # 右边放不下 ⇒ 翻到鼠标左侧
+		if pos.y + th > vs.y - 8.0:
+			pos.y = mp.y - th - 14.0     # 下边放不下 ⇒ 翻到鼠标上方
+		pos.x = clampf(pos.x, 8.0, maxf(8.0, vs.x - tw - 8.0))
+		pos.y = clampf(pos.y, 8.0, maxf(8.0, vs.y - th - 8.0))
 		_tooltip.position = pos
 
 func _cur() -> Array:

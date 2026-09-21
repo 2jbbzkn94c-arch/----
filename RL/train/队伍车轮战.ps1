@@ -209,6 +209,14 @@ if (-not $SkipRuns) {
 }
 
 # ---------- 排名：每个候选的 8 场里赢了几场（只看 a_side=1 = 候选队扮演敌方 = 生产侧）----------
+# 【2026-09-21 加·版本一致性统计】修好表头的 measure.csv 每行 audit 末尾带着
+#   `scripts[cand=<fork sha12> base=<陪练 sha12> duel=… skil=…]`，用它数"这 768 格里有几格是
+#   用**现在这套代码**测出来的"。池子是**跨版本拼接**的（一天里引擎改了很多次，每改一次
+#   fork/陪练的哈希就变），所以排名带一点系统偏差（对手强度随版本漂移）—— 这里如实记进 meta，
+#   不假装整批跑在同一版引擎上。
+$curFork = (Get-FileHash (Join-Path $root 'RL\ai\AI_Battle.gd') -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
+$curBase = (Get-FileHash (Join-Path $root 'RL\ai\AI_Battle_原版.gd') -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
+$verNow = 0; $verOld = 0; $verUnknown = 0
 $score = @()
 for ($i = 0; $i -lt $candidates.Count; $i++) {
     $w = 0; $l = 0; $d = 0; $pts = 0.0
@@ -218,6 +226,10 @@ for ($i = 0; $i -lt $candidates.Count; $i++) {
         if (-not (Test-Path $csv)) { continue }
         foreach ($r in (Import-Csv $csv)) {
             if ([string]$r.a_side -ne '1') { continue }
+            $mv = [regex]::Match([string]$r.audit, 'scripts\[cand=([0-9a-f]+) base=([0-9a-f]+)')
+            if ($mv.Success) {
+                if (($mv.Groups[1].Value -eq $curFork) -and ($mv.Groups[2].Value -eq $curBase)) { $verNow++ } else { $verOld++ }
+            } else { $verUnknown++ }
             if ([string]$r.res -eq 'W') { $w++ } elseif ([string]$r.res -eq 'L') { $l++ } else { $d++ }
             $pts += [double]$r.ptsA
         }
@@ -245,8 +257,8 @@ $strong = @($ranked | Select-Object -First $n3)
 $mid = @($ranked | Select-Object -Skip $n3 | Select-Object -First $n3)
 $weak = @($ranked | Select-Object -Skip (2 * $n3))
 $pool = [ordered]@{
-    _说明 = '标准单机敌方"队伍池"（离线车轮战排出来的队）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=弱 1=中 2/3=强；文件缺失或档位为空 ? 自动回退到"按评分加权随机组队"。'
-    _口径 = '每支候选队打同一批固定 8 支对手（配对），只取 a_side=1（候选队扮演敌方=生产侧）的那一局有效；候选统一 5 人；每队至多 1 个慢英雄。'
+    _说明 = '标准单机敌方"队伍池"（离线车轮战排出来的队）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)；⚠️ 档位键**必须是 ASCII**（weak/mid/strong，与 Battle.PICK_POOL_TIER 对齐；中文键会让 _load_pick_pool() 一个档都对不上 ⇒ 池子静默失效）；文件缺失或档位为空 ? 自动回退到"按评分加权随机组队"。'
+    _口径 = '每支候选队打同一批固定 8 支对手（配对），只取 a_side=1（候选队扮演敌方=生产侧）的那一局有效；候选统一 5 人；每队至多 1 个慢英雄。⚠️ 本批是**跨引擎版本拼接**（见 meta.引擎版本一致）：每格记录了自己当时的 fork/陪练 sha12，排名把不同版本的格子一视同仁 ⇒ 只当粗筛用。'
     _回退 = '删掉本文件即可（立刻回到旧行为）。'
     meta = [ordered]@{
         生成时间 = (Get-Date -Format 'yyyy-MM-dd HH:mm')
@@ -254,13 +266,26 @@ $pool = [ordered]@{
         权重sha12 = (Get-FileHash (Join-Path $root $BaseWeights) -Algorithm SHA256).Hash.Substring(0, 12)
         tag = $Tag; 候选 = $candidates.Count; 对手 = $opponents.Count; 有效局数 = $ranked[0].n
         beam = $Beam; 种子起点 = $SeedStart
+        引擎版本一致 = ('当前版本 ' + $verNow + ' 格 / 旧版本 ' + $verOld + ' 格 / 无记录 ' + $verUnknown + ' 格（每格 audit 里记着当时的 fork/陪练 sha12；只有"当前版本"那些格的对手与候选是现在这套代码）')
     }
-    强 = @($strong | ForEach-Object { , @($_.deck -split ',') })
-    中 = @($mid | ForEach-Object { , @($_.deck -split ',') })
-    弱 = @($weak | ForEach-Object { , @($_.deck -split ',') })
+    # 【2026-09-21 修】档位键必须是 ASCII：`src/Battle.gd::PICK_POOL_TIER` = {0:weak, 1:mid, 2:strong, 3:strong}，
+    #   这里原来写的是中文键（强/中/弱）⇒ `_load_pick_pool()` 一个档都对不上 ⇒ 池子**静默失效**
+    #   （游戏照旧按评分随机组队，看不出错）。跑一次静态自检就能发现：读 `Battle.PICK_POOL_TIER`
+    #   的三个值，与本文件顶层键比对。
+    weak = @($weak | ForEach-Object { , @($_.deck -split ',') })
+    mid = @($mid | ForEach-Object { , @($_.deck -split ',') })
+    strong = @($strong | ForEach-Object { , @($_.deck -split ',') })
 }
 [System.IO.File]::WriteAllText($poolPath, ($pool | ConvertTo-Json -Depth 8), $noBom)
-Write-Host ("[池] 已写 {0}：强 {1} · 中 {2} · 弱 {3}" -f $poolPath, $strong.Count, $mid.Count, $weak.Count)
+# 写完立刻自检：三个 ASCII 档位键都在、且每支队伍都是非空字符串数组（键写错 = 池子在游戏里无效）。
+$chk = Get-Content $poolPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$missing = @(@('weak', 'mid', 'strong') | Where-Object { -not ($chk.PSObject.Properties.Name -contains $_) })
+if ($missing.Count -gt 0) { throw ('队伍池写坏了：缺档位键 ' + ($missing -join ',')) }
+foreach ($t in @('weak', 'mid', 'strong')) {
+    $bad = @($chk.$t | Where-Object { @($_).Count -lt 3 })
+    if ($bad.Count -gt 0) { throw ('队伍池写坏了：档 ' + $t + ' 里有 ' + $bad.Count + ' 支队伍不足 3 人') }
+}
+Write-Host ("[池] 已写 {0}：strong {1} · mid {2} · weak {3}（ASCII 档位键自检通过）" -f $poolPath, $strong.Count, $mid.Count, $weak.Count)
 Write-Host '[池] 各档前列：'
 foreach ($pair in @(@('强', $strong), @('中', $mid), @('弱', $weak))) {
     $tagName = $pair[0]

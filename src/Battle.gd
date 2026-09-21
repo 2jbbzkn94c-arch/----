@@ -66,6 +66,10 @@ var _rematch_started := false     # 主机已发起联机重开（防重入，�
 
 # 回合限时：本端可操作回合超过时限自动结束0 秒）= 未开始计时（部署/等待/选人阶段）
 const TURN_TIME_LIMIT := 90.0
+# 【2026-09-21 用户定】入场「选择卡组」三选一的限时：15 秒不选 ⇒ 随机选一个（见 `_deck_pick_timeout()`）。
+# 与部署轮（`DEPLOY_BUDGET_SECONDS` 预算耗尽自动随机上人）、竞技场 2 选 1（`arena_pick_time_left`）
+# 同一套做法：到点由 Battle 自己替玩家做决定，面板上的大字由 HUD 读 `deck_pick_time_left` 显示。
+const DECK_PICK_TIME_LIMIT := 15.0
 var turn_time_left := 0.0          # 本端可操作回合剩余秒数（从本端回合开始起算，演出/动画也算时间
 var peer_turn_time_left := 0.0     # 对端行动回合剩余秒数（联机等待端本地递减 + 对端广播校准
 var _turn_expired := false         # 本端回合已超时但正处于演动画，待回到可提交状态时自动结束
@@ -336,6 +340,11 @@ func _process(dt: float) -> void:
 				arena_pick_time_left = 0.0
 				action_info.emit("选卡超时，自动选择第一张")
 				_auto_pick_first()
+	# 入场"选择卡组"限时（2026-09-21 用户定，15 秒）：到点随机选一个可用卡组
+	if state == State.DECK_PICK and deck_pick_time_left > 0.0:
+		deck_pick_time_left = maxf(deck_pick_time_left - dt, 0.0)
+		if deck_pick_time_left <= 0.0:
+			_deck_pick_timeout()
 	var match_live: bool = GameState.match_running and not GameState.match_over
 	# 双控：当前行动方都由本端操控 → my_turn_live=当前行动方；否则=本端回合
 	var my_turn_live: bool = match_live and GameState.active_side == _operable_side()
@@ -413,12 +422,14 @@ func send_quick_chat(text: String) -> void:
 func _begin_deck_pick() -> void:
 	_deck_pick_match = true   # 本局为"入场选卡组"开局：重开时据此重新选队伍
 	state = State.DECK_PICK
+	deck_pick_time_left = DECK_PICK_TIME_LIMIT   # 【2026-09-21】开始读秒（15 秒超时随机选一个）
 	_prepare_first_side()   # 弹面板的同时提示"本局先手"
 	var decks: Array = []
 	for slot in [1, 2, 3]:
 		decks.append(DeckStore.load_deck(slot))
 	deck_pick_requested.emit(decks)
-	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）。")
+	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）；%d 秒内不选将随机选择。"
+			% int(DECK_PICK_TIME_LIMIT))
 
 # HUD 面板回调：玩家选中某个卡组槽（slot 1..3）。
 # 卡组不足 5 名时由 HUD 侧弹提示并保持面板，不进入此函数。
@@ -442,8 +453,30 @@ func _on_deck_pick_random() -> void:
 	log_message.emit("随机英雄出战（%d 名）。" % ids.size())
 	_commit_deck(ids)
 
+# 【2026-09-21 用户定·15 秒】入场选卡组超时：从**可用**（≥`DEFAULT_DECK_SIZE` 名，与 HUD 那道
+# "至少 5 名才能出战"同一口径）的卡组槽里**随机**选一个；三个槽都不可用 ⇒ 退回「随机英雄」那条路
+# （就是面板上那个按钮调用的同一函数）。单机/联机同一套：联机各自随机自己的卡组、照常发 deckchoice。
+func _deck_pick_timeout() -> void:
+	if state != State.DECK_PICK:
+		return
+	if _online_deck_pick and _online_my_deck.size() > 0:
+		return   # 联机：本端已经选过、正在等对端 ⇒ 别再随机一次
+	deck_pick_time_left = 0.0
+	var slots: Array = []
+	for slot in [1, 2, 3]:
+		if DeckStore.load_deck(slot).size() >= DEFAULT_DECK_SIZE:
+			slots.append(slot)
+	if slots.is_empty():
+		action_info.emit("选择卡组超时，随机组队出战")
+		_on_deck_pick_random()
+		return
+	var pick: int = int(slots[rng.randi() % slots.size()])
+	action_info.emit("选择卡组超时，随机选用卡组 %d" % pick)
+	_on_deck_pick(pick)
+
 # 本端已确定卡组：单机直接开战；联机则发给对端并等双方齐备
 func _commit_deck(ids: Array) -> void:
+	deck_pick_time_left = 0.0   # 【2026-09-21】已选定 ⇒ 停止读秒（联机等对端期间不再随机）
 	if _online_deck_pick:
 		_online_my_deck = _order_deck(ids)
 		deck_pick_done.emit()   # 收起选卡组面板
@@ -458,12 +491,14 @@ func _begin_online_deck_pick() -> void:
 	_online_deck_pick = true
 	_online_my_deck = []
 	state = State.DECK_PICK
+	deck_pick_time_left = DECK_PICK_TIME_LIMIT   # 【2026-09-21】各自读秒：15 秒超时随机选自己的卡组
 	_prepare_first_side()   # 先手由种子决定，两端一致；同时弹"本局先手"提示
 	var decks: Array = []
 	for slot in [1, 2, 3]:
 		decks.append(DeckStore.load_deck(slot))
 	deck_pick_requested.emit(decks)
-	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）。")
+	action_info.emit("选择卡组：从 3 个已存卡组中选一个（或点「随机英雄」）；%d 秒内不选将随机选择。"
+			% int(DECK_PICK_TIME_LIMIT))
 	# 对端若已先发来卡组（启动竞态）：这里补一次判定
 	_maybe_start_online_deploy()
 
@@ -1041,6 +1076,9 @@ var _deck_pick_match := false      # 单机普通模式：本局由"入场选卡
 var _online_my_deck: Array = []    # 联机入场选卡组：本端已选卡组
 var _online_peer_deck: Array = []  # 联机入场选卡组：对端已选卡组（收到 deckchoice 后填入）
 var arena_pick_time_left := -1.0  # 当前轮剩余选择秒数0=不限时，如等待对敌方AI轮）
+# 【2026-09-21 用户定】入场「选择卡组」剩余秒数（DECK_PICK 面板期间每帧递减，HUD 读它显示大字）；
+# 到 0 由 `_deck_pick_timeout()` 随机选一个卡组。已选定后置 0（联机等对端期间不再读秒）。
+var deck_pick_time_left := 0.0
 var _arena_pending: Array = []       # 当前轮随机的2个候选英id
 var _arena_pool: Array = []          # 剩余候选池（未被选走的英雄）
 var _arena_picked: Array = []        # 玩家已选（进己方卡组）
@@ -1128,6 +1166,7 @@ func reset_match(redraft := false) -> void:
 	deploy_budget_left = DEPLOY_BUDGET_SECONDS
 	deploy_budget_active = false
 	arena_pick_time_left = -1.0
+	deck_pick_time_left = 0.0   # 【2026-09-21】入场选卡组的读秒也一并清零（新局由 _begin_deck_pick 重新起算）
 	_first_side_decided = false   # 重开视为新开局：重新随机先手并弹框提示
 	GameState.start_match(GameState.SIDE_PLAYER)
 	if GameState.player_placement.size() > 0 or GameState.enemy_placement.size() > 0:
@@ -1969,6 +2008,14 @@ func _begin_side(side: int) -> void:
 			# 被沉默/眩晕时：不还原——保持"变身后的英雄"形态，仅技能失效(由 skill_allowed 拦截)
 			if not u.skill_allowed():
 				continue
+			# 还原前先让**旧形态**结清自己的跨回合账（它的到期点正是"本方回合开始"）。
+			# 下面那个 on_own_turn_start_always 循环此时跑的已经是还原后的古灵精怪，
+			# 而账本在旧形态的脚本实例上：锤头鲨的加成一旦被写进 unit.atk_buff，
+			# 实例一换就再也没人减得掉它 —— 用户报的「古灵精怪变过锤头鲨，
+			# 下一回合变成别的英雄时攻击力没有重置」就是这条。
+			# 同类：装甲堡垒的[坚固]（clears_on_turn_end=false、Unit.clear_temp_statuses
+			# 也不清它）唯一清除点也是本钩子，漏结就会永久留在身上。
+			_hero(u).on_own_turn_start_always()
 			u.hero_id = u.transform_base_id
 			_apply_base_hero(u, u.transform_base_id)
 			u._update_name_label()
@@ -2246,6 +2293,10 @@ func _apply_turn_end_sync(faction: int) -> void:
 	if GameState.match_over:
 		return
 	_clear_statuses(faction)
+	# 【2026-09-21 修·联机墓碑不同步】与主机 `_end_side` 里那一步**逐字对齐**：清"刚结束这一方"的墓碑。
+	# 主机那半边按同一个阵营清 ⇒ 两端墓碑集合一致（否则客户端不跑 _end_side，碑会一直留着）。
+	if graves.size() > 0:
+		_clear_side_graves(faction)
 
 # 对指定阵营的存活英雄统一扣血（回合结束伤害，只扣该方）
 # 单机：直接本地扣；联机主机：本地扣后广播让客户端对同阵营重演（保持两端血量一致）
@@ -3805,7 +3856,16 @@ func _end_side(side: int) -> void:
 	_clear_statuses(side_faction(side))
 	# 我方回合结束：统一清空我方(玩家)墓碑——墓碑为我方替补落位点，
 	# 本回合结束即用完；延迟到此刻而非"替补一落位就清"，避免我方墓碑过早消失。
-	if side_faction(side) == _my_faction() and graves.size() > 0:
+	# 【2026-09-21 修·联机墓碑不同步】联机改成**按"刚结束回合的阵营"清**：
+	#   `_end_side` 联机下只在主机跑（客户端靠 `_apply_turn_end_sync` 补跑），而 `_my_faction()`
+	#   是**本端视角**（主机=PLAYER / 客户端=ENEMY）⇒ 主机只清自己的、客户端这步根本没跑，
+	#   两端墓碑集合从此分叉：一端显示还有碑、另一端已经没了（用户报的"敌方墓碑没消失，
+	#   但敌方视角里已经消失"）。客户端那半边见 `_apply_turn_end_sync`（同一件事、同一阵营）。
+	#   单机保持原样：只清本端(玩家)自己的墓碑，敌方墓碑由 `_place_enemy_sub` 补位完成时即时清。
+	if GameState.is_online:
+		if graves.size() > 0:
+			_clear_side_graves(side_faction(side))
+	elif side_faction(side) == _my_faction() and graves.size() > 0:
 		_clear_side_graves(_my_faction())
 	# 11 回合起：本方回合结束只扣本方的血（双方各自回合结束各扣各，不一起扣
 	_settle_side_round_damage(side)
@@ -4464,7 +4524,7 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 
 # 古灵精怪：随机变为己方队伍中的一名其他角色，暂时获得其技能与数
 func _transform(u: Unit, picked_override: String = "") -> void:
-	# 候= 场上己方队友 + 本方替补池英
+	# 候选 = 场上己方队友 + 本方替补席（未上场） + 本局己方卡组全体（含**已阵亡**，见下）
 	var cand: Dictionary = {}
 	for v in units:
 		if v.alive and v.faction == u.faction and v != u:
@@ -4472,6 +4532,15 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	var roster: Array = player_roster if u.faction == DataRegistry.Faction.PLAYER else enemy_roster
 	for hid in roster:
 		cand[hid] = true
+	# 【2026-09-21 用户要求：已阵亡的队友也要能变】上面两个来源都覆盖不到阵亡英雄——
+	# 阵亡后单位已 queue_free（不在场上），上场时也已从替补席 erase（不在 roster），
+	# 于是"己方队伍"里死掉的那几个永远进不了候选池。本局卡组（player_deck/enemy_deck）
+	# 才是一直保留全员名单的地方（含已阵亡、含未上场），按阵营取来补齐。
+	# 排除 hero_28 自己：候选池历来不含自身（变身成自己 = 白转一轮），卡组里正好也含它。
+	var deck: Array = GameState.player_deck if u.faction == DataRegistry.Faction.PLAYER else GameState.enemy_deck
+	for hid in deck:
+		if hid != "hero_28":
+			cand[hid] = true
 	if cand.size() == 0:
 		return
 	# 不重复变成上一次已变过的对象（若候选只剩它，则降级允许
@@ -5170,21 +5239,22 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 		_try_begin_next_sub(fn)
 	else:
 		_resume_after_sub()   # 恢复回合状（内部完成后刷新常驻队伍面板，避免与替补面板叠层）
-	# 只有"确实没有下一个替时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
-	# 联机：clear_side>=0 时用负责端广播的结论（两端一致执行，避免墓碑只在本端视角消失）；
-	# clear_side<0（单机/直接调用）才按本端视角推断。
-	# 我方(玩家)墓碑延迟到"我方回合结束"(_end_side)才统一清空，避免"替补一落位墓碑就消失"；
-	# 敌方墓碑仍按其替补完成即时清理。
-	if not more_subs:
-		var fn_done: bool
-		if clear_side >= 0:
-			fn_done = clear_side == 1
-		else:
-			fn_done = _roster_of(fn).size() == 0
-			if _is_manual_sub_faction(fn):
-				if fn_done:
-					_set_pending_subs_of(fn, 0)   # 替补耗尽：清空剩余名额，避免残留
-				fn_done = fn_done or _pending_subs_of(fn) <= 0
+	# 只有"确实没有下一个替补"时才清理该阵营剩余墓碑（否则第二人的墓碑会被提前抹掉）
+	# 【2026-09-21 修·联机墓碑不同步】联机（`clear_side >= 0`）**只看负责端广播的结论**：
+	#   不再看本端的 `more_subs`、也不再按"是不是本端阵营"分叉。那两个量都是**本端视角**的
+	#   （`_my_faction()` 两端相反；对方阵营的待补名额在本端根本没人维护，`_pending_opp_subs`
+	#   只有双控才用得上）⇒ 两端会各清一半：一端碑没了、另一端还留着（用户报的现象）。
+	#   单机（clear_side < 0）保持原样：我方墓碑延迟到"我方回合结束"才统一清，
+	#   敌方墓碑按补位完成即时清。
+	if clear_side >= 0:
+		if clear_side == 1:
+			_clear_side_graves(fn)
+	elif not more_subs:
+		var fn_done: bool = _roster_of(fn).size() == 0
+		if _is_manual_sub_faction(fn):
+			if fn_done:
+				_set_pending_subs_of(fn, 0)   # 替补耗尽：清空剩余名额，避免残留
+			fn_done = fn_done or _pending_subs_of(fn) <= 0
 		if fn_done and fn != _my_faction():   # 我方墓碑留到回合末清；其余阵营立即清
 			_clear_side_graves(fn)
 
@@ -5625,6 +5695,12 @@ func _run_enemy_turn() -> void:
 		var finished := _ai_done
 		_ai_mutex.unlock()
 		if finished:
+			break
+		# 【2026-09-21 防御】AI 线程里一旦抛脚本错（例如诊断打印越界），线程会**直接退出**、
+		# `_ai_done` 永远保持 false ⇒ 原来会在这里无限等，表现为"敌方回合一卡不结束"。
+		# 检测到线程已结束但没写结果，就放弃本次计划（这回合敌方不出手），并把原因打进控制台。
+		if _ai_thread != null and _ai_thread.is_started() and not _ai_thread.is_alive():
+			push_error("敌方 AI 线程异常退出（脚本报错？）→ 本回合计划作废，敌方跳过行动。请看上面的报错。")
 			break
 		await get_tree().process_frame
 	_ai_thread.wait_to_finish()   # 回收线程资源（结果已写入 _ai_plan）
