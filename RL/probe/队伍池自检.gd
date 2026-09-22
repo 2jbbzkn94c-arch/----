@@ -166,13 +166,121 @@ func _one_match(k: int) -> Dictionary:
 			k, int(u.faction), seen.size(), ",".join(PackedStringArray(seen.keys()))])
 	# ⑥ 动态替补：直接问它"现在需要补位，你上谁"（候选应来自**全英雄池**，可以不在卡组里）
 	if dyn:
-		for t in 3:
+		var seen_dyn := {}
+		for t in 10:
 			var pk: Dictionary = _b._dynamic_sub_pick()
 			var pid := String(pk.get("id", ""))
-			print("POOL|%d|dyn_sub_pick|id=%s|in_deck=%s|cell=%s" % [
-				k, pid, str(GameState.enemy_deck.has(pid)), str(pk.get("cell", Vector2i(-99, -99)))])
+			seen_dyn[pid] = true
+			if t < 3:
+				print("POOL|%d|dyn_sub_pick|id=%s|in_deck=%s|cell=%s" % [
+					k, pid, str(GameState.enemy_deck.has(pid)), str(pk.get("cell", Vector2i(-99, -99)))])
+		print("POOL|%d|dyn_sub_variety|distinct=%d|[%s]" % [
+			k, seen_dyn.size(), ",".join(PackedStringArray(seen_dyn.keys()))])
+		# ① 逼出"能斩杀"档：把一个玩家单位打到 1 血，且它旁边有敌方合法落点 ⇒ 应挑"这一手能杀的高攻"
+		await _test_kill_branch(k)
+		# ② 逼出"救人"档：把 enemy_dead 设成 2（再死一个就判负）+ 我方一个单位残血挨打 ⇒ 应挑救人牌
+		await _test_save_branch(k)
 	await _teardown()
 	return { "ok": ok, "type": tid }
+
+## 判据①「能斩杀」：把玩家单位打到 1 血（且贴近敌方合法落点）⇒ 期望 `_dynamic_sub_pick()` 返回
+##   `cell != (-99,-99)`（说明它是按落点算的斩杀）且该英雄从该格能打到目标、攻击力 ≥ 目标当前血。
+func _test_kill_branch(k: int) -> void:
+	var cells: Array = _b._sub_legal_cells_for_ai()
+	if cells.is_empty():
+		print("POOL|%d|kill_test|skipped(no_legal_cell)" % k)
+		return
+	# 找一个离合法落点最近的玩家单位，把它打到 1 血
+	var target: Unit = null
+	var best_d := 999
+	for u in _b.units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction == DataRegistry.Faction.ENEMY:
+			continue
+		for c in cells:
+			var d: int = _b.grid.distance(c, u.cell)
+			if d < best_d:
+				best_d = d
+				target = u
+	if target == null:
+		print("POOL|%d|kill_test|skipped(no_target)" % k)
+		return
+	target.hp = 1
+	target.refresh_stats()
+	var pk: Dictionary = _b._dynamic_sub_pick()
+	var hid := String(pk.get("id", ""))
+	var cell: Vector2i = pk.get("cell", Vector2i(-99, -99))
+	var def := DataRegistry.get_hero(hid)
+	var reach := -1
+	var dmg := -1
+	if def != null and cell.x != -99:
+		reach = DataRegistry.spawn_move(def) + DataRegistry.spawn_attack_range(def)
+		dmg = def.atk
+	var ok_kill := cell.x != -99 and def != null and dmg >= 1 and _b.grid.distance(cell, target.cell) <= reach
+	print("POOL|%d|kill_test|target=%s|hp=%d|dist_to_cell=%d|pick=%s|cell=%s|reach=%d|atk=%d|kill_branch=%s" % [
+		k, String(target.hero_id), target.hp, best_d, hid, str(cell), reach, dmg,
+		"FIRED" if ok_kill else "NOT_FIRED"])
+
+## 判据②「救人」：`enemy_dead = 2`（用户口径：只在 AI 已阵亡 2 人时才考虑）+ 我方一个单位被围到"必死"。
+## ⚠️ 必须挑**威胁最高**的那个单位打到 1 血 —— 第一版挑了"第一个存活单位"，它离玩家十万八千里 ⇒ 威胁=0
+##    ⇒ `_our_doomed_unit()` 返回 null ⇒ 判据②根本没机会触发（测试假阴性，不是代码问题）。
+func _test_save_branch(k: int) -> void:
+	_b.enemy_dead = 2          # 再死一个就判负（LOSS_DEATH_COUNT = 3）
+	# ★ 先把上一项（斩杀）测试打到 1 血的**玩家单位治回满血**：否则判据①"能斩杀"会先命中，
+	#   判据②永远轮不到（第一版就是这样：doomed=true 但 pick 仍是坠炮手、save_branch=NOT_FIRED）。
+	for p in _b.units:
+		if p != null and is_instance_valid(p) and p.alive and p.faction != DataRegistry.Faction.ENEMY:
+			p.hp = p.max_hp
+			p.refresh_stats()
+	var mine: Unit = null
+	var best_threat := -1
+	for u in _b.units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != DataRegistry.Faction.ENEMY:
+			continue
+		var threat := 0
+		for p in _b.units:
+			if p == null or not is_instance_valid(p) or not p.alive:
+				continue
+			if p.faction == DataRegistry.Faction.ENEMY:
+				continue
+			if _b.grid.distance(p.cell, u.cell) <= p.attack_range + p.effective_move():
+				threat += p.effective_atk()
+		if threat > best_threat:
+			best_threat = threat
+			mine = u
+	if mine == null:
+		print("POOL|%d|save_test|skipped(no_our_unit)" % k)
+		return
+	# ★ 开局两边还在各自出生区、互相够不到（实测 threat 恒 0 ⇒ 必死判定永远不成立）⇒ 把被测单位**挪到**
+	#   某个玩家单位旁边（直接改 cell：本探针只读位置，不碰 occupancy；测完就退，不影响别的）
+	var foe: Unit = null
+	for p in _b.units:
+		if p != null and is_instance_valid(p) and p.alive and p.faction != DataRegistry.Faction.ENEMY:
+			foe = p
+			break
+	var moved := false
+	if foe != null:
+		for c in _b.grid.neighbors(foe.cell):
+			if not _b.occupancy.has(c) and not _b.graves.has(c):
+				mine.cell = c
+				mine.position = _b.grid.cell_to_pos(c) if _b.grid.has_method("cell_to_pos") else mine.position
+				moved = true
+				break
+	mine.hp = 1
+	mine.refresh_stats()
+	var pk: Dictionary = _b._dynamic_sub_pick()
+	var hid := String(pk.get("id", ""))
+	var def := DataRegistry.get_hero(hid)
+	var is_heal: bool = DataRegistry.MECH_TAGS.get("治疗", []).has(hid)
+	var is_saver: bool = hid == "hero_36" or hid == "hero_16" or is_heal \
+			or (def != null and def.skills.has(DataRegistry.Skill.TAUNT))
+	var doomed := _b._our_doomed_unit()
+	print("POOL|%d|save_test|enemy_dead=%d|threat=%d|doomed=%s|pick=%s|saver=%s|save_branch=%s" % [
+		k, _b.enemy_dead, best_threat, str(doomed != null), hid, str(is_saver),
+		"FIRED" if (doomed != null and is_saver) else "NOT_FIRED"])
 
 func _wait_state(states: Array, sec: float) -> bool:
 	var t0 := Time.get_ticks_msec()

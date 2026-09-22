@@ -5471,6 +5471,12 @@ var _pending_sub := ""   # 已选中的替hero_id（等待落位）
 var _last_sub_rows: Array = []
 
 # ---------- 【2026-09-22 新增·队伍池配方档】动态替补（用户口径，逐条对应）----------
+# 【2026-09-22·用户拍板"要"】③④"缺口/兜底"档改成 **分数前 SUB_PICK_TOPK 名里随机**：
+#   为什么：这一档复用的是既有 `_best_enemy_sub_idx()` 的打分，而波盾(hero_16) 在那套分里有
+#   **与局面无关的固定加成**（`<替补>`+0.5、登场全队圣盾 +5，有人受伤再 +3）⇒ 常规局面它几乎必然第一
+#   （探针实测 13 局里 12 局都是它）。用户口径是"要有一定随机性" ⇒ 改成 top-K 随机。
+#   ①②"能斩杀/救人"这两个**明确战术机会**仍然取最高分（并列随机），不吃这个 top-K。
+const SUB_PICK_TOPK := 3
 # 用户原话：「没有预设替补的不要在开场就决定好替补队伍，在需要替补的时候再从英雄池里选合适的，
 #   合适的替补不能单纯按照评分来，比如可以斩杀的时候，一个够伤害的高攻比其他替补都要合适，
 #   再比如我方有个英雄下回合必死，我准备要输了，那梅林也是个很好的选择」
@@ -5567,8 +5573,10 @@ func _save_candidates(cands: Array) -> Array:
 			out.append(h)
 	return out
 
-## ③+④ 借既有"缺口打分"（临时把候选表当替补席用，零重复实现）拿分，再叠抖动取最高（并列随机）
-func _sub_pick_with_need_score(list: Array, jitter: float) -> String:
+## ③+④ 借既有"缺口打分"（临时把候选表当替补席用，零重复实现）拿分。
+## `topk_random=true` ⇒ **分数前 `SUB_PICK_TOPK` 名里随机**（默认，用于③④缺口/兜底档）；
+## `false` ⇒ 取最高分（并列随机），用于②"救人"这种明确战术机会。
+func _sub_pick_with_need_score(list: Array, jitter: float, topk_random: bool = true) -> String:
 	if list.is_empty():
 		return ""
 	var saved := enemy_roster
@@ -5585,6 +5593,10 @@ func _sub_pick_with_need_score(list: Array, jitter: float) -> String:
 		var s := float(r["s"]) + randf() * jitter
 		scored.append({ "hid": String(r["hid"]), "s": s })
 		best = maxf(best, s)
+	if topk_random:
+		scored.sort_custom(func(a, b): return float(a["s"]) > float(b["s"]))
+		var slice: Array = scored.slice(0, mini(SUB_PICK_TOPK, scored.size()))
+		return String((slice[randi() % slice.size()])["hid"])
 	var tied: Array = []
 	for r in scored:
 		if float(r["s"]) >= best - 0.000001:
@@ -5624,7 +5636,8 @@ func _dynamic_sub_pick() -> Dictionary:
 		if doomed != null:
 			var savers := _save_candidates(cands)
 			if not savers.is_empty():
-				var hid2 := _sub_pick_with_need_score(savers, jitter)
+				# ② "救人"是明确战术机会 ⇒ 取最高分（并列随机），**不**走 top-K 随机
+				var hid2 := _sub_pick_with_need_score(savers, jitter, false)
 				if hid2 != "":
 					if _CONSOLE_SUB_LOG:
 						print("[替补·动态] 判据②救人（我方 %s 下回合必死 · 已阵亡 %d 人）→ 上 %s" % [
