@@ -43,6 +43,11 @@ const KEY_VAR := {
 	# ---- 【2026-09-21 新增】两项"队形"评分：⑳抱团（孤立罚）/ ㉑退路被夹；默认 0 = 关 ----
 	"FORM_COHESION_W": "w_form_cohesion",
 	"FORM_ESCAPE_W": "w_form_escape",
+	# ---- 【2026-09-21 新增】治疗计价（③回血侧）与 附体计价（⑬宿魂）----
+	#   ⚠️ `POSSESS_TARGET_W` 真实读取走 `_wh()`（按**施加者英雄段**覆盖）⇒ 这里注入的是**扁平兜底值**；
+	#   噩梦档 `hero_46` 段是空的 ⇒ 兜底值就是实际生效值 ✓（要测"打开有没有用"正是这一条）。
+	"HEAL_CREDIT_W": "w_heal_credit",
+	"POSSESS_TARGET_W": "w_possess_target",
 }
 const INT_KEYS := ["BEAM", "TIEBREAK_MODE"]
 const FACTORS := [0.5, 2.0]

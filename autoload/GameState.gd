@@ -80,12 +80,16 @@ var is_online := false
 var is_host := false
 # 联机对局随机种子：主机在开局时随机生成并随 start 消息广播，两端 Battle 用同一种子（确定性）。
 var online_seed := 12345
+# 联机：对端玩家姓名（大厅 hello / name 消息里互换；对局顶部状态栏显示"敌方 <姓名>"）。
+# 对端是老版本（不发姓名）时为空串，状态栏按"对方"显示。
+var net_peer_name := ""
 
 # 退出联机界面/对局：清空联机标志与上一局卡组，避免残留状态影响下次进入。
 func reset_online() -> void:
 	is_online = false
 	is_host = false
 	online_seed = 12345
+	net_peer_name = ""   # 退出联机：清掉对端姓名（下次进大厅重新互换）
 	arena_mode = false
 	pick_deck_in_battle = false
 	player_deck = []

@@ -142,6 +142,23 @@ func _build() -> void:
 	vbox.add_child(title)
 
 	# 2) 英雄池：固定 7 列放大卡面，放入滚动容器（桌面滚轮 / 安卓触摸滑动），占弹性空间
+	#    池上方一行 = 筛选按钮 + 结果计数（筛选只影响显示，不影响已选卡组）
+	var filter_row := HBoxContainer.new()
+	filter_row.add_theme_constant_override("separation", 12)
+	filter_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(filter_row)
+	_filter_btn = Button.new()
+	_filter_btn.text = "筛选"
+	_filter_btn.custom_minimum_size = Vector2(0, 38)
+	_filter_btn.add_theme_font_size_override("font_size", 16)
+	_filter_btn.pressed.connect(_open_filter)
+	filter_row.add_child(_filter_btn)
+	_filter_info = Label.new()
+	_filter_info.add_theme_font_size_override("font_size", 14)
+	_filter_info.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	_filter_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	filter_row.add_child(_filter_info)
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -153,6 +170,7 @@ func _build() -> void:
 	var hex_host := Control.new()
 	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(hex_host)
+	_pool_host = hex_host
 	_build_hex_pool(hex_host)
 
 	_detail_label = Label.new()
@@ -426,14 +444,32 @@ func _show_team_view() -> void:
 
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（纵向原生滚动）
+var _pool_host: Control = null             # 卡池宿主（筛选后整块重建）
 var _pool_touch_down := false              # 触屏在卡池区域内按着（拖动池 / 未松手时不跟随 hover 弹框）
 const _DETAIL_H := 130.0   # 卡池下方详情预留区高度（随卡池一起滚动可见）
 
-# 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
-# 六边形边对边贴紧连成蜂窝）。每行 5 张放大卡面，超高时滚动容器出现滚动条。
-func _build_hex_pool(host: Control) -> void:
-	# 卡池按种族分组排：人族→机械→兽族→精灵→魔族，同种族按 hero_id 排——保证初始界面顺序固定，
-	# 新增英雄无论加在角色列表的哪个位置都落到对应种族区段。
+# ---- 英雄池筛选（按钮放在英雄池上方）----
+# 四组条件：①特性关键词 ②血量档 ③攻击力档 ④攻击方式（近战/远程）。
+# 组内多选=或（满足任一即可），组间=且（各组都要满足）；某组一个都不选=该组不参与筛选。
+const FILTER_TAGS := ["嘲讽", "疾行", "渗透", "后勤", "替补", "无特性"]
+const FILTER_HP_BUCKETS := ["≤15", "16-20", "21-25", "≥26"]
+const FILTER_ATK_BUCKETS := ["≤1", "2", "3", "≥4"]
+const FILTER_KINDS := ["近战", "远程"]
+
+var _filter_btn: Button = null
+var _filter_info: Label = null            # 按钮右侧"共 N 名 / 筛选后 N / M"提示
+var _filter_overlay: Control = null       # 筛选弹层
+var _filter_count_lb: Label = null        # 弹层内"符合条件：N 名"实时计数
+var _filter_chips: Array = []             # 弹层内所有方块按钮（重置时取消勾选）
+var _filter_tags: Array = []              # 选中的特性（字符串）
+var _filter_hp: Array = []                # 选中的血量档（下标 0..3）
+var _filter_atk: Array = []               # 选中的攻击力档（下标 0..3）
+var _filter_kind: Array = []              # 选中的攻击方式（0=近战 1=远程）
+
+# 卡池英雄与顺序：按种族分组排（人族→机械→兽族→精灵→魔族），同种族按 hero_id 排——
+# 保证初始界面顺序固定，新增英雄无论加在角色列表的哪个位置都落到对应种族区段。
+# 有筛选条件时再按条件过滤（只影响显示，不动已选卡组）。
+func _pool_ids() -> Array:
 	var ids: Array = DataRegistry.heroes.keys()
 	ids.sort_custom(func(a: String, b: String):
 		var da := DataRegistry.get_hero(a)
@@ -443,6 +479,349 @@ func _build_hex_pool(host: Control) -> void:
 		if ra != rb:
 			return ra < rb
 		return a < b)
+	if not _filter_active():
+		return ids
+	var out: Array = []
+	for id in ids:
+		if _hero_passes_filter(id):
+			out.append(id)
+	return out
+
+# ---- 筛选：条件判定 ----
+func _filter_active() -> bool:
+	return (_filter_tags.size() + _filter_hp.size() + _filter_atk.size() + _filter_kind.size()) > 0
+
+# 英雄自带的关键词特性（卡面 <xxx>）。远程归"攻击方式"组，这里不含。
+func _hero_tags(def: DataRegistry.HeroDef) -> Array:
+	var out: Array = []
+	if def == null:
+		return out
+	if def.skills.has(DataRegistry.Skill.TAUNT):
+		out.append("嘲讽")
+	if def.skills.has(DataRegistry.Skill.SWIFT):
+		out.append("疾行")
+	if def.skills.has(DataRegistry.Skill.INFILTRATE):
+		out.append("渗透")
+	if def.skills.has(DataRegistry.Skill.LOGISTICS):
+		out.append("后勤")
+	if def.skills.has(DataRegistry.Skill.BENCH):
+		out.append("替补")
+	return out
+
+# 血量档：0=≤15、1=16-20、2=21-25、3=≥26
+func _hp_bucket(def: DataRegistry.HeroDef) -> int:
+	if def.max_hp <= 15:
+		return 0
+	if def.max_hp <= 20:
+		return 1
+	if def.max_hp <= 25:
+		return 2
+	return 3
+
+# 攻击力档：0=≤1、1=2、2=3、3=≥4
+func _atk_bucket(def: DataRegistry.HeroDef) -> int:
+	if def.atk <= 1:
+		return 0
+	if def.atk == 2:
+		return 1
+	if def.atk == 3:
+		return 2
+	return 3
+
+# 组内多选=或（命中任一即可），组间=且
+func _hero_passes_filter(id: String) -> bool:
+	var def: DataRegistry.HeroDef = DataRegistry.get_hero(id)
+	if def == null:
+		return false
+	if _filter_kind.size() > 0:
+		var kind := 1 if def.attack_type == DataRegistry.AttackType.RANGED else 0
+		if not _filter_kind.has(kind):
+			return false
+	if _filter_hp.size() > 0 and not _filter_hp.has(_hp_bucket(def)):
+		return false
+	if _filter_atk.size() > 0 and not _filter_atk.has(_atk_bucket(def)):
+		return false
+	if _filter_tags.size() > 0:
+		var tags := _hero_tags(def)
+		# 特性：多选时要求**全部满足**（"无特性"=一个关键词都没有；它与其它特性互斥，界面层保证不会同时选中）
+		for t in _filter_tags:
+			if t == "无特性":
+				if not tags.is_empty():
+					return false
+			elif not tags.has(t):
+				return false
+	return true
+
+# 重建英雄卡池（筛选条件变化时调用）：只重排卡池，卡组/已选保持不变
+func _rebuild_hex_pool() -> void:
+	if _pool_host == null or not is_instance_valid(_pool_host):
+		return
+	_hide_tooltip()
+	for c in _pool_host.get_children():
+		if c == _detail_label:
+			continue   # 详情标签保留，位置随新池高度重排
+		_pool_host.remove_child(c)
+		c.queue_free()
+	_build_hex_pool(_pool_host)
+	if _detail_label != null and is_instance_valid(_detail_label):
+		_detail_label.position = Vector2(10, _hex_pool_size.y + 6)
+	if _pool_scroll != null and is_instance_valid(_pool_scroll):
+		_pool_scroll.scroll_vertical = 0   # 筛完回到池顶
+	_update_ui()
+
+# 池上方计数 + 筛选按钮文案 + 弹层内实时计数
+func _refresh_filter_ui() -> void:
+	var total := DataRegistry.heroes.size()
+	var shown := _pool_ids().size()
+	if _filter_btn != null and is_instance_valid(_filter_btn):
+		var n := _filter_tags.size() + _filter_hp.size() + _filter_atk.size() + _filter_kind.size()
+		_filter_btn.text = "筛选" if n == 0 else "筛选（%d 项）" % n
+	if _filter_info != null and is_instance_valid(_filter_info):
+		if not _filter_active():
+			_filter_info.text = "共 %d 名英雄" % total
+		else:
+			var hidden_sel := 0
+			for id in _selected:
+				if not _pool_ids().has(id):
+					hidden_sel += 1
+			var extra := "（%d 名已选被隐藏，卡组不变）" % hidden_sel if hidden_sel > 0 else ""
+			_filter_info.text = "筛选后 %d / %d 名%s" % [shown, total, extra]
+	if _filter_count_lb != null and is_instance_valid(_filter_count_lb):
+		_filter_count_lb.text = "符合条件：%d 名英雄" % shown
+
+func _filter_group_array(group_key: String) -> Array:
+	match group_key:
+		"tag":
+			return _filter_tags
+		"hp":
+			return _filter_hp
+		"atk":
+			return _filter_atk
+	return _filter_kind
+
+# 取消同组其它方块的勾选（单选组 / 互斥项用；不触发信号，状态由调用方直接写）
+func _untoggle_group_except(group_key: String, keep: Button) -> void:
+	for b in _filter_chips:
+		if b == null or not is_instance_valid(b) or b == keep:
+			continue
+		if String(b.get_meta("group")) != group_key:
+			continue
+		if b.button_pressed:
+			b.set_pressed_no_signal(false)
+			_paint_filter_chip(b)
+
+func _on_filter_chip(btn: Button) -> void:
+	if btn == null or not is_instance_valid(btn):
+		return
+	var group := String(btn.get_meta("group"))
+	var arr: Array = _filter_group_array(group)
+	var v: Variant = btn.get_meta("value")
+	if btn.button_pressed:
+		if group == "kind":
+			# 攻击方式：单选 —— 勾一个就把另一个取消
+			arr.clear()
+			arr.append(v)
+			_untoggle_group_except("kind", btn)
+		elif group == "tag" and String(v) == "无特性":
+			# "无特性"与其它特性互斥：勾它就把别的特性取消
+			arr.clear()
+			arr.append(v)
+			_untoggle_group_except("tag", btn)
+		elif not arr.has(v):
+			arr.append(v)
+	else:
+		arr.erase(v)
+	_paint_filter_chip(btn)
+	_rebuild_hex_pool()
+	_refresh_filter_ui()
+
+# 选中的方块：绿色高亮边框（与选人卡面选中描边同色）+ 深绿底 + 亮字，一眼看出勾了哪些。
+# 未选中则撤掉覆盖样式，回到主题那款黑色金属牌。
+var _filter_on_sb: StyleBoxFlat = null
+var _filter_on_focus_sb: StyleBoxFlat = null
+
+func _filter_chip_on_stylebox() -> StyleBoxFlat:
+	if _filter_on_sb == null:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.09, 0.27, 0.15, 0.96)
+		sb.set_border_width_all(3)
+		sb.border_color = Color(0.30, 1.0, 0.45)
+		sb.set_corner_radius_all(10)
+		sb.content_margin_left = 14.0
+		sb.content_margin_right = 14.0
+		sb.content_margin_top = 6.0
+		sb.content_margin_bottom = 7.0
+		_filter_on_sb = sb
+	return _filter_on_sb
+
+# 焦点框：只描边不填底（否则键盘焦点会把字盖住），同样用绿色
+func _filter_chip_focus_stylebox() -> StyleBoxFlat:
+	if _filter_on_focus_sb == null:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0, 0, 0, 0)
+		sb.set_border_width_all(2)
+		sb.border_color = Color(0.55, 1.0, 0.65, 0.95)
+		sb.set_corner_radius_all(10)
+		_filter_on_focus_sb = sb
+	return _filter_on_focus_sb
+
+func _paint_filter_chip(btn: Button) -> void:
+	if btn.button_pressed:
+		var sb := _filter_chip_on_stylebox()
+		btn.add_theme_stylebox_override("normal", sb)
+		btn.add_theme_stylebox_override("hover", sb)
+		btn.add_theme_stylebox_override("pressed", sb)
+		btn.add_theme_stylebox_override("hover_pressed", sb)
+		btn.add_theme_stylebox_override("focus", _filter_chip_focus_stylebox())
+		btn.add_theme_color_override("font_color", Color(0.92, 1.0, 0.9))
+		btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+		btn.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
+	else:
+		for st in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+			btn.remove_theme_stylebox_override(st)
+		btn.add_theme_color_override("font_color", Color(0.93, 0.94, 1.0))
+		btn.add_theme_color_override("font_hover_color", Color(1.0, 0.93, 0.7))
+		btn.remove_theme_color_override("font_pressed_color")
+
+# 一行筛选组：标题 + 可多选的方块按钮（自动换行）
+func _add_filter_group(parent: Control, title: String, group_key: String, labels: Array) -> void:
+	var sel: Array = _filter_group_array(group_key)
+	var head := Label.new()
+	head.text = title
+	head.add_theme_font_size_override("font_size", 16)
+	head.add_theme_color_override("font_color", Color(0.8, 0.86, 0.98))
+	parent.add_child(head)
+	var flow := HFlowContainer.new()
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
+	flow.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(flow)
+	for i in labels.size():
+		# 特性组用名字当值，其余组用档位下标
+		var value: Variant = labels[i] if group_key == "tag" else i
+		var b := Button.new()
+		b.text = String(labels[i])
+		b.toggle_mode = true
+		b.button_pressed = sel.has(value)
+		b.custom_minimum_size = Vector2(0, 42)
+		b.add_theme_font_size_override("font_size", 16)
+		b.set_meta("group", group_key)
+		b.set_meta("value", value)
+		_paint_filter_chip(b)
+		b.toggled.connect(func(_on: bool): _on_filter_chip(b))
+		flow.add_child(b)
+		_filter_chips.append(b)
+
+func _open_filter() -> void:
+	if _filter_overlay != null and is_instance_valid(_filter_overlay):
+		return
+	_hide_tooltip()
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	# 选中的英雄卡会把自身 z_index 提到 2（避免高亮描边被邻卡盖住）；z 排序优先于添加顺序，
+	# 所以弹层要显式抬到它之上，否则已选英雄会画在筛选框上面。
+	ov.z_index = 20
+	# 点弹框外面（遮罩那块空白）也关掉：遮罩/居中容器都设成"不接鼠标"，
+	# 只有面板本体吃点击，于是落在空白处的点击会冒泡到 ov 自己身上。
+	ov.gui_input.connect(_on_filter_overlay_input)
+	add_child(ov)
+	_filter_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	box.custom_minimum_size = Vector2(minf(520.0, vsize.x * 0.9), 0.0)   # 窄屏也不会超出屏幕
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "筛选英雄"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	_filter_chips.clear()
+	_add_filter_group(box, "特性", "tag", FILTER_TAGS)
+	_add_filter_group(box, "血量（HP）", "hp", FILTER_HP_BUCKETS)
+	_add_filter_group(box, "攻击力", "atk", FILTER_ATK_BUCKETS)
+	_add_filter_group(box, "攻击方式", "kind", FILTER_KINDS)
+	_filter_count_lb = Label.new()
+	_filter_count_lb.add_theme_font_size_override("font_size", 15)
+	_filter_count_lb.add_theme_color_override("font_color", Color(1.0, 0.9, 0.6))
+	_filter_count_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_filter_count_lb)
+	var hint := Label.new()
+	hint.text = "特性：勾中的几项要同时满足；血量 / 攻击力：勾中的项满足其一即可；攻击方式：只能选一个。不同组之间要同时满足。勾选即生效。"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.add_theme_color_override("font_color", Color(0.72, 0.78, 0.88))
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(hint)
+	var btn_row := HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 10)
+	box.add_child(btn_row)
+	var reset := Button.new()
+	reset.text = "重置"
+	reset.custom_minimum_size = Vector2(0, 46)
+	reset.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	reset.add_theme_font_size_override("font_size", 18)
+	reset.pressed.connect(_reset_filter)
+	btn_row.add_child(reset)
+	var close := Button.new()
+	close.text = "关闭"
+	close.custom_minimum_size = Vector2(0, 46)
+	close.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close.add_theme_font_size_override("font_size", 18)
+	close.pressed.connect(_close_filter)
+	btn_row.add_child(close)
+	_refresh_filter_ui()
+
+# 点弹框外面的遮罩区域也关掉弹框（落在面板上的点击由面板吃掉，不会走到这里）
+func _on_filter_overlay_input(ev: InputEvent) -> void:
+	var hit := false
+	if ev is InputEventMouseButton:
+		var mb := ev as InputEventMouseButton
+		hit = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
+	elif ev is InputEventScreenTouch:
+		hit = (ev as InputEventScreenTouch).pressed
+	if hit:
+		get_viewport().set_input_as_handled()   # 这一下只用来关弹框，不再传给底下的界面
+		_close_filter()
+
+func _reset_filter() -> void:
+	_filter_tags.clear()
+	_filter_hp.clear()
+	_filter_atk.clear()
+	_filter_kind.clear()
+	for b in _filter_chips:
+		if b != null and is_instance_valid(b):
+			b.set_pressed_no_signal(false)   # 不触发信号：状态已清空，最后由下面的 _refresh 统一刷新
+			_paint_filter_chip(b)
+	_rebuild_hex_pool()
+	_refresh_filter_ui()
+
+func _close_filter() -> void:
+	if _filter_overlay != null and is_instance_valid(_filter_overlay):
+		_filter_overlay.queue_free()
+	_filter_overlay = null
+	_filter_count_lb = null
+	_filter_chips.clear()
+
+# 英雄卡池：odd-q 蜂窝排布（与棋盘同一套公式：列间距1.5r、奇数列下移半行，
+# 六边形边对边贴紧连成蜂窝）。每行 5 张放大卡面，超高时滚动容器出现滚动条。
+func _build_hex_pool(host: Control) -> void:
+	# 卡池顺序见 _pool_ids()（种族分组 + 筛选条件）。
+	var ids: Array = _pool_ids()
 	var cols := 5
 	# 可用宽按滚动容器内宽计(视口宽 - 左右边距 24*2 - 少量余量)，保证池宽 ≤ 容器宽，横向永不出滚动条
 	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 64.0, 320.0)
@@ -455,6 +834,12 @@ func _build_hex_pool(host: Control) -> void:
 	host.custom_minimum_size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	host.size = Vector2(total_w, _hex_pool_size.y + _DETAIL_H)
 	_card_buttons.clear()
+	# 筛选后一个都不剩：留一块空白区给"无符合条件"提示（别把池压成 0 高）
+	if ids.is_empty():
+		_hex_pool_size = Vector2(avail_w, 0.0)
+		host.custom_minimum_size = Vector2(avail_w, _DETAIL_H)
+		host.size = Vector2(avail_w, _DETAIL_H)
+		return
 	# 卡片绘制半径比蜂窝间距半径略小（CARD_GAP_SCALE）：六边形间留出一点小空隙，
 	# 避免边贴边让相邻描边重叠、选中高亮被邻卡盖住；图标溢出也落在空隙里。
 	var card_r: float = r * CARD_GAP_SCALE
@@ -601,6 +986,7 @@ func _update_ui() -> void:
 		_card_buttons[id].set_selected(_selected.has(id))
 	if _sel_count != null:
 		_sel_count.text = "已选 %d / %d" % [_selected.size(), PICK_COUNT]
+	_refresh_filter_ui()   # 池上方计数（含"已选但被筛掉"的提示）
 	_auto_sync()
 	_refresh_deck_slots()
 

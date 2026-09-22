@@ -1,9 +1,13 @@
 extends Node
 ## 对战统计（全局自动加载）：按模式记录胜/败场，持久化到 user://，关闭游戏不丢。
 ## 只统计"一方累计 3 名英雄阵亡"判定出的正式对局；中途退出/断线/自由部署（测试）不计入。
+## 同时保存「名片」姓名（联机大厅左上角名片框可改；联机对局顶部状态栏显示）。
 
 const SAVE_PATH := "user://stats.cfg"
 const MODES := ["sp_normal", "sp_arena", "mp_normal", "mp_arena"]
+const NAME_SEC := "profile"     # 名片姓名存档段
+const NAME_MAX := 6             # 姓名最长 6 字（对局顶部状态栏一行放得下）
+const DEFAULT_NAME := "玩家"    # 未填姓名时显示的名字
 const MODE_NAMES := {
 	"sp_normal": "单机普通模式",
 	"sp_arena": "单机竞技场模式",
@@ -13,6 +17,7 @@ const MODE_NAMES := {
 
 var wins: Dictionary = {}     # mode -> int
 var losses: Dictionary = {}   # mode -> int
+var player_name := ""         # 名片姓名（本地保存；空串=用默认名"玩家"）
 
 func _ready() -> void:
 	_ensure()
@@ -70,6 +75,24 @@ func win_rate_text(key: String) -> String:
 		return "—"
 	return "%.1f%%" % (win_rate(key) * 100.0)
 
+# ---- 名片姓名（本地）----
+# 显示用姓名：没填就返回"玩家"
+func display_name() -> String:
+	var s := player_name.strip_edges()
+	return DEFAULT_NAME if s == "" else s
+
+# 保存姓名（空白=恢复默认显示）；超长截断；存 user://，关游戏不丢
+func set_player_name(n: String) -> void:
+	var s := n.strip_edges()
+	if s.length() > NAME_MAX:
+		s = s.substr(0, NAME_MAX)
+	player_name = s
+	_save()
+
+# 联机战绩一行文案（供名片框显示）：胜/败/胜率
+func online_record_text(key: String) -> String:
+	return "%d 胜 %d 负 · 胜率 %s" % [win_count(key), loss_count(key), win_rate_text(key)]
+
 func reset_all() -> void:
 	wins.clear()
 	losses.clear()
@@ -81,6 +104,7 @@ func _save() -> void:
 	for m in MODES:
 		cfg.set_value("stats", "win_" + m, win_count(m))
 		cfg.set_value("stats", "loss_" + m, loss_count(m))
+	cfg.set_value(NAME_SEC, "name", player_name)
 	var err := cfg.save(SAVE_PATH)
 	if err != OK:
 		print("统计存档跳过（无法写入 user://）: ", err)
@@ -92,3 +116,4 @@ func _load() -> void:
 	for m in MODES:
 		wins[m] = int(cfg.get_value("stats", "win_" + m, 0))
 		losses[m] = int(cfg.get_value("stats", "loss_" + m, 0))
+	player_name = String(cfg.get_value(NAME_SEC, "name", ""))

@@ -32,6 +32,8 @@ var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上�
 var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
 var _last_pd := -1
 var _last_ed := -1
+var _last_my_text := ""   # 上次刷新的"我方"侧文字（联机=姓名；用于姓名变化时补刷新）
+var _last_op_text := ""   # 上次刷新的"敌方"侧文字（联机=姓名）
 var _end_btn: Button          # 结束回合（仅我方回合可点）
 var _restart_btn: Button      # 重开（联机不需要，隐藏）
 var _back_btn: Button         # 返回（联机=返回大厅，单机=返回选人）
@@ -143,7 +145,7 @@ func bind(b: Battle) -> void:
 	GameState.active_side_changed.connect(_on_round_changed)
 
 # 右键查看生成物作用
-func show_item_info(type: String) -> void:
+func show_item_info(type: String, owner_faction: int = -1) -> void:
 	_close_unit_card()   # 统一：若已有信息浮层先关闭（复用同一 overlay 槽，避免叠加/自捕获）
 	var vsize := get_viewport().get_visible_rect().size
 	var overlay := Control.new()
@@ -172,7 +174,21 @@ func show_item_info(type: String) -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(title)
 	var desc := Label.new()
-	desc.text = battle.item_desc(type)
+	# 【2026-09-21 用户定稿·圣诞老人】道具提示要**说明归属**：带归属的道具只有放置方能拾取，
+	#   对方踩上去会直接消失（板面上也按归属描边：我方绿 / 敌方红）。
+	var own_txt := "（中立道具：双方都能拾取）"
+	if owner_faction == DataRegistry.Faction.PLAYER:
+		own_txt = "（我方道具：只有我方能拾取，敌方踩到会消失）"
+	elif owner_faction == DataRegistry.Faction.ENEMY:
+		own_txt = "（敌方道具：只有敌方才能拾取，我方踩到会消失）"
+	desc.text = battle.item_desc(type) + "\n" + own_txt
+	# 标题也带上归属，一眼看清是谁的（配色与板面右下角圆点一致：我方蓝 / 敌方红）
+	if owner_faction == DataRegistry.Faction.PLAYER:
+		title.text = "增益道具 · 我方"
+		title.add_theme_color_override("font_color", Color(0.45, 0.7, 1.0))
+	elif owner_faction == DataRegistry.Faction.ENEMY:
+		title.text = "增益道具 · 敌方"
+		title.add_theme_color_override("font_color", Color(1.0, 0.45, 0.4))
 	desc.add_theme_font_size_override("font_size", 16)
 	desc.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
 	desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1252,15 +1268,18 @@ func _build() -> void:
 	toph.add_child(_turn_timer_label)
 
 	# 顶部阵亡计数：左我方 / 右敌方（骷髅图标，放大版）
+	# 联机对局这两行还要显示双方姓名（我方=本机名片姓名 / 敌方=对端姓名），
+	# 字号收一档（27→18）免得和中间的"第 N 回合 / 剩余时间"挤在一起。
+	var death_font := 18 if GameState.is_online else 27
 	_player_deaths = Label.new()
-	_player_deaths.add_theme_font_size_override("font_size", 27)
+	_player_deaths.add_theme_font_size_override("font_size", death_font)
 	_player_deaths.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
 	_player_deaths.text = "我方 ☠☠☠"
 	_player_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_deaths.position = Vector2(12, 11)
 	root.add_child(_player_deaths)
 	_enemy_deaths = Label.new()
-	_enemy_deaths.add_theme_font_size_override("font_size", 27)
+	_enemy_deaths.add_theme_font_size_override("font_size", death_font)
 	_enemy_deaths.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
 	_enemy_deaths.text = "☠☠☠ 敌方"
 	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -1633,10 +1652,19 @@ func _refresh_deaths() -> void:
 	var total := battle.LOSS_DEATH_COUNT
 	var pd := battle.player_dead
 	var ed := battle.enemy_dead
-	if pd == _last_pd and ed == _last_ed:
+	# 联机对局：两侧文字直接换成玩家姓名（我方=本机名片姓名，敌方=对端姓名；对端没发姓名时写"对方"），
+	# 不再写"我方/敌方"字样；单机没有姓名，仍用"我方/敌方"做标识。
+	var my_txt := "我方"
+	var op_txt := "敌方"
+	if GameState.is_online:
+		my_txt = Stats.display_name()
+		op_txt = GameState.net_peer_name if GameState.net_peer_name != "" else "对方"
+	if pd == _last_pd and ed == _last_ed and my_txt == _last_my_text and op_txt == _last_op_text:
 		return
 	_last_pd = pd
 	_last_ed = ed
+	_last_my_text = my_txt
+	_last_op_text = op_txt
 	var ps := ""
 	var es := ""
 	for i in total:
@@ -1649,9 +1677,9 @@ func _refresh_deaths() -> void:
 		my_icons = es   # 客户端：我方=敌方(红)阵亡
 		op_icons = ps
 	if _player_deaths:
-		_player_deaths.text = "我方 " + my_icons
+		_player_deaths.text = "%s %s" % [my_txt, my_icons]
 	if _enemy_deaths:
-		_enemy_deaths.text = op_icons + " 敌方"
+		_enemy_deaths.text = "%s %s" % [op_icons, op_txt]
 
 func _process(_dt: float) -> void:
 	_refresh_deaths()

@@ -1,18 +1,7 @@
 [gd_resource type="Theme" format=3 uid="uid://ooqj0bl4tc6s"]
 
-[ext_resource type="Texture2D" path="res://theme/btn_plate_dark.png" id="1_plate"]
-[ext_resource type="Texture2D" path="res://theme/panel_frame_dark.png" id="2_panel"]
-
-[sub_resource type="StyleBoxTexture" id="sb_panel"]
-content_margin_left = 20.0
-content_margin_top = 16.0
-content_margin_right = 20.0
-content_margin_bottom = 16.0
-texture = ExtResource("2_panel")
-texture_margin_left = 18.0
-texture_margin_top = 18.0
-texture_margin_right = 18.0
-texture_margin_bottom = 18.0
+[ext_resource type="Texture2D" uid="uid://rgjosy8l6aig" path="res://theme/btn_plate_dark.png" id="1_plate"]
+[ext_resource type="Texture2D" uid="uid://6hnw0wufp2fv" path="res://theme/panel_frame_dark.png" id="2_panel"]
 
 [sub_resource type="StyleBoxTexture" id="sb_disabled"]
 content_margin_left = 14.0
@@ -73,6 +62,17 @@ texture_margin_right = 13.0
 texture_margin_bottom = 13.0
 modulate_color = Color(0.82, 0.82, 0.86, 1)
 
+[sub_resource type="StyleBoxTexture" id="sb_panel"]
+content_margin_left = 20.0
+content_margin_top = 16.0
+content_margin_right = 20.0
+content_margin_bottom = 16.0
+texture = ExtResource("2_panel")
+texture_margin_left = 18.0
+texture_margin_top = 18.0
+texture_margin_right = 18.0
+texture_margin_bottom = 18.0
+
 [resource]
 Button/colors/font_color = Color(0.93, 0.94, 1, 1)
 Button/colors/font_disabled_color = Color(0.5, 0.51, 0.55, 0.75)
@@ -85,6 +85,8 @@ Button/styles/focus = SubResource("sb_focus")
 Button/styles/hover = SubResource("sb_hover")
 Button/styles/normal = SubResource("sb_normal")
 Button/styles/pressed = SubResource("sb_pressed")
+Label/colors/font_outline_color = Color(0, 0, 0, 0.72)
+Label/constants/outline_size = 3
 OptionButton/styles/disabled = SubResource("sb_disabled")
 OptionButton/styles/focus = SubResource("sb_focus")
 OptionButton/styles/hover = SubResource("sb_hover")
@@ -92,5 +94,3 @@ OptionButton/styles/normal = SubResource("sb_normal")
 OptionButton/styles/pressed = SubResource("sb_pressed")
 Panel/styles/panel = SubResource("sb_panel")
 PanelContainer/styles/panel = SubResource("sb_panel")
-Label/colors/font_outline_color = Color(0, 0, 0, 0.72)
-Label/constants/outline_size = 3

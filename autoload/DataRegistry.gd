@@ -214,6 +214,14 @@ func _semantic_heroes(text: String) -> Array:
 				for hid in MECH_TAGS.get(tag, []):
 					if not out.has(hid):
 						out.append(hid)
+	# 【2026-09-21 新增·用户拍板 B】**特性标签式写法**（「远程 / 后勤 / 嘲讽 …」）⇒ 展开成带该标签的
+	#   全部英雄（表由特性列预扫建立 ⇒ 改英雄特性自动跟随）。没有这一步，荆棘树人「远程/后勤」、
+	#   宿魂「远程」、赏金猎人「嘲讽」这三格展开为空、AI 读不到（详见 `const TRAIT_TAGS` 处说明）。
+	for tg in TRAIT_TAGS:
+		if text.contains(tg):
+			for hid in _trait_tag_ids.get(tg, []):
+				if not out.has(hid):
+					out.append(hid)
 	return out
 
 # 数值筛选类文本（如"技能评分+补强>3的非替补角色"、"面板攻击力可以大于等于4的"）：
@@ -443,6 +451,19 @@ var heroes: Dictionary = {}
 var summons: Dictionary = {}
 # 显示名 -> id（预扫建立，供 _extract_ids 全名匹配），独立于加载顺序。
 var _full_name_map: Dictionary = {}
+# 【2026-09-21 新增·用户拍板 B】特性标签 -> 英雄 id（预扫"特性"列建立，供"标签式克制"解析）。
+# 为什么需要：角色列表「克制 / 被克制 / 配合」列里存在**标签式写法** ——
+#   荆棘树人「远程/后勤」· 宿魂「远程」· 赏金猎人「嘲讽」，而原来的三路解析
+#   （① 名称/简称 ② SEMANTIC 关键词 → MECH_TAGS ③ 数值筛选句式）**一个都认不出这些标签**
+#   ⇒ 整列展开为空 ⇒ `battle_unit_value_parts().counter` 恒 0 ⇒ 写在那儿的"克制"对 AI **完全不可见**
+#   （= 假数据；用户实测反馈「荆棘树人怎么克制那里没解释出来」就是这么来的）。
+# 现改为：**文本里出现某个特性标签 ⇒ 展开成"特性里带该标签"的全部英雄**，且这张表是
+#   **从特性列现扫出来的** ⇒ 以后改英雄特性，这里自动跟着变，不用手抄 id 表。
+# ⚠️ 刻意**不含「替补」**：那是"职能标记"而不是机制标签，而且「克制」列里本就有
+#   「技能评分+补强>3的**非替补**角色」这种数值句式（含"替补"二字）⇒ 收进来会把整批替补英雄
+#   误判成"被它克制"（这是真会出错的，不是洁癖）。
+const TRAIT_TAGS: Array[String] = ["远程", "后勤", "嘲讽", "疾行", "渗透"]
+var _trait_tag_ids: Dictionary = {}
 
 func _ready() -> void:
 	_load_heroes()
@@ -450,6 +471,7 @@ func _ready() -> void:
 func _load_heroes() -> void:
 	heroes.clear()
 	summons.clear()
+	_trait_tag_ids.clear()   # 特性标签表随英雄表一起重建（见 TRAIT_TAGS 说明）
 	var rows := _read_json_rows("res://英雄相关/角色列表.json")
 	if rows.is_empty():
 		push_error("无法读取 res://英雄相关/角色列表.json")
@@ -507,6 +529,16 @@ func _load_heroes() -> void:
 		var pname: String = str(cells[col_name]).strip_edges()
 		if pname != "" and not _full_name_map.has(pname):
 			_full_name_map[pname] = pid
+		# 同时建立"特性标签 -> 英雄 id"表（见 `const TRAIT_TAGS` 处说明）。衍生物也收：
+		#   它们同样能当克制对象（例如"能施加异常的英雄"里就有召唤物来源），收进来只多不少。
+		var ptrait: String = str(cells[col_trait]).strip_edges() if (col_trait >= 0 and col_trait < cells.size()) else ""
+		if ptrait != "":
+			for tg in TRAIT_TAGS:
+				if ptrait.contains(tg):
+					var arr: Array = _trait_tag_ids.get(tg, [])
+					if not arr.has(pid):
+						arr.append(pid)
+					_trait_tag_ids[tg] = arr
 
 	for ri in range(hdr_idx + 1, rows.size()):
 		var cells: Array = rows[ri]

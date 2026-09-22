@@ -5,7 +5,9 @@ extends SceneTree
 
 const _UNPARSEABLE_WHITELIST := [
 	"无", "暂无",
-	"嘲讽",
+	# 【2026-09-21 移除「嘲讽」】它原来在白名单里，是因为当时**解析器认不出特性标签**（赏金猎人
+	# 「克制：嘲讽」展开为空）。现在 `DataRegistry` 会按"特性里带该标签的英雄"展开（见
+	# `const TRAIT_TAGS`）⇒ 「嘲讽」应当真的解析出对象，留在白名单里就成了"把真问题藏起来"。
 ]
 
 func _initialize() -> void:

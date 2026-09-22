@@ -66,11 +66,16 @@ static func collect(battle, pool: Array = []) -> Dictionary:
 	# 地形：金矿与普通增益道具都在 buff_items 里，按类型拆成两份
 	var gold := {}
 	var buff := {}
+	var buff_own := {}
 	for c in battle.buff_items.keys():
 		if battle.buff_items[c] == "gold":
 			gold[c] = true
 		else:
 			buff[c] = battle.buff_items[c]
+			# 【2026-09-21 用户定稿·圣诞老人】道具**归属**（只有圣诞老人当场生成的礼物才有）：
+			#   必须进快照，否则 AI 会把「敌方踩到我们的礼物」误判成「玩家吃到了道具」——分记反了。
+			if battle.buff_owner.has(c):
+				buff_own[c] = int(battle.buff_owner[c])
 	var grave := {}
 	for c in battle.graves.keys():
 		grave[c] = true
@@ -83,6 +88,7 @@ static func collect(battle, pool: Array = []) -> Dictionary:
 	return {
 		"descs": descs, "occ": occ,
 		"gold": gold, "buff": buff, "grave": grave, "obstacle": obstacle, "bomb": bomb,
+		"buff_owner": buff_own,   # 【2026-09-21】道具归属（cell -> 阵营）；老读取方忽略即可
 		# 【RL 修正·用户已批准】双方**替补席**英雄 id 列表（battle.player_roster / battle.enemy_roster；
 		# 生产侧替补流程见 src/Battle.gd:118-125、4338(_pending_enemy_sub += 1)、4388(_place_enemy_sub)、
 		# 4413(_best_enemy_sub_idx)、4561(_free_sub_cell_for 优先本方墓碑格)）。RL 的 sim 需要它才能预测

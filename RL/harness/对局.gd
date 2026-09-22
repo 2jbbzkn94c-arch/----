@@ -237,7 +237,10 @@ func _ai_side(side: int, a_side: int) -> void:
 	if fn != DataRegistry.Faction.ENEMY:
 		descs = _relabel(descs)            # 替玩家方规划：对调 fn 标签
 	var sim = ai.build_state(descs, snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+	# ⚠️ 第 9/10 参（rosters / auto_sub）**保持不传**（= {}）：harness 的对局从不发生替补
+	#   （`measure.csv` 里 subA/subB 恒 0），传了会让模拟"预测替补登场及其登场效果"、
+	#   凭空改变跑批里的 AI 决策 ⇒ 与本批历史读数不可比。只补第 11 参 `buff_owner`（道具归属）。
 	var t_s := Time.get_ticks_msec()
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	var el := Time.get_ticks_msec() - t_s

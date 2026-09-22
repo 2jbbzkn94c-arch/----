@@ -103,6 +103,12 @@ class Sim:
 	var obstacles: Dictionary = {}     # cell -> true（障碍物：阻挡移动与攻击视线）
 	var bombs: Dictionary = {}         # cell -> true（炸弹：经过不炸，落停引爆，非炸弹人应避免停在上面）
 	var buff_cells: Dictionary = {}    # cell -> "atk"/"move"/"shield"/"heal"（普通增益道具，AI可评估收益去吃）
+# 【2026-09-21 用户定稿·圣诞老人】道具**归属**：cell -> 阵营。
+# 语义（与真实 `Battle._pickup_buff_at_cell` 完全一致）：
+#   · 有归属且**不是自己阵营** ⇒ 踩上去**道具直接消失**（双方都没收益：不记 `buff_taken`、不给效果）
+#   · 有归属且是自己阵营 / 无归属（中立，开局散落的那种）⇒ 正常拾取计分
+# 快照带过来的只有"圣诞老人当场生成的礼物"；老调用点不传 ⇒ 全当中立 ⇒ 行为与改动前逐位相同。
+	var buff_owner: Dictionary = {}
 	var killed_players := 0   # 本回合内击杀的玩家单位数（评估给即时重奖，驱动"先收残血"顺序）
 	# 本回合内拾取的增益道具价值合计（供评估加分，驱动 AI 主动去吃道具）。
 	# 【RL 修正 2026-09-15·用户选 B】**按阵营定符号**：拾取方是 AI 自己（`Faction.ENEMY`）记 **+价值**，
@@ -185,6 +191,7 @@ class Sim:
 		c.soft_cache = soft_cache
 		c.bombs = bombs.duplicate()
 		c.buff_cells = buff_cells.duplicate()
+		c.buff_owner = buff_owner.duplicate()   # 【2026-09-21】道具归属也要跟着分叉（否则 beam 里互相污染）
 		c.killed_players = killed_players
 		c.buff_taken = buff_taken
 		c.pending_sub = pending_sub.duplicate()
@@ -432,16 +439,25 @@ const IDLE_HIT_PENALTY := 0.0
 #   "各躲各的、谁能躲多远躲多远"；⑧道具还主动把单位拉去捡东西。唯一带整队味道的 ⑦ 是 **max 型**
 #   （只罚最危险的那一个）⇒ 它管得住"某个人站太前"，管不住"三个人摊开成三块"。
 #   ⇒ 这个病**必须新增项**，靠调现有键的数值是治不了的（调大 ⑦ 只会让大家躲得更散）。
-# ① `FORM_COHESION_W`（抱团）：每个我方非召唤物单位至少要有一个队友在 `FORM_RADIUS` 格内，
-#    没有队友就罚 1 点。**只罚"孤立"、不罚"挤在一起"** ⇒ 不会把队伍逼成一坨去吃 AoE。
+# ① `FORM_COHESION_W`（抱团）：每个我方非召唤物单位至少要有一个队友在 `FORM_RADIUS` 格内
+#    **且中间没被地形挡开**（障碍/墓碑），没有队友就罚 1 点。**只罚"孤立"、不罚"挤在一起"**
+#    ⇒ 不会把队伍逼成一坨去吃 AoE。
+#    ⚠️ **2026-09-21 晚（用户三次口径）**：①「抱团要考虑障碍物」⇒ 隔着一格宽的墙、坐标距 2
+#    **不算抱团**；②「**不要计算过程，按照行动完的站位计算**」⇒ 判据只看**行动完的站位 + 地形**
+#    （`_form_gap_open()`，与 `HexGrid.los_blocked` 同语义；**中间站着单位不算墙**、不做寻路/BFS）；
+#    ③ 用户看到日志里 `⑳抱团 -0.00→-3.00` 后追问「大家都贴在一起，为什么死神扣 3 分」——
+#    查明那 3 分其实记在**远处的医护兵**头上（⑳ 是全队求和项、日志按"谁在动"归因），
+#    而且两步后队友贴回来就原样还回来 ⇒ **中途结账会看到这种来回** ⇒ 定稿：
+#    **⑳㉑ 只在"全队都行动完"的末态结算**（`_evaluate(sim, end_of_turn)`，中途恒为 0）。
 # ② `FORM_ESCAPE_W`（退路/被夹）：每个我方单位的 6 个邻格里"能走的"还剩几个，少于
 #    `FORM_ESCAPE_MIN` 就罚差额（治"贴墙、死胡同"）；再加「相邻敌人数 − 相邻队友数」的正数部分
-#    （治"被包夹"——身边敌人比队友多，就是被夹住了）。
+#    （治"被包夹"——身边敌人比队友多，就是被夹住了）。**同样只在末态结算**。
 # 两项都是**纯局面量**（只看位置与占位，不需要任何新数据、不看对面怎么走），代价 O(单位数×6)。
 # 默认 0 ⇒ 生产三档逐位不变；噩梦档的初值写在 `RL/weights/噩梦.json`，要调只动那两个数。
 const FORM_COHESION_W := 0.0
 const FORM_ESCAPE_W := 0.0
-const FORM_RADIUS := 2          # 抱团半径（六向格距；2 = 一步能回援 = "互相够得着"）
+const FORM_RADIUS := 2          # 抱团半径（**步数**，不是坐标距；2 = 一步能回援 = "互相够得着"）
+								# ⚠️ `_form_gap_open()` 按"1 格 + 2 格"写死 ⇒ 改这个常量要同步改那里。
 const FORM_ESCAPE_MIN := 2      # 每个单位至少留 2 个可走邻格（1 个 = 只剩一条路；0 = 死胡同）
 # 【已删 2026-09-20·用户拍板】原 `const LEECH_TRIGGER_W := 0.0`（古拉 hero_14 的"触发吸血补一笔"）。
 # 删除依据：3 队 × 3 个值的棋力批**越调越负**（−0.56 / −1.83 / −3.70，胜率 0.39→0.33）⇒ 判死。
@@ -1123,11 +1139,15 @@ func _init(g: HexGrid) -> void:
 # 老口径 `true` 等价于 "score"，见 Sim.auto_sub 与 `_sim_sub_rule`）。
 # **可选**第 10 参；缺省 {} = 谁都不预测替补 = 与加本参之前逐位相同（生产路径与老调用点不变）。
 # 只有 harness（检视器）在"它自己会替那一方按已知规则点选"时才传。
-func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}, buff_cells: Dictionary = {}, active_fn: int = -1, rosters: Dictionary = {}, auto_sub: Dictionary = {}) -> Sim:
+# **可选**第 11 参 `buff_owner`：道具**归属**（cell -> 阵营），来自快照 `"buff_owner"`。
+# 缺省 {} = 所有道具都当**中立**（双方都能捡）= 与加本参之前逐位相同（老调用点不受影响）。
+# 见 `Sim.buff_owner` 与 `_sim_pickup_owned()` 的说明。
+func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}, buff_cells: Dictionary = {}, active_fn: int = -1, rosters: Dictionary = {}, auto_sub: Dictionary = {}, buff_owner: Dictionary = {}) -> Sim:
 	var s := Sim.new()
 	s.rosters = rosters.duplicate(true)
 	s.auto_sub = auto_sub.duplicate()
 	s.active_fn = DataRegistry.Faction.ENEMY if active_fn < 0 else (active_fn as DataRegistry.Faction)
+	s.buff_owner = buff_owner.duplicate()   # 【2026-09-21】道具归属（圣诞老人的礼物只有放置方能捡）
 	s.gold_cells = gold_cells.duplicate()
 	s.graves = graves.duplicate()
 	s.obstacles = obstacles.duplicate()
@@ -1364,7 +1384,9 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 					# `RL/progress_tracking/2_英雄特化.md` 的古拉一行）。
 					# 【2026-09-20 新增·默认关】这一手**没攻击**、而它移动前站着就能打到人 ⇒ 扣 `IDLE_HIT_PENALTY`。
 					var idle := idle_hit if int(a.get("atk", -1)) < 0 else 0.0
-					var cand: Dictionary = { "sim": s2, "path": path, "score": _evaluate(s2) - w_gold_oc * oc - idle,
+					# 【2026-09-21 深夜·用户口径】"全队行动完"的那一层才把 ⑳㉑ 计入（见 `_evaluate` 注释）。
+					var eot := done2.size() >= enemy_idxs.size()
+					var cand: Dictionary = { "sim": s2, "path": path, "score": _evaluate(s2, eot) - w_gold_oc * oc - idle,
 							"done": done2,
 							"tb": (_tiebreak_tuple(s2) if w_tiebreak_mode > 0 else []) }
 					# 【2026-09-19 新增·默认关】判负线硬闸门：这一手走完我方（非召唤物）全军覆没
@@ -1510,6 +1532,16 @@ func _rollout_enemy_turn(sim_in: Sim) -> Sim:
 	var worst_sc := INF
 	for od in orders:
 		var cur: Sim = sim_in.clone()
+		# 【2026-09-21 修·附体的解除时机】真实规则：**[附体]在"目标方回合结束"时解除**
+		#   （`src/Battle.gd:2304` 目标阵营回合结束 ⇒ `_clear_statuses` 清绑定）。
+		#   推演这一段 = **我方回合已经结束、轮到玩家行动** ⇒ 挂在我方单位身上的附体（玩家宿魂给的）
+		#   此刻应当已经解除；而挂在玩家单位身上的附体（我方宿魂给的）要到**玩家回合结束**才解除
+		#   ⇒ 在推演末尾清。原来两边都不清 ⇒ 推演会**高估附体的寿命**（多算一轮镜像伤害）。
+		#   （主搜索只推我方这一回合、附体本来就不会解除 ⇒ 那边不用动。）
+		for i2 in cur.units.size():
+			var cu2: SimUnit = cur.units[i2]
+			if cu2 != null and cu2.alive and cu2.fn == DataRegistry.Faction.ENEMY:
+				cu2.possessed_by = -1
 		# 这半回合是"玩家回合"：`active_fn` 决定锤头鲨(hero_37)"只在自己回合计数"、圣光护盾等规则的走向，
 		# 与 `search()` 开头把 `active_fn` 设成"本方阵营"同一语义（见文件上方 `Sim.active_fn` 的说明）。
 		cur.active_fn = DataRegistry.Faction.PLAYER
@@ -1530,6 +1562,12 @@ func _rollout_enemy_turn(sim_in: Sim) -> Sim:
 					best_sim = s2
 			if best_sim != null:
 				cur = best_sim
+		# 【2026-09-21 修·附体解除时机】玩家回合结束 ⇒ 挂在他们身上的附体（我方宿魂给的）解除
+		#   （同真实 `_clear_statuses`；见本函数开头那段说明）
+		for i3 in cur.units.size():
+			var cu3: SimUnit = cur.units[i3]
+			if cu3 != null and cu3.alive and cu3.fn == DataRegistry.Faction.PLAYER:
+				cu3.possessed_by = -1
 		# 这一种顺序推演完 ⇒ 按"我方评分"比，取最狠的那一种
 		var sc_end := _evaluate(cur)
 		if worst == null or sc_end < worst_sc:
@@ -1826,13 +1864,14 @@ func _greedy_finish(states_in: Array, enemy_idxs: Array) -> Array:
 			for a in _actions_for(cur["sim"], i):
 				var s2: Sim = cur["sim"].clone()
 				_apply(s2, i, a)
-				var sc := _evaluate(s2)
+				var done2: Dictionary = (cur["done"] as Dictionary).duplicate()
+				done2[i] = true
+				# 【2026-09-21 深夜】同上：只有"全队都行动完"的那一步才把 ⑳㉑ 计入。
+				var sc := _evaluate(s2, done2.size() >= enemy_idxs.size())
 				if sc > best_score:
 					best_score = sc
 					var path: Array = (cur["path"] as Array).duplicate()
 					path.append({ "idx": i, "action": a })
-					var done2: Dictionary = (cur["done"] as Dictionary).duplicate()
-					done2[i] = true
 					best_child = { "sim": s2, "path": path, "score": sc, "done": done2 }
 			if best_child.is_empty():
 				continue
@@ -1872,7 +1911,8 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 	var replay := sim.clone()
 	var prev := _evaluate(replay)
 	var start_score := prev
-	for step in path:
+	for si in path.size():
+		var step: Dictionary = path[si]
 		var idx := int(step["idx"])
 		var u0: SimUnit = sim.units[idx]        # 名字用初始
 		var ur: SimUnit = replay.units[idx]     # 数值用回放当前状态
@@ -1948,9 +1988,12 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			line += " → 不攻击（原地够得到%d个）" % _valid_targets(replay, ur, ur.cell).size()
 		var bd0 := _eval_breakdown(replay)     # 本步之前（逐项）
 		_apply(replay, idx, a)
-		var aft := _evaluate(replay)
+		# 【2026-09-21 深夜】⑳㉑ 只在**末态**结算 ⇒ 诊断回放里也只有"本回合最后一步"带这两项
+		#   （否则 Σ 自校验会差一个 ±3，日志会自相矛盾）。
+		var last_step := (si == path.size() - 1)
+		var aft := _evaluate(replay, last_step)
 		var delta := aft - prev
-		var bd1 := _eval_breakdown(replay)     # 本步之后（逐项）
+		var bd1 := _eval_breakdown(replay, last_step)     # 本步之后（逐项）
 		prev = aft
 		line += "  [本步 Δ%+.1f]" % delta
 		txt += "\n" + line
@@ -1999,15 +2042,16 @@ func _term_defs() -> Array:
 		["⑬附体(宿魂)", "宿魂(hero_46)：敌方被[附体]的单位 +POSSESS_TARGET_W(%.2f) × 身价/20。**值按施加者（宿魂）英雄覆盖读**（`_wh`）" % w_possess_target],
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且被敌人够得着 ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取）" % w_solid_hold],
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
-	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ 半径 %d 格内一个队友都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起 ⇒ 不会把队伍逼成一坨吃 AoE）" % [w_form_cohesion, FORM_RADIUS]],
-	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 相邻敌数 − 相邻队友数) ]（治贴墙/死胡同/被包夹）" % [w_form_escape, FORM_ESCAPE_MIN]],
+	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ %d 格内**且中间没被障碍/墓碑挡开**的队友一个都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起；**只在全队行动完的末态结算**，中途不算）" % [w_form_cohesion, FORM_RADIUS]],
+	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 相邻敌数 − 相邻队友数) ]（治贴墙/死胡同/被包夹；**同样只在末态结算**）" % [w_form_escape, FORM_ESCAPE_MIN]],
 	]
 
 ## 【2026-09-20 新增·诊断专用】把 `_evaluate()` 的每一项**单独算出来**，供逐项打印。
 ## ⚠️ 只在 `log_decisions = true` 时被调用，**不参与任何决策**。它与 `_evaluate()` 必须同口径 ——
 ##   校验办法：`_print_decision` 里打印 `_evaluate() 实测 − Σ已知项`，不为 0 就是漂移（自校验）。
 ##   未列的项（金矿 hero_42 / A 档英雄项 / 血锁开团等）会自动落进「其它(未列)」。
-func _eval_breakdown(sim: Sim) -> Dictionary:
+## `end_of_turn` 与 `_evaluate()` 同义：⑳㉑ **只在末态列出来**（中途不放进 `d`）⇒ 否则 Σ 自校验会差一个 ±3。
+func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	_sim_sync_pins(sim)   # 与 `_evaluate()` 第一步一致（否则"远程被贴"的攻击力口径会漂）
 	var d := {}
 	d["①障碍绕路"] = -_obstacle_detour(sim)
@@ -2074,7 +2118,9 @@ func _eval_breakdown(sim: Sim) -> Dictionary:
 	if w_poison_apply != 0.0 or _any_hero_key(["POISON_APPLY_W"]):
 		d["⑯猛毒新挂"] = sim.poison_apply_val
 	# 【2026-09-21 新增·默认关】⑳抱团 / ㉑退路被夹（与 `_evaluate()` 末尾那两行同口径 ⇒ Σ 自校验才对得上）
-	if w_form_cohesion != 0.0 or w_form_escape != 0.0:
+	# ⚠️ **只在末态列出来**（`end_of_turn`，2026-09-21 深夜用户口径）：中途这两项恒为 0，
+	#   所以这里**不放进 `d`**（`_breakdown_line` 读不到即 0）⇒ 日志里它们只会出现在**最后一步**。
+	if end_of_turn and (w_form_cohesion != 0.0 or w_form_escape != 0.0):
 		var fp3: Vector2 = _formation_parts(sim)
 		d["⑳抱团"] = -w_form_cohesion * fp3.x
 		d["㉑退路/被夹"] = -w_form_escape * fp3.y
@@ -2431,6 +2477,18 @@ func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
 func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴向直线冲锋（与玩家一致，避免规划与执行轨迹不符）。
 	# 途中被单位/墓碑/**障碍物**阻挡即停：障碍同样挡冲锋，防止 AI 计划穿墙。
 	# 注：冲锋是移动方式，沉默不影响；只有"根本不能移动"（眩晕/荆棘）时 emove 已为 0
+	# 【2026-09-21 用户定稿·宿魂 hero_46】「可以移动到任意格子」= 瞬移：
+	#   落点 = **任意空格**（**可以落道具格/炸弹格**；障碍/墓碑/被占格不行），**不看移动力与连通性**。
+	#   与真实 `Battle._move_reachable()` 的瞬移分支逐条同口径（含"被钉住就不能瞬移"那道门）。
+	#   炸弹格**保留**在候选里：真实规则"落停引爆"（免疫炸弹的英雄还能安全站上去），
+	#   所以不能像普通移动那样把炸弹格剔掉（普通移动在函数末尾会剔，这里提前返回）。
+	if u.hero_id == "hero_46" and not u.stunned and u.emove > 0:
+		var tp := {}
+		for c in grid.all_cells():
+			if sim.occ.has(c) or sim.obstacles.has(c) or sim.graves.has(c):
+				continue
+			tp[c] = true
+		return tp
 	if u.hero_id == "hero_24" and not u.stunned:
 		var out := {}
 		var dirs: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
@@ -2775,10 +2833,10 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				_sim_take_damage(sim, u, SIM_BOMB_DAMAGE, false, false)
 			if u.alive:
 				# 移动后拾取普通增益道具(收益已在走位排序中权衡)
-				if sim.buff_cells.has(mc):
-					var bt: String = String(sim.buff_cells[mc])
+				# 【2026-09-21】改走统一入口 `_sim_take_buff()`（含**归属判定**：踩别人的道具=道具消失、双方零收益）
+				var bt: String = _sim_take_buff(sim, mc, u.fn)
+				if bt != "":
 					sim.buff_taken += _buff_gain(sim, u, bt)   # 记录本回合吃到的道具价值（已按阵营定符号）
-					sim.buff_cells.erase(mc)
 					if bt == "atk":
 						# 【RL 修正】捡到攻击道具：真实 `Unit.atk_use_buff += 1` → `effective_atk()` **立刻 +1**
 						# （下次攻击结算时才消耗）。所以 eatk 要同步 +1（原来只记 atk_use_buff、eatk 不动，
@@ -3904,6 +3962,22 @@ func _sim_bulwark_absorb(sim: Sim, t: SimUnit, dmg: int) -> int:
 		return dmg - 1
 	return dmg
 
+## 【2026-09-21 用户定稿·圣诞老人】落点道具拾取的**统一入口**（归属判定）：
+##   返回**该生效的道具类型**，或 ""（这一格没道具 / 道具被别人归属挡掉）。
+##   语义与真实 `Battle._pickup_buff_at_cell` 逐条一致：
+##     · 有归属且**不是自己阵营** ⇒ 道具**直接消失**，双方都不记分、不给效果（"对方踩掉礼物"）
+##     · 有归属且是自己阵营 / 无归属（中立，开局散落那种）⇒ 正常返回类型，由调用方结算收益与 `buff_taken`
+func _sim_take_buff(sim: Sim, cell: Vector2i, fn: int) -> String:
+	if not sim.buff_cells.has(cell):
+		return ""
+	var bt := String(sim.buff_cells[cell])
+	var owned_by_foe: bool = sim.buff_owner.has(cell) and int(sim.buff_owner[cell]) != fn
+	sim.buff_cells.erase(cell)
+	sim.buff_owner.erase(cell)
+	if owned_by_foe:
+		return ""
+	return bt
+
 # 宿魂附体镜像：宿魂（hero_46 施放者）受伤时，其附体的目标同受伤害（递归，防互相附体死循环）
 func _sim_possess_mirror(sim: Sim, caster: SimUnit, dmg: int) -> void:
 	if caster == null or caster.hero_id != "hero_46" or dmg <= 0:
@@ -4037,10 +4111,10 @@ func _sim_swap_cells(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 func _sim_pickup_at_cell(sim: Sim, t: SimUnit) -> void:
 	if t == null:
 		return
-	if sim.buff_cells.has(t.cell):
-		var bt2: String = String(sim.buff_cells[t.cell])
+	# 【2026-09-21】统一入口：含**道具归属**判定（踩别人的道具 = 道具消失、双方零收益）
+	var bt2: String = _sim_take_buff(sim, t.cell, t.fn)
+	if bt2 != "":
 		sim.buff_taken += _buff_gain(sim, t, bt2)
-		sim.buff_cells.erase(t.cell)
 		if bt2 == "atk":
 			t.atk_use_buff += 1
 			# 【2026-09-20 修 bug】去掉原来的 `if t.echo_set < 0` 守卫：真实 `effective_atk()` 已改成
@@ -4128,10 +4202,10 @@ func _sim_pull_target(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	#   ① `_trigger_bomb(target)`（上面那行）② `_pickup_buff_at_cell(target)`（下面这段）。
 	#   被拉者会捡走脚下那格的增益/金矿（用户局 #2 就是 (2,4) 被拉者捡走）；
 	#   死尸分支在上面已提前 return（只位移、不引爆、不拾取）。
-	if sim.buff_cells.has(t.cell):
-		var bt2: String = String(sim.buff_cells[t.cell])
+	# 【2026-09-21】统一入口：含**道具归属**判定（踩别人的道具 = 道具消失、双方零收益）
+	var bt2: String = _sim_take_buff(sim, t.cell, t.fn)
+	if bt2 != "":
 		sim.buff_taken += _buff_gain(sim, t, bt2)
-		sim.buff_cells.erase(t.cell)
 		if bt2 == "atk":
 			t.atk_use_buff += 1
 			# 【2026-09-20 修 bug】去掉原来的 `if t.echo_set < 0` 守卫：真实 `effective_atk()` 已改成
@@ -4283,10 +4357,12 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 ## 开销：每个敌方单位只查一次（走 soft_route_cost 的缓存），对搜索速度影响很小。
 ## 【2026-09-21 新增·默认关】两项"队形"评分（见 `const FORM_COHESION_W` 处说明）的唯一实现。
 ## 返回 `Vector2(抱团罚分, 退路罚分)`，**都是正数**（由 `_evaluate` 取负）。只算我方（AI 侧）非召唤物存活单位。
-##   · 抱团：某单位在 `FORM_RADIUS` 格内一个队友都没有 ⇒ +1（**只罚孤立**）
+##   · 抱团：某单位在 `FORM_RADIUS` 格内**且中间没被地形挡开**的队友一个都没有 ⇒ +1（**只罚孤立**）
+##     ⚠️ **只看行动完的站位**（2026-09-21 深夜用户口径）：地形（障碍/墓碑）算隔断、**单位不算**，
+##     也不模拟"走不走得过去" ⇒ 隔墙不算抱团，但中间站着人照样算
 ##   · 退路：`max(0, FORM_ESCAPE_MIN − 可走邻格数)` + `max(0, 相邻敌数 − 相邻队友数)`（贴墙/死胡同/被包夹）
 ## 口径细节：墓碑与障碍都算"走不了"（真实规则两者都挡路）；被单位占住的邻格不算可走；
-##   出界的邻格不算（贴边 = 少一条退路，正好是我们要罚的）。
+##   出界的邻格不算（贴边 = 少一条退路，正好是我们要罚的）。两半共用这套"能不能走"口径。
 ## ⚠️ **性能要求**：本函数在 `_evaluate()` 里 ⇒ 一次决策被调 **上万次**。所以：
 ##   ① 返回 `Vector2`（不分配 Array）② 方向表是 `const`（不每次新建）③ 不建临时 `ours` 数组（直接两趟扫 `sim.units`）。
 ##   实测（2 局 beam=100 冒烟）：带两项 `search_ms_max` 1472 → 2222 ms；优化成现在这版后 ≈1.5×以内（见 §14#226）。
@@ -4302,8 +4378,12 @@ func _formation_parts(sim: Sim) -> Vector2:
 			continue
 		if DataRegistry.summons.has(u.hero_id):
 			continue
-		# ① 抱团：半径内有没有队友（第二趟扫，不建临时数组；**找到一个就跳出** —— 最常见的"已经抱团"
-		#   局面只花 1 次 `grid.distance`）。
+		# ① 抱团：半径内有没有队友（第二趟扫，不建临时数组；**找到一个就跳出**）。
+		#   判据 = **行动完的站位**：格距 ≤ FORM_RADIUS，且中间**没有被障碍/墓碑挡开**。
+		#   贴身（格距 1）永远算 —— 相邻两格之间没有"中间格"，什么也插不进来；
+		#   格距 2 才看那两个"中间格"是不是被地形堵死 ⇒ **隔墙不算抱团**（用户 2026-09-21 要求）。
+		#   ⚠️ **不模拟"走不走得过去"**（用户 2026-09-21 深夜口径）：中间站着单位**不算墙**
+		#   —— 那是走位过程，不是站位问题；本项纯看站位 + 地形，不做任何寻路/BFS。
 		var buddy := 0
 		for j in sim.units.size():
 			var v: SimUnit = sim.units[j]
@@ -4311,7 +4391,10 @@ func _formation_parts(sim: Sim) -> Vector2:
 				continue
 			if DataRegistry.summons.has(v.hero_id):
 				continue
-			if grid.distance(u.cell, v.cell) <= FORM_RADIUS:
+			var dd := grid.distance(u.cell, v.cell)
+			if dd > FORM_RADIUS:
+				continue
+			if dd <= 1 or _form_gap_open(sim, u.cell, v.cell):
 				buddy += 1
 				break
 		if buddy == 0:
@@ -4343,6 +4426,30 @@ func _formation_parts(sim: Sim) -> Vector2:
 		esc += float(maxi(0, FORM_ESCAPE_MIN - free_n))
 		esc += float(maxi(0, adj_foe - adj_friend))
 	return Vector2(coh, esc)
+
+## 【2026-09-21 深夜·用户口径】抱团 ⑳ 只看"**行动完的站位**"：两格**恰好格距 2** 时，
+## 判断两人中间有没有被**地形**挡开 —— 两个"中间格"（同时贴着两人的公共邻居）里
+## **只要还有一个不是障碍/墓碑**，就算看得见/连得上（与引擎 `HexGrid.los_blocked` 同语义：
+## 多条最短路留一条通就不算被挡）。
+##   · **不看单位**：中间站着人（队友或敌人）**不算墙** —— 那是"走位过程"，不是"站位"。
+##   · **不做寻路/BFS**：纯站位 + 纯地形，代价 O(6)，不分配任何容器。
+## ⚠️ 不要退回"按能不能走过去判"：那会去模拟"怎么绕过去"，而且队友站中间时反而判成不抱团（不合直觉）。
+func _form_gap_open(sim: Sim, a: Vector2i, b: Vector2i) -> bool:
+	var ax := grid.axial_of(a)
+	var mids := 0
+	var blocked := 0
+	for d in FORM_DIRS:
+		var m := grid.offset_of(ax + d)
+		if not grid.in_bounds(m):
+			continue
+		if grid.distance(m, b) != 1:
+			continue            # 只认"同时贴着两人"的公共邻居
+		mids += 1
+		if sim.obstacles.has(m) or sim.graves.has(m):
+			blocked += 1
+	if mids == 0:
+		return true             # 贴边到没有公共邻居（极罕见）：不罚
+	return blocked < mids
 
 func _obstacle_detour(sim: Sim) -> float:
 	if sim.obstacles.is_empty():
@@ -4436,7 +4543,10 @@ func _sim_refresh_pins(sim: Sim) -> void:
 		u.pin_flag = _sim_enemy_adjacent(sim, u, u.cell)
 	_sim_sync_pins(sim)
 
-func _evaluate(sim: Sim) -> float:
+## `end_of_turn`：**本回合我方全部行动完**的那个局面（由 `search()` 在末层传 true）。
+##   ⚠️ 只影响 ⑳抱团 / ㉑退路被夹 两项 —— 2026-09-21 深夜用户口径「按照行动完的站位计算」：
+##   这两项**只在末态结算**（中途恒为 0）⇒ 临时拉距/临时贴墙不再扣分。其余项与以前逐位相同。
+func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	_sim_sync_pins(sim)   # 【RL 修正】先按当前位置刷新"远程被贴"的攻击力
 	var score := 0.0
 	# 障碍"挡路"惩罚：按**实际绕路代价**计分（不再按障碍个数给固定小分）。
@@ -4714,9 +4824,11 @@ func _evaluate(sim: Sim) -> float:
 	if w_terminal != 0.0:
 		score += w_terminal * _terminal_value(sim)
 	# 【2026-09-21 新增·默认关】两项"队形"评分（见 `const FORM_COHESION_W` 处说明）：
-	#   ⑳抱团（每个我方单位至少一个队友在 FORM_RADIUS 内）· ㉑退路/被夹（可走邻格 / 邻敌多于邻友）。
-	#   两项都是纯局面量、纯罚分（永远 ≤ 0）⇒ 它们只把"散开/钻死胡同"的走法往下压，不奖励任何具体站位。
-	if w_form_cohesion != 0.0 or w_form_escape != 0.0:
+	#   ⑳抱团（每个我方单位至少一个队友在 FORM_RADIUS 格内、且中间没被障碍/墓碑挡开）·
+	#   ㉑退路/被夹（可走邻格 / 邻敌多于邻友）。两项都是纯局面量、纯罚分（永远 ≤ 0）。
+	#   ⚠️ **只在末态结算**（`end_of_turn`，2026-09-21 深夜用户口径「不要计算过程，按照行动完的站位计算」）：
+	#   中途恒为 0 ⇒ 不会再出现「死神走开扣 3 分、下一个队友贴回来又 +3」的来回。详见 const 处说明。
+	if end_of_turn and (w_form_cohesion != 0.0 or w_form_escape != 0.0):
 		var fp := _formation_parts(sim)
 		score -= w_form_cohesion * fp.x
 		score -= w_form_escape * fp.y
@@ -5058,6 +5170,19 @@ func _threat_can_hit(sim: Sim, a: SimUnit, target_cell: Vector2i) -> bool:
 		var range_at := a.atk_range
 		if a.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, a, a.cell):
 			range_at = 1   # 远程被贴身：射程压 1（真实规则）
+		# 【2026-09-21 用户定稿·宿魂 hero_46】瞬移威胁：它**能落到任意合法格再开火** ⇒
+		#   判据从「路网距离 ≤ 射程＋移动力」换成「目标周围存在一个合法落点、且从那儿能打中」。
+		#   ⚠️ 这条会很『狠』（宿魂几乎能威胁全场）—— 那是真实规则，不是高估。
+		#   被钉住（眩晕 / 移动力被压到 0）时退回普通判据（与 Battle._move_reachable 同一道门）。
+		if a.hero_id == "hero_46" and not a.stunned and a.emove > 0:
+			for c in _cells_within_radius(target_cell, maxi(range_at, 1)):
+				if c == target_cell:
+					continue                  # 不能落在目标自己那格（单位占位）
+				if sim.obstacles.has(c) or sim.graves.has(c) or sim.occ.has(c):
+					continue                  # 站不了那儿
+				if _threat_firing_ok(sim, a, c, target_cell):
+					return true
+			return false
 		var d := walk_dist(sim, a.cell, target_cell)
 		if d < 1 or d > range_at + maxi(a.emove, 0):
 			return false

@@ -45,6 +45,9 @@ var _session_started := false    # 本次会话是否已成功开房或连上（
 var _btn_reconnect: Button = null   # 手动重新连接按钮
 var _addr_history: OptionButton = null   # 历史主机地址下拉框（连成功过的地址）
 var _addrs: Array = []              # 历史主机地址（最近成功连接的排最前）
+var _peer_name := ""                # 对端姓名（hello / name 消息互换；对端老版本时为空）
+var _btn_card: Button = null        # 左上角「名片」按钮（弹名片框：改姓名 + 看联机胜率）
+var _card_overlay: Control = null   # 名片框弹层
 
 const ADDR_SAVE_PATH := "user://net_addrs.cfg"   # 历史地址持久化（关游戏不丢）
 const ADDR_HISTORY_MAX := 8
@@ -76,6 +79,8 @@ func _on_net_disconnected() -> void:
 		_peer_ready = false
 		_peer_slot = 0
 		_peer_deck = []
+		_peer_name = ""           # 断线：忘掉对端姓名（重连会重新握手交换）
+		GameState.net_peer_name = ""
 		_refresh_ui()
 		return
 	_status.text = "连接已断开"
@@ -85,6 +90,8 @@ func _on_net_disconnected() -> void:
 	_my_ready = false
 	_peer_slot = 0
 	_peer_deck = []
+	_peer_name = ""
+	GameState.net_peer_name = ""
 	_refresh_ui()
 	# 容错：此前以客户端身份连上后意外断开 -> 自动重连一次（安卓退后台回来网络被系统重置的典型场景）
 	if not _am_host and _last_join_addr != "" and not _auto_retry_done:
@@ -145,7 +152,8 @@ func _on_connected() -> void:
 			disp = "%s:%d" % [_last_join_addr, _last_join_port]
 		_remember_addr(disp)
 	if not NetBus.is_host:
-		NetBus.send_to(1, JSON.stringify({ "type": "hello", "ver": NET_VERSION }))
+		# 客户端握手：带上自己的「名片」姓名（老版本收不到 name 字段会忽略，不影响连接）
+		NetBus.send_to(1, JSON.stringify({ "type": "hello", "ver": NET_VERSION, "name": Stats.display_name() }))
 	_refresh_ui()
 
 func _on_packet(_from: int, text: String) -> void:
@@ -167,16 +175,20 @@ func _on_packet(_from: int, text: String) -> void:
 					return
 				_peer_online = true
 				_peer_ready = false   # 新加入方需重新点"准备完毕"
+				# 对端姓名（名片）：记下来给状态文字与对局顶部状态栏用
+				_peer_name = String(cmd.get("name", ""))
+				GameState.net_peer_name = _peer_name
 				# 把当前模式补发给刚加入的客户端（若主机在客户端加入前已选模式，对方收不到历史广播）。
 				# 注：必须用广播 send_all —— ENet 客户端 uid 是随机分配的，主机定向 send_to(固定id) 到不了对端；
 				# 全项目主机->客户端（对局指令同步等）均用 send_all，双端场景下广播=发给唯一对端。
 				NetBus.send_all(JSON.stringify({ "type": "mode", "mode": _mode }))
+				_broadcast_my_name()   # 主机也把自己的姓名发过去（客户端才知道"敌方"是谁）
 				if _my_confirmed and _my_slot > 0:
 					# 主机在客人加入前就已确认卡组：补发一次，否则客人永远看不到主机已确认
 					_send_my_confirmation()
 					_status.text = "我方卡组已确认，等待对方确认…"
 				else:
-					_status.text = "✅ 对端已加入，%s" % ("等待对方点击「准备完毕」…" if _mode == "arena" else "请双方选择卡组")
+					_status.text = "✅ 对端%s已加入，%s" % [_peer_tag(), "等待对方点击「准备完毕」…" if _mode == "arena" else "请双方选择卡组"]
 				_refresh_ui()
 		"choseslot":  # 对端选了卡组槽（带自己本机的卡组内容；仅普通模式有意义）
 			if _mode == "normal":
@@ -226,6 +238,12 @@ func _on_packet(_from: int, text: String) -> void:
 					_enter_arena_mode()   # 清掉普通模式卡组确认类提醒（含"对方取消了卡组确认"等）
 				else:
 					_enter_normal_mode()
+		"name":  # 对端「名片」姓名（握手后互换；对端改名也会收到这条）
+			_peer_name = String(cmd.get("name", ""))
+			GameState.net_peer_name = _peer_name
+			if not NetBus.is_host and _peer_name != "":
+				_status.text = "✅ 已连接（客户端）· 主机%s" % _peer_tag()
+			_refresh_ui()
 		"ver_err":  # 主机通知版本不符
 			if not NetBus.is_host:
 				var minev := int(cmd.get("mine", 0))
@@ -436,6 +454,15 @@ func _build() -> void:
 	btn_back.pressed.connect(_back_to_menu)
 	vbox.add_child(btn_back)
 
+	# 左上角「名片」按钮：弹名片框（改自己的姓名 + 看联机胜率）。
+	# 放在最后添加 ⇒ 位于所有内容之上，不会被上方 vbox 抢走点击（与标题错开，不压字）。
+	_btn_card = Button.new()
+	_btn_card.custom_minimum_size = Vector2(0, 40)
+	_btn_card.add_theme_font_size_override("font_size", 18)
+	_btn_card.position = Vector2(14, 6)
+	_btn_card.pressed.connect(_open_name_card)
+	add_child(_btn_card)
+
 	_build_hover_tooltip()
 	_refresh_ui()
 
@@ -602,6 +629,142 @@ func _on_hero_hovered(hid: String) -> void:
 		_hover_box.add_child(lb)
 	_hover_tooltip.reset_size()
 	_hover_tooltip.visible = true
+
+# ---- 名片框（左上角按钮弹出）：改自己的姓名（本地保存 + 通知对端）+ 查看联机胜率 ----
+func _peer_tag() -> String:
+	# 对端名字：不知道就叫"对方"（老版本不发姓名）
+	return "「%s」" % _peer_name if _peer_name != "" else ""
+
+func _open_name_card() -> void:
+	if _card_overlay != null and is_instance_valid(_card_overlay):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_card_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	# 居中交给 CenterContainer（与主菜单各弹窗同款）：面板多大都居中，不会顶出屏幕
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(minf(430.0, vsize.x * 0.78), 0.0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "名片"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	# 姓名行：输入框 + 保存（保存后本地落盘，并当场通知对端）
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 10)
+	box.add_child(name_row)
+	var name_label := Label.new()
+	name_label.text = "姓名"
+	name_label.add_theme_font_size_override("font_size", 20)
+	name_label.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+	name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	name_row.add_child(name_label)
+	var edit := LineEdit.new()
+	edit.text = Stats.player_name
+	edit.placeholder_text = "最多 %d 字" % Stats.NAME_MAX
+	edit.max_length = Stats.NAME_MAX
+	edit.custom_minimum_size = Vector2(0, 48)
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	edit.add_theme_font_size_override("font_size", 20)
+	name_row.add_child(edit)
+	var save := Button.new()
+	save.text = "保存"
+	save.custom_minimum_size = Vector2(0, 48)
+	save.add_theme_font_size_override("font_size", 18)
+	name_row.add_child(save)
+	var msg := Label.new()
+	msg.text = "姓名存在本机；联机对战时显示在顶部状态栏（我方 = 你，敌方 = 对端）。"
+	msg.add_theme_font_size_override("font_size", 12)
+	msg.add_theme_color_override("font_color", Color(0.72, 0.78, 0.88))
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(msg)
+	save.pressed.connect(func(): _save_name_card(edit, msg))
+	edit.text_submitted.connect(func(_t: String): _save_name_card(edit, msg))   # 输入框回车＝保存
+	# 联机胜率（分开统计普通模式 / 竞技场模式）
+	var sep := HSeparator.new()
+	box.add_child(sep)
+	var rec_title := Label.new()
+	rec_title.text = "联机胜率"
+	rec_title.add_theme_font_size_override("font_size", 20)
+	rec_title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	rec_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(rec_title)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 8)
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_child(grid)
+	for key in ["mp_normal", "mp_arena"]:
+		var k_lb := Label.new()
+		k_lb.text = Stats.mode_name(key)
+		k_lb.add_theme_font_size_override("font_size", 17)
+		k_lb.add_theme_color_override("font_color", Color(0.92, 0.93, 1.0))
+		k_lb.custom_minimum_size = Vector2(190, 0)
+		grid.add_child(k_lb)
+		var v_lb := Label.new()
+		v_lb.text = Stats.online_record_text(key)
+		v_lb.add_theme_font_size_override("font_size", 17)
+		v_lb.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+		v_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		v_lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(v_lb)
+	var total_w := Stats.win_count("mp_normal") + Stats.win_count("mp_arena")
+	var total_l := Stats.loss_count("mp_normal") + Stats.loss_count("mp_arena")
+	var total_lb := Label.new()
+	var total_txt := "联机总计：%d 胜 %d 负" % [total_w, total_l]
+	if total_w + total_l > 0:
+		total_txt += " · 胜率 %.1f%%" % (float(total_w) / float(total_w + total_l) * 100.0)
+	total_lb.text = total_txt
+	total_lb.add_theme_font_size_override("font_size", 16)
+	total_lb.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	total_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(total_lb)
+	var close := Button.new()
+	close.text = "关闭"
+	close.custom_minimum_size = Vector2(0, 46)
+	close.add_theme_font_size_override("font_size", 18)
+	close.pressed.connect(_close_name_card)
+	box.add_child(close)
+
+func _save_name_card(edit: LineEdit, msg: Label) -> void:
+	Stats.set_player_name(edit.text)
+	edit.text = Stats.player_name
+	_broadcast_my_name()   # 已连上时当场把新姓名告诉对端（对局中不用再发）
+	_refresh_card_button()
+	msg.text = "已保存：%s（存在本机，联机对局顶部状态栏会显示这个名字）" % Stats.display_name()
+
+func _close_name_card() -> void:
+	if _card_overlay != null and is_instance_valid(_card_overlay):
+		_card_overlay.queue_free()
+	_card_overlay = null
+
+# 把本机姓名广播给对端（进大厅握手 + 改名后各发一次）：只带姓名，不影响对局逻辑
+func _broadcast_my_name() -> void:
+	if NetBus.is_online:
+		NetBus.send_all(JSON.stringify({ "type": "name", "name": Stats.display_name() }))
+
+# 左上角按钮文案随姓名变化（"名片：张三"）
+func _refresh_card_button() -> void:
+	if _btn_card != null and is_instance_valid(_btn_card):
+		_btn_card.text = "名片：%s" % Stats.display_name()
 
 # "编辑卡组"：叠层打开普通模式选人页（网络连接不断、大厅状态保留）。
 # 编辑目标 = 当前已选槽（未选则沿用上次槽位），Menu 会自动载入并自动保存。
@@ -891,6 +1054,7 @@ func _deck_of(slot: int) -> Array:
 func _refresh_ui() -> void:
 	if not is_instance_valid(_mode_label):
 		return
+	_refresh_card_button()   # 左上角名片按钮显示当前姓名
 	var my_is_host := NetBus.is_host
 	# 开房/加入按钮：开房中=可取消；连接对方中=两按钮禁用（防重复触发）
 	_btn_host.text = "取消开房" if my_is_host else "开房（作为主机）"

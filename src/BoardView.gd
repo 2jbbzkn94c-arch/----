@@ -9,6 +9,12 @@ var _highlights: Dictionary = {}  # cell -> Color
 var bombs: Dictionary = {}        # cell -> true（炸弹人的陷阱）
 var obstacles: Dictionary = {}     # cell -> 耐久（障碍物）
 var buff_items: Dictionary = {}    # cell -> "atk"/"move"（增益道具）
+# 【2026-09-21 用户定稿·圣诞老人】道具归属：cell -> 阵营（-1/缺省 = 中立，双方都能捡）。
+# 画面上用一圈描边区分：我方（PLAYER）绿、敌方（ENEMY）红 ⇒ 一眼看出"这枚是谁的礼物"。
+var buff_owner: Dictionary = {}
+# 【2026-09-21 用户定稿·圣诞老人】演出用：这些格子上的道具**暂不画**（礼物还在空中飞，
+# 落地后由 Battle 从本表里移除 ⇒ 图标才出现）。只影响绘制，不影响 buff_items 逻辑。
+var hidden_item_cells: Dictionary = {}
 var gold_left: Dictionary = {}     # cell -> 金矿剩余回合数（右下角小字展示，3→0消失）
 var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可选择在此落位）
 var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 兜底底色（木纹贴图缺失时才用）
@@ -108,6 +114,8 @@ func _draw() -> void:
 		_draw_cell_digit(center, str(int(obstacles[cell])))
 	# 增益道具/金矿（有美术素材的直接贴图；移动道具仍用程序画的蓝点）
 	for cell in buff_items.keys():
+		if hidden_item_cells.has(cell):
+			continue   # 【圣诞老人】礼物还在飞：这一格先不画（落地后 Battle 解除隐藏）
 		var center := board_origin + grid.cell_to_world(cell)
 		var st: String = buff_items[cell]
 		var tex: Texture2D = null
@@ -128,6 +136,16 @@ func _draw() -> void:
 			# 防御：将来新增道具类型没配贴图时，画个黄点提示，别整格空着
 			draw_circle(center, grid.hex_size * 0.26, Color(0.25, 0.2, 0.08, 0.9))
 			draw_circle(center, grid.hex_size * 0.16, Color(1.0, 0.9, 0.3))
+		# 【2026-09-21 用户定稿·圣诞老人】归属标记：**右下角一个小圆点**（我方蓝 / 敌方红），
+		#   位置与"金矿剩余回合数/障碍耐久"的数字锚点同一套（`_digit_anchor` = 格右下），
+		#   只是往上挪一点、别和数字打架；中立道具（无归属）不画点。
+		#   （第一版画的是"整格描边圈"，用户要求改成右下角圆点 —— 描边太抢眼、和圣盾等特效混在一起。）
+		if buff_owner.has(cell):
+			var own := int(buff_owner[cell])
+			var dot := Color(0.35, 0.62, 1.0, 1.0) if own == DataRegistry.Faction.PLAYER else Color(1.0, 0.33, 0.3, 1.0)
+			var dp := _digit_anchor(center)   # 与"金矿剩余回合数/障碍耐久"同一套右下角锚点
+			draw_circle(dp, grid.hex_size * 0.17, Color(0, 0, 0, 0.85))   # 黑底：保证在任何贴图上都看得清
+			draw_circle(dp, grid.hex_size * 0.12, dot)
 		# 金矿：右下角显示剩余回合数（3→2→1，到0消失），与障碍耐久同一套画法
 		if st == "gold" and gold_left.has(cell):
 			_draw_cell_digit(center, str(int(gold_left[cell])))

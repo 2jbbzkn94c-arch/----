@@ -39,6 +39,49 @@ class Projectile:
 
 # 长剑的剑气：一道弧形刃光沿直线飞出（当前未使用）
 
+# 【2026-09-21 用户定稿·圣诞老人】飞行中的礼物：一个会转的小礼盒（金盒身 + 红缎带 + 外发光）。
+# 为什么不复用上面的 `Projectile`：那是个 ~13px 的光点，配 0.4 秒飞行实机上"看不见"（用户反馈）。
+class GiftFly:
+	extends Node2D
+	var color := Color(1.0, 0.85, 0.35)
+	var size := 22.0
+
+	func _draw() -> void:
+		# 防护：节点变换出现非有限值时三角剖分会失败，直接跳过绘制
+		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
+			return
+		var h := size * 0.5
+		draw_circle(Vector2.ZERO, size * 1.15, Color(1.0, 0.9, 0.45, 0.22))   # 外发光
+		draw_rect(Rect2(Vector2(-h, -h), Vector2(size, size)), color, true)   # 盒身
+		# 缎带（十字）+ 描边：小尺寸下也看得出是"礼盒"而不是一坨黄点
+		var rb := Color(0.85, 0.25, 0.22)
+		draw_rect(Rect2(Vector2(-h * 0.22, -h), Vector2(h * 0.44, size)), rb, true)
+		draw_rect(Rect2(Vector2(-h, -h * 0.22), Vector2(size, h * 0.44)), rb, true)
+		draw_rect(Rect2(Vector2(-h, -h), Vector2(size, size)), Color(0.35, 0.2, 0.05), false, 2.0)
+
+# 【2026-09-21 用户定稿·宿魂[附体]演出】把"施加者 ↔ 被附体者"用一条魂线连起来（按**施加者**阵营上色：
+# 我方蓝 / 敌方红，与棋子描边同一套颜色）。
+# 为什么单独做一个节点、还每帧重画：单位在演出里会移动（前冲/被击退/瞬移），只有每帧取**单位当前坐标**
+# 重画，线才会跟着人走；BoardView 是"需要时才重绘"，追踪移动会拖影。
+# z_index = 1 ⇒ 压在棋盘(0)之上、棋子(2/10)之下，不挡人也不被人挡。
+class PossessLinkView:
+	extends Node2D
+	var links: Array = []   # 每项 = { "from": Vector2, "to": Vector2, "color": Color }
+
+	func _draw() -> void:
+		for it in links:
+			var a: Vector2 = it["from"]
+			var b: Vector2 = it["to"]
+			var c: Color = it["color"]
+			if (b - a).length() < 1.0:
+				continue   # 两点几乎重合（被附体者就是自己那种异常）：不画
+			# 三层叠出"魂线"：外发光 → 主线 → 两端小环（目标端再点一个白芯）
+			draw_line(a, b, Color(c.r, c.g, c.b, c.a * 0.20), 11.0, true)
+			draw_line(a, b, Color(c.r, c.g, c.b, c.a), 3.5, true)
+			draw_circle(a, 5.0, Color(c.r, c.g, c.b, c.a))
+			draw_circle(b, 6.5, Color(c.r, c.g, c.b, c.a))
+			draw_circle(b, 3.0, Color(1.0, 1.0, 1.0, c.a * 0.9))
+
 # 障碍受击冲击波：白色扩散圆环（障碍物被攻击时的命中演出）
 class RingFlash:
 	extends Node2D
@@ -70,6 +113,13 @@ const TURN_TIME_LIMIT := 90.0
 # 与部署轮（`DEPLOY_BUDGET_SECONDS` 预算耗尽自动随机上人）、竞技场 2 选 1（`arena_pick_time_left`）
 # 同一套做法：到点由 Battle 自己替玩家做决定，面板上的大字由 HUD 读 `deck_pick_time_left` 显示。
 const DECK_PICK_TIME_LIMIT := 15.0
+# 【2026-09-21 用户要求】「回合开始 → 英雄开始放技能」中间的**停顿**（秒）。
+# 原来是一拍不歇：回合切换音效刚响，各英雄的回合开始技就噼里啪啦连着放完，观感上"没看懂发生了什么"。
+#   · 0 = 关（回到旧行为）；默认 0.45 ≈ 半秒，够看清"换回合了"再开始演出。
+#   · **联机**：两端都在 `_run_side_skills()` 里等同一段延迟（同一触发点）⇒ 不引入不同步。
+#   · **RL harness**：`Engine.time_scale = 20`，而 `create_timer` 默认受 time_scale 缩放 ⇒
+#     等效只等 0.02 秒，跑批时长几乎不变（这也是选 `create_timer` 而不是 `await process_frame` 的原因）。
+const TURN_START_SKILL_DELAY := 0.9
 var turn_time_left := 0.0          # 本端可操作回合剩余秒数（从本端回合开始起算，演出/动画也算时间
 var peer_turn_time_left := 0.0     # 对端行动回合剩余秒数（联机等待端本地递减 + 对端广播校准
 var _turn_expired := false         # 本端回合已超时但正处于演动画，待回到可提交状态时自动结束
@@ -137,10 +187,19 @@ var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位
 var _pending_enemy_sub := 0        # 敌方阵亡待替补数量（轮到敌方回合时按此数量补位）
 var bombs: Dictionary = {}        # cell -> true（炸弹陷阱）
 var obstacles: Dictionary = {}    # cell -> 耐久（障碍物，阻挡移动，可被破坏
-var buff_items: Dictionary = {}   # cell -> "atk"/"move"（圣诞老人等放置的增益道具
+var buff_items: Dictionary = {}   # cell -> "atk"/"move"/"heal"/"shield"/"gold"
+# 【2026-09-21 用户定稿·圣诞老人】道具**归属**：cell -> 阵营（`DataRegistry.Faction`）。
+# 只有圣诞老人当场生成的道具会写归属（开局散落的道具是中立、双方都能捡）；
+# 规则：**只有归属方能拾取**，对方踩上去 ⇒ 道具**直接消失**（不生效、也不留给别人）。
+# 与 `buff_items` 平行维护：所有 erase/clear 都要成对做（`_pickup_buff_at_cell` / 重置 / 金矿）。
+var buff_owner: Dictionary = {}
+# 【2026-09-21 用户定稿·演出】正在"飞行中"的礼物所在格：这些格子的道具**暂时不画**，
+# 落地那一刻才显形（配合 `_throw_gift()`）。⚠️ 纯演出：`buff_items` 当场就已写入，逻辑时序不变。
+var _gift_hidden_cells: Dictionary = {}
 var graves: Dictionary = {}       # cell -> hero_id（阵亡单位的墓碑：替补可在此落位，落位后消失
 var _possess_links: Dictionary = {}   # [附体] 绑定: target(Unit) -> 施加者 caster(Unit)
 var _possess_depth := 0               # [附体] 镜像递归深度（多宿魂互附时防死循环）
+var _possess_link_view: PossessLinkView = null   # [附体] 魂线视图（每帧按单位当前位置重画）
 var gold_left: Dictionary = {}        # cell -> 金矿剩余回合数（3→0 消失；每完整回合减1）
 var _gold_tick_round := -1            # 已执行过金矿倒计时的回合号（每轮只减一次，两端同步）
 
@@ -257,6 +316,8 @@ func _ready() -> void:
 	board_view.bombs = bombs
 	board_view.obstacles = obstacles
 	board_view.buff_items = buff_items
+	board_view.buff_owner = buff_owner   # 归属：板面按归属上色（圣诞老人的礼物只有放置方能捡）
+	board_view.hidden_item_cells = _gift_hidden_cells   # 演出：飞行中的礼物所在格暂不画
 	board_view.graves = graves
 	board_view.gold_left = gold_left
 	# 地块木纹铺法：联机两端必须一致（都用联机种子）；单机每局随机换一种铺法
@@ -274,6 +335,10 @@ func _ready() -> void:
 	if battle_bg != null:
 		add_child(battle_bg)
 	add_child(board_view)
+	# 【2026-09-21·附体魂线】连线视图：压在棋盘之上、棋子之下（见 PossessLinkView 的说明）
+	_possess_link_view = PossessLinkView.new()
+	_possess_link_view.z_index = 1
+	add_child(_possess_link_view)
 	# 【演出·大伤害震屏】专用相机：anchor=固定左上 + position=0 时视野与"没有相机"逐像素一致，
 	# 平时 offset 恒为 0（画面完全不变），只有大伤害时抖一下 offset。
 	# 为什么用相机而不是挪节点坐标：相机只改画面映射，不动棋盘/单位的坐标，
@@ -324,6 +389,7 @@ func _process(dt: float) -> void:
 	# 出生区色罩（我方淡蓝 / 敌方淡红）只在**部署英雄阶段**亮；部署完由木纹接管，整局不再染色
 	if board_view != null:
 		board_view.set_spawn_zones(state == State.DEPLOY or state == State.PLACE_DEPLOY)
+	_refresh_possess_links()   # 附体魂线：每帧按单位当前位置重画（跟着演出走）
 	# 开局选人限时：本端三轮共用一个共享预算；预算耗尽 -> 自动随机补人（每次补一人，换回本侧轮继续补到满
 	if state == State.DEPLOY or state == State.PLACE_DEPLOY:
 		if deploy_budget_active:
@@ -402,7 +468,7 @@ func _process(dt: float) -> void:
 			_press_viewed = true
 			var cu = occupancy.get(_press_cell, null)
 			if buff_items.has(_press_cell):
-				item_view_requested.emit(buff_items[_press_cell])
+				item_view_requested.emit(buff_items[_press_cell], int(buff_owner.get(_press_cell, -1)))
 			elif cu != null:
 				card_view_requested.emit(cu)
 
@@ -1090,7 +1156,7 @@ signal arena_draft_done                     # 8轮选完
 
 signal deploy_refresh
 signal card_view_requested(unit: Unit)   # 右键查看卡面
-signal item_view_requested(type: String)  # 右键查看道具作用
+signal item_view_requested(type: String, owner_faction: int)  # 右键查看道具作用（owner_faction = 归属阵营，-1 = 中立/双方可捡）
 signal touch_view_end_requested           # 触屏长按查看后松手：请求 HUD 关闭属性浮层
 
 # 开局先手提示（单机）：先= 部署上首发先+ 开战先行动。短暂浮~1s 自动消失，不阻塞流程
@@ -1124,6 +1190,7 @@ func reset_match(redraft := false) -> void:
 	occupancy.clear()
 	bombs.clear()
 	buff_items.clear()
+	buff_owner.clear()   # 道具归属与 buff_items 成对维护（见 `buff_owner` 说明）
 	obstacles.clear()
 	graves.clear()
 	gold_left.clear()
@@ -1849,13 +1916,54 @@ func _place_buff_items(u: Unit, n: int) -> void:
 	_rng_shuffle(spots)
 	var types: Array = ["heal", "atk", "move", "shield"]   # 圣诞老人的四种礼
 	var placed := 0
+	var placed_cells: Array = []
 	while placed < n and spots.size() > 0:
 		var c: Vector2i = spots.pop_back()
 		buff_items[c] = types[rng.randi() % types.size()]
+		# 【2026-09-21 用户定稿】圣诞老人**当场生成**的道具带归属：只有放置方能拾取，
+		#   对方踩上去 = 道具直接消失（见 `buff_owner` 与 `_pickup_buff_at_cell`）。
+		buff_owner[c] = u.faction
+		placed_cells.append(c)
 		placed += 1
 	if placed > 0:
 		log_message.emit("%s 在空地放置了 %d 个增益道具。" % [u.display_name, placed])
 		_refresh_board()
+		# 【2026-09-21 用户定稿·演出】礼物**丢过去**（不是凭空出现在格子上）：依次抛出，错开一点看得出是两件。
+		# ⚠️ 逻辑时序不变——`buff_items`/`buff_owner` 上面已经当场写好（AI 快照/拾取/联机同步都按原样），
+		#   这里只是把图标"藏到落地那一刻"再显示。
+		for i in placed_cells.size():
+			_throw_gift(u, placed_cells[i], 0.15 * float(i))
+
+# 礼物抛物飞行：从送礼者位置划一道弧线飞到落点，落地时弹一圈金环并让图标显形。
+func _throw_gift(from_u: Unit, cell: Vector2i, delay: float) -> void:
+	if board_view == null:
+		return
+	if from_u == null or not is_instance_valid(from_u):
+		return
+	_gift_hidden_cells[cell] = true
+	_refresh_board()
+	var from := board_view.cell_world_center(from_u.cell)
+	var to := board_view.cell_world_center(cell)
+	var gift := GiftFly.new()
+	gift.position = from
+	gift.z_index = 20       # 画在单位之上（单位是 2/10）：飞行途中不会被棋子挡住
+	add_child(gift)
+	var dur := 0.5          # 飞行时长：0.38 → 0.5，慢一点看得出来是"丢过去"
+	var t := create_tween()
+	if delay > 0.0:
+		t.tween_interval(delay)
+	# 抛物线：水平线性插值 + 垂直抬高一截（sin 曲线两端为 0、中段最高），顺手自转一点像被抛出的礼盒
+	t.tween_method(func(k: float) -> void:
+		if not is_instance_valid(gift):
+			return
+		gift.position = from.lerp(to, k) + Vector2(0.0, -48.0 * sin(PI * k))
+		gift.rotation = k * TAU * 1.5, 0.0, 1.0, dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	t.tween_callback(func():
+		if is_instance_valid(gift):
+			gift.queue_free()
+		_gift_hidden_cells.erase(cell)
+		_refresh_board()                                           # 落地才把道具图标画出来
+		_boom_ring_fx(cell, Color(1.0, 0.85, 0.35), 1.1, 0.28))    # 落地小爆环
 
 # 道具作用说明（右键查拾取用）
 func item_desc(type: String) -> String:
@@ -1926,6 +2034,7 @@ func _tick_gold_age() -> void:
 		if left <= 0:
 			if buff_items.get(c, "") == "gold":
 				buff_items.erase(c)
+				buff_owner.erase(c)
 				log_message.emit("一块金矿风化消失了。")
 			gold_left.erase(c)
 			changed = true
@@ -1940,6 +2049,8 @@ func _refresh_board() -> void:
 		board_view.obstacles = obstacles
 		board_view.bombs = bombs
 		board_view.buff_items = buff_items
+		board_view.buff_owner = buff_owner
+		board_view.hidden_item_cells = _gift_hidden_cells   # 演出用：礼物在飞的格子暂不画
 		board_view.graves = graves
 		board_view.queue_redraw()
 
@@ -1989,6 +2100,10 @@ func _begin_side(side: int) -> void:
 	if GameState.match_over:
 		return   # 对局已结束（如烧死判负）：不再开新回替补界面
 	_ending_side = false   # 新回合开始：解除"回合标记（含客方提交结束后的等待窗口
+	# 【2026-09-21 用户要求】**回合切换提醒先弹出来**，再走后面的账目结算与回合开始技演出。
+	#   原来横幅在 `_begin_side()` **末尾**才 emit ⇒ 圣诞老人的礼物都飞完了提示才出现（用户实机反馈），
+	#   所以挪到最前面。文案口径与原末尾那三处完全一致（见 `_turn_banner_text`）。
+	turn_banner.emit(_turn_banner_text(side))
 	AudioManager.play("turn")
 	_turn_expired = false   # 新回合开始：清除上个回合的超时待提交标记
 	state = State.ANIMATING   # 回合开始技能逐个演出期间锁定输入
@@ -2023,13 +2138,14 @@ func _begin_side(side: int) -> void:
 			u.refresh_stats()
 	_sync_ranged_adjacent()   # 回合切换：敌方移换位后刷新远程被贴身状
 	# 阵营级"非技能"回合开始结算（**不受沉默影响**）：清跨回合账目。
-	# 必须放在 _tick_statuses **之前**：猛毒就是"回合开始结算的伤害"，对锤头鲨这类
-	# "敌人受伤就涨攻击力"的英雄属于**本回合的新增**；若放在后面（原来挂在回合开始技之后），
-	# 这份新增会被"上一轮加成到期"一并减掉，表现就是"吃不到中毒伤害的加成"。
+	# 这必须发生在**毒伤结算之前**：猛毒是"回合开始结算的伤害"，对锤头鲨这类"敌人受伤就涨攻击力"
+	# 的英雄属于**本回合的新增**；若挂在毒伤之后，这份新增会被"上一轮加成到期"一并减掉
+	# （用户报过"吃不到中毒伤害的加成"）。
+	# 【2026-09-21 用户要求】毒伤本身已挪进 `_run_side_skills()` —— 即**替补全部落位之后**，
+	# 这样本回合刚上场的替补（锤头鲨）也能吃到这份伤害并拿到 +1（原来它在替补落位之前就结算完了）。
 	for u in units:
 		if u != null and is_instance_valid(u) and u.alive and u.faction == side_fn:
 			_hero(u).on_own_turn_start_always()
-	_tick_statuses(side)   # 猛毒等：回合开始结
 	# —— 回合开始顺序：先完成上一方回合阵亡留下的替补，再触发各英雄回合开始技 ——
 	# 本端手动方（我方；自由部署双控=双方）的补位需要玩家点击选择，无法在此同步落位：
 	# 打开替补面板并把"回合开始技"顺延到全部补位完成后再触发（见 _resume_after_sub）。
@@ -2043,11 +2159,10 @@ func _begin_side(side: int) -> void:
 		if GameState.is_online:
 			_send_turn_time_left()
 		if side == _my_side():
-			turn_banner.emit("你的回合")   # 即便要先进替补，也先弹回合切换提醒（否则只弹替补面板无回合提示）
+			# 横幅已在 `_begin_side()` 开头弹过（要先进替补也照样有回合提示，见那里的改动）
 			action_info.emit("你的回合（第 %d 回合）：先为阵亡队友补位。" % GameState.round_number)
 		else:
 			# 自由部署双控：敌方回合也由本端操控，但补位仍要玩家点选敌方替补
-			turn_banner.emit("敌方回合（你操控）")
 			action_info.emit("敌方回合（第 %d 回合·你来操控）：先为敌方阵亡英雄补位。" % GameState.round_number)
 		_defer_side_skills = true
 		_defer_side = side
@@ -2081,6 +2196,19 @@ func _begin_side(side: int) -> void:
 # 两端在同一触发点执行:行动方补位完成后(或无需补位时)由行动端广播 side_skills,两端同跑,
 # 保证金矿/道具等 rng 落点与单位集合一致。单机/等待端均经由本函数统一收尾。
 func _run_side_skills(side: int) -> void:
+	# 【2026-09-21 用户要求】回合开始 → 英雄开始放技能之间**先停一下**（见 `TURN_START_SKILL_DELAY`）。
+	#   放在这里而不是 `_begin_side()` 开头：`_begin_side()` 前半段是"清账/结算状态"（重置回合旗标、
+	#   还原变身、猛毒 tick），那些是"回合开始的账"、不该被延迟拉开；玩家能看到的演出（逐个放技能、
+	#   道具落位、金矿倒计时）全在下面的 `_trigger_turn_start_all()` 里，正是要延迟的那一段。
+	#   联机：两端都走本函数、同一时点 ⇒ 同步不受影响。
+	if TURN_START_SKILL_DELAY > 0.0:
+		await get_tree().create_timer(TURN_START_SKILL_DELAY).timeout
+	# 【2026-09-21 用户要求】猛毒等"回合开始结算的伤害"放在**这里**（原来在 `_begin_side()` 里、
+	#   替补落位之前就结算完了）：本端回合开始若有替补要落位，技能段会被顺延到补位完成
+	#   （`_defer_side_skills` ⇒ `_resume_after_sub` ⇒ 本函数），毒伤却已经先算完 ⇒
+	#   刚上场的替补（锤头鲨）"没看见"这份伤害、拿不到 +1（用户反馈）。
+	#   放在本函数 = **替补全部落位之后**，且与金矿倒计时/回合开始技同一时点（联机两端同跑，不会分叉）。
+	_tick_statuses(side)   # 猛毒等：场上所有中毒单位各结算 1 点（与哪一方开始回合无关）
 	# 金矿倒计时：每个完整回合（回合号变化）只减一次，两端同一时点同步执行
 	if GameState.round_number != _gold_tick_round:
 		_gold_tick_round = GameState.round_number
@@ -2111,7 +2239,7 @@ func _run_side_skills(side: int) -> void:
 			return
 		state = State.PLAYER_INPUT
 		action_info.emit("你的回合（第 %d 回合）：点击一名己方英雄。" % GameState.round_number)
-		turn_banner.emit("你的回合")
+		# 回合横幅已在 `_begin_side()` 开头弹过（见那里的说明）——这里不再重复弹
 		# 不自动选中，由玩家点击选择
 	else:
 		# 敌方回合：不在本端操作，清零计时（等待对端真人行动时显示对端剩余
@@ -2129,7 +2257,6 @@ func _run_side_skills(side: int) -> void:
 			turn_time_left = TURN_TIME_LIMIT
 			state = State.PLAYER_INPUT
 			action_info.emit("敌方回合（你来操控）：点击一名敌方英雄。")
-			turn_banner.emit("敌方回合（你操控）")
 			return
 		state = State.ENEMY_TURN
 		if GameState.is_online:
@@ -2139,7 +2266,7 @@ func _run_side_skills(side: int) -> void:
 		else:
 			action_info.emit("敌方回合…")
 			_run_enemy_turn.call_deferred()
-		turn_banner.emit("敌方回合")
+	# 回合横幅已在 `_begin_side()` 开头弹过（见那里的说明）——这里不再重复弹
 
 # 回合开始时结算永久/持续状
 # 猛毒：无论哪一方回合开始，场上所有中毒单位都结算 1 点伤害（参数保留仅为兼容调用点）
@@ -2154,6 +2281,12 @@ func _tick_statuses(_faction: int) -> void:
 				log_message.emit("%s 受到[猛毒] 1 点伤害。" % u.display_name)
 func side_faction(side: int) -> int:
 	return DataRegistry.Faction.PLAYER if side == GameState.SIDE_PLAYER else DataRegistry.Faction.ENEMY
+
+# 【2026-09-21】回合横幅文案（三处旧 emit 的口径合并到这里，只在 `_begin_side()` 开头弹一次）
+func _turn_banner_text(side: int) -> String:
+	if side == _my_side():
+		return "你的回合"
+	return "敌方回合（你操控）" if GameState.dual_control else "敌方回合"
 
 # ---- 视角辅助（联机：主机=玩家蓝，客户敌方/红；单机=玩家方）----
 # 本端人类操作的是哪一方
@@ -2445,7 +2578,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
 		var u = occupancy.get(cell, null)
 		if buff_items.has(cell):
-			item_view_requested.emit(buff_items[cell])
+			item_view_requested.emit(buff_items[cell], int(buff_owner.get(cell, -1)))
 		elif u != null:
 			card_view_requested.emit(u)
 		return
@@ -2573,7 +2706,7 @@ func _handle_touch_gesture(event: InputEvent) -> void:
 		if state != State.ARENA_DRAFT and state != State.PLACE_DEPLOY and state != State.PLACE_SUB:
 			var cu = occupancy.get(cell, null)
 			if buff_items.has(cell):
-				item_view_requested.emit(buff_items[cell])
+				item_view_requested.emit(buff_items[cell], int(buff_owner.get(cell, -1)))
 			elif cu != null:
 				card_view_requested.emit(cu)
 		return
@@ -2952,6 +3085,23 @@ func _is_logistics(u: Unit) -> bool:
 func _move_reachable(u: Unit) -> Dictionary:
 	# 一部分英雄的移动范围完全自定义（大骑士冲锋：沿 6 轴向直线冲任意距离，移动力不封顶）
 	var hb := _hero(u)
+	if hb.uses_teleport_movement():
+		# 【2026-09-21 用户定稿·宿魂】瞬移：**任意空格**都是合法落点（道具格/炸弹格可以落，
+		#   障碍/墓碑/被占格不行），与移动力和地形连通性无关；被钉住时不能瞬移（与 `_do_move` 同一道门）。
+		var tp: Dictionary = hb.teleport_reachable_cells()
+		if not tp.is_empty():
+			return tp
+		var out := {}
+		# 【2026-09-21 修复】原写 `u.stunned` —— 那是 **AI 模拟里 SimUnit 的字段**，真实 `Unit` 没有它，
+		# 一执行就报 "Invalid access to property or key 'stunned'"（宿魂瞬移那条分支才会走到）。
+		# 真实单位查状态要用 StatusDB 的键：`has_status(StatusDB.STUN)`（= 眩晕）。
+		if u.has_status(StatusDB.STUN) or u.effective_move() <= 0:
+			return out
+		for c in grid.all_cells():
+			if occupancy.has(c) or obstacles.has(c) or graves.has(c):
+				continue
+			out[c] = true
+		return out
 	if hb.uses_charge_movement():
 		return hb.charge_reachable_cells()
 	var stop_forbidden := occupancy.duplicate()
@@ -3357,7 +3507,21 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	# 玩家 UI 的可达格本就挡墙（见 _move_reachable），此处兜底 AI/联机指令误算穿墙
 	var hb := _hero(u)
 	var path: Array
-	if hb.uses_charge_movement():
+	if hb.uses_teleport_movement():
+		# 【2026-09-21 用户定稿·宿魂 hero_46】「可以移动到任意格子」= **瞬移式移动**：
+		#   · 落点合法性已由上面三道拦截保证（不落障碍/墓碑/被占格）⇒ **道具格、炸弹格都能落**
+		#   · 路径只有终点一格（一次跳跃，不沿格子走、不看移动力、不看地形连通性）
+		#   · **不触发"队友移动后"类效果**：把 `last_move_dist` 记 **0** ⇒ 风语者 `on_ally_moved(mover, dist)`
+		#     里那道 `dist > 0` 闸门自然拦住（不用在派发层写特例）
+		#   · 落停照常结算：踩炸弹（`_bomb_enter_check` 在终点格判）/ 拾取道具（`_finish_move` 里）
+		#   · 被钉住（眩晕 / [荆棘] 把移动力压到 0）时不能瞬移 —— 与"能不能移动"同一道门
+		# 【2026-09-21 修复】同 `_move_reachable`：真实 Unit 没有 `stunned` 字段，要用 StatusDB 的键
+		if u.has_status(StatusDB.STUN) or u.effective_move() <= 0:
+			_finish_move(u, for_enemy)
+			return
+		u.last_move_dist = 0
+		path = [target_cell]
+	elif hb.uses_charge_movement():
 		path = hb.charge_path(target_cell)
 	else:
 		path = grid.find_path(u.cell, target_cell, _current_path_blockers(u))
@@ -3375,6 +3539,8 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	var max_steps := u.effective_move()
 	if hb.uses_charge_movement():
 		max_steps = hb.charge_step_cap()   # 冲锋：直线冲任意距离，不按移动力截断
+	elif hb.uses_teleport_movement():
+		max_steps = 1                      # 瞬移：路径只有终点一格，与移动力无关
 	if path.size() > max_steps:
 		path = path.slice(0, max_steps)
 	# 冲锋：本次实际冲到的格数先记账，等**移动动画播完**再结算攻击力上升
@@ -3388,7 +3554,41 @@ func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
 	occupancy.erase(u.cell)
 	u.cell = final_cell
 	occupancy[final_cell] = u
+	# 【2026-09-21·宿魂】瞬移的演出改成"沉下去 → 从地里钻出来"，不走过去（见 `_animate_emerge`）
+	if hb.uses_emerge_move_anim():
+		_animate_emerge(u, final_cell, for_enemy)
+		return
 	_animate_step_path(u, path, 0, for_enemy)
+
+# 【2026-09-21·宿魂 hero_46 专属】瞬移的演出：**不"走"过去**，而是原地沉入地下、
+# 再在落点从地里钻出来（渐显 + 由小放大）。落停结算与逐格行走完全一致：
+# 末尾仍调 `_bomb_enter_check()`（停在炸弹格照常引爆）与 `_finish_move()`（拾道具 / 收尾 / 发 action_finished）。
+# 总时长 0.16 + 0.45 ≈ 0.61 秒，远小于回放"等一招"的 3 秒兜底。
+func _animate_emerge(u: Unit, cell: Vector2i, for_enemy: bool) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	# 记下原缩放（选中时是 1.08）：动画结尾要还原成它，不能写死 Vector2.ONE，否则会把"选中放大"抹掉
+	var base_scale := u.scale
+	var sink_scale := Vector2(base_scale.x * 0.30, base_scale.y * 0.12)   # 贴地压扁 = 沉入地下
+	var target_pos := board_view.cell_world_center(cell)
+	var out_t := create_tween()
+	out_t.tween_property(u, "scale", sink_scale, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	out_t.parallel().tween_property(u, "modulate:a", 0.0, 0.16)
+	out_t.tween_callback(func():
+		if u == null or not is_instance_valid(u):
+			return
+		u.position = target_pos      # 逻辑落点早已生效（cell/occupancy），这里只是把画面挪过去
+		u.scale = sink_scale
+		var in_t := create_tween()
+		in_t.tween_property(u, "modulate:a", 1.0, 0.20)   # 先淡入，再放大：观感是"从土里透出来"
+		in_t.parallel().tween_property(u, "scale", base_scale, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)   # 末尾轻微过冲 = 钻出地面的弹性
+		in_t.tween_callback(func():
+			if u == null or not is_instance_valid(u):
+				return
+			u.set_selected(u == selected)   # 按"此刻是否仍被选中"还原缩放/描边（选中 1.08 / 未选中 1.0）
+			u.modulate.a = 1.0
+			_bomb_enter_check(u, cell, for_enemy)   # 落停照常判炸弹（与 _animate_step_path 同口径）
+			_finish_move(u, for_enemy)))
 
 # 沿路径逐格推进（每格一小步，走完再结算
 func _animate_step_path(u: Unit, path: Array, idx: int, for_enemy: bool) -> void:
@@ -3458,17 +3658,27 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 	if not buff_items.has(u.cell):
 		return
 	var btype: String = buff_items[u.cell]
+	# 【2026-09-21 用户定稿·圣诞老人】归属判定：**只有放置方能拾取**；对方踩上去 ⇒ 道具**直接消失**
+	#   （不生效、也不留给别人）。开局散落的道具没有归属（`buff_owner` 里没有该格）⇒ 双方都能捡。
+	if buff_owner.has(u.cell) and int(buff_owner[u.cell]) != u.faction:
+		buff_items.erase(u.cell)
+		buff_owner.erase(u.cell)
+		log_message.emit("%s 踩掉了对方的道具（道具消失）。" % u.display_name)
+		_refresh_board()
+		return
 	if btype == "gold":
 		# 金矿：只有能拾取它的英雄才消费（规则由英雄脚本提供 can_pickup_gold）——
 		# 其他单位踩到不消费、金矿留在格上继续倒计时
 		if not _hero(u).can_pickup_gold():
 			return
 		buff_items.erase(u.cell)
+		buff_owner.erase(u.cell)
 		gold_left.erase(u.cell)   # 被拾取后不再倒计时
 		_hero(u).on_pickup_gold()   # 收益由英雄脚本结算（矿工：攻 +1 永久 / 上限 +3 / 回 3 血）
 		_refresh_board()
 		return
 	buff_items.erase(u.cell)
+	buff_owner.erase(u.cell)
 	if btype == "atk":
 		u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
 		u.refresh_stats()
@@ -3617,8 +3827,15 @@ func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 # 【演出·大伤害震屏】一次完整震动约 0.23 秒：5 段递减抖动 + 回中。
 # 连续两下大伤害（先挨打、再被反击）时重开一次，而不是把两次抖动叠在一起。
 # 随机数用全局 randf_range（与 Unit 的粒子演出同一约定），**不碰 battle.rng**——那是联机同步用的确定性随机源。
-func _shake_once(dealt: int) -> void:
-	if dealt < SHAKE_HIT_MIN:   # 6 点起就震（含 6）
+func _shake_once(hit_damage: int, hp_lost: int) -> void:
+	# 判定口径（两条都要满足）：
+	#   ① `hit_damage`（这一击的**面板伤害**）≥ 6；
+	#   ② `hp_lost`（**真的打掉了血**）> 0。
+	# 【2026-09-21 修复】原来只看"实际掉血"：击杀时 hp_lost = 对方**剩余血量**，常常不到 6
+	#   （3 血的目标被 8 点打死只掉 3）⇒ 表现成"≥6 的击杀不震"（用户反馈）。
+	#   又不能只看面板伤害：被圣盾格挡 / 被坚固完全防住时面板够大却一点血没掉，
+	#   那种情况不该有冲击感 ⇒ 所以补上"真的掉血"这一条。
+	if hp_lost <= 0 or hit_damage < SHAKE_HIT_MIN:
 		return
 	if _shake_cam == null or not is_instance_valid(_shake_cam):
 		return
@@ -3665,7 +3882,8 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 				target._shield_block_status = true
 			var hp_before := target.hp
 			target.take_damage(dmg, false, false, "被%s攻击" % attacker.display_name, true)
-			_shake_once(hp_before - target.hp)   # 【演出】这一击实际打掉 ≥6 点血：屏幕震一下
+			# 【演出】面板伤害 ≥6 且真的打掉了血（含击杀，见 _shake_once 的口径说明）
+			_shake_once(dmg, hp_before - target.hp)
 	_last_attacked = target
 	# 攻击后技能在**命中瞬间**触发（如战锤麻痹/冰冻），让反击结算时已吃debuff
 	_trigger_on_attack(attacker, _last_attacked, for_enemy)
@@ -3738,7 +3956,8 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
 			var chp_before := attacker.hp
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
-			_shake_once(chp_before - attacker.hp)   # 【演出】反击同样算攻击：实际打掉 ≥6 点血也震一下
+			# 【演出】反击同样算攻击：面板伤害 ≥6 且真的打掉了血就震（含把攻击者反杀）
+			_shake_once(cdmg, chp_before - attacker.hp)
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -3773,7 +3992,8 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
 			var chp_before := attacker.hp
 			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
-			_shake_once(chp_before - attacker.hp)   # 【演出】远程反击同样算攻击：实际打掉 ≥6 点血也震一下
+			# 【演出】远程反击同样算攻击：面板伤害 ≥6 且真的打掉了血就震（含把攻击者反杀）
+			_shake_once(cdmg, chp_before - attacker.hp)
 			if attacker.alive:
 				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
@@ -4040,6 +4260,39 @@ func _possess_mirror(caster: Unit, dmg: int) -> void:
 			continue
 		t.take_damage(dmg, false, false, "附体")
 	_possess_depth -= 1
+
+# 【2026-09-21 用户定稿·宿魂[附体]演出】每帧把当前绑定关系推给魂线视图。
+# 用**单位当前坐标**（`Unit.position`）而不是格子中心：这样攻击前冲、被击退、瞬移时线会跟着拉长/收缩。
+# 颜色取**施加者**阵营（我方蓝 / 敌方红，与棋子描边同一套 `Unit._faction_color`），并做一点呼吸明暗。
+func _refresh_possess_links() -> void:
+	if _possess_link_view == null or not is_instance_valid(_possess_link_view):
+		return
+	if _possess_links.is_empty():
+		if not (_possess_link_view.links as Array).is_empty():
+			_possess_link_view.links = []
+			_possess_link_view.queue_redraw()
+		return
+	var pulse := 0.72 + 0.28 * sin(float(Time.get_ticks_msec()) / 260.0)   # 呼吸：0.44 ~ 1.0
+	var out: Array = []
+	var keys := _possess_links.keys()   # 先取快照：下面会顺手删失效项（与 `_possess_mirror` 同一写法）
+	for t in keys:
+		# 【2026-09-21 晚修复】这里原来写 `var caster: Unit = _possess_links.get(t)`。
+		#   绑定表里会**残留已被释放**的单位（目标死了、而施加者此后没再挨打 ⇒ `_possess_mirror`
+		#   那条清理路径不会经过它），而把「已释放实例」赋给**带类型标注**的变量会抛
+		#   `SCRIPT ERROR: Trying to assign invalid previously freed instance` ——
+		#   本函数是 `_process` 里每帧调的 ⇒ 一局能刷几千条（实测 possab4_d2 2454 条）。
+		#   ⇒ 改成**无类型取值 + 先校验再用**，并把失效的键/值一起 `erase`（否则每帧重试同一批死引用）。
+		var caster = _possess_links.get(t)
+		if t == null or not is_instance_valid(t) or not t.alive:
+			_possess_links.erase(t)
+			continue
+		if caster == null or not is_instance_valid(caster) or not caster.alive:
+			_possess_links.erase(t)
+			continue
+		var c: Color = caster._faction_color(caster.faction)
+		out.append({ "from": caster.position, "to": (t as Unit).position, "color": Color(c.r, c.g, c.b, pulse) })
+	_possess_link_view.links = out
+	_possess_link_view.queue_redraw()
 
 # 某格相邻的对立阵营单
 func _enemies_adjacent_to(cell: Vector2i, faction: int) -> Array:
@@ -4756,7 +5009,7 @@ func _replan_enemy_action(u: Unit) -> Dictionary:
 	ai.log_decisions = false                            # 临时补算，不重复打印决策说明
 	ai.time_budget_ms = 1200                            # 回合中途的小补算：别占满 10 秒（与 late_sub 同口径）
 	var sim = ai.build_state(descs, snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return {}
@@ -4781,7 +5034,7 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 	# 别让回合中途的补算也占满 10 秒（那会让对局卡顿）。
 	ai.time_budget_ms = 1200
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return
@@ -5035,7 +5288,7 @@ func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
 	var pick: Vector2i = ai.pick_sub_cell(sim, hero_id, cells)
 	if pick.x == -99 and pick.y == -99:
 		return fallback
@@ -5098,7 +5351,7 @@ func _sub_finish_hero_pick(cells: Array) -> int:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
 	var hid: String = ai.pick_sub_hero(sim, enemy_roster, cells)
 	var i := enemy_roster.find(hid)
 	if i < 0:
@@ -5733,7 +5986,7 @@ func _run_enemy_turn() -> void:
 # 写死 BattleAI 会让线程启动失败（"Cannot convert argument 1"）。RefCounted 对生产 AI 与候选都成立。
 func _enemy_ai_worker(ai: RefCounted, snap: Dictionary) -> void:
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"])
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()
 	_ai_plan = result

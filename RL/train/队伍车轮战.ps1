@@ -17,6 +17,8 @@
 #   & RL\train\队伍车轮战.ps1 -OnlyPlan            # 只生成候选与对手、打印出来，不跑对局（秒级自检）
 #   & RL\train\队伍车轮战.ps1 -Cands 24 -SkipRuns  # 小样跑（先验流程）
 #   & RL\train\队伍车轮战.ps1 -WritePool           # 只按已有结果排名 + 写队伍池
+#   & RL\train\队伍车轮战.ps1 -SkipRuns -PoolOut RL\weights\队伍池_候选.json
+#                                                # 排名 + 写到"候选池"（**不生效**：游戏只读 队伍池.json）
 [CmdletBinding()]
 param(
     [int]$Cands = 96,
@@ -29,8 +31,15 @@ param(
     [string]$Tag = 'pool1',
     [string]$DeckSize = 5,
     [int]$OnlyOpp = 0,          # >0 = 只跑这一个对手列（1..8）：把 768 格切成 8 条并行链
+    [string]$PoolOut = '',      # 写到哪里（默认 = RL\weights\队伍池.json = 生产路径）。
+                                #   2026-09-21 深夜加：用户要求"池子先不生效"时用它写到别处
+                                #   （例如 RL\weights\队伍池_候选.json —— 游戏只读生产路径那个文件名）。
     [switch]$OnlyPlan,
     [switch]$SkipRuns,
+    [string]$DumpCandidates = '',  # 【2026-09-22 加】把这一批"候选队伍 + 对手"导出成 JSON
+                                   #   （给 队伍瑞士轮.ps1 用：它要拿同一批候选互相打，
+                                   #    不能自己再生成一遍 —— 两边生成器一旦不一致，瑞士轮的名次
+                                   #    就对不上车轮战的排名）。导出即退出，不跑对局。
     [switch]$WritePool
 )
 $ErrorActionPreference = 'Stop'
@@ -38,6 +47,10 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)   # RL\train -> RL
 $train = Join-Path $PSScriptRoot 'Train.ps1'
 $results = Join-Path $PSScriptRoot 'results'
 $poolPath = Join-Path $root 'RL\weights\队伍池.json'
+if ($PoolOut) {
+    # 相对路径按项目根解析；绝对路径原样用。
+    $poolPath = if ([System.IO.Path]::IsPathRooted($PoolOut)) { $PoolOut } else { Join-Path $root $PoolOut }
+}
 
 # ---------- 读角色列表（PS 侧实现一份最小版"静态评分"，与 DataRegistry.hero_strength 同口径优先取"总评分"）----------
 $jsonPath = Join-Path $root '英雄相关\角色列表.json'
@@ -128,34 +141,169 @@ function New-Deck2([object[]]$pool, [bool]$needTank, [bool]$needDps, [int]$size)
 
 $per = $PerGroup
 if ($per -le 0) { $per = [int][Math]::Floor($Cands / 3) }
-$strongPool = @($byScore | Select-Object -First 20)
-$midPool = @($byScore | Select-Object -Skip 12 | Select-Object -First 28)
-$allPool = @($heroes)
 
+# ============ 【2026-09-21 重写·用户「参与海选的队伍也不能瞎选」+「训练首发队伍，挑出强中弱 3 人首发」】============
+# 旧做法（已废）：从池子里**随机抽** size 个，只保证"至少 1 坦克 + 至少 1 输出"⇒ 强弱全靠运气，海选出来一堆废物队。
+# 新做法（**确定性、按规则枚举、同一 Seed 可复现**）：
+#   ① 首发池 = 全部英雄 **剔除 `<替补>` 标签**（`hero_role_name()` 里的"替补"）：那类英雄的技能只在**替补登场**时
+#      触发，游戏里 `Battle._enemy_deploy()` 明确不会让它们首发 ⇒ 放进首发池等于白占一个位置。
+#   ② **枚举**首发池里所有 3 人组合，用一套写死的规则打分（单体总评分之和 + 职能配比 + 慢英雄惩罚）；
+#   ③ 按分数名次取：强档候选 = 最好的那批 · 中档 = 中间 · 歪档 = 最差的那批；**每支候选/对手内部的英雄复用有上限**
+#      （cap）⇒ 避免"十支队都是同一批 3 个人"。
+#   ④ 8 支对手用同一套规则生成（2 强 + 4 中 + 2 歪，**对每个候选都相同** ⇒ 配对公平）。
+#   ⑤ 分数只用来**取样**（保证候选质量分布），真正的强弱仍由**实测胜率**排名决定（见文件末尾的排名/切档）。
+$slowSet = @('hero_33', 'hero_05', 'hero_35', 'hero_06', 'hero_08', 'hero_43')   # 慢英雄（召唤/续航那几类，单局能拖到 100 秒）
+$fieldHeroes = @($heroes | Where-Object { $roleOf[$_.id] -ne '替补' })
+if ($fieldHeroes.Count -lt 20) { throw "首发池异常：只剩 $($fieldHeroes.Count) 个英雄（替补标签剔除后）" }
+
+function Score-Lineup([string[]]$ids) {
+    $s = 0.0
+    foreach ($i in $ids) {
+        $hit = @($heroes | Where-Object { $_.id -eq $i })
+        if ($hit.Count -eq 0) { return -999.0 }
+        $s += [double]$hit[0].score
+    }
+    if ((Count-Role $ids '坦克') -ge 1) { $s += 2.0 } else { $s -= 4.0 }
+    if ((Count-Role $ids '输出') -ge 1) { $s += 1.0 } else { $s -= 2.5 }
+    if ((Count-Role $ids '功能') -ge 1) { $s += 0.5 }
+    $slowN = 0
+    foreach ($i in $ids) { if ($slowSet -contains $i) { $slowN++ } }
+    if ($slowN -ge 2) { $s -= 3.0 * ($slowN - 1) }
+    return $s
+}
+
+$allCombos = New-Object System.Collections.Generic.List[object]
+for ($a = 0; $a -lt $fieldHeroes.Count; $a++) {
+    for ($b = $a + 1; $b -lt $fieldHeroes.Count; $b++) {
+        for ($c = $b + 1; $c -lt $fieldHeroes.Count; $c++) {
+            $ids = @([string]$fieldHeroes[$a].id, [string]$fieldHeroes[$b].id, [string]$fieldHeroes[$c].id)
+            $allCombos.Add([pscustomobject]@{ ids = $ids; sc = (Score-Lineup $ids) })
+        }
+    }
+}
+$combos = @($allCombos | Sort-Object -Property @{ Expression = 'sc'; Descending = $true }, @{ Expression = { ($_.ids -join ',') }; Descending = $false })
+Write-Host ("[池] 首发池 {0} 个英雄（已剔除<替补>标签）· 枚举出 {1} 个 3 人组合 · 分数区间 [{2:N1}, {3:N1}]" -f $fieldHeroes.Count, $combos.Count, $combos[$combos.Count - 1].sc, $combos[0].sc)
+
+# 从排好序的组合里挑 count 支：每位英雄最多出现 cap 次（保证多样性），从第 skip 个开始扫
+function Pick-Lineups([object[]]$sorted, [int]$count, [int]$cap, [int]$skip) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $use = @{}
+    $i = $skip
+    $guard = 0
+    while ($out.Count -lt $count -and $i -lt $sorted.Count -and $guard -lt 100000) {
+        $guard++
+        $c = $sorted[$i]; $i++
+        $ok = $true
+        foreach ($h in $c.ids) { if ([int]$use[[string]$h] -ge $cap) { $ok = $false; break } }
+        if (-not $ok) { continue }
+        foreach ($h in $c.ids) { $use[[string]$h] = [int]$use[[string]$h] + 1 }
+        $out.Add(@{ tier = ''; deck = @($c.ids); sc = $c.sc })
+    }
+    return $out.ToArray()
+}
+
+$n3 = [int][Math]::Floor($combos.Count / 3)
+$capCand = 4          # 候选里每位英雄最多出现 4 次
+$capOpp = 2           # 对手里每位英雄最多出现 2 次
+# 歪档用**倒序**（从最差往上取）：否则"后 1/3 的正序"取的其实是那一档里最好的 ⇒ 歪得不够歪。
+$weakBand = @($combos | Select-Object -Skip (2 * $n3))
+[array]::Reverse($weakBand)
 $candidates = @()
-for ($i = 0; $i -lt $per; $i++) {
-    $d = $null
-    while ($null -eq $d) { $d = New-Deck2 $strongPool $true $true $DeckSize }
-    $candidates += , @{ tier = '强'; deck = $d }
+foreach ($pair in @(@('强', $combos, 0), @('中', $combos, $n3), @('歪', $weakBand, 0))) {
+    $band = [string]$pair[0]; $pool2 = $pair[1]; $skip = [int]$pair[2]
+    $got = @(Pick-Lineups $pool2 $per $capCand $skip)
+    # 第一遍被"每位英雄最多 4 次"卡住时，**从更深处再扫一遍**（skip 往后挪，避免又是同一批组合）
+    if ($got.Count -lt $per) {
+        $got2 = @(Pick-Lineups $pool2 ($per - $got.Count + 8) ($capCand * 3) ($skip + 1500))
+        foreach ($g in $got2) {
+            if ($got.Count -ge $per) { break }
+            if (-not ($got | Where-Object { ($_.deck -join ',') -eq ($g.deck -join ',') })) { $got += $g }
+        }
+        Write-Host ("[池] {0} 档：上限 {1} 只凑到一部分 ⇒ 从 +1500 处放宽到 {2}，补到 {3}/{4}" -f $band, $capCand, ($capCand * 3), $got.Count, $per)
+    }
+    foreach ($g in $got) { $g.tier = $band }
+    $candidates += $got
 }
-for ($i = 0; $i -lt $per; $i++) {
-    $d = $null
-    while ($null -eq $d) { $d = New-Deck2 $allPool $true $true $DeckSize }
-    $candidates += , @{ tier = '中'; deck = $d }
+if ($candidates.Count -lt $Cands) { Write-Host ("[池] !! 候选只凑到 {0}/{1}" -f $candidates.Count, $Cands) }
+
+# ---------- 固定的 8 支对手：2 强 + 4 中 + 2 歪（**对每个候选都相同** ⇒ 配对公平）----------
+# 取法刻意做成**确定性且互不重复**：在同一份"按分数排好序"的组合表上取几个**相距很远的固定下标** ⇒
+#   ① 三档之间不可能撞车（第一版撞过：歪档取到了强档那几支）② 同一 Seed 永远同一批对手、可复现。
+#   （候选那边用的是"英雄复用上限"来保证多样性，对手只有 8 支、直接按下标取更简单可靠。）
+$oppIndex = @(
+    @{ tier = '强'; list = $combos;    i = 2 },
+    @{ tier = '强'; list = $combos;    i = 40 },
+    @{ tier = '中'; list = $combos;    i = $n3 + 5 },
+    @{ tier = '中'; list = $combos;    i = $n3 + 60 },
+    @{ tier = '中'; list = $combos;    i = $n3 + 160 },
+    @{ tier = '中'; list = $combos;    i = $n3 + 320 },
+    @{ tier = '歪'; list = $weakBand;  i = 0 },
+    @{ tier = '歪'; list = $weakBand;  i = 60 }
+)
+# 【2026-09-22 加·用户「换两个队伍」】**对手也最多 1 个慢英雄、且 8 支互不重复**（与候选同一条规矩）。
+#   起因：歪档原来抽到 `德鲁伊/死灵法师/风语者`、`末日/死灵法师/风语者` 两支**召唤+奶**的队，
+#   单局能拖 3~5 倍 —— 实测 O7 只跑到 **0.26 格/分**、而 O3 是 1.23 ⇒ 整批被这两列拖到 **7 小时**。
+#   两趟做法（保证 O1~O6 与历史/已测数据**逐字不变**）：
+#     ① 原下标直取：只要"慢英雄 ≤1 且不与前面重复"就照旧（O1~O6 全部走这条 ⇒ 已测的格不作废）
+#     ② 不合格的（慢英雄 ≥2 / 撞车）才补位：**先在同档列表里找 0 慢英雄**、找不到再退 ≤1 慢，且不重复。
+$opponents = @()
+$usedKey = @{}
+foreach ($o in $oppIndex) {
+    $lst = $o.list
+    $idx = [int]$o.i
+    if ($idx -ge $lst.Count) { $opponents += $null; continue }
+    $ids = @($lst[$idx].ids)
+    $slowN2 = 0
+    foreach ($h in $ids) { if ($slowSet -contains $h) { $slowN2++ } }
+    $key0 = ($ids | Sort-Object) -join ','
+    if ($slowN2 -ge 2 -or $usedKey.ContainsKey($key0)) { $opponents += $null; continue }
+    $usedKey[$key0] = $true
+    $opponents += @{ tier = [string]$o.tier; deck = $ids; sc = $lst[$idx].sc }
 }
-for ($i = 0; $i -lt $per; $i++) {
-    $d = $null
-    $tries = 0
-    while ($null -eq $d -and $tries -lt 40) { $tries++; $d = New-Deck2 $allPool $false $false $DeckSize }
-    if ($null -eq $d) { $d = New-Deck2 $allPool $true $true $DeckSize }
-    $candidates += , @{ tier = '歪'; deck = $d }
+for ($oi = 0; $oi -lt $oppIndex.Count; $oi++) {
+    if ($null -ne $opponents[$oi]) { continue }
+    $o = $oppIndex[$oi]
+    $lst = $o.list
+    $found = $null
+    foreach ($maxSlow in @(0, 1)) {
+        if ($found) { break }
+        for ($k = [int]$o.i; $k -lt $lst.Count; $k++) {
+            $ids2 = @($lst[$k].ids)
+            $slowN3 = 0
+            foreach ($h2 in $ids2) { if ($slowSet -contains $h2) { $slowN3++ } }
+            if ($slowN3 -gt $maxSlow) { continue }
+            $key2 = ($ids2 | Sort-Object) -join ','
+            if ($usedKey.ContainsKey($key2)) { continue }
+            $found = @{ tier = [string]$o.tier; deck = $ids2; sc = $lst[$k].sc; idx = $k; maxSlow = $maxSlow }
+            break
+        }
+    }
+    if ($found) {
+        $usedKey[(($found.deck) | Sort-Object) -join ','] = $true
+        Write-Host ("[池] 对手 {0} 原下标 {1} 不合格（慢英雄 ≥2 / 撞车）⇒ 改用下标 {2}（慢英雄 ≤{3}）" -f $o.tier, $o.i, $found.idx, $found.maxSlow)
+        $opponents[$oi] = @{ tier = [string]$found.tier; deck = @($found.deck); sc = $found.sc }
+    } else {
+        Write-Host ("[池] !! 对手 {0} @{1} 在同档列表里找不到合格替身" -f $o.tier, $o.i)
+    }
+}
+$opponents = @($opponents | Where-Object { $null -ne $_ })
+
+# ---------- 【2026-09-22】导出这一批"候选 + 对手"（给 队伍瑞士轮.ps1 用，导出即退出）----------
+if ($DumpCandidates) {
+    $outPath = if ([System.IO.Path]::IsPathRooted($DumpCandidates)) { $DumpCandidates } else { Join-Path $root $DumpCandidates }
+    $dump = [ordered]@{
+        _说明 = '队伍车轮战生成器导出的候选/对手（同一 Seed ⇒ 与车轮战那批逐字一致）。供 队伍瑞士轮.ps1 复用，避免两处生成器漂移。'
+        生成时间 = (Get-Date -Format 'yyyy-MM-dd HH:mm'); tag = $Tag; 候选数 = $candidates.Count
+        deck_size = $DeckSize; seed = $Seed
+        candidates = @($candidates | ForEach-Object { [ordered]@{ tier = $_.tier; deck = @($_.deck) } })
+        opponents = @($opponents | ForEach-Object { [ordered]@{ tier = $_.tier; deck = @($_.deck) } })
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outPath) | Out-Null
+    [System.IO.File]::WriteAllText($outPath, ($dump | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host ("[池] 已导出候选/对手：{0}（候选 {1} · 对手 {2}）" -f $outPath, $candidates.Count, $opponents.Count)
+    exit 0
 }
 
-# ---------- 固定的 8 支对手：2 强 + 4 中 + 2 歪（**对每个候选都相同** ? 配对）----------
-$opponents = @()
-for ($i = 0; $i -lt 2; $i++) { $d = $null; while ($null -eq $d) { $d = New-Deck2 $strongPool $true $true $DeckSize }; $opponents += , @{ tier = '强'; deck = $d } }
-for ($i = 0; $i -lt 4; $i++) { $d = $null; while ($null -eq $d) { $d = New-Deck2 $midPool $true $true $DeckSize }; $opponents += , @{ tier = '中'; deck = $d } }
-for ($i = 0; $i -lt 2; $i++) { $d = $null; $t = 0; while ($null -eq $d -and $t -lt 40) { $t++; $d = New-Deck2 $allPool $false $false $DeckSize }; if ($null -eq $d) { $d = New-Deck2 $allPool $true $true $DeckSize }; $opponents += , @{ tier = '歪'; deck = $d } }
 
 function Show-Deck($deck) {
     $names = @()

@@ -131,6 +131,25 @@ func shows_infinite_range() -> bool:
 func uses_charge_movement() -> bool:
 	return false
 
+## 【2026-09-21 用户定稿】**瞬移式移动**（宿魂 hero_46：「可以移动到任意格子」）。
+## 口径（用户逐条确认）：**每回合都能用** · 落点 = **任意空格**（**可以落道具格/炸弹格**；
+##   不能落墓碑/障碍/单位格）· **算一次移动**（走完不能再动，攻击照常）·
+##   **不触发「队友移动后」类效果**（风语者的回血/移动光环）· **会拾取道具、会踩炸弹**。
+## 默认实现按 `hero_id` 兜底（**故意不改英雄脚本**：用户正在改这几个英雄，避免撞车）；
+##   英雄脚本要显式表达时，覆盖本函数即可。
+func uses_teleport_movement() -> bool:
+	return unit != null and unit.hero_id == "hero_46"
+
+## 瞬移的可达格集合（`uses_teleport_movement()` 为真时 Battle 直接采用本结果；默认空 = 用 Battle 的通用实现）。
+func teleport_reachable_cells() -> Dictionary:
+	return {}
+
+## 【2026-09-21 用户定稿】瞬移式移动的**演出**：不要"平移过去"，改成
+##   「原地沉入地下 → 在落点从地里钻出来（渐显 + 由小放大）」。
+## 与 `uses_teleport_movement()` 同一套兜底口径（按 hero_id，不改英雄脚本，避免撞车）。
+func uses_emerge_move_anim() -> bool:
+	return unit != null and unit.hero_id == "hero_46"
+
 ## 冲锋式移动的可达格集合（uses_charge_movement() 为 true 时 Battle 直接采用本结果）。
 func charge_reachable_cells() -> Dictionary:
 	return {}

@@ -13,13 +13,14 @@ func on_attack(target: Unit) -> void:
 		return
 	var kb: bool = battle._knockback(target, unit.cell)
 	var hdmg: int = battle._attack_damage(unit) * _bonus_damage(target)
+	var hit: int = hdmg if kb else hdmg * 2   # 击退=1 倍；不能击退=2 倍
 	target.set_big_hit_style()   # 撞击/重击均为技能伤害数字,大号突出
 	var hp_before: int = target.hp
-	target.take_damage(hdmg if kb else hdmg * 2, false, false,
+	target.take_damage(hit, false, false,
 			("被%s撞飞" % unit.display_name) if kb else ("被%s的重击重创" % unit.display_name), true)
 	# 【演出】长角自己结算平A伤害（Battle 不代结），所以震屏也要在这里补一处：
-	# 与其它攻击同一判定口径——实际打掉 ≥6 点血才震（圣盾格挡/坚固挡住时为 0，不震）
-	battle._shake_once(hp_before - target.hp)
+	# 与其它攻击同一判定口径 —— 面板伤害 ≥6 且真的打掉了血（含击杀）就震；被圣盾格挡/坚固完全防住（0 伤）不震
+	battle._shake_once(hit, hp_before - target.hp)
 
 func _bonus_damage(target: Unit) -> int:
 	return battle._bonus_damage(unit, target)
