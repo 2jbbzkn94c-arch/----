@@ -736,14 +736,18 @@ func _normalize_recipe(d: Dictionary) -> Dictionary:
 		if pool.is_empty():
 			return {}   # 空槽 ⇒ 这条配方作废（免得开局挑不出人）
 		slots.append({ "pool": pool })
-	# 预设替补：可写成一维数组（一份名单）或"多组"（每组 {pool, n}）—— 组形式支持配方 4 的"(A/B)1 + (C/D/E/F)2"
+	# 预设替补：两种来源、两种写法（都要认，2026-09-22 踩过 —— 少认一种 ⇒ 替补组被丢掉 ⇒ 卡组只剩首发、
+	#   古灵精怪的形态池跟着缩水，用户实测"没变成预设替补"就是这个）：
+	#   ① `bench`       ：一维数组（英雄名名单）**或**"多组"（[{pool, n}]）
+	#   ② `bench_multi` ：多组 —— 生成端（`写队伍池_按人工标注.ps1`）把"1选1 + 4选2"这类写在这里
+	#   ③ `dynamic_bench`：显式标记（生成端会写）。缺省时才按"有没有替补内容"推断。
 	var bench: Array = []
 	var bench_multi: Array = []
-	var dynamic := true
+	var has_bench := false
 	if d.has("bench"):
-		dynamic = false
 		var b = d.get("bench")
-		if typeof(b) == TYPE_ARRAY:
+		if typeof(b) == TYPE_ARRAY and not (b as Array).is_empty():
+			has_bench = true
 			for item in (b as Array):
 				if typeof(item) == TYPE_DICTIONARY:
 					var g := item as Dictionary
@@ -760,7 +764,31 @@ func _normalize_recipe(d: Dictionary) -> Dictionary:
 					if h != "" and not bench.has(h):
 						bench.append(h)
 		elif typeof(b) == TYPE_STRING and String(b) != "":
+			has_bench = true
 			bench.append(String(b))
+	# ② 顶层 `bench_multi`（生成端的写法）
+	if d.has("bench_multi"):
+		var bm = d.get("bench_multi")
+		if typeof(bm) == TYPE_ARRAY and not (bm as Array).is_empty():
+			has_bench = true
+			for item in (bm as Array):
+				if typeof(item) == TYPE_DICTIONARY:
+					var g2 := item as Dictionary
+					var gpool2: Array = []
+					var gp2 = g2.get("pool", [])
+					if typeof(gp2) == TYPE_ARRAY:
+						for hid in (gp2 as Array):
+							gpool2.append(String(hid))
+					if gpool2.is_empty():
+						continue
+					bench_multi.append({ "pool": gpool2, "n": maxi(int(g2.get("n", 1)), 0) })
+				else:
+					var h2 := String(item)
+					if h2 != "" and not bench.has(h2):
+						bench.append(h2)
+	var dynamic := not has_bench
+	if d.has("dynamic_bench"):
+		dynamic = bool(d.get("dynamic_bench"))   # ③ 显式标记优先（"没写替补 ⇒ 动态替补"靠它）
 	return {
 		"id": String(d.get("id", "")),
 		"note": String(d.get("note", "")),
