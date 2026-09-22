@@ -605,9 +605,16 @@ func _start_with_player_deck(player_ids: Array) -> void:
 	if not _pending_recipe.is_empty():
 		GameState.enemy_recipe = _pending_recipe
 		if _CONSOLE_AI_LOG:
-			print("[队伍池] 类型已生效：槽位候选 %d 槽 · 预设替补 %d 名 · 动态替补=%s · 抖动=%.1f" % [
+			# ⚠️ 预设替补有两种写法：`bench`（一份名单）与 `bench_multi`（多组，如"1选1 + 4选2"）。
+			#   日志只数 `bench` 会显示成"0 名"（用户实测 R09 看到的），其实替补是有的 ⇒ 两个都数。
+			var benchN := (GameState.enemy_recipe.get("bench", []) as Array).size()
+			var benchGroups: Array = (GameState.enemy_recipe.get("bench_multi", []) as Array)
+			var benchM := 0
+			for g in benchGroups:
+				benchM += int((g as Dictionary).get("n", 0))
+			print("[队伍池] 类型已生效：槽位候选 %d 槽 · 预设替补 %d 名（%d 组共 %d）· 动态替补=%s · 抖动=%.1f" % [
 				(GameState.enemy_recipe.get("slots", []) as Array).size(),
-				(GameState.enemy_recipe.get("bench", []) as Array).size(),
+				benchN, benchGroups.size(), benchM,
 				str(bool(GameState.enemy_recipe.get("dynamic_bench", true))),
 				float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))])
 	_pending_recipe = {}
