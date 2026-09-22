@@ -591,6 +591,9 @@ func _maybe_start_online_deploy() -> void:
 func _start_with_player_deck(player_ids: Array) -> void:
 	GameState.pick_deck_in_battle = false
 	var want := randi_range(5, 8)
+	# 【2026-09-22 配方档】本局是否走配方：先清空，`_synergy_pick_enemy()` 挑中配方时会写 `_pending_recipe`
+	GameState.enemy_recipe = {}
+	_pending_recipe = {}
 	# 【2026-09-21 L1+L2+L3】把玩家阵容传进去（L1 的克制项要用它）；回来记一笔"最近用过"（避免连着同一支队）
 	var enemy := _synergy_pick_enemy(want, player_ids)
 	if not enemy.is_empty():
@@ -598,6 +601,16 @@ func _start_with_player_deck(player_ids: Array) -> void:
 		while _recent_enemy_decks.size() > PICK_RECENT_MAX:
 			_recent_enemy_decks.pop_back()
 	GameState.set_decks(_order_deck(player_ids), _order_deck(enemy))
+	# 配方落库（必须在 `set_decks()` 之后：它是"本局敌方走哪条类型"的运行态，部署端与替补端都读它）
+	if not _pending_recipe.is_empty():
+		GameState.enemy_recipe = _pending_recipe
+		if _CONSOLE_AI_LOG:
+			print("[队伍池] 类型已生效：槽位候选 %d 槽 · 预设替补 %d 名 · 动态替补=%s · 抖动=%.1f" % [
+				(GameState.enemy_recipe.get("slots", []) as Array).size(),
+				(GameState.enemy_recipe.get("bench", []) as Array).size(),
+				str(bool(GameState.enemy_recipe.get("dynamic_bench", true))),
+				float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))])
+	_pending_recipe = {}
 	deck_pick_done.emit()   # 通知 HUD 收起"选择卡组"面板（无论走哪条选择路径都收）
 	_begin_deployment()
 
@@ -637,11 +650,21 @@ const PICK_POOL_TIER := { 0: "weak", 1: "mid", 2: "strong", 3: "strong" }
 const PICK_POOL_PATH := "res://RL/weights/队伍池.json"
 const PICK_POOL_TOPK := 8      # 在线分排序后取前 k 支随机抽（1 = 永远挑最优、∞ = 退化成纯随机）
 const PICK_RECENT_MAX := 3     # 最近 N 局用过的队不再出（避免连着遇到同一支）
-var _pick_pool: Dictionary = {}       # 档位名 -> Array[Array[String]]（空 = 没池子 ⇒ 回退）
+# 【2026-09-22 配方档】候选挑人的"抖动"默认值（池子文件 `meta.pick_jitter` 可覆盖）：
+#   一次"克制"= `counter_bonus` 给 2.0 ⇒ 默认 2.0 ≈ "七成按分数、三成随缘"，避免"玩家一上负面，
+#   对面立刻掏负墟"这种机械感。0 = 恢复"严格取最高分"（改动前的行为）。
+const PICK_JITTER_DEFAULT := 2.0
+var _pick_pool: Dictionary = {}       # 档位名 -> Array（元素 = 固定队伍 Array[String] 或 配方 Dictionary）
 var _pick_pool_tried := false
+var _pool_pick_jitter := PICK_JITTER_DEFAULT
 var _recent_enemy_decks: Array = []
+var _pending_recipe: Dictionary = {}  # 本局挑中的配方（`_start_with_player_deck()` 里落到 GameState）
 
 ## 读队伍池（只读一次；文件缺失/解析失败/结构不对 ⇒ 保持空 ⇒ 回退旧行为）。纯容错，不抛错。
+## 【2026-09-22 配方档】档位里现在允许两种元素：
+##   ① 旧格式 = **固定队伍**（hero_id 数组）；
+##   ② 新格式 = **配方（类型）**（字典：`slots` 首发槽候选池 + 可选 `bench` 预设替补）。
+##   配方的落地见 `_synergy_pick_enemy()`（每场随机抽 1 条）+ `GameState.enemy_recipe` + `Deploy._enemy_pick()`。
 func _load_pick_pool() -> void:
 	if _pick_pool_tried:
 		return
@@ -655,6 +678,10 @@ func _load_pick_pool() -> void:
 	f.close()
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return
+	# 配方档的"挑人抖动"（用户口径：不要每次都精准克制）——写文件里就能调，不用改代码
+	var meta = (parsed as Dictionary).get("meta", {})
+	if typeof(meta) == TYPE_DICTIONARY and (meta as Dictionary).has("pick_jitter"):
+		_pool_pick_jitter = maxf(float((meta as Dictionary)["pick_jitter"]), 0.0)
 	for key in PICK_POOL_TIER.values():
 		var tier := String(key)
 		if not (parsed as Dictionary).has(tier):
@@ -669,8 +696,127 @@ func _load_pick_pool() -> void:
 				for hid in (d as Array):
 					one.append(String(hid))
 				decks.append(one)
+			elif typeof(d) == TYPE_DICTIONARY:
+				var rec := _normalize_recipe(d as Dictionary)
+				if not rec.is_empty():
+					decks.append(rec)
 		if not decks.is_empty():
 			_pick_pool[tier] = decks
+
+## 归一化/校验一条配方（结构不对 ⇒ 返回空字典 ⇒ 该条整体忽略，不影响其它条目）
+## 产物：{ id, slots: [ {pool:[hero_id...]} | {fixed:"hero_id"} ... ], bench: [hero_id...], dynamic_bench: bool, w: float }
+func _normalize_recipe(d: Dictionary) -> Dictionary:
+	var slots_in = d.get("slots", [])
+	if typeof(slots_in) != TYPE_ARRAY or (slots_in as Array).is_empty():
+		return {}
+	var slots: Array = []
+	for s in (slots_in as Array):
+		if typeof(s) != TYPE_DICTIONARY:
+			return {}
+		var sd := s as Dictionary
+		var fixed := String(sd.get("fixed", ""))
+		if fixed != "":
+			slots.append({ "pool": [fixed] })
+			continue
+		var pool_in = sd.get("pool", [])
+		if typeof(pool_in) != TYPE_ARRAY:
+			return {}
+		var pool: Array = []
+		for hid in (pool_in as Array):
+			var h := String(hid)
+			if h != "" and not pool.has(h):
+				pool.append(h)
+		if pool.is_empty():
+			return {}   # 空槽 ⇒ 这条配方作废（免得开局挑不出人）
+		slots.append({ "pool": pool })
+	# 预设替补：可写成一维数组（一份名单）或"多组"（每组 {pool, n}）—— 组形式支持配方 4 的"(A/B)1 + (C/D/E/F)2"
+	var bench: Array = []
+	var bench_multi: Array = []
+	var dynamic := true
+	if d.has("bench"):
+		dynamic = false
+		var b = d.get("bench")
+		if typeof(b) == TYPE_ARRAY:
+			for item in (b as Array):
+				if typeof(item) == TYPE_DICTIONARY:
+					var g := item as Dictionary
+					var gpool: Array = []
+					var gp = g.get("pool", [])
+					if typeof(gp) == TYPE_ARRAY:
+						for hid in (gp as Array):
+							gpool.append(String(hid))
+					if gpool.is_empty():
+						continue
+					bench_multi.append({ "pool": gpool, "n": maxi(int(g.get("n", 1)), 0) })
+				else:
+					var h := String(item)
+					if h != "" and not bench.has(h):
+						bench.append(h)
+		elif typeof(b) == TYPE_STRING and String(b) != "":
+			bench.append(String(b))
+	return {
+		"id": String(d.get("id", "")),
+		"note": String(d.get("note", "")),
+		"slots": slots,
+		"bench": bench,
+		"bench_multi": bench_multi,
+		"dynamic_bench": dynamic,
+		"w": maxf(float(d.get("w", 1.0)), 0.0),
+		"jitter": _pool_pick_jitter,
+	}
+
+## 档位里是否含配方（含 ⇒ 走"每场随机抽 1 条"的用户口径；纯固定队伍档 ⇒ 走原来的打分+TOPK+随机）
+func _tier_has_recipe(entries: Array) -> bool:
+	for e in entries:
+		if typeof(e) == TYPE_DICTIONARY:
+			return true
+	return false
+
+## 按 w 加权随机抽一条（配方/固定队伍通用）；全部 w<=0 ⇒ 退化为均匀随机
+func _pick_entry_weighted(entries: Array) -> Variant:
+	if entries.is_empty():
+		return null
+	var total := 0.0
+	for e in entries:
+		total += float((e as Dictionary).get("w", 1.0)) if typeof(e) == TYPE_DICTIONARY else 1.0
+	if total <= 0.0:
+		return entries[randi() % entries.size()]
+	var r := randf() * total
+	for e in entries:
+		var w: float = float((e as Dictionary).get("w", 1.0)) if typeof(e) == TYPE_DICTIONARY else 1.0
+		r -= w
+		if r <= 0.0:
+			return e
+	return entries[entries.size() - 1]
+
+## 配方的"初始卡组" = 锁定首发 + 预设替补（动态替补的类型 ⇒ 只有锁定首发；候选池**不进卡组**）
+## ⚠️ 候选槽（有 pool 但非 locked）刻意**不进**初始卡组：它们只在部署/替补时按局面挑（用户口径）。
+func _recipe_initial_deck(rec: Dictionary) -> Array:
+	var out: Array = []
+	for s in (rec.get("slots", []) as Array):
+		var pool: Array = (s as Dictionary).get("pool", [])
+		if (pool as Array).size() == 1 and out.size() < 3:
+			# 只有一项 = 锁定槽（`_normalize_recipe` 已把 fixed 归一成单项 pool）
+			var hid := String(pool[0])
+			if not out.has(hid):
+				out.append(hid)
+	for hid in (rec.get("bench", []) as Array):
+		var h := String(hid)
+		if not out.has(h):
+			out.append(h)
+	# 多组预设替补：按组各抽 n 个（组内不重复、且不与已有重复）
+	for g in (rec.get("bench_multi", []) as Array):
+		var gd := g as Dictionary
+		var pool: Array = (gd.get("pool", []) as Array).duplicate()
+		var need := int(gd.get("n", 1))
+		while need > 0 and not pool.is_empty():
+			var pick := String(pool[randi() % pool.size()])
+			pool.erase(pick)
+			if out.has(pick):
+				continue
+			out.append(pick)
+			need -= 1
+	return out
 
 ## 整队在线分（L1+L3 共用）：队内 solo 之和 + 队内协同之和 + TARGET_W × 对玩家阵容的净克制之和
 func _enemy_deck_score(deck: Array, player_ids: Array) -> float:
@@ -714,7 +860,26 @@ func _synergy_pick_enemy(want: int, player_ids: Array = []) -> Array:
 	_load_pick_pool()
 	var tier := String(PICK_POOL_TIER.get(GameState.ai_difficulty, ""))
 	if _pick_pool.has(tier):
-		var picked := _pick_from_candidates((_pick_pool[tier] as Array).duplicate(), player_ids)
+		var entries: Array = (_pick_pool[tier] as Array).duplicate()
+		# 【2026-09-22 配方档·用户口径】档里含配方 ⇒ **每场随机抽 1 个类型**（按 `w` 加权，默认等权）：
+		#   · 抽到配方 ⇒ 记下它（`_pending_recipe`，由 `_start_with_player_deck()` 落到 GameState），
+		#                 初始卡组 = 锁定首发 + 预设替补（候选池**不进卡组**：它们在部署/替补时按局面挑）
+		#   · 抽到固定队伍 ⇒ 原样返回（不再进"打分 TOPK"，因为口径是"随机选一个类型"）
+		if _tier_has_recipe(entries):
+			var picked_entry = _pick_entry_weighted(entries)
+			if picked_entry != null:
+				if typeof(picked_entry) == TYPE_DICTIONARY:
+					_pending_recipe = (picked_entry as Dictionary).duplicate(true)
+					if _CONSOLE_AI_LOG:
+						print("[队伍池] 本局敌方类型：%s（%s）" % [
+							String(_pending_recipe.get("id", "?")), String(_pending_recipe.get("note", ""))])
+					return _recipe_initial_deck(_pending_recipe)
+				var fixed_team: Array = []
+				for hid in (picked_entry as Array):
+					fixed_team.append(String(hid))
+				return fixed_team
+		# ---- 纯固定队伍档（weak/mid 等）：保留原口径（打分 + 前 TOPK + 随机）----
+		var picked := _pick_from_candidates(entries, player_ids)
 		if not picked.is_empty():
 			return picked
 	# ---- ②：池子缺失 ⇒ 现算一支（原逻辑 + L1 克制项）----
@@ -2171,7 +2336,7 @@ func _begin_side(side: int) -> void:
 	# 单机敌方（AI）待补位：先自动落位，再统一触发技能（联机敌方为对端真人，按其补位节奏同步）
 	# 自由部署双控时敌方也归本端玩家手动点选，故不跑 AI 补位。
 	if not GameState.is_online and side != _my_side() and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
-			and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
+			and _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
 		_start_placing_subs = true
 		_place_enemy_sub()
 		_start_placing_subs = false
@@ -2250,7 +2415,8 @@ func _run_side_skills(side: int) -> void:
 			peer_turn_time_left = TURN_TIME_LIMIT
 		# 敌方若有上一回合阵亡待替补：按阵亡数量在出生区自动落位，再开始敌方回
 		# （自由部署双控的敌方归本端玩家手动点选，不在此自动落位）
-		if not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) and _pending_enemy_sub > 0 and enemy_roster.size() > 0:
+		if not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) and _pending_enemy_sub > 0 \
+				and (enemy_roster.size() > 0 or _dynamic_sub_active()):
 			_place_enemy_sub()
 		if GameState.dual_control:
 			# 自由部署双控：敌方回合也由本端操控(不跑 AI)
@@ -4919,7 +5085,8 @@ func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = tru
 					print("[替补] %s%s 延迟阵亡（非本方回合/结算/回合开始演出期），待补名额=%d" % [_fn_txt(fn), u.display_name, _pending_subs_of(fn)])
 	elif not GameState.is_online:
 		# 单机：敌(AI)阵亡 -> 自动按阵亡数量补位
-		if enemy_roster.size() > 0:
+		# 【2026-09-22 配方档】"替补席为空但走动态替补"也算有得补 ⇒ 同样记一个待补名额
+		if enemy_roster.size() > 0 or _dynamic_sub_active():
 			_pending_enemy_sub += 1   # 每阵亡一名，记录一个待补位名额（敌方回合开始才落位
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
 			if GameState.active_side == GameState.SIDE_ENEMY:
@@ -5046,23 +5213,41 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 
 # 敌方替补：按阵亡数量在出生区自动落位（我方回合结束时、敌方回合开始前触发）
 func _place_enemy_sub() -> void:
-	while _pending_enemy_sub > 0 and enemy_roster.size() > 0:
-		# 【2026-09-19 新增·默认关】收尾优先：`SUB_FINISH_W > 0` 且对面只剩 1 个存活单位时
-		#   （3 人阵容 ⇒ 打死它 = 直接判负玩家），把"选谁"交给 AI 侧挑"补上来就能收官"的那个。
-		#   默认 0（`_sub_finish_w()` 恒 0）⇒ `idx_pick` 就是原来的 `_best_enemy_sub_idx()` ⇒ 逐位不变。
-		var idx_pick := _best_enemy_sub_idx()
-		if _sub_finish_w() > 0.0 and _foe_alive_count() == 1:
-			var fc := _sub_finish_hero_pick(_sub_legal_cells_for_ai())
-			if fc >= 0:
-				idx_pick = fc
-		var next_id: String = enemy_roster.pop_at(idx_pick)
-		var cell := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
+	# 【2026-09-22 配方档】动态替补：本局敌方走配方 **且 该配方没写预设替补** ⇒ 候选不是替补席，
+	#   而是"需要补位时"从全英雄池按局面挑（见 `_dynamic_sub_pick()`）。
+	while _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
+		var next_id: String = ""
+		var forced_cell := Vector2i(-99, -99)
+		var from_roster := enemy_roster.size() > 0
+		if from_roster:
+			# 【2026-09-19 新增·默认关】收尾优先：`SUB_FINISH_W > 0` 且对面只剩 1 个存活单位时
+			#   （3 人阵容 ⇒ 打死它 = 直接判负玩家），把"选谁"交给 AI 侧挑"补上来就能收官"的那个。
+			#   默认 0（`_sub_finish_w()` 恒 0）⇒ `idx_pick` 就是原来的 `_best_enemy_sub_idx()` ⇒ 逐位不变。
+			var idx_pick := _best_enemy_sub_idx()
+			if _sub_finish_w() > 0.0 and _foe_alive_count() == 1:
+				var fc := _sub_finish_hero_pick(_sub_legal_cells_for_ai())
+				if fc >= 0:
+					idx_pick = fc
+			next_id = enemy_roster.pop_at(idx_pick)
+		else:
+			var dyn := _dynamic_sub_pick()
+			if dyn.is_empty():
+				break
+			next_id = String(dyn.get("id", ""))
+			forced_cell = dyn.get("cell", Vector2i(-99, -99))
+			if next_id == "":
+				break
+		var cell: Vector2i = forced_cell
+		if cell.x == -99 or cell.y == -99:
+			cell = _free_sub_cell_for(DataRegistry.Faction.ENEMY)
 		# 规则 C（SUB_JOIN_RULE，**默认关闭**）：在同一批合法落点里挑"能立刻参战"的那一格。
 		# 关掉时这一行只多一次布尔判断（开关缓存），落点选法与改动前**逐位相同**。
-		if _sub_join_rule_on():
+		# ⚠️ 动态替补已经自己选过落点（判据①要按落点算斩杀）⇒ 不再被规则 C 覆盖。
+		if forced_cell.x == -99 and _sub_join_rule_on():
 			cell = _sub_cell_by_rule_c(next_id, cell)
 		if cell.x == -99 and cell.y == -99:
-			enemy_roster.push_front(next_id)   # 出生区满了，留到下一轮再
+			if from_roster:
+				enemy_roster.push_front(next_id)   # 出生区满了，留到下一轮再
 			_pending_enemy_sub = 0
 			break
 		# 只清本次落位占用的这座墓；敌方其它墓碑保留到各自替补完成（同时阵亡多人时逐个补位
@@ -5085,7 +5270,7 @@ func _place_enemy_sub() -> void:
 func _best_enemy_sub_idx() -> int:
 	var best_i := 0
 	var best_s := -1e18
-	var cand_rows: Array = []   # 分析日志用：候选价值明细
+	var cand_rows: Array = []   # 候选价值明细（★2026-09-22：**始终**收集，动态替补要用它做"分数+抖动"）
 	var has_taunt := false
 	var wounded := 0
 	var live_melee := 0   # 存活且能上前线的敌方单位数（近战或嘲讽）
@@ -5165,11 +5350,13 @@ func _best_enemy_sub_idx() -> int:
 			"hero_39":   # 猎颅者：登场锁定目标
 				s += 2.0
 				why.append("登场锁定")
-		if _CONSOLE_AI_LOG:
-			cand_rows.append({ "hid": hid, "n": def.display_name, "s": s, "why": why })
+		# ★2026-09-22：**始终**收集候选明细（不再只在开日志时收集）—— 动态替补要拿这份分数
+		#   做"分数 + 抖动"（否则就得把这段 200 行的局面打分再抄一份，迟早漂移）。
+		cand_rows.append({ "hid": hid, "n": def.display_name, "s": s, "why": why })
 		if s > best_s:
 			best_s = s
 			best_i = i
+	_last_sub_rows = cand_rows
 	if _CONSOLE_AI_LOG and cand_rows.size() > 0:
 		cand_rows.sort_custom(func(x, y): return x["s"] > y["s"])
 		print("\n[AI替补上人] 敌方需要补位（现有 %d 人待选）" % cand_rows.size())
@@ -5181,6 +5368,176 @@ func _best_enemy_sub_idx() -> int:
 
 # ---- 替补选择与落位（本端"我方"；联主机玩家/客户端敌方，单机=玩家----
 var _pending_sub := ""   # 已选中的替hero_id（等待落位）
+# 【2026-09-22 配方档】`_best_enemy_sub_idx()` 每次都会把"候选 + 分值"写进这里（动态替补复用同一份打分）
+var _last_sub_rows: Array = []
+
+# ---------- 【2026-09-22 新增·队伍池配方档】动态替补（用户口径，逐条对应）----------
+# 用户原话：「没有预设替补的不要在开场就决定好替补队伍，在需要替补的时候再从英雄池里选合适的，
+#   合适的替补不能单纯按照评分来，比如可以斩杀的时候，一个够伤害的高攻比其他替补都要合适，
+#   再比如我方有个英雄下回合必死，我准备要输了，那梅林也是个很好的选择」
+#   ⇒ 判据顺序：① 能斩杀（**只算这一手**）② 救人（只在"AI 已阵亡 2 人"时）③ 结构性缺口 ④ 兜底（带抖动）。
+# ⚠️ 只在"本局敌方走配方 且 该配方没写预设替补"时启用；其它情况一律走原逻辑 ⇒ 逐位不变。
+func _dynamic_sub_active() -> bool:
+	if GameState.enemy_recipe.is_empty():
+		return false
+	return bool(GameState.enemy_recipe.get("dynamic_bench", true))
+
+## 动态替补的候选 = **全部英雄**（用户拍板：从全英雄选） − 本局已出现过的（场上/墓碑/替补席）− 衍生物
+func _dynamic_sub_candidates() -> Array:
+	var used := {}
+	for u in units:
+		if u == null or not is_instance_valid(u):
+			continue
+		used[String(u.hero_id)] = true
+	for c in graves.keys():
+		var gd = graves[c]
+		if typeof(gd) == TYPE_DICTIONARY:
+			used[String(gd.get("hero", ""))] = true
+	for hid in enemy_roster:
+		used[String(hid)] = true
+	for hid in player_roster:
+		used[String(hid)] = true
+	var out: Array = []
+	for hid in DataRegistry.heroes.keys():
+		var h := String(hid)
+		if h == "" or used.has(h):
+			continue
+		var def := DataRegistry.get_hero(h)
+		if def == null or def.is_summon:
+			continue
+		out.append(h)
+	return out
+
+## ① 能斩杀（只算这一手）：候选落在某合法格后，能打到某个敌方单位且**这一击伤害 ≥ 其当前 HP**。
+## 返回 { "cell": Vector2i, "dmg": float, "foe": Unit }；杀不了 ⇒ 空字典。
+## 口径说明（近似，够用即可）：伤害取英雄定义攻击力 `def.atk`（召唤/多段/暴击等不计）；
+## "够得到"按 `出生移动力 + 射程` 判（替补这一手可以先走再打）。
+func _sub_best_kill(hid: String, cells: Array) -> Dictionary:
+	var def := DataRegistry.get_hero(hid)
+	if def == null:
+		return {}
+	var reach := DataRegistry.spawn_move(def) + DataRegistry.spawn_attack_range(def)
+	var best := {}
+	var best_dmg := -1.0
+	for c in cells:
+		for u in units:
+			if u == null or not is_instance_valid(u) or not u.alive:
+				continue
+			if u.faction == DataRegistry.Faction.ENEMY:
+				continue
+			if grid.distance(c, u.cell) > reach:
+				continue
+			var dmg := float(def.atk)
+			if dmg < float(u.hp):
+				continue
+			if dmg > best_dmg:
+				best_dmg = dmg
+				best = { "cell": c, "dmg": dmg, "foe": u }
+	return best
+
+## 我方（敌方阵营）"下回合必死"的单位：把能打到它的玩家单位攻击力求和 ≥ 它的当前 HP。
+## 近似口径：够得到 = `玩家单位射程 + 其移动力` 之内（玩家下回合可以先走再打）。
+func _our_doomed_unit() -> Unit:
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != DataRegistry.Faction.ENEMY:
+			continue
+		var threat := 0
+		for p in units:
+			if p == null or not is_instance_valid(p) or not p.alive:
+				continue
+			if p.faction == DataRegistry.Faction.ENEMY:
+				continue
+			if grid.distance(p.cell, u.cell) <= p.attack_range + p.effective_move():
+				threat += p.effective_atk()
+		if threat >= u.hp:
+			return u
+	return null
+
+## ② 救人候选：梅林（hero_36，回最低血队友并换位）· 波盾（hero_16，全队圣盾）· 治疗族 · 嘲讽（去挡火力）
+func _save_candidates(cands: Array) -> Array:
+	var out: Array = []
+	for hid in cands:
+		var h := String(hid)
+		var def := DataRegistry.get_hero(h)
+		if def == null:
+			continue
+		var is_heal: bool = DataRegistry.MECH_TAGS.get("治疗", []).has(h)
+		if h == "hero_36" or h == "hero_16" or is_heal or def.skills.has(DataRegistry.Skill.TAUNT):
+			out.append(h)
+	return out
+
+## ③+④ 借既有"缺口打分"（临时把候选表当替补席用，零重复实现）拿分，再叠抖动取最高（并列随机）
+func _sub_pick_with_need_score(list: Array, jitter: float) -> String:
+	if list.is_empty():
+		return ""
+	var saved := enemy_roster
+	enemy_roster = list.duplicate()
+	_last_sub_rows = []
+	var idx := _best_enemy_sub_idx()
+	var rows: Array = _last_sub_rows.duplicate()
+	enemy_roster = saved
+	if rows.is_empty():
+		return String(list[idx]) if idx >= 0 and idx < list.size() else String(list[0])
+	var best := -1e18
+	var scored: Array = []
+	for r in rows:
+		var s := float(r["s"]) + randf() * jitter
+		scored.append({ "hid": String(r["hid"]), "s": s })
+		best = maxf(best, s)
+	var tied: Array = []
+	for r in scored:
+		if float(r["s"]) >= best - 0.000001:
+			tied.append(r)
+	return String((tied[randi() % tied.size()])["hid"])
+
+## 动态替补总入口：按 ①②③④ 挑一个，返回 { "id": hero_id, "cell": Vector2i }（cell 为 (-99,-99) ⇒ 用原落点规则）
+func _dynamic_sub_pick() -> Dictionary:
+	var cands := _dynamic_sub_candidates()
+	if cands.is_empty():
+		return {}
+	var jitter := float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))
+	var cells: Array = _sub_legal_cells_for_ai()
+	# ---- ① 能斩杀（只算这一手）----
+	if not cells.is_empty():
+		var kill_rows: Array = []
+		for hid in cands:
+			var km := _sub_best_kill(hid, cells)
+			if not km.is_empty():
+				kill_rows.append({ "id": String(hid), "cell": km["cell"], "dmg": float(km["dmg"]) })
+		if not kill_rows.is_empty():
+			var top := -1e18
+			for r in kill_rows:
+				top = maxf(top, float(r["dmg"]))
+			var tied: Array = []
+			for r in kill_rows:
+				if float(r["dmg"]) >= top - 0.0001:
+					tied.append(r)
+			var pick: Dictionary = tied[randi() % tied.size()]
+			if _CONSOLE_SUB_LOG:
+				print("[替补·动态] 判据①能斩杀 → 上 %s（这一手 %.0f 伤害，落点 %s，候选 %d 人可杀）" % [
+					String(pick["id"]), float(pick["dmg"]), str(pick["cell"]), kill_rows.size()])
+			return { "id": String(pick["id"]), "cell": pick["cell"] }
+	# ---- ② 救人：只在"再死一个就判负"时（用户口径：只考虑 AI 已阵亡 2 人）----
+	if enemy_dead >= LOSS_DEATH_COUNT - 1:
+		var doomed := _our_doomed_unit()
+		if doomed != null:
+			var savers := _save_candidates(cands)
+			if not savers.is_empty():
+				var hid2 := _sub_pick_with_need_score(savers, jitter)
+				if hid2 != "":
+					if _CONSOLE_SUB_LOG:
+						print("[替补·动态] 判据②救人（我方 %s 下回合必死 · 已阵亡 %d 人）→ 上 %s" % [
+							String(doomed.hero_id), enemy_dead, hid2])
+					return { "id": hid2, "cell": Vector2i(-99, -99) }
+	# ---- ③ 结构性缺口 + ④ 兜底（同一份打分 + 抖动）----
+	var hid3 := _sub_pick_with_need_score(cands, jitter)
+	if hid3 == "":
+		return {}
+	if _CONSOLE_SUB_LOG:
+		print("[替补·动态] 判据③/④缺口+兜底 → 上 %s（候选池 %d 人）" % [hid3, cands.size()])
+	return { "id": hid3, "cell": Vector2i(-99, -99) }
 
 # 尝试开始下一个替补名额（同时阵亡多人时逐个替补）。仅在空闲且有名有替补时消费 1 个
 func _try_begin_next_sub(fn: int = -1) -> void:

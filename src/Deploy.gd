@@ -4,6 +4,8 @@ extends Control
 ## 玩家手动从我方卡池选；敌方由 AI 自动选。
 
 const DEPLOY := 3
+# 【2026-09-22】配方首发挑选的调试日志（想看"敌方这一手为什么挑他"就改成 true）
+const RECIPE_PICK_LOG := false
 
 var player_pool: Array = []
 var enemy_pool: Array = []
@@ -117,6 +119,12 @@ func _pass_to_enemy() -> void:
 func _enemy_pick() -> void:
 	if finished:
 		return
+	# 【2026-09-22 配方档·用户口径】走配方时：**按槽位填人**（做法乙），候选 = 该槽位的候选池（全部，
+	#   不进卡组）− 已上阵；打分 = 既有 `_enemy_candidate_value()`（含"对玩家已首发"的净克制）+ 抖动；
+	#   并列随机。⇒ "1 近战 + 1 远程 + 1 嘲讽"这种结构不会被部署打散，且不会每次都精准克制。
+	if not GameState.enemy_recipe.is_empty():
+		_enemy_pick_by_recipe()
+		return
 	if enemy_pool.size() > 0 and enemy_deployed.size() < DEPLOY:
 		# 【2026-09-18 改·用户第 1 条】原来是 `enemy_pool.pop_front()` —— **按池子顺序拿第一个**，
 		# 也就是说敌方先发阵容**完全随机/固定**：不看强度、不看配合、不看对面站了谁。
@@ -146,6 +154,89 @@ func _enemy_pick() -> void:
 			# 我方先满，但敌方还需补选（不应发生，因交替）
 			pass
 		_refresh()
+
+# 【2026-09-22 新增·配方档（做法乙）】按槽位填首发：
+#   · 槽位序号 = 已上阵人数（第 1 次挑选填槽 0、第 2 次填槽 1、第 3 次填槽 2）
+#   · 候选 = `slots[i].pool`（整池；**不是**只带两个）− 已上阵；<替补> 标签英雄不主动首发（与既有口径一致）
+#   · 打分 = `_enemy_candidate_value()`（含对玩家已首发的净克制）+ `randf() * jitter`
+#   · 取最高分；并列/近似并列在并列集里随机（不取第一个）
+#   · 上阵后从 `enemy_pool` 移除同名（配方档的初始卡组 = 锁定首发 + 预设替补，避免"同一个人既在场上又在替补席"）
+func _enemy_pick_by_recipe() -> void:
+	var slots: Array = GameState.enemy_recipe.get("slots", [])
+	var si: int = enemy_deployed.size()
+	if si >= slots.size() or si >= DEPLOY:
+		_pass_to_enemy_done()
+		return
+	var pool: Array = ((slots[si] as Dictionary).get("pool", []) as Array)
+	var jitter := float(GameState.enemy_recipe.get("jitter", 2.0))
+	var cands: Array = []
+	var scores: Array = []
+	for hid in pool:
+		var h := String(hid)
+		if h == "" or enemy_deployed.has(h):
+			continue
+		var cd: DataRegistry.HeroDef = DataRegistry.get_hero(h)
+		if cd == null:
+			continue
+		if cd.skills.has(DataRegistry.Skill.BENCH):
+			continue   # 替补标签英雄不主动首发（它的技能只在替补登场时触发）
+		cands.append(h)
+		scores.append(_enemy_candidate_value(h) + randf() * jitter)
+	if cands.is_empty():
+		# 该槽位挑不出人（都被禁/已上阵）⇒ 退回"从卡组挑"的老路径，尽量别空过
+		_enemy_pick_fallback_from_pool()
+		return
+	# 取最高分；与最高分相同（或相差 < 1e-6）的一起随机
+	var best := -1e18
+	for s in scores:
+		best = maxf(best, float(s))
+	var tied: Array = []
+	for i in cands.size():
+		if float(scores[i]) >= best - 0.000001:
+			tied.append(i)
+	var pick_i: int = int(tied[randi() % tied.size()])
+	var hid: String = String(cands[pick_i])
+	enemy_pool.erase(hid)
+	enemy_deployed.append(hid)
+	if RECIPE_PICK_LOG:
+		print("[部署·配方] 槽%d 候选%d 人 → 上 %s" % [si + 1, cands.size(), DataRegistry.get_hero(hid).display_name])
+	if enemy_deployed.size() == DEPLOY and player_deployed.size() == DEPLOY:
+		_start_battle()
+		return
+	current_side = 0
+	_refresh()
+
+# 兜底：配方该槽位无人可上 ⇒ 用既有"从卡组挑最优"的逻辑（有卡组时才有意义）
+func _enemy_pick_fallback_from_pool() -> void:
+	var best_i := 0
+	var best_sc := -1e9
+	for i in enemy_pool.size():
+		var cand: String = enemy_pool[i]
+		var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
+		var is_bench: bool = cd != null and cd.skills.has(DataRegistry.Skill.BENCH)
+		var sc: float = _enemy_candidate_value(cand) if not is_bench else -1e8
+		if sc > best_sc:
+			best_sc = sc
+			best_i = i
+	if enemy_pool.is_empty():
+		_pass_to_enemy_done()
+		return
+	var hid: String = enemy_pool[best_i]
+	enemy_pool.remove_at(best_i)
+	enemy_deployed.append(hid)
+	if enemy_deployed.size() == DEPLOY and player_deployed.size() == DEPLOY:
+		_start_battle()
+		return
+	current_side = 0
+	_refresh()
+
+# 配方档：槽位填完但玩家还没选满 ⇒ 把选择权交回玩家（不空过）
+func _pass_to_enemy_done() -> void:
+	current_side = 0
+	if player_deployed.size() == DEPLOY and enemy_deployed.size() == DEPLOY:
+		_start_battle()
+		return
+	_refresh()
 
 # 【2026-09-18 新增·用户第 1 条】敌方候选价值（0 新参数，全部来自 DataRegistry 现成表）：
 #   单人评分 + 与己方已选协同 + 对玩家已选**净克制**（`battle_unit_value_parts` 的 counter 就是净额）

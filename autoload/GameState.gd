@@ -25,6 +25,13 @@ var surrender := false
 var player_deck: Array = []
 var enemy_deck: Array = []
 
+# 【2026-09-22 新增·队伍池"配方"运行态】本局敌方队伍走的是哪条配方（类型）。
+#   写入点：`src/Battle.gd::_start_with_player_deck()`（`_synergy_pick_enemy()` 挑中的配方在这里落库）。
+#   读取点：`src/Deploy.gd::_enemy_pick()`（按槽位候选池挑首发）·`src/Battle.gd::_place_enemy_sub()`
+#          （没有预设替补时按局面从英雄池动态挑替补）。
+#   ⚠️ 空字典 = 本局没走配方（走固定队伍 / 池子缺失 / 回退路径）⇒ 一切行为与改动前**逐位相同**。
+var enemy_recipe: Dictionary = {}
+
 # 自由放置（测试场景用）：cell(Vector2i) -> hero_id。若非空，Battle 部署时按此直接放置
 var player_placement: Dictionary = {}
 var enemy_placement: Dictionary = {}

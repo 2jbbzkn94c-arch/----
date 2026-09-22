@@ -37,13 +37,14 @@ function Resolve-UnderRoot([string]$p) {
 
 # ---------- 英雄名/特性表（模板行要用）----------
 $heroRows = Get-Content (Join-Path $root '英雄相关\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-$name2id = @{}; $id2name = @{}; $traits = @{}
+$name2id = @{}; $id2name = @{}; $traits = @{}; $allIds = @()
 for ($i = 1; $i -lt $heroRows.Count; $i++) {
     $num = 0
     if (-not [int]::TryParse([string]$heroRows[$i][0], [ref]$num)) { continue }
     $hid = 'hero_{0:D2}' -f $num
     $nmx = [string]$heroRows[$i][2]
     $name2id[$nmx] = $hid; $id2name[$hid] = $nmx; $traits[$hid] = [string]$heroRows[$i][5]
+    $allIds += $hid
 }
 # ⚠️ 常见手误别名（用户手写模板时出现；命中就提示一声，不当成特性名去匹配）
 $alias = @{ '烈焰祭祀' = '烈焰祭司' }
@@ -113,6 +114,123 @@ function Expand-Spec([string]$text) {
     return $out
 }
 
+# ---------- 配方（"类型"）解析 ----------
+# 把**一个槽位**的文字解析成英雄名列表（全池，不截断）。支持写法：
+#   `古灵精怪`                     单名 ⇒ 调用方会当"锁定槽"
+#   `（复仇者/负墟）根据对方要求…`   括号内多选（后面的人话说明会被丢掉）
+#   `(共鸣者/巨剑）随机1人`         同上（"随机N人"由调用方解释成"替补补几个"）
+#   `嘲讽（排除替补和大骑士，根据对方首发决定）`  特性名 + 排除（排除项可以是英雄名或特性名）
+#   `近战` / `远程`                特殊词：近战 = 没有 <远程> 标签；远程 = 有 <远程> 标签
+function Resolve-SlotPool([string]$slotText) {
+    $s = $slotText
+    # ⚠️ 顺序很重要（踩过）：**先**从括号里取"排除项 / 备选项"，**再**剥掉人话说明。
+    #   反过来的话 `嘲讽（排除替补和大骑士，根据对方首发决定）` 会先被"根据…"截断成
+    #   `嘲讽（排除替补和大骑士` ⇒ 括号配不成对 ⇒ 槽位名变成 `嘲讽（` ⇒ 整条配方解析失败。
+    $excl = @()
+    foreach ($mm in [regex]::Matches($s, '排除([^)）]*)')) {
+        $inner = [regex]::Replace($mm.Groups[1].Value, '[，,]?\s*根据.*$', '')
+        foreach ($p in @($inner -split '[/、,，和与]' | Where-Object { $_ })) { $excl += $p }
+    }
+    $alts = @()
+    foreach ($mm in [regex]::Matches($s, '[（(]([^)）]*)[)）]')) {
+        $inner = $mm.Groups[1].Value
+        if ($inner -match '^\s*排除') { continue }
+        $inner = [regex]::Replace($inner, '[，,]?\s*根据.*$', '')
+        $inner = [regex]::Replace($inner, '其中随机\s*\d+\s*人', '')
+        $inner = [regex]::Replace($inner, '其中一人', '')
+        foreach ($p in @($inner -split '[/、,，]' | Where-Object { $_ })) { $alts += $p }
+    }
+    $base = ($s -replace '[（(][^)）]*[)）]', '')
+    $base = ($base -replace '排除[^)）]*', '')
+    $base = [regex]::Replace($base, '[，,]?\s*根据.*$', '')
+    $base = [regex]::Replace($base, '其中随机\s*\d+\s*人', '')
+    $base = [regex]::Replace($base, '其中一人', '')
+    $base = [regex]::Replace($base, '其中', '')
+    $base = [regex]::Replace($base, '随机\s*\d+\s*人', '')
+    $base = $base.Trim().Trim('，', ',', '、')
+    $names = @()
+    foreach ($b in @($base -split '[/、,，]' | Where-Object { $_ })) {
+        if ($b -eq '近战') { $names += @($allIds | Where-Object { $traits[$_] -notmatch '远程' } | ForEach-Object { $id2name[$_] }); continue }
+        if ($b -eq '远程') { $names += @($allIds | Where-Object { $traits[$_] -match '远程' } | ForEach-Object { $id2name[$_] }); continue }
+        if ($alias.ContainsKey($b)) { $names += $alias[$b]; continue }
+        if ($name2id.ContainsKey($b)) { $names += $b; continue }
+        $hit = @($allIds | Where-Object { [string]$traits[$_] -match [regex]::Escape($b) } | ForEach-Object { $id2name[$_] })
+        if ($hit.Count -eq 0) { throw ('槽位「' + $b + '」认不出（既不是英雄名也不是特性名）') }
+        $names += $hit
+    }
+    $names += $alts
+    $names = @($names | Sort-Object -Unique)
+    foreach ($e in $excl) {
+        $ex = $e
+        if ($alias.ContainsKey($ex)) { $ex = $alias[$ex] }
+        if ($name2id.ContainsKey($ex)) {
+            $names = @($names | Where-Object { $_ -ne $ex })
+        } else {
+            $names = @($names | Where-Object { [string]$traits[$name2id[$_]] -notmatch [regex]::Escape($ex) })
+        }
+    }
+    # ⚠️ **不要**写成 `return , $names`：那样调用方的 `@(...)` 会收到"1 个元素（= 整个名单数组）"，
+    #   于是"多候选槽"被误判成 `Count -eq 1` ⇒ 写成 fixed（2026-09-22 踩过）。直接返回即可。
+    return $names
+}
+
+# 把一整行配方（如 `3.首发：古灵精怪 + 暗域 + 嬉皮死神，替补：（…）其中随机3人`）解析成配方对象。
+# 产物与游戏端读取端（`src/Battle.gd::_normalize_recipe`）对齐：
+#   { id, note, slots: [ {fixed:"hero_xx"} | {pool:[...]} ], bench:[...], bench_multi:[{pool:[...],n:N}], w }
+function Convert-SpecToRecipe([string]$text, [int]$lineNo) {
+    $t = [regex]::Replace($text, '^\s*\d+\s*[.、]\s*', '')
+    $main = $t
+    $benchTxt = ''
+    $m = [regex]::Match($t, '^(.*?)[，,]\s*替补\s*[:：]\s*(.*)$')
+    if ($m.Success) {
+        $main = $m.Groups[1].Value; $benchTxt = $m.Groups[2].Value
+    } else {
+        $m2 = [regex]::Match($t, '^(.*?)\s*替补\s*[:：]\s*(.*)$')
+        if ($m2.Success) { $main = $m2.Groups[1].Value; $benchTxt = $m2.Groups[2].Value }
+    }
+    $main = [regex]::Replace($main, '^\s*首发\s*[:：]?\s*', '')
+    $main = $main.Trim().TrimEnd('，', ',')
+    $slots = @()
+    foreach ($st in @($main -split '\+' | Where-Object { $_.Trim() -ne '' })) {
+        # ⚠️ 用 foreach 累加，别用 `@(函数)`（函数的输出是"名字数组"，`@()` 包起来会变成
+        #   "1 个元素 = 整个数组" ⇒ 多候选槽被误判成 fixed）
+        $poolNames = @()
+        foreach ($x in (Resolve-SlotPool $st)) { $poolNames += $x }
+        if ($poolNames.Count -eq 0) { throw ('槽位解析为空：' + $st) }
+        if ($poolNames.Count -eq 1) { $slots += [ordered]@{ fixed = $name2id[$poolNames[0]] } }
+        else { $slots += [ordered]@{ pool = @($poolNames | ForEach-Object { $name2id[$_] }) } }
+    }
+    $bench = @()
+    $benchMulti = @()
+    $dynamic = $true
+    if ($benchTxt.Trim() -ne '') {
+        $dynamic = $false
+        foreach ($grp in @($benchTxt -split '\+' | Where-Object { $_.Trim() -ne '' })) {
+            $mn = [regex]::Match($grp, '随机\s*(\d+)\s*人')
+            $hasRandom = $mn.Success
+            $n = 1
+            if ($hasRandom) { $n = [int]$mn.Groups[1].Value }
+            $pool2 = @()
+            foreach ($x in (Resolve-SlotPool $grp)) { $pool2 += $x }
+            if ($pool2.Count -eq 0) { continue }
+            if ($hasRandom) {
+                $benchMulti += [ordered]@{ pool = @($pool2 | ForEach-Object { $name2id[$_] }); n = $n }
+            } else {
+                foreach ($x in $pool2) { $bench += $name2id[$x] }
+            }
+        }
+    }
+    return [ordered]@{
+        id = ('R{0:D2}' -f $lineNo)
+        note = $text
+        slots = @($slots)
+        bench = @($bench)
+        bench_multi = @($benchMulti)
+        dynamic_bench = $dynamic
+        w = 1.0
+    }
+}
+
 # ---------- 读 MD ----------
 $mdPath = Resolve-UnderRoot $Md
 if (-not (Test-Path $mdPath)) { throw ('找不到标注文件：' + $mdPath) }
@@ -121,6 +239,7 @@ $secMap = @{ '强' = 'strong'; '中' = 'mid'; '弱' = 'weak' }
 $section = ''
 $items = @()
 $specs = @()
+$recipes = @()
 $lineNo = 0
 foreach ($ln in $lines) {
     $lineNo++
@@ -135,7 +254,15 @@ foreach ($ln in $lines) {
         #   落地方式待用户拍板（见文件头与 `5_选人策略.md` §现状⑤-3）。
         if ($t -match '^[`~]+$') { continue }
         if ($t -match '^\d+\s*[.、]') {
-            Write-Host ('[人工池] (配方行·暂不落库) 第 {0} 行：{1}' -f $lineNo, $t)
+            # 编号配方行 ⇒ 解析成"类型（配方）"，与固定队伍一起写进同一档（游戏端两种元素都认）
+            try {
+                $rec = Convert-SpecToRecipe $t $lineNo
+                $recipes += [pscustomobject]@{ tier = $section; rec = $rec; line = $lineNo }
+                Write-Host ('[人工池] 配方（第 {0} 行 → {1} 档）：{2} 槽 · 预设替补 {3} 名 / 多组 {4} 组 / 动态={5}' -f `
+                    $lineNo, $section, @($rec.slots).Count, @($rec.bench).Count, @($rec.bench_multi).Count, $rec.dynamic_bench)
+            } catch {
+                Write-Host ('[人工池] !! 第 {0} 行配方解析失败，已跳过：{1}' -f $lineNo, $_.Exception.Message)
+            }
             continue
         }
         if ($section -eq '') { throw ('第 ' + $lineNo + ' 行出现在任何分区之前 ⇒ MD 结构不对') }
@@ -208,6 +335,11 @@ foreach ($sp in $specs) {
     Write-Host ('    生成 {0} 支（去重后新增 {1}）；例：{2}' -f @($teams).Count, $added, ($nmList -join ' · '))
 }
 if ($specs.Count -gt 0) { Write-Host ('[人工池] 模板行共 {0} 行 ⇒ 新增 {1} 支' -f $specs.Count, $specMade) }
+# 配方（类型）⇒ 与固定队伍一起进同一档（元素是字典，游戏端 `_normalize_recipe()` 认）
+foreach ($r in $recipes) {
+    $tiers[$r.tier] += , $r.rec
+}
+if ($recipes.Count -gt 0) { Write-Host ('[人工池] 配方 {0} 条已并入对应档（强 {1} / 中 {2} / 弱 {3} 条）' -f $recipes.Count, @($recipes | Where-Object { $_.tier -eq 'strong' }).Count, @($recipes | Where-Object { $_.tier -eq 'mid' }).Count, @($recipes | Where-Object { $_.tier -eq 'weak' }).Count) }
 # ⚠️ 安全网：**空档拒绝写盘**。池子空档在游戏里会走 `_load_pick_pool()` 的回退（= 与"没有池子"一样），
 #   静默写出一份"强档为空"的池子，等于白跑一趟还可能被当成"已启用"。要故意写空档得显式 `-AllowEmptyTier`。
 foreach ($t in @('weak', 'mid', 'strong')) {
@@ -219,50 +351,85 @@ $uniq = @($items | ForEach-Object { $_.idx } | Sort-Object -Unique)
 $nMark = @($items | Where-Object { $_.mark -ne '' }).Count
 $nStar = @($items | Where-Object { $_.star }).Count
 # ⚠️ `-f` 必须与字符串同一行（PS 5.1 换行后会当成新语句，踩过）
-Write-Host ('[人工池] 读到 {0} 支（唯一 {1} 支）· 强 {2} / 中 {3} / 弱 {4} · 带标记 {5} 支 · 带★ {6} 支' -f $items.Count, $uniq.Count, $tiers.strong.Count, $tiers.mid.Count, $tiers.weak.Count, $nMark, $nStar)
+Write-Host ('[人工池] 读到 {0} 支固定队伍（唯一 {1}）+ {2} 条配方 · 强 {3} / 中 {4} / 弱 {5} · 带标记 {6} 支 · 带★ {7} 支' -f $items.Count, $uniq.Count, $recipes.Count, @($tiers.strong).Count, @($tiers.mid).Count, @($tiers.weak).Count, $nMark, $nStar)
 if ($uniq.Count -ne $items.Count) { throw ('有重复编号：' + (($items | Group-Object idx | Where-Object { $_.Count -gt 1 } | ForEach-Object { 'C{0:D3}' -f [int]$_.Name }) -join ',')) }
 
 # ---------- 写盘 ----------
 $wi = Resolve-UnderRoot 'RL\weights\噩梦.json'
+# 元素两种：固定队伍（hero_id 数组）与**配方（类型）**（字典）—— 游戏端 `_load_pick_pool()` 两种都认
+# ⚠️ 必须用 `+= , (...)` 逐条追加：`$arr | ForEach-Object { @($_) }` 会被 PowerShell **拆平**
+#   （固定队伍会散成一串 hero_id ⇒ 写出来的池子"每支队伍不足 3 人"，2026-09-22 踩过）。
+function Pack-Tier($entries) {
+    $out = @()
+    foreach ($e in $entries) {
+        if ($e -is [System.Collections.IDictionary]) { $out += , $e }
+        else { $out += , @($e) }
+    }
+    return , $out
+}
 $pool = [ordered]@{
-    _说明 = '标准单机敌方"队伍池"（**人工标注版·尚未启用**）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)。⚠️ 档位键必须是 ASCII。要启用：把本文件复制成 RL\weights\队伍池.json（并删掉那份只读占位池）。'
-    _口径 = '档位 = **人工标注**（来源 `队伍池.md`）：行首 1→strong / 2→mid / 3→weak；没有数字的保持该行所在分区。牌组按行内 `C###` 编号从车轮战候选表取。'
+    _说明 = '标准单机敌方"队伍池"（**人工标注版 + 配方/类型 · 尚未启用**）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)。⚠️ 档位键必须是 ASCII。要启用：把本文件复制成 RL\weights\队伍池.json（并删掉那份只读占位池）。'
+    _口径 = '档位 = 人工标注（来源 `队伍池.md`）。档内可混两种元素：① **固定队伍** = hero_id 数组；② **配方（类型）** = 字典（`slots` 首发槽候选池 + 可选 `bench` 预设替补；没写 bench ⇒ 替补在需要时从全英雄池按局面挑）。含配方的档按"每场随机抽 1 条"处理。'
     _回退 = '删掉 RL\weights\队伍池.json 即可（立即回到"按评分加权随机组队"）。'
     meta = [ordered]@{
         生成时间 = (Get-Date -Format 'yyyy-MM-dd HH:mm')
         引擎sha12 = (Get-FileHash (Join-Path $root 'RL\ai\AI_Battle.gd') -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
         权重sha12 = (Get-FileHash $wi -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
-        排名口径 = '人工标注（队伍池.md 的 1/2/3 + 分区）'
-        候选数 = $items.Count; 每档 = $(if ($tiers.strong.Count -eq $tiers.mid.Count -and $tiers.mid.Count -eq $tiers.weak.Count) { $tiers.strong.Count } else { '不等分' })
+        排名口径 = ('人工标注（队伍池.md：C### 名单 + {0} 条配方）' -f $recipes.Count)
+        # ★ 配方/候选挑人的"抖动"：一次克制 = 2.0 ⇒ 默认 2.0 ≈ 七成按分数、三成随缘（用户口径）
+        pick_jitter = 2.0
+        候选数 = @($items).Count; 配方数 = @($recipes).Count
         来源 = @((Split-Path -Leaf $mdPath))
     }
-    weak = @($tiers.weak | ForEach-Object { , @($_) })
-    mid = @($tiers.mid | ForEach-Object { , @($_) })
-    strong = @($tiers.strong | ForEach-Object { , @($_) })
+    weak = Pack-Tier $tiers.weak
+    mid = Pack-Tier $tiers.mid
+    strong = Pack-Tier $tiers.strong
 }
 $outPath = Resolve-UnderRoot $Out
-[System.IO.File]::WriteAllText($outPath, ($pool | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($outPath, ($pool | ConvertTo-Json -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host ('[人工池] 已写 ' + $outPath)
 
 # ---------- 自检 ----------
 $chk = Get-Content $outPath -Raw -Encoding UTF8 | ConvertFrom-Json
-foreach ($t in @('weak', 'mid', 'strong')) {
-    if (-not ($chk.PSObject.Properties.Name -contains $t)) { throw ('池子写坏了：缺档位键 ' + $t) }
-    $bad = @($chk.$t | Where-Object { @($_).Count -lt 3 })
-    if ($bad.Count -gt 0) { throw ('池子写坏了：档 ' + $t + ' 里有 ' + $bad.Count + ' 支队伍不足 3 人') }
-}
 $known = @{}
 $rows = Get-Content (Join-Path $root '英雄相关\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 for ($i = 1; $i -lt $rows.Count; $i++) {
     $num = 0
     if ([int]::TryParse([string]$rows[$i][0], [ref]$num)) { $known['hero_{0:D2}' -f $num] = $true }
 }
-$unknown = @()
-foreach ($t in @('weak', 'mid', 'strong')) { foreach ($d in $chk.$t) { foreach ($h in @($d)) { if (-not $known.ContainsKey([string]$h)) { $unknown += [string]$h } } } }
+$nDeck = 0; $nRecipe = 0; $unknown = @()
+foreach ($t in @('weak', 'mid', 'strong')) {
+    if (-not ($chk.PSObject.Properties.Name -contains $t)) { throw ('池子写坏了：缺档位键 ' + $t) }
+    foreach ($e in @($chk.$t)) {
+        # ⚠️ 读回来的 JSON：固定队伍 = 数组；配方 = PSCustomObject（**不是** IDictionary）⇒ 用 `-is [System.Array]` 区分
+        if (-not ($e -is [System.Array])) {
+            $nRecipe++
+            $slots = @($e.slots)
+            if ($slots.Count -lt 1) { throw ('配方写坏了（档 ' + $t + '）：slots 为空') }
+            foreach ($s in $slots) {
+                # 槽位两种写法（读取端 `_normalize_recipe` 两种都认）：`{pool:[...]}` 或 `{fixed:"hero_xx"}`
+                $names = @($s.PSObject.Properties.Name)
+                $sid = @()
+                if ($names -contains 'pool') { $sid = @($s.pool) }
+                if ($names -contains 'fixed') { $sid += @([string]$s.fixed) }
+                if ($sid.Count -lt 1) { throw ('配方写坏了（档 ' + $t + '）：某个槽位既没 pool 也没 fixed') }
+                foreach ($h in $sid) {
+                    if ([string]$h -eq '') { throw ('配方写坏了（档 ' + $t + '）：槽位里有空 hero_id') }
+                    if (-not $known.ContainsKey([string]$h)) { $unknown += [string]$h }
+                }
+            }
+            if ($e.PSObject.Properties.Name -contains 'bench') {
+                foreach ($h in @($e.bench)) { if (-not $known.ContainsKey([string]$h)) { $unknown += [string]$h } }
+            }
+        } else {
+            $nDeck++
+            if (@($e).Count -lt 3) { throw ('池子写坏了：档 ' + $t + ' 里有固定队伍不足 3 人') }
+            foreach ($h in @($e)) { if (-not $known.ContainsKey([string]$h)) { $unknown += [string]$h } }
+        }
+    }
+}
 if ($unknown.Count -gt 0) { throw ('池子写坏了：有 ' + $unknown.Count + ' 个 hero_id 不在角色列表里（例：' + $unknown[0] + '）') }
-$total = @($chk.weak).Count + @($chk.mid).Count + @($chk.strong).Count
-if ($total -ne 120) { Write-Host ('[人工池] ⚠️ 总队伍数 = {0}（不是 120）⇒ 可能有队伍没进任何档' -f $total) }
-Write-Host '[人工池] 自检通过：三个 ASCII 档位键都在 · 每队 3 人 · hero_id 全部可解析'
+Write-Host ('[人工池] 自检通过：三个 ASCII 档位键都在 · 固定队伍 {0} 支（≥3 人）· 配方 {1} 条（槽位候选非空、hero_id 全部可解析）· pick_jitter={2}' -f $nDeck, $nRecipe, $pool.meta.pick_jitter)
 
 # ---------- 与旧候选池对照（只打印）----------
 $cmpPath = Resolve-UnderRoot $CompareOld

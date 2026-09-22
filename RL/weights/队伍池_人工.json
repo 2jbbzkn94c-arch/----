@@ -1,14 +1,15 @@
 {
-    "_说明":  "标准单机敌方\"队伍池\"（**人工标注版·尚未启用**）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)。⚠️ 档位键必须是 ASCII。要启用：把本文件复制成 RL\\weights\\队伍池.json（并删掉那份只读占位池）。",
-    "_口径":  "档位 = **人工标注**（来源 `队伍池.md`）：行首 1→strong / 2→mid / 3→weak；没有数字的保持该行所在分区。牌组按行内 `C###` 编号从车轮战候选表取。",
+    "_说明":  "标准单机敌方\"队伍池\"（**人工标注版 + 配方/类型 · 尚未启用**）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)。⚠️ 档位键必须是 ASCII。要启用：把本文件复制成 RL\\weights\\队伍池.json（并删掉那份只读占位池）。",
+    "_口径":  "档位 = 人工标注（来源 `队伍池.md`）。档内可混两种元素：① **固定队伍** = hero_id 数组；② **配方（类型）** = 字典（`slots` 首发槽候选池 + 可选 `bench` 预设替补；没写 bench ⇒ 替补在需要时从全英雄池按局面挑）。含配方的档按\"每场随机抽 1 条\"处理。",
     "_回退":  "删掉 RL\\weights\\队伍池.json 即可（立即回到\"按评分加权随机组队\"）。",
     "meta":  {
-                 "生成时间":  "2026-09-22 12:07",
+                 "生成时间":  "2026-09-22 12:57",
                  "引擎sha12":  "0ca1be8a46ac",
                  "权重sha12":  "ce9801354a68",
-                 "排名口径":  "人工标注（队伍池.md 的 1/2/3 + 分区）",
-                 "候选数":  113,
-                 "每档":  "不等分",
+                 "排名口径":  "人工标注（队伍池.md：C### 名单 + 8 条配方）",
+                 "pick_jitter":  2,
+                 "候选数":  82,
+                 "配方数":  8,
                  "来源":  [
                             "队伍池.md"
                         ]
@@ -282,21 +283,6 @@
              ],
     "mid":  [
                 [
-                    "hero_10",
-                    "hero_25",
-                    "hero_46"
-                ],
-                [
-                    "hero_14",
-                    "hero_18",
-                    "hero_49"
-                ],
-                [
-                    "hero_10",
-                    "hero_12",
-                    "hero_46"
-                ],
-                [
                     "hero_21",
                     "hero_22",
                     "hero_32"
@@ -443,145 +429,325 @@
                 ]
             ],
     "strong":  [
-                   [
-                       "hero_01",
-                       "hero_03",
-                       "hero_22"
-                   ],
-                   [
-                       "hero_18",
-                       "hero_40",
-                       "hero_44"
-                   ],
-                   [
-                       "hero_26",
-                       "hero_40",
-                       "hero_43"
-                   ],
-                   [
-                       "hero_07",
-                       "hero_12",
-                       "hero_46"
-                   ],
-                   [
-                       "hero_14",
-                       "hero_23",
-                       "hero_47"
-                   ],
-                   [
-                       "hero_01",
-                       "hero_13",
-                       "hero_32"
-                   ],
-                   [
-                       "hero_07",
-                       "hero_25",
-                       "hero_46"
-                   ],
-                   [
-                       "hero_17",
-                       "hero_34",
-                       "hero_44"
-                   ],
-                   [
-                       "hero_13",
-                       "hero_21",
-                       "hero_32"
-                   ],
-                   [
-                       "hero_01",
-                       "hero_13",
-                       "hero_21"
-                   ],
-                   [
-                       "hero_04",
-                       "hero_22",
-                       "hero_32"
-                   ],
-                   [
-                       "hero_22",
-                       "hero_33",
-                       "hero_40"
-                   ],
-                   [
-                       "hero_04",
-                       "hero_25",
-                       "hero_45"
-                   ],
-                   [
-                       "hero_04",
-                       "hero_12",
-                       "hero_45"
-                   ],
-                   [
-                       "hero_15",
-                       "hero_21",
-                       "hero_49"
-                   ],
-                   [
-                       "hero_17",
-                       "hero_23",
-                       "hero_34"
-                   ],
-                   [
-                       "hero_01",
-                       "hero_07",
-                       "hero_25"
-                   ],
-                   [
-                       "hero_07",
-                       "hero_09",
-                       "hero_25"
-                   ],
-                   [
-                       "hero_11",
-                       "hero_18",
-                       "hero_40"
-                   ],
-                   [
-                       "hero_01",
-                       "hero_07",
-                       "hero_13"
-                   ],
-                   [
-                       "hero_18",
-                       "hero_23",
-                       "hero_40"
-                   ],
-                   [
-                       "hero_17",
-                       "hero_27",
-                       "hero_44"
-                   ],
-                   [
-                       "hero_15",
-                       "hero_20",
-                       "hero_26"
-                   ],
-                   [
-                       "hero_11",
-                       "hero_17",
-                       "hero_31"
-                   ],
-                   [
-                       "hero_11",
-                       "hero_40",
-                       "hero_42"
-                   ],
-                   [
-                       "hero_27",
-                       "hero_34",
-                       "hero_44"
-                   ],
-                   [
-                       "hero_11",
-                       "hero_18",
-                       "hero_42"
-                   ],
-                   [
-                       "hero_23",
-                       "hero_24",
-                       "hero_32"
-                   ]
+                   {
+                       "id":  "R04",
+                       "note":  "1.近战（排除替补/嘲讽/圣诞老人/末日/死神/血锁/共鸣者/锤头鲨/古灵精怪）+ 远程（排除风语者/烈焰祭司/炸弹人/傀儡师）+ 嘲讽（排除替补和大骑士，根据对方首发决定）",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_30",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ]
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_10",
+                                                      "hero_21",
+                                                      "hero_34",
+                                                      "hero_08",
+                                                      "hero_09",
+                                                      "hero_20",
+                                                      "hero_33",
+                                                      "hero_06",
+                                                      "hero_07",
+                                                      "hero_45"
+                                                  ]
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_13",
+                                                      "hero_44",
+                                                      "hero_23",
+                                                      "hero_49",
+                                                      "hero_12",
+                                                      "hero_22",
+                                                      "hero_11",
+                                                      "hero_26",
+                                                      "hero_25",
+                                                      "hero_48"
+                                                  ]
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R05",
+                       "note":  "2.近战（排除替补/嘲讽/圣诞老人/末日/死神/血锁/共鸣者/锤头鲨/古灵精怪）+ 近战（排除替补/嘲讽/圣诞老人/末日/死神/血锁/共鸣者/锤头鲨/古灵精怪）+ 嘲讽（排除替补和大骑士，根据对方首发决定）",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_30",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ]
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_30",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ]
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_13",
+                                                      "hero_44",
+                                                      "hero_23",
+                                                      "hero_49",
+                                                      "hero_12",
+                                                      "hero_22",
+                                                      "hero_11",
+                                                      "hero_26",
+                                                      "hero_25",
+                                                      "hero_48"
+                                                  ]
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R07",
+                       "note":  "3.首发：古灵精怪 + 暗域 + 嬉皮死神，替补：（毒蛇淑女、白游侠、小阴影、烛火、长剑、赏金猎人、长角、死灵法师、锤头鲨、宿魂、共鸣者）其中随机3人",
+                       "slots":  [
+                                     {
+                                         "fixed":  "hero_28"
+                                     },
+                                     {
+                                         "fixed":  "hero_27"
+                                     },
+                                     {
+                                         "fixed":  "hero_30"
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+                                           {
+                                               "pool":  [
+                                                            "hero_10",
+                                                            "hero_37",
+                                                            "hero_03",
+                                                            "hero_47",
+                                                            "hero_20",
+                                                            "hero_33",
+                                                            "hero_46",
+                                                            "hero_15",
+                                                            "hero_18",
+                                                            "hero_32",
+                                                            "hero_17"
+                                                        ],
+                                               "n":  3
+                                           }
+                                       ],
+                       "dynamic_bench":  false,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R09",
+                       "note":  "4.首发：古灵精怪 + 暗域 + 黄金矿工，替补：（风语者/古拉博士）随机1人 + （长角/烛火/白游侠/长剑）随机2人",
+                       "slots":  [
+                                     {
+                                         "fixed":  "hero_28"
+                                     },
+                                     {
+                                         "fixed":  "hero_27"
+                                     },
+                                     {
+                                         "fixed":  "hero_42"
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+                                           {
+                                               "pool":  [
+                                                            "hero_43",
+                                                            "hero_14"
+                                                        ],
+                                               "n":  1
+                                           },
+                                           {
+                                               "pool":  [
+                                                            "hero_10",
+                                                            "hero_18",
+                                                            "hero_32",
+                                                            "hero_17"
+                                                        ],
+                                               "n":  2
+                                           }
+                                       ],
+                       "dynamic_bench":  false,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R11",
+                       "note":  "5.首发：圣诞老人 + 宿魂 + （复仇者/负墟）根据对方要求，有负面的上负墟，其他时候上复仇者，替补：德鲁伊/坠炮手/涌电技师/梅林/猎颅者",
+                       "slots":  [
+                                     {
+                                         "fixed":  "hero_02"
+                                     },
+                                     {
+                                         "fixed":  "hero_46"
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_44",
+                                                      "hero_23"
+                                                  ]
+                                     }
+                                 ],
+                       "bench":  [
+                                     "hero_08",
+                                     "hero_39",
+                                     "hero_36",
+                                     "hero_38",
+                                     "hero_45"
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  false,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R13",
+                       "note":  "6.（暗域/血锁/傀儡师）随机1人 + 嬉皮死神 + 嘲讽（排除替补和大骑士，根据首发决定）",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_05",
+                                                      "hero_41"
+                                                  ]
+                                     },
+                                     {
+                                         "fixed":  "hero_30"
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_13",
+                                                      "hero_44",
+                                                      "hero_23",
+                                                      "hero_49",
+                                                      "hero_12",
+                                                      "hero_22",
+                                                      "hero_11",
+                                                      "hero_26",
+                                                      "hero_25",
+                                                      "hero_48"
+                                                  ]
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R15",
+                       "note":  "7.（黄金矿工/红帽） + 风语者 + 雪拳",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_40",
+                                                      "hero_42"
+                                                  ]
+                                     },
+                                     {
+                                         "fixed":  "hero_43"
+                                     },
+                                     {
+                                         "fixed":  "hero_26"
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R17",
+                       "note":  "8.死灵法师 + 烈焰祭祀 + (共鸣者/巨剑）随机1人",
+                       "slots":  [
+                                     {
+                                         "fixed":  "hero_33"
+                                     },
+                                     {
+                                         "fixed":  "hero_19"
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_47",
+                                                      "hero_12"
+                                                  ]
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   }
                ]
 }
