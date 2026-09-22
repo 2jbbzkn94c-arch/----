@@ -93,6 +93,19 @@ func _one_match(k: int) -> Dictionary:
 		k, tid, slots.size(), "|".join(slot_desc), bench.size(), bmulti.size(), ",".join(gdesc),
 		str(bool(rec.get("dynamic_bench", true))), float(rec.get("jitter", 0.0))])
 	print("POOL|%d|init_deck=%d[%s]" % [k, GameState.enemy_deck.size(), ",".join(PackedStringArray(GameState.enemy_deck))])
+	# 槽位候选的**评分分布**（前 5 名）：用来看"抖动 2.0 够不够撬动最高分"
+	for si2 in slots.size():
+		var pool2: Array = ((slots[si2] as Dictionary).get("pool", []) as Array)
+		if pool2.size() < 3:
+			continue
+		var rows: Array = []
+		for hid2 in pool2:
+			rows.append({ "h": String(hid2), "s": _b._deploy_candidate_value(String(hid2), _b.enemy_deployed) })
+		rows.sort_custom(func(a, b): return float(a["s"]) > float(b["s"]))
+		var txt := ""
+		for r in rows.slice(0, 5):
+			txt += "%s=%.1f " % [String(r["h"]), float(r["s"])]
+		print("POOL|%d|slot%d_top5|n=%d|%s" % [k, si2 + 1, pool2.size(), txt])
 	# ---- 驱动部署（双方轮流；玩家侧我们替他点）----
 	var guard := 0
 	while (_b.state == Battle.State.DEPLOY or _b.state == Battle.State.PLACE_DEPLOY) and guard < 6000:

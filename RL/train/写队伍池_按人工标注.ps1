@@ -197,8 +197,12 @@ function Convert-SpecToRecipe([string]$text, [int]$lineNo) {
         $poolNames = @()
         foreach ($x in (Resolve-SlotPool $st)) { $poolNames += $x }
         if ($poolNames.Count -eq 0) { throw ('槽位解析为空：' + $st) }
+        # `pick`：槽位文字里带「根据…决定 / 根据…要求」⇒ 这个槽要**按克制挑**（"对面有毒蛇就上战锤"那类）；
+        #   其它槽（近战/远程/"随机1人"）⇒ 泛化槽，游戏端走"上位圈随机"（`meta.pick_band`）。
+        $pickMode = ''
+        if ($st -match '根据') { $pickMode = 'counter' }
         if ($poolNames.Count -eq 1) { $slots += [ordered]@{ fixed = $name2id[$poolNames[0]] } }
-        else { $slots += [ordered]@{ pool = @($poolNames | ForEach-Object { $name2id[$_] }) } }
+        else { $slots += [ordered]@{ pool = @($poolNames | ForEach-Object { $name2id[$_] }); pick = $pickMode } }
     }
     $bench = @()
     $benchMulti = @()
@@ -378,6 +382,9 @@ $pool = [ordered]@{
         排名口径 = ('人工标注（队伍池.md：C### 名单 + {0} 条配方）' -f $recipes.Count)
         # ★ 配方/候选挑人的"抖动"：一次克制 = 2.0 ⇒ 默认 2.0 ≈ 七成按分数、三成随缘（用户口径）
         pick_jitter = 2.0
+        # ★ 泛化槽（近战/远程/"随机1人"）的"上位圈宽度"：取"最高分 − pick_band"以内的候选随机。
+        #   实测抖动撬不动（远程池最高分领先 1.9）⇒ 靠这个控制"敌人有多不固定"：0 = 永远最强，越大越随意。
+        pick_band = 3.0
         候选数 = @($items).Count; 配方数 = @($recipes).Count
         来源 = @((Split-Path -Leaf $mdPath))
     }

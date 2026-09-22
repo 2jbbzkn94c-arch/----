@@ -661,9 +661,18 @@ const PICK_RECENT_MAX := 3     # 最近 N 局用过的队不再出（避免连�
 #   一次"克制"= `counter_bonus` 给 2.0 ⇒ 默认 2.0 ≈ "七成按分数、三成随缘"，避免"玩家一上负面，
 #   对面立刻掏负墟"这种机械感。0 = 恢复"严格取最高分"（改动前的行为）。
 const PICK_JITTER_DEFAULT := 2.0
+# 【2026-09-22·用户提问"近战/远程有抖动吗"之后新增】**泛化槽的"上位圈宽度"**：
+#   用户写「近战/远程」这种泛化槽，本意是"敌人别太固定"。但实测：抖动只有 ±2.0，而最高分对第二名的
+#   领先可达 1.9（远程池：沉默术士 23.9 vs 赏金猎人 22.0）⇒ 抖动撬不动，"泛化槽"实际还是被最高分垄断
+#   （实测：沉默术士约 4 成、暗域约 3 成）。
+#   ⇒ 泛化槽改成：**先按分数排序，取"最高分 − band"以内的所有人，在其中均匀随机**。
+#     band = 0 ⇒ 等价于"永远取最高"；band 很大 ⇒ 全池均匀。默认 3.0（约 5~8 人进圈，由池子 `meta.pick_band` 覆盖）。
+#   ⚠️ `pick: "counter"` 的条件槽**不受这条影响**（"根据对方首发决定"要保留克制意图、仍取最高分）。
+const PICK_BAND_DEFAULT := 3.0
 var _pick_pool: Dictionary = {}       # 档位名 -> Array（元素 = 固定队伍 Array[String] 或 配方 Dictionary）
 var _pick_pool_tried := false
 var _pool_pick_jitter := PICK_JITTER_DEFAULT
+var _pool_pick_band := PICK_BAND_DEFAULT
 var _recent_enemy_decks: Array = []
 var _pending_recipe: Dictionary = {}  # 本局挑中的配方（`_start_with_player_deck()` 里落到 GameState）
 
@@ -689,6 +698,8 @@ func _load_pick_pool() -> void:
 	var meta = (parsed as Dictionary).get("meta", {})
 	if typeof(meta) == TYPE_DICTIONARY and (meta as Dictionary).has("pick_jitter"):
 		_pool_pick_jitter = maxf(float((meta as Dictionary)["pick_jitter"]), 0.0)
+	if typeof(meta) == TYPE_DICTIONARY and (meta as Dictionary).has("pick_band"):
+		_pool_pick_band = maxf(float((meta as Dictionary)["pick_band"]), 0.0)
 	for key in PICK_POOL_TIER.values():
 		var tier := String(key)
 		if not (parsed as Dictionary).has(tier):
@@ -723,7 +734,7 @@ func _normalize_recipe(d: Dictionary) -> Dictionary:
 		var sd := s as Dictionary
 		var fixed := String(sd.get("fixed", ""))
 		if fixed != "":
-			slots.append({ "pool": [fixed] })
+			slots.append({ "pool": [fixed], "pick": "" })
 			continue
 		var pool_in = sd.get("pool", [])
 		if typeof(pool_in) != TYPE_ARRAY:
@@ -735,7 +746,9 @@ func _normalize_recipe(d: Dictionary) -> Dictionary:
 				pool.append(h)
 		if pool.is_empty():
 			return {}   # 空槽 ⇒ 这条配方作废（免得开局挑不出人）
-		slots.append({ "pool": pool })
+		# `pick`：`"counter"` = 这个槽位要**按克制挑**（"根据对方首发决定"那类，取最高分）；
+		# 空/其它 = **泛化槽**（近战/远程/随机1人那类）⇒ 走"上位圈随机"（见 `_pool_pick_band`）
+		slots.append({ "pool": pool, "pick": String(sd.get("pick", "")) })
 	# 预设替补：两种来源、两种写法（都要认，2026-09-22 踩过 —— 少认一种 ⇒ 替补组被丢掉 ⇒ 卡组只剩首发、
 	#   古灵精怪的形态池跟着缩水，用户实测"没变成预设替补"就是这个）：
 	#   ① `bench`       ：一维数组（英雄名名单）**或**"多组"（[{pool, n}]）
@@ -792,6 +805,7 @@ func _normalize_recipe(d: Dictionary) -> Dictionary:
 	return {
 		"id": String(d.get("id", "")),
 		"note": String(d.get("note", "")),
+		"pick_band": _pool_pick_band,
 		"slots": slots,
 		"bench": bench,
 		"bench_multi": bench_multi,
@@ -1804,7 +1818,11 @@ func _deploy_is_hard(id: String) -> bool:
 ##    （那边也做了同样的槽位逻辑，但这条才是实际路径 —— 2026-09-22 实机日志发现挂错了地方）。
 ## 候选 = 配方第 i 槽的**全部候选**（**可以在卡组之外**，例如"复仇者/负墟"只活在槽位池里）；
 ## 打分 = 既有 `_deploy_candidate_value()`（含对玩家已首发的净克制 + 职能配比）+ `randf() * jitter`；
-## 取最高分、并列随机（用户口径：不要每次都精准克制）。`<替补>` 标签英雄不主动首发（既有口径）。
+## 两种挑法（2026-09-22 用户提问"近战/远程有抖动吗"之后定稿）：
+##   · 槽位带 `pick == "counter"`（"根据对方首发/要求决定"那类）⇒ **取最高分**（并列随机）—— 保留克制意图；
+##   · 其它槽（近战/远程/随机1人 这类**泛化槽**）⇒ **"上位圈随机"**：分数在 `最高分 − band` 以内的所有人里
+##     均匀随机（band 见 `const PICK_BAND_DEFAULT`）—— 治"泛化槽还是被最高分垄断"。
+## `<替补>` 标签英雄不主动首发（既有口径）。
 func _recipe_deploy_pick() -> bool:
 	if GameState.enemy_recipe.is_empty():
 		return false
@@ -1812,8 +1830,11 @@ func _recipe_deploy_pick() -> bool:
 	var si: int = enemy_deployed.size()
 	if si < 0 or si >= slots.size() or si >= DEPLOY_COUNT_BATTLE:
 		return false
-	var pool: Array = ((slots[si] as Dictionary).get("pool", []) as Array)
-	var jitter := float(GameState.enemy_recipe.get("jitter", 2.0))
+	var slot: Dictionary = slots[si] as Dictionary
+	var pool: Array = (slot.get("pool", []) as Array)
+	var is_counter := String(slot.get("pick", "")) == "counter"
+	var jitter := float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))
+	var band := float(GameState.enemy_recipe.get("pick_band", PICK_BAND_DEFAULT))
 	var cands: Array = []
 	var scores: Array = []
 	for hid in pool:
@@ -1832,11 +1853,17 @@ func _recipe_deploy_pick() -> bool:
 	var best := -1e18
 	for s in scores:
 		best = maxf(best, float(s))
-	var tied: Array = []
+	var pool_idx: Array = []
 	for i in cands.size():
-		if float(scores[i]) >= best - 0.000001:
-			tied.append(i)
-	var pick_i: int = int(tied[randi() % tied.size()])
+		# 条件槽：只要并列最高的；泛化槽：要"最高分 − band"以内的所有人
+		if is_counter:
+			if float(scores[i]) >= best - 0.000001:
+				pool_idx.append(i)
+		elif float(scores[i]) >= best - band:
+			pool_idx.append(i)
+	if pool_idx.is_empty():
+		pool_idx.append(0)
+	var pick_i: int = int(pool_idx[randi() % pool_idx.size()])
 	var hid: String = String(cands[pick_i])
 	var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
 	if cell.x == -99 and cell.y == -99:
