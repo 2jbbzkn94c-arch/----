@@ -1764,9 +1764,73 @@ func _deploy_is_hard(id: String) -> bool:
 		return true
 	return false
 
+## 【2026-09-22 配方档·真实部署路径】按槽位填敌方首发（做法乙）。返回 true = 本回合已替敌方选好并落位。
+## ⚠️ 单机线上走的是**这里**（`Battle` 自己的部署态），不是 `src/Deploy.gd` 那个场景脚本
+##    （那边也做了同样的槽位逻辑，但这条才是实际路径 —— 2026-09-22 实机日志发现挂错了地方）。
+## 候选 = 配方第 i 槽的**全部候选**（**可以在卡组之外**，例如"复仇者/负墟"只活在槽位池里）；
+## 打分 = 既有 `_deploy_candidate_value()`（含对玩家已首发的净克制 + 职能配比）+ `randf() * jitter`；
+## 取最高分、并列随机（用户口径：不要每次都精准克制）。`<替补>` 标签英雄不主动首发（既有口径）。
+func _recipe_deploy_pick() -> bool:
+	if GameState.enemy_recipe.is_empty():
+		return false
+	var slots: Array = GameState.enemy_recipe.get("slots", [])
+	var si: int = enemy_deployed.size()
+	if si < 0 or si >= slots.size() or si >= DEPLOY_COUNT_BATTLE:
+		return false
+	var pool: Array = ((slots[si] as Dictionary).get("pool", []) as Array)
+	var jitter := float(GameState.enemy_recipe.get("jitter", 2.0))
+	var cands: Array = []
+	var scores: Array = []
+	for hid in pool:
+		var h := String(hid)
+		if h == "" or enemy_deployed.has(h):
+			continue
+		var cd: DataRegistry.HeroDef = DataRegistry.get_hero(h)
+		if cd == null:
+			continue
+		if cd.skills.has(DataRegistry.Skill.BENCH):
+			continue
+		cands.append(h)
+		scores.append(_deploy_candidate_value(h, enemy_deployed) + randf() * jitter)
+	if cands.is_empty():
+		return false   # 该槽挑不出人 ⇒ 交回原逻辑（至少别空过）
+	var best := -1e18
+	for s in scores:
+		best = maxf(best, float(s))
+	var tied: Array = []
+	for i in cands.size():
+		if float(scores[i]) >= best - 0.000001:
+			tied.append(i)
+	var pick_i: int = int(tied[randi() % tied.size()])
+	var hid: String = String(cands[pick_i])
+	var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
+	if cell.x == -99 and cell.y == -99:
+		return false   # 出生区满了：交回原逻辑（同样落不下，同样留到下一轮）
+	enemy_pool.erase(hid)   # 在卡组里就从卡组移除（不在也无妨：候选池不进卡组是设计口径）
+	enemy_deployed.append(hid)
+	_deploy_spawn_at(DataRegistry.Faction.ENEMY, hid, cell)
+	if _CONSOLE_AI_LOG:
+		print("[AI首发部署·配方] 槽%d（候选 %d 人 · 抖动 %.1f）→ 上阵 %s" % [
+			si + 1, cands.size(), jitter, DataRegistry.get_hero(hid).display_name])
+	return true
+
 func _enemy_deploy() -> void:
 	if state != State.DEPLOY or _deploy_side != 1:
 		return
+	# 【2026-09-22 配方档·真实部署路径】按槽位填首发（做法乙）。
+	# ⚠️ 单机实际走的是**这里**（`Battle` 自己的部署态），不是 `src/Deploy.gd` 那个场景脚本
+	#    （那是另一条部署入口 ⇒ 那边也做了同样的槽位逻辑，但这条才是线上路径）。
+	if not GameState.enemy_recipe.is_empty():
+		if _recipe_deploy_pick():
+			_deploy_after_pick()
+			return
+		if enemy_pool.is_empty():
+			# ⚠️ 防卡死：配方槽挑不出人 **且** 卡组也空（配方 1/2 这类"候选全在池里、卡组为空"的类型）
+			#    ⇒ 不能停在"等敌方选人"（部署态会一直等下去）⇒ 直接跳过本次敌方部署轮。
+			if _CONSOLE_AI_LOG:
+				print("[AI首发部署·配方] 槽位挑不出人且卡组为空 → 跳过本次敌方部署")
+			_deploy_after_pick()
+			return
 	if enemy_pool.size() > 0 and enemy_deployed.size() < DEPLOY_COUNT_BATTLE:
 		# 上人策略：从卡池挑一与已上场敌人配合最的英雄作为首发，
 		# 而不是简单按顺序 pop_front —保证首发阵容机制协同

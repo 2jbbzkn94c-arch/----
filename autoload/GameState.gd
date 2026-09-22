@@ -124,6 +124,9 @@ func start_match(first_side: int = SIDE_PLAYER) -> void:
 func set_decks(player: Array, enemy: Array) -> void:
 	player_deck = player.duplicate()
 	enemy_deck = enemy.duplicate()
+	# 【2026-09-22】换卡组 = 新一局 ⇒ 清掉上一局的"配方"运行态（否则自由部署/竞技场/重开会**沿用旧配方**）。
+	#   正常路径的写法是：`Battle._start_with_player_deck()` 先 `set_decks()`、**再**把本局配方写进 `enemy_recipe`。
+	enemy_recipe = {}
 
 # 推进到对方行动方。first_side = 本局先手方（谁先行动）。
 # 回合数只在"先手之后的第二位行动方结束"时 +1：保证第 N 回合 = 双方各完整行动一轮。
