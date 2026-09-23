@@ -22,6 +22,7 @@ var _filter_info: Label = null             # 筛选按钮右侧"共 N 名 / 筛�
 var _filter: Menu.HeroFilter = null        # 筛选状态机 = 普通模式那份实现（Menu 的嵌套类）
 var _pool_touch_down := false              # 触屏按住英雄池中
 var _squad_cap: Label = null               # 英雄池下方"已选队伍"标题行
+var _squad_clear_btn: Button = null        # 标题行右端「清空」按钮（用户要求：清空放进队伍列表里）
 var _squad_host: Control = null            # "已选队伍"小卡宿主（每次刷新整块重建）
 var _enemy_ai := false                     # 敌方是否交给 AI（不勾选=双控，双方都归玩家）
 var _diff_opt: OptionButton = null          # AI 难度下拉（敌方为 AI 时生效）
@@ -260,12 +261,31 @@ func _build() -> void:
 	# 【2026-09-23 用户要求】「在英雄池下方增加一个已选择英雄队伍，像普通模式那样，
 	#   点击英雄可以直接取消选择」⇒ 悬停看属性、**点小卡 = 取消选择**（见 `_on_squad_card_clicked`）。
 	#   排列顺序 = 勾选顺序 ⇒ 前 STARTERS 名就是首发（标题行里写明）；只显示当前编辑的那一侧。
+	# 【2026-09-23 深夜·用户要求】「队伍列表增加一个清空按钮」⇒ 计数文字与「清空」并排放一行，
+	#   就贴在队伍小卡上方（不用再跑到页面底部那个「清空当前队伍」去找；那个按钮照旧保留）。
+	var squad_row := HBoxContainer.new()
+	squad_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	squad_row.add_theme_constant_override("separation", 10)
+	vbox.add_child(squad_row)
 	_squad_cap = Label.new()
 	_squad_cap.add_theme_font_size_override("font_size", 15)
 	_squad_cap.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	# ⚠️ 【2026-09-23 修·用户截图「清空把英雄池挤没了」】**自动换行的 Label 放进 HBox 必须给它宽度**：
+	#   不写 `SIZE_EXPAND_FILL` 的话，它的最小宽度只有 **1 个字** ⇒ HBox 把它压成"一字一行的竖条"，
+	#   那一列的**最小高度**就涨到几十行 ⇒ VBox 只能把可伸缩的英雄池（ScrollContainer）挤成 0 高。
+	#   现在：占满剩余宽度 + 文字居中 + **关掉自动换行**（文案短，720 宽下稳放一行）。
+	#   ⚠️ 在 VBox 里当独子时不会踩这个坑（VBox 默认把子节点横向拉满）——是**搬进 HBox** 才暴露的。
+	_squad_cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_squad_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_squad_cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vbox.add_child(_squad_cap)
+	_squad_cap.autowrap_mode = TextServer.AUTOWRAP_OFF
+	squad_row.add_child(_squad_cap)
+	_squad_clear_btn = Button.new()
+	_squad_clear_btn.text = "清空"
+	_squad_clear_btn.custom_minimum_size = Vector2(84, 32)
+	_squad_clear_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER   # 行高变化时按钮保持 32 高，不被拉长
+	_squad_clear_btn.add_theme_font_size_override("font_size", 16)
+	_squad_clear_btn.pressed.connect(_on_squad_clear)
+	squad_row.add_child(_squad_clear_btn)
 	_squad_host = Control.new()
 	_squad_host.size_flags_horizontal = Control.SIZE_SHRINK_CENTER   # 小卡整行居中（本页其它行也是居中）
 	vbox.add_child(_squad_host)
@@ -555,6 +575,8 @@ func _refresh_squad() -> void:
 		_squad_cap.text = "%s队伍：空 —— 点上面英雄池的卡加入（前 %d 名首发，其余替补）" % [side_name, STARTERS]
 	else:
 		_squad_cap.text = "%s队伍 %d/%d —— 点小卡可取消选择（前 %d 名首发，其余替补）" % [side_name, ids.size(), TEAM_SIZE, STARTERS]
+	if _squad_clear_btn != null and is_instance_valid(_squad_clear_btn):
+		_squad_clear_btn.disabled = ids.is_empty()   # 空队伍时清空没意义 ⇒ 灰掉
 	_build_squad_preview(ids)
 
 func _build_squad_preview(ids: Array) -> void:
@@ -591,6 +613,11 @@ func _build_squad_preview(ids: Array) -> void:
 
 # 点队伍里的小卡 = 直接从队伍里去掉这个英雄（与普通模式"点卡组小卡"同一手感）。
 # 不复用 `_toggle()`：那个是"点一下弹属性框"的加入手感，这里是明确的删除动作。
+# 【2026-09-23 深夜·用户要求】队伍列表里的「清空」：清掉**当前编辑的那一侧**。
+#   走同一个 `_on_clear()`（清空 + 写存档 + 刷新）⇒ 与底部那个「清空当前队伍」行为逐字一致。
+func _on_squad_clear() -> void:
+	_on_clear()
+
 func _on_squad_card_clicked(id: String) -> void:
 	var arr := _cur()
 	if not arr.has(id):

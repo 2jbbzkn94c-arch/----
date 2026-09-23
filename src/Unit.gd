@@ -250,6 +250,15 @@ func _skill_tags() -> String:
 				out += "勤"
 			DataRegistry.Skill.BENCH:
 				out += "候"
+	# 【2026-09-23 深夜·用户报「风语者的技能生效后，队友卡面上没有疾行的标志」】风语者的移动光环是
+	#   **数值增益**（`heroes/hero_43_风语者.gd` 给队友 `move_buff += 1`），而上面这段只认**自身静态词条**
+	#   （`DataRegistry.Skill.SWIFT` = `<疾行>`）⇒ 吃到光环的队友牌面**一点变化都没有**。
+	#   这里补：**只要身上有移动增益（`move_buff > 0`）就同样挂一个「疾」**，位置/配色与自带词条一致；
+	#   本来就有 `<疾行>` 的不重复（`contains` 去重）。⚠️ 只加 `<疾行>` 的**显示**，不动 `effective_move()`。
+	#   刷新路径：风语者的 `on_enter`/`on_ally_entered`、`Battle._run_side_skills()` 的回合开始统一刷新、
+	#   以及 `_clear_statuses()`（回合末 `move_buff = 0`）**都会调 `refresh_stats()`** ⇒ 见那里新增的一行。
+	if move_buff > 0 and not out.contains("疾"):
+		out += "疾"
 	return out
 
 func _hex_points(r: float) -> PackedVector2Array:
@@ -364,6 +373,9 @@ func refresh_stats() -> void:
 	_update_atk_label()
 	_update_hp_label()
 	_update_status_label()
+	# 【2026-09-23 深夜·用户报「风语者光环生效后队友牌面没有疾行标志」】词条标签也要跟着刷：
+	#   移动光环（`move_buff`）与它一样是"数值增益" ⇒ 不刷的话「疾」不会出现/不会消失。
+	_update_tags_label()
 
 # 刷新名字标签（用于古灵精怪变身等）
 func _update_name_label() -> void:
@@ -630,7 +642,12 @@ func burst_fx(color: Color, text: String) -> void:
 		_float_text(text, color)
 
 # 被动技能触发提示：给该单位描一圈亮边并闪烁 + 飘字，便于分辨是谁的被动生效
-func flash_passive() -> void:
+# 【2026-09-23 深夜·用户报「风语者开局被动怎么会弹两个字样」】`with_text := false` = **只闪边框、不飘"被动"**：
+#   回合开始技在 `Battle._trigger_turn_start()` 里已经走过一次 `burst_fx(..., 专属飘字)`
+#   （风语者 = 「风语」）⇒ 这里再飘一个"被动"就成了**两个字样叠在一起**。
+#   调用方（`Battle._trigger_turn_start_all()`）会在"该英雄已有专属飘字"时传 false；
+#   没有专属飘字的英雄照旧飘"被动"（回合结束那条路仍用默认 true）。
+func flash_passive(with_text := true) -> void:
 	if _passive_border == null:
 		_passive_border = Line2D.new()
 		_passive_border.points = _hex_points(hex_radius + 2.0)
@@ -640,7 +657,8 @@ func flash_passive() -> void:
 		_passive_border.default_color = Color(1.0, 0.92, 0.35)
 		_passive_border.modulate.a = 0.0
 		add_child(_passive_border)
-	_float_text("被动", Color(1.0, 0.92, 0.35))
+	if with_text:
+		_float_text("被动", Color(1.0, 0.92, 0.35))
 	if _passive_tween:
 		_passive_tween.kill()
 	_passive_border.visible = true

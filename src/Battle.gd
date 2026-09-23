@@ -286,6 +286,7 @@ var board_view: BoardView
 var rng := RandomNumberGenerator.new()   # 统一随机源：单机默认随机，联机时由主机播种保证确定
 var _session_id := 0   # 对局会话代：重开/重置时递增，让残留的异步协程（敌方回放等）检测到并安全退
 var _ai_thread: Thread = null      # 敌方 AI 后台搜索线程（避免主线程卡死无法查看/操作）
+var _ai_worker_ai = null           # 正在这条线程里搜索的 AI 实例（协作式中断用，见 `_reap_ai_thread()`）
 var _ai_plan: Array = []           # 线程算出的敌方行动计划
 var _ai_done := false              # 线程是否已完成
 var _ai_used := false              # 是否已消费本次线程结果
@@ -480,11 +481,23 @@ var _sub_faction := -1          # 当前替补操作的目标阵营（-1=无；P
 var player_dead := 0
 var enemy_dead := 0
 
-func _exit_tree() -> void:
-	# 兜底：场景卸载前回收可能仍在跑的后台 AI 线程，避免节点释放后线程写成员报错
+# 【2026-09-23 深夜·用户报「AI 思考时点重开/返回选人会卡住」】回收后台搜索线程前先**让它自己停**。
+#   机制：`HUD._on_restart()` → `reset_match()`、以及"返回选人"的 `change_scene_to_file` → `_exit_tree()`，
+#   两处都会 `_ai_thread.wait_to_finish()` ⇒ **主线程被冻住**；而一次搜索最长可跑满 `TIME_BUDGET_MS`
+#   （噩梦 25 秒）⇒ 用户看到的就是"点一下卡死"。现在先置 `abort_requested`，搜索在下一个循环层立刻返回
+#   空计划 ⇒ 冻结时间从"最多 25 秒"降到"最多一层（通常几十毫秒）"。
+func _reap_ai_thread() -> void:
+	if _ai_worker_ai != null and is_instance_valid(_ai_worker_ai):
+		_ai_worker_ai.abort_requested = true
 	if _ai_thread != null and _ai_thread.is_started():
 		_ai_thread.wait_to_finish()
 	_ai_thread = null
+	_ai_worker_ai = null
+
+func _exit_tree() -> void:
+	# 兜底：场景卸载前回收可能仍在跑的后台 AI 线程，避免节点释放后线程写成员报错
+	# （先 `abort_requested` 叫停，见 `_reap_ai_thread()` 的说明 ⇒ 不再冻满整个搜索）
+	_reap_ai_thread()
 
 func _ready() -> void:
 	_enemy_replay = EnemyReplay.new(self)   # 敌方计划回放器（无状态，重开不必重建）
@@ -1586,10 +1599,9 @@ signal turn_banner(text: String)
 # redraft=true 用于"对局结束后再战一局"：竞技场会重新 2 选 1 选人（对局中"重开"则沿用同队伍）
 func reset_match(redraft := false) -> void:
 	_session_id += 1   # 让上次对局的异步协程（敌方回放等）检测到会话已变并安全退
-	# 若敌方 AI 后台线程仍在跑，等它结束并回收（搜索已限幅，耗时短；避免线程泄漏）
-	if _ai_thread != null and _ai_thread.is_started():
-		_ai_thread.wait_to_finish()
-	_ai_thread = null
+	# 若敌方 AI 后台线程仍在跑，**先叫停再回收**（见 `_reap_ai_thread()`：否则主线程会冻满整个搜索，
+	# 用户报的"AI 思考时点重开会卡住"就是这个）
+	_reap_ai_thread()
 	_ai_done = false
 	_ai_used = false
 	_ending_side = false
@@ -2342,13 +2354,16 @@ const BOMB_DAMAGE := 5
 const GOLD_LIFE := 3
 func _place_obstacles() -> void:
 	# 预设障碍布局(坐标为代码坐标:用户左下角[1,1] 对应 x=列-1, y=7-行):
-	#   1) [3,2][3,3][3,4][3,5] -> 中列一线(略上移,不占底线出生行)
+	#   1) [3,3][3,4]          -> 中列两格（居中的一小段，不占出生行）
 	#   2) [2,4][4,4]          -> 顶部两行隔列
 	#   3) [1,3][1,4][5,3][5,4] -> 左右两翼
 	#   4) 无障碍
 	# 每局开局随机选取一种。
+	# 【2026-09-23 深夜·用户口径】「把中间有一列4格障碍的地图删掉，改成一列2格，在中间」⇒ 第 1 种由
+	#   原来的**中列 4 格**（代码 y=5/4/3/2）换成**中列 2 格**（代码 y=4/3 = 用户坐标 [3,3][3,4]）；
+	#   预设仍 4 种、`rng.randi_range(0, presets.size()-1)` 的调用次数不变 ⇒ 不影响任何"按种子复现"的跑批结构。
 	var presets: Array = [
-		[Vector2i(2, 5), Vector2i(2, 4), Vector2i(2, 3), Vector2i(2, 2)],
+		[Vector2i(2, 4), Vector2i(2, 3)],
 		[Vector2i(1, 3), Vector2i(3, 3)],
 		[Vector2i(0, 4), Vector2i(0, 3), Vector2i(4, 4), Vector2i(4, 3)],
 		[],
@@ -2874,7 +2889,10 @@ func _trigger_turn_start_all(faction: int) -> void:
 			continue
 		if u.alive and u.faction == faction:
 			if _trigger_turn_start(u):
-				u.flash_passive()
+				# 【2026-09-23 深夜·用户报「风语者开局被动怎么会弹两个字样」】`_trigger_turn_start()` 里已经
+				#   走过 `burst_fx(..., 专属飘字)`（风语者 = 「风语」）⇒ 这里再飘"被动"就是两个字样叠一起。
+				#   所以：**该英雄有专属飘字时只闪边框**，没有专属飘字的才补"被动"。
+				u.flash_passive(String(DataRegistry.hero_fx(u.hero_id).get("text", "")) == "")
 				if not is_inside_tree():
 					return   # 已脱离场景树（点击重开/reload/切场景）：安全退出
 				await get_tree().create_timer(0.35, false).timeout
@@ -6732,11 +6750,15 @@ func _run_enemy_turn() -> void:
 	ai.log_decisions = _CONSOLE_AI_LOG   # AI 行动方案评分输出跟随 AI 行为日志总开关（默认关）
 	# 后台线程搜索：AI 计算期间主线程保持响应（可点英雄查看属性），算完再回放。
 	# BattleAI 只读 grid 几何与 DataRegistry 静态数据，不触碰场景节点，线程安全。
+	_reap_ai_thread()   # 保险：不应有残留线程（先叫停，见 `_reap_ai_thread()`）
+	# ⚠️ 【2026-09-23 修·连带 bug】这三行**必须在 `_reap_ai_thread()` 之后**：被回收的那个线程在退出前
+	#   会写 `_ai_done = true`（见 `_enemy_ai_worker()`）⇒ 先清后回收的话，新搜索的等待循环会**立刻
+	#   认为已完成**、把上一条线程的（被中断后为空的）计划当成本次结果。
 	_ai_plan = []
 	_ai_done = false
 	_ai_used = false
-	if _ai_thread != null and _ai_thread.is_started():
-		_ai_thread.wait_to_finish()   # 保险：不应有残留线程
+	ai.abort_requested = false   # 【2026-09-23】新一次搜索：清掉上一轮可能留下的中断请求
+	_ai_worker_ai = ai
 	_ai_thread = Thread.new()
 	_ai_thread.start(_enemy_ai_worker.bind(ai, snap))
 	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
@@ -6757,6 +6779,7 @@ func _run_enemy_turn() -> void:
 		await get_tree().process_frame
 	_ai_thread.wait_to_finish()   # 回收线程资源（结果已写入 _ai_plan）
 	_ai_thread = null
+	_ai_worker_ai = null          # 【2026-09-23】搜索已结束：松掉中断用的实例引用
 	if _ai_done and not _ai_used:
 		_ai_used = true
 		_ai_mutex.lock()

@@ -331,6 +331,26 @@ var log_verbose := false
 ##        时 10 秒跑不完两个阶段 ⇒ 出手阶段还没轮到就被砍掉 ⇒ AI 只挪位不出手。
 ##   默认 10000 ⇒ 简单/普通/困难三档逐位不变（它们的权重文件没有这个键）。
 var time_budget_ms := 10000
+## 【2026-09-23 深夜·用户要求「控制台里写上有没有超时」】最近一次搜索的取证：耗时 + 有没有撞上时间上限。
+##   只给决策日志用（`_print_decision()` 会把它打在抬头行里），**不参与任何决策**。
+##   ⚠️ `last_search_timeout = true` 的含义：这份计划的**后半段是超时后的贪心收尾**（`_greedy_finish()`）
+##   ⇒ 它**未必是最优解**，此时"为什么没选那一手"很可能只是**没搜到**（先看这行，再查别的）。
+var last_search_ms := 0
+var last_search_timeout := false
+## 【2026-09-23 深夜·用户报「AI 思考时点重开/返回选人会卡住」】**协作式中断开关**。
+##   `Battle` 在"重开 / 切场景"时要回收后台搜索线程（`reset_match()` / `_exit_tree()` 里的 `wait_to_finish()`），
+##   而 `wait_to_finish()` 会**把主线程冻住**——一次搜索最长可跑满 `time_budget_ms`（噩梦 25s）
+##   ⇒ 原来就是"点重开卡死 25 秒"。现在 `Battle` 先把本开关置 true，搜索在**每个循环层**检查它、
+##   立刻返回空计划 ⇒ 冻结时间降到"最多一层（通常几十毫秒）"。
+##   ⚠️ 只由主线程写、搜索线程只读；每局新建 AI 实例时由 `Battle` 归 false。
+var abort_requested := false
+## 【2026-09-23 深夜·用户要求「查一下 25 秒都花在哪儿」】两阶段搜索（`SEARCH_MODE ≥ 1`）的分账，
+##   抬头行下面会多打一行 `[搜索分账]`。同样是**纯取证**（只为回答"时间花在哪、搜了多少"），不参与决策。
+var last_tp_phase1_ms := 0        # 阶段 1（走位）耗时
+var last_tp_phase2_ms := 0        # 阶段 2（出手）耗时
+var last_tp_layouts_built := 0    # 阶段 1 一共产出多少套阵型
+var last_tp_layouts_used := 0     # 经漏斗送进阶段 2 的阵型数（受 TWO_PHASE_LAYOUTS 封顶）
+var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个数
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -918,6 +938,8 @@ var w_weak_p := WEAK_P
 var w_weak_seed := WEAK_SEED
 # 【2026-09-23·默认关】搜索模式（0 = 现役逐单位组合 / 1 = 两阶段联合搜索），见 `const SEARCH_MODE` 处说明。
 var w_search_mode := SEARCH_MODE
+# 【2026-09-23 深夜·默认关】阶段 1 每层保留宽度（0 = 沿用 `BEAM`），见 `const TWO_PHASE_P1_BEAM` 处说明。
+var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
 var w_sub_finish_w := SUB_FINISH_W
@@ -1148,6 +1170,8 @@ func set_weights(t: Dictionary) -> void:
 			"SPLIT_W": w_split = float(v)
 			# 【2026-09-23·默认关】搜索模式（0 = 现役逐单位组合 / 1 = 两阶段联合搜索：先联合走位、再联合分配出手）
 			"SEARCH_MODE": w_search_mode = int(v)
+			# 【2026-09-23 深夜·默认关】阶段 1 每层保留宽度（算力分配键，见 const TWO_PHASE_P1_BEAM 处说明）
+			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
@@ -1426,7 +1450,18 @@ const SEARCH_MODE := 0
 # ⚠️ 【2026-09-23 深夜②·已试过并回退】曾放到 **32**（想盖住"阶段 1 位置分看走眼"的那一段），实测
 #   没有棋力收益、阶段 2 却贵约 4 倍 ⇒ **按用户拍板回到 8**（依据见 `_layout_score()` 上方那段与
 #   `Data/Progress_tracking/1_通用策略.md` 文末那一轮：`sm24` 批 Δpts(sm2−sm0) = −6.07 [−14.52,+2.38]）。
-const TWO_PHASE_LAYOUTS := 8
+# ⚠️ 【2026-09-23 深夜⑱·用户拍板 B】8 → **16**（阶段 2 工作量 ×2）。与 ② 那次的区别：② 是"换尺子 + 放宽
+#   到 32"一起改（尺子那笔抵消了收益）；这次只放宽余量，并且**同时**加了"全员原地保送"（见
+#   `_search_two_phase()` 阶段 2 开头）⇒ 两者叠加后**必须实测**才知道有没有用（`难度体检 -Mode smode`）。
+const TWO_PHASE_LAYOUTS := 16
+# 【2026-09-23 深夜·用户「查一下 25 秒都花在哪儿」+ 两局实测分账】**阶段 1 的每层保留宽度**独立成一个键。
+#   病灶（实机两局读数）：`[搜索分账] 阶段1 10.6~11.6s：阵型 400 套 → 送阶段2 16 套 · 阶段2 13.7~14.5s`
+#   —— 阶段 1 沿用 `BEAM`（噩梦 400）⇒ 花掉 ~45% 预算去枚举 400 套阵型，而下游**只用 16 套**
+#   （`TWO_PHASE_LAYOUTS`）⇒ 后 384 套基本白算，阶段 2 被饿到超时（计划后半段只能贪心收尾）。
+#   0 = 关（沿用 `BEAM` ⇒ **逐位不变**）· >0 = 阶段 1 每层只留这么多条线（内部夹到 ≥ `TWO_PHASE_LAYOUTS`）。
+#   ⚠️ 这是**算力分配键**（不动任何评分）⇒ 想定型要走剂量批（`难度体检 -Mode smode`）：
+#     先试 96（预计阶段 1 从 ~11s 降到 ~3s，把 8 秒让给阶段 2），看 ① 还超不超时 ② Δpts。
+const TWO_PHASE_P1_BEAM := 0
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
 func search(sim: Sim, enemy_faction: int) -> Array:
@@ -1436,6 +1471,14 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	# `enemy_faction` 是 int 入参、`Sim.active_fn` 是 `DataRegistry.Faction` 枚举类型字段：
 	# 直接赋 int 会报 `INT_AS_ENUM_WITHOUT_CAST` 警告（编辑器里会看到），所以显式 `as` 转换。
 	sim.active_fn = enemy_faction as DataRegistry.Faction
+	# 【2026-09-23 深夜·用户要求】每次搜索先清取证（三条出口各自回填；见 `last_search_ms` 处说明）
+	last_search_ms = 0
+	last_search_timeout = false
+	last_tp_phase1_ms = 0
+	last_tp_phase2_ms = 0
+	last_tp_layouts_built = 0
+	last_tp_layouts_used = 0
+	last_tp_leaves = 0
 	var enemy_idxs: Array = []
 	for i in sim.units.size():
 		if sim.units[i].fn == enemy_faction and sim.units[i].alive:
@@ -1572,8 +1615,11 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 				if merged.size() > beam * 2:
 					merged.sort_custom(_cmp_state)
 					merged = merged.slice(0, beam)
+				if abort_requested:
+					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
 				if deadline > 0 and Time.get_ticks_msec() >= deadline:
 					timed_out = true
+					last_search_timeout = true   # 【取证】撞上 TIME_BUDGET_MS（抬头行会写明）
 					break
 			if timed_out:
 				break
@@ -1596,6 +1642,7 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 		w_focus_fire = kf_save
 		return []
 	if log_decisions:
+		last_search_ms = Time.get_ticks_msec() - t0   # 【取证】本次搜索实际耗时（抬头行会写明）
 		_print_decision(sim, states[0])
 	# 【2026-09-19】弱化引擎的临时权重还原（`wk_*` 全 false 时这三行是恒等操作）
 	w_threat_dead_fold = kd_save
@@ -1637,8 +1684,12 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 ##     变成了零成本（用户实机症状：「莫名其妙的不打」）。现改为**本回合开始时**的判据
 ##     （`_actions_for()` 里有没有 `atk >= 0`，与现役逐字同一把尺子 ⇒ "原位打 / 走一步再打都算"）。
 func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
-	var deadline := (Time.get_ticks_msec() + time_budget_ms) if time_budget_ms > 0 else 0
+	var t0 := Time.get_ticks_msec()   # 【取证】抬头行要用"这次搜索花了多久"
+	var deadline := (t0 + time_budget_ms) if time_budget_ms > 0 else 0
 	var beam := _beam()
+	# 【2026-09-23 深夜·默认关】阶段 1 的每层宽度（`TWO_PHASE_P1_BEAM`）：0 = 沿用 `BEAM`（逐位不变）；
+	#   >0 = 只留这么多条线（至少 `TWO_PHASE_LAYOUTS`，否则漏斗没东西可送）。见 const 处那两局实测分账。
+	var p1_beam: int = beam if w_tp_p1_beam <= 0 else maxi(int(w_tp_p1_beam), maxi(TWO_PHASE_LAYOUTS, 1))
 	# ⚠️ 内层宽度必须是整数：这里用 **8.0** 走浮点除再 `int()` 取整，避免编辑器那条
 	#   `INTEGER_DIVISION`（"Integer division. Decimal part will be discarded."）警告 ——
 	#   `beam` 恒为正 ⇒ 截断与整数除完全等价，行为逐位不变（2026-09-23 用户报的那条警告）。
@@ -1687,15 +1738,18 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 						path.append({ "idx": idx, "action": a })   # 原地不生成步骤（省一次回放亮边）
 					var full: bool = done2.size() >= enemy_idxs.size()
 					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full)))
+				if abort_requested:
+					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
 				if deadline > 0 and Time.get_ticks_msec() >= deadline:
 					timed_out = true
+					last_search_timeout = true   # 【取证】阶段 1 就超时（抬头行会写明）
 					break
 			if timed_out:
 				break
 		if not pending:
 			break
 		merged.sort_custom(_cmp_state)
-		layouts = merged.slice(0, beam)
+		layouts = merged.slice(0, p1_beam)   # 【取证/键】阶段 1 宽度 = `p1_beam`（`TWO_PHASE_P1_BEAM`，0 = BEAM）
 		if timed_out:
 			break
 	if layouts.is_empty():
@@ -1711,14 +1765,48 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		#   "原地出手 / 敲相邻障碍 / 不打"（它自己就按 `u.moved` 卡住移动）⇒ 规则照样守住，
 		#   而且挪过位的单位**该打的这一下不会白丢**。
 		var gw_in: Array = []
-		for st0 in layouts.slice(0, mini(layouts.size(), 8)):
+		for st0 in layouts.slice(0, mini(layouts.size(), maxi(TWO_PHASE_LAYOUTS, 1))):
 			gw_in.append(_tp_state(st0["sim"], st0["path"], {}, float(st0["score"])))
 		var gw1: Array = _greedy_finish(gw_in, enemy_idxs)
+		last_tp_layouts_used = gw_in.size()                                   # 【取证】送进收尾的阵型数
+		last_tp_phase2_ms = 0                                                 # 阶段 2 没跑
+		if log_decisions and gw1.size() > 0:
+			last_search_ms = Time.get_ticks_msec() - t0   # 走位阶段就超时也要打日志（否则这一回合控制台什么都没有）
+			_print_decision(sim, gw1[0])
 		return gw1[0]["path"] if gw1.size() > 0 else (layouts[0]["path"] as Array)
 	# ---------- 阶段 2：再安排谁打谁（不再移动） ----------
+	last_tp_layouts_built = layouts.size()                 # 【取证】阶段 1 产出多少套阵型
+	last_tp_phase1_ms = Time.get_ticks_msec() - t0         # 【取证】阶段 1 花了多久
+	var t_p2 := Time.get_ticks_msec()                      # 【取证】阶段 2 计时起点
 	var best: Dictionary = {}
 	var best_wiped: Dictionary = {}
 	var layout_n := mini(maxi(TWO_PHASE_LAYOUTS, 1), layouts.size())
+	# 【2026-09-23 深夜⑱·用户拍板 A】**保送"全员原地"那套阵型进阶段 2**。
+	#   为什么必须保送：模式 2 的阶段 2 是**唯一**还会发"移动+攻击"整套组合的地方（`_tp_attack_actions()`
+	#   开头 `if w_search_mode >= 2: return _actions_for(sim, idx)`），而它对**已经在阶段 1 挪过位**的单位
+	#   只剩"原地出手 / 敲障碍 / 不打"（`_actions_for()` 按 `u.moved` 卡住移动）⇒ **只有"全员都还没动"
+	#   这套阵型能把现役（模式 0）的整套动作空间带进阶段 2**。
+	#   而它是跟别人一起拼 `_layout_score()` 代理分的（起点分 + 原地/落点能打的伤害 + 队形/暴露），
+	#   "谁都没动"在这把尺子上通常不占优 ⇒ 实测被前 N 名挤掉 ⇒ **模式 0 会选的那条路在模式 2 里直接
+	#   不可达**（用户实机 2026-09-23 深夜：超新星"只走到 (0,3)"/荆棘树人"只走到 (1,2)"整回合空手，
+	#   而"换一格再打"那两手的局部读数是 7.7 / 11.1 分）。
+	#   保送手法：它排在 `layout_n` 之外时**与第 `layout_n` 名对调**（只牺牲最弱的一套余量，其余名次不动）；
+	#   连 `beam` 都没进（代理分把它排到 `beam` 名之外）时**现场按种子原样重建一套**再放进去
+	#   —— 重建用的是与阶段 1 起点完全相同的三个参数（`sim` / `start_can_hit` / `empty ⇒ complete`）。
+	#   判据：`path` 为空 ⟺ 一个单位都没移动过（`_tp_move_actions()` 只给 `move != null` 的动作记步骤）。
+	if layout_n > 0:
+		var stay_i := -1
+		for li0 in layouts.size():
+			if (layouts[li0]["path"] as Array).is_empty():
+				stay_i = li0
+				break
+		if stay_i < 0:
+			layouts.append(_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0)))
+			stay_i = layouts.size() - 1
+		if stay_i >= layout_n:
+			var keep0: Dictionary = layouts[layout_n - 1]
+			layouts[layout_n - 1] = layouts[stay_i]
+			layouts[stay_i] = keep0
 	for li in layout_n:
 		var base: Dictionary = layouts[li]
 		var layer: Array = [_tp_state((base["sim"] as Sim).clone(), (base["path"] as Array).duplicate(), {},
@@ -1761,8 +1849,11 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 						var eot := done3.size() >= enemy_idxs.size()
 						merged2.append(_tp_state(s3, path3, done3,
 								_evaluate(s3, eot) - (idle_hit if not hit else 0.0)))
+				if abort_requested:
+					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
 				if deadline > 0 and Time.get_ticks_msec() >= deadline:
 					p2_timeout = true
+					last_search_timeout = true   # 【取证】阶段 2 出手阶段超时（抬头行会写明）
 					break
 			if p2_timeout:
 				break
@@ -1775,19 +1866,26 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 			# 出手阶段超时：这一套阵型用贪心补齐（位置已定 ⇒ `_actions_for` 只会给"原地出手/不打"）
 			complete = _greedy_finish(layer.slice(0, mini(layer.size(), 4)), enemy_idxs)
 		for st in complete:
+			last_tp_leaves += 1                            # 【取证】阶段 2 评估出的完整计划数
 			if w_no_loss_filter > 0 and _myside_wiped(st["sim"], sim.active_fn):
 				if best_wiped.is_empty() or _cmp_state(st, best_wiped):
 					best_wiped = st
 				continue
 			if best.is_empty() or _cmp_state(st, best):
 				best = st
+		if abort_requested:
+			return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃
 		if deadline > 0 and Time.get_ticks_msec() >= deadline:
+			last_search_timeout = true   # 【取证】阵型还没比完就到点了（抬头行会写明）
 			break
+	last_tp_layouts_used = layout_n                    # 【取证】漏斗真正送进阶段 2 的阵型数
+	last_tp_phase2_ms = Time.get_ticks_msec() - t_p2   # 【取证】阶段 2 花了多久
 	if best.is_empty():
 		best = best_wiped
 	if best.is_empty():
 		return []
 	if log_decisions:
+		last_search_ms = Time.get_ticks_msec() - t0   # 【取证】本次搜索实际耗时（抬头行会写明）
 		_print_decision(sim, best)
 	return best["path"]
 
@@ -2236,7 +2334,25 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 	var acted := {}
 	for st0 in path:
 		acted[int(st0["idx"])] = true
-	var txt := "\n===== 敌方 AI 本回合：%d 个单位 · %d 步 =====" % [_ai_unit_count(sim), path.size()]
+	# 【2026-09-23 深夜·用户要求】抬头行写明"这次搜索有没有超时"：撞上 `TIME_BUDGET_MS` ⇒ 计划后半段
+	#   是超时后的贪心收尾（`_greedy_finish()`）⇒ **未必是最优解**，"为什么没选那一手"很可能只是没搜到。
+	#   先看这一行，再查别的。⚠️ 只读取证字段，不影响任何决策。
+	var tinfo := ""
+	if time_budget_ms > 0:
+		tinfo = " · 思考 %.1fs / 上限 %.0fs（%s）" % [float(last_search_ms) / 1000.0,
+			float(time_budget_ms) / 1000.0,
+			("⚠️ 超时：计划后半段是贪心收尾，未必最优" if last_search_timeout else "未超时")]
+	else:
+		tinfo = " · 思考 %.1fs（无上限）" % (float(last_search_ms) / 1000.0)
+	var txt := "\n===== 敌方 AI 本回合：%d 个单位 · %d 步%s =====" % [_ai_unit_count(sim), path.size(), tinfo]
+	# 【2026-09-23 深夜·用户要求「查一下 25 秒都花在哪儿」】两阶段搜索的分账（只有 `SEARCH_MODE ≥ 1` 才有）。
+	#   一眼看清时间花在"枚举阵型"还是"排出手"，以及漏斗到底放了多少套进阶段 2。**纯取证**。
+	if w_search_mode >= 1:
+		txt += "\n     [搜索分账] 阶段1（走位）%.1fs：阵型 %d 套 → 送阶段2 %d 套（上限 %d）" % [
+			float(last_tp_phase1_ms) / 1000.0, last_tp_layouts_built, last_tp_layouts_used,
+			maxi(TWO_PHASE_LAYOUTS, 1)]
+		txt += " · 阶段2（出手）%.1fs：完整计划 %d 个" % [
+			float(last_tp_phase2_ms) / 1000.0, last_tp_leaves]
 	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
 	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
 	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。
@@ -2309,10 +2425,18 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 							desc3, alt_dmg, maxf(gap, 0.0),
 							_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
 							_plain_reason(bd0, bd_alt2, ur.skills.has(DataRegistry.Skill.TAUNT))]
+					# 【2026-09-23 深夜·用户拍板「加」】同一条明细也挂在这里（"没选的那一手"那一支）
+					var g5 := _plain_gap_terms(bd1, bd_alt2)
+					if g5 != "":
+						alt_note += "\n     分差明细（现在这一手 − 没选的那一手）：" + g5
 		# 【2026-09-23 用户要求·第三版】这一步**打的是这个目标，为什么不打那个**：
 		#   用户原话「雪拳为什么在…打 5 血的圣光和…打 9 血的红帽之间选择了打红帽」——"选了谁"回答了，
 		#   "为什么选它"没有。这里对**其它每个目标**各取"最疼的一手"，在同一局面上算分差，
 		#   把"差在哪一项"写成一句话（只列最接近的两个备选，避免日志爆）。
+		# 【2026-09-23 用户要求·第四版】**拼接顺序**修正：这段诊断必须先攒着（`tr_note`），等它自己那一步的
+		#   抬头行（「· 单位：…/原因：…」）写完再补。原来先 `txt +=` 诊断、后 `txt +=` 抬头 ⇒ 日志里它挤在
+		#   **上一步的尾巴**下面，用户读成「巨剑"只走到 (2,3)"那一步为什么讲打谁」（实际讲的是下一步的那一击）。
+		var tr_note := ""
 		if is_atk_step:
 			var chosen_t := int(a.get("atk", -1))
 			var alt_alts: Array = []
@@ -2347,16 +2471,103 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var o5: Dictionary = scored[i4]["o"]
 				var mc5: Variant = (o5["combo"] as Dictionary).get("move")
 				var from5 := ("原地" if mc5 == null else ("从 %s 走到 %s" % [str(pu.cell), str(mc5)]))
-				lines.append("%s%s（约 %.0f 伤）会少 %.1f 分" % [from5, String(o5["name"]), float(o5["dmg"]),
-					maxf(float(scored[i4]["gap"]), 0.0)])
+				# 【2026-09-23 深夜·用户报「为什么荆棘树人不去打烛火」】这里原来写 `maxf(gap, 0.0)` ⇒
+				#   **负的差距被截成 0.0** ⇒ 日志里"其实更值（被搜索漏掉）"和"真的打平"长得一模一样
+				#   （用户那条日志：荆棘树人 打圣光 与 走一步打烛火 两行都写"会少 0.0 分"，读不出真相）。
+				#   现在按符号分开写：gap < −0.5 ⇒ 直接标"**本可多赚 X 分** ⚠️"（与"没选的那一手"同一口径）。
+				var g4 := float(scored[i4]["gap"])
+				if g4 < -0.5:
+					lines.append("%s%s（约 %.0f 伤）**本可多赚 %.1f 分** ⚠️" % [from5, String(o5["name"]),
+						float(o5["dmg"]), absf(g4)])
+				else:
+					lines.append("%s%s（约 %.0f 伤）会少 %.1f 分" % [from5, String(o5["name"]),
+						float(o5["dmg"]), g4])
 			if lines.size() > 0:
-				txt += "\n     为什么打的是它：换成「%s」—— 打它赢在「%s」，那些备选只赢在「%s」" % [
+				# 最接近的那个备选本身就比它值 ⇒ 一眼点破"疑似被搜索漏掉（剪枝）"（原来是靠 `maxf` 掩盖掉的）
+				var warn5 := "⚠️ 有备选比它更值（疑似被搜索漏掉/剪枝）：" if float(scored[0]["gap"]) < -0.5 else ""
+				tr_note = "\n     为什么打的是它：%s换成「%s」—— 打它赢在「%s」，那些备选只赢在「%s」" % [
+					warn5,
 					"；".join(lines),
 					_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
 					_plain_reason(bd0, scored[0]["bd"], ur.skills.has(DataRegistry.Skill.TAUNT))]
-		txt += "\n · %s：%s\n     原因：%s%s\n     %s" % [u0.name, what,
-			_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)), alt_note,
-			_plain_incoming(end_sim, idx, landed)]
+				# 【2026-09-23 深夜·用户拍板「加」】把**最接近的那条备选**与"现在这一手"的**逐项分差**列出来
+				#   ⇒ 一眼看出是哪一项在付钱（④集火 / ⑱钉人 / ③血量账 / ⑦暴露…），不用再靠推理。
+				#   ⚠️ 两边都是 `end_of_turn = false`（中途态）⇒ ⑳㉑㉒㉓㉕ 在这条明细里恒为 0、不会出现
+				#     （它们只在"全队都行动完"的末态结算；想看它们得开 `log_verbose` 的详细版）。
+				var g6 := _plain_gap_terms(bd1, scored[0]["bd"])
+				if g6 != "":
+					tr_note += "\n     分差明细（现在这一手 − 那条备选）：" + g6
+			else:
+				# 【2026-09-23 深夜·用户问「怎么控制台里不说他为什么不打另一个了」】没有备选时原来**一个字都不写**
+				#   ⇒ 日志看起来像"漏说了"。这里明确交代一句。
+				# 【同日·用户接着问「为什么不选择去打烛火，把它封住」/「荆棘树人能走到烛火面前，只是选了圣光身边」】
+				#   ⚠️ 两种情况必须分清，否则读起来像 AI 自己乱选：
+				#     ① **规则锁死**：唯一目标带[嘲讽] ⇒ 从这一步的开火格够得到它，别的目标**根本不合法**
+				#        （`_valid_targets()` 的嘲讽门按**开火格**判）；
+				#     ② **真够不到**：射程/路网/视线不允许。
+				#   所以这里不光说一句，还把**其它每个敌人**逐个点名：够得到（那就是被嘲讽门挡下）还是压根够不到。
+				#   判据 = `_actions_for()` 给出的所有开火格，逐个用 `_reachable_ignoring_taunt()`（把嘲讽门关掉）
+				#   问一遍。纯日志、不参与任何决策。
+				var ct := int(a.get("atk", -1))
+				var ct_taunt: bool = ct >= 0 and ct < pre.units.size() and pre.units[ct] != null \
+					and (pre.units[ct] as SimUnit).skills.has(DataRegistry.Skill.TAUNT)
+				# 【2026-09-23 深夜·用户口径「那段话删了，占位置」】两句都压到最短，只留判据本身（不再写"为什么"）：
+				if ct_taunt:
+					tr_note = "\n     为什么打的是它：它带[嘲讽] ⇒ 只能打它"
+				else:
+					tr_note = "\n     为什么打的是它：没有别的能打到的目标（够不到）"
+			# 其它敌人逐个点名（同样压短：被[嘲讽]门挡下 / 够不到）
+			# 【2026-09-23 深夜·用户又一条日志暴露的缺口】这一句原来**只在"没有备选"的分支里**（上面那个
+			#   `else` 内部）⇒ 一旦有备选，日志就**不再提没进备选的那些敌人**（用户那句"为什么荆棘树人
+			#   不去打烛火"在有备选的那一局就完全读不到答案）。现在挪到 `is_atk_step` 这一层：
+			#   **两种情况都点名**；**已经在上面备选里列过的目标不再重复**（`named`）。
+			var named := {}
+			for i4b in scored.size():
+				named[String((scored[i4b]["o"] as Dictionary)["name"])] = true
+			var reach_any := {}
+			for aa6 in _actions_for(pre, idx):
+				var fc6: Vector2i = pu.cell if aa6.get("move") == null else Vector2i(aa6["move"])
+				for i6 in _reachable_ignoring_taunt(pre, pu, fc6):
+					reach_any[int(i6)] = true
+			# 【2026-09-23 深夜·用户问「会不会是路被截掉了、其实走得到」】下面这段是**起点格对照**：
+			#   上面那句"够不到"是在**这一步的局面**（`pre`）上算的，而这一步的局面由计划里前面几步决定
+			#   （谁先走到哪、占了哪格）⇒ "够不到"有可能只是"**在这条计划下**够不到"。
+			#   所以再用**它本回合还没动过的样子**（起点格 `u0` + 回合开始的局面 `sim`）问一遍。
+			# ⚠️【2026-09-23 深夜②·用户又一条日志把顺序问题指出来了】模式 2 会把"走位"和"出手"**拆成两步**：
+			#   到"出手"那一步时 `u.moved = true` ⇒ `_actions_for()` **只给原地出手**（不再给移动格）
+			#   ⇒ 只按"现在这一格"判"够不够得到"会**误报"被[嘲讽]门挡下"**（用户实况：荆棘树人先走到 (2,3)、
+			#   再原地打圣光 ⇒ 日志说"烛火 被[嘲讽]门挡下"，可它完全可以从起点格走另一格打烛火）。
+			#   ⇒ 判据改成**先问起点格**（三种问法，见下），"现在这一格"只作最后的兜底。
+			#   ⚠️ 纯日志、不参与任何决策；超时那一局尤其要看这行（别的顺序压根没搜完）。
+			var start_reach := {}    # 起点格出发：**关掉嘲讽门**够得到谁
+			var start_legal := {}    # 起点格出发：**带嘲讽门**合法能打谁（= 真的能打到）
+			for c8 in _move_cells(sim, u0).keys():
+				for i8 in _reachable_ignoring_taunt(sim, u0, c8):
+					start_reach[int(i8)] = true
+				for i8 in _valid_targets(sim, u0, c8):
+					start_legal[int(i8)] = true
+			var notes: Array[String] = []
+			for i7 in pre.units.size():
+				var t7: SimUnit = pre.units[i7]
+				if t7 == null or not t7.alive or t7.fn == pu.fn or i7 == chosen_t:
+					continue
+				if named.has(t7.name):
+					continue   # 已经在备选里列过了
+				# 判据顺序（从强到弱）：起点格就能合法打到 ⇒ 起点格够得到但被嘲讽门挡 ⇒ 现在这格够得到但被挡 ⇒ 真够不到
+				if start_legal.has(i7):
+					notes.append("%s **其实能打到**（从起点格换个落点/开火格就合法 ⇒ 是这条计划没走，不是够不到）" % t7.name)
+				elif start_reach.has(i7):
+					notes.append("%s 从起点格够得到，但开火格也够得到[嘲讽] ⇒ 被[嘲讽]门挡下" % t7.name)
+				elif reach_any.has(i7):
+					notes.append("%s 现在这一格够得到，但被[嘲讽]门挡下（换个开火格才行）" % t7.name)
+				else:
+					notes.append("%s 够不到" % t7.name)
+			if notes.size() > 0:
+				tr_note += "\n     其它敌人：" + "；".join(notes)
+		txt += "\n · %s：%s\n     原因：%s%s" % [u0.name, what,
+			_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)), alt_note]
+		txt += tr_note
+		txt += "\n     %s" % _plain_incoming(end_sim, idx, landed)
 	# ② 计划里没有步骤的单位（= "整回合没动作"）：说明它本来能不能打、以及为什么没打
 	for ii in sim.units.size():
 		var iu: SimUnit = sim.units[ii]
@@ -2410,6 +2621,29 @@ func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> St
 	if mv != null and Vector2i(mv) != ur.cell:
 		return "只走到 %s（这一步不出手）" % str(mv)
 	return "原地不动、也没出手"
+
+## 【2026-09-23 深夜·用户拍板「加」】"现在这一手 − 那条备选"的**逐项分差**（正数 = 现在这一手在这项上更赚）。
+##   只给决策日志用（`_print_decision()` 的两处诊断）；两侧同口径 —— 都取 `end_of_turn = false`（中途态）
+##   ⇒ ⑳㉑㉒㉓㉕ 恒为 0、不会出现在这条明细里（它们只在"全队都行动完"的末态结算）。
+##   只列 |差| ≥ 0.05 的前 `max_n` 项（避免刷屏）；各项之和 ≈ 上层报的那个"会少 X 分"。
+func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, max_n: int = 5) -> String:
+	var keys := {}
+	for k in bd_now.keys():
+		keys[String(k)] = true
+	for k in bd_alt.keys():
+		keys[String(k)] = true
+	var diffs: Array = []
+	for k in keys.keys():
+		var d := float(bd_now.get(k, 0.0)) - float(bd_alt.get(k, 0.0))
+		if absf(d) >= 0.05:
+			diffs.append({ "k": String(k), "d": d })
+	if diffs.is_empty():
+		return ""
+	diffs.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
+	var parts: Array[String] = []
+	for i in mini(max_n, diffs.size()):
+		parts.append("%s %+.1f" % [String(diffs[i]["k"]), float(diffs[i]["d"])])
+	return " · ".join(parts)
 
 ## 把"这一步的评分变化"翻译成人话：取变化最大的 1~3 项，各配一句短语（`_term_phrase`）。
 ## `is_taunt` = **走这一步的单位自己是不是嘲讽单位** —— 只有 ㉕ 用得到：
@@ -2531,10 +2765,14 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 	_apply(s_alt, ii, best_combo)
 	var bd_b := _eval_breakdown(s_alt, true)
 	var dlt := _evaluate(s_alt, true) - _evaluate(end_sim, true)
+	# 【2026-09-23 深夜·用户拍板「加」】同一套**逐项分差**也挂在这条"整回合没动作"的诊断上。
+	#   ⚠️ 这里两边都是 `end_of_turn = true`（**末态**口径）⇒ ⑳㉑㉒㉓㉕ 会正常出现（与上面两处不同）。
+	var g8 := _plain_gap_terms(bd_b, bd_a)
+	var g8_tail := ("\n     分差明细（补上这一手 − 现在这样）：" + g8) if g8 != "" else ""
 	if dlt > 0.5:
-		return head + "，而且补上它分数更高（多赚 %.1f 分）⇒ 这一步像是被搜索漏掉了（剪枝），值得查" % dlt
+		return head + "，而且补上它分数更高（多赚 %.1f 分）⇒ 这一步像是被搜索漏掉了（剪枝），值得查" % dlt + g8_tail
 	return head + "，但换成打这一手更不划算（少 %.1f 分）⇒ 原因：%s" % [absf(dlt),
-		_plain_reason(bd_a, bd_b, iu.skills.has(DataRegistry.Skill.TAUNT))]
+		_plain_reason(bd_a, bd_b, iu.skills.has(DataRegistry.Skill.TAUNT))] + g8_tail
 
 ## 本局面里"我方（AI 阵营）还活着几个单位" —— 只给日志表头用。
 func _ai_unit_count(sim: Sim) -> int:
@@ -3462,6 +3700,17 @@ func _sim_enemy_adjacent(sim: Sim, u: SimUnit, from_cell: Vector2i) -> bool:
 	return false
 
 # 返回某落点可攻击的目标 idx（含嘲讽规则；坠炮手 ignore_los 且未被贴身时无视嘲讽）
+## 【2026-09-23 深夜·诊断专用】"**把嘲讽门关掉**，从这一格还够得到谁" —— 即 `_valid_targets()` 去掉嘲讽过滤。
+##   只给 `_print_decision()` 回答用户那种追问用：「XXX 明明够得到 / 能走到它面前，为什么不打它」
+##   ⇒ 用来分清"**规则锁死**"（够得到，但开火格同时够得到[嘲讽]的对手）与"**真够不到**"。**不参与任何决策**。
+func _reachable_ignoring_taunt(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
+	var out: Array = []
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn != u.fn and _in_range(sim, u, from_cell, t):
+			out.append(i)
+	return out
+
 func _valid_targets(sim: Sim, u: SimUnit, from_cell: Vector2i) -> Array:
 	var taunts: Array = []
 	# 坠炮手未沉默且"未被贴身"才无视嘲讽；被贴身时按普通远程处理、受嘲讽约束
@@ -6704,6 +6953,18 @@ func _shield_next_turn(sim: Sim, t: SimUnit) -> bool:
 ##   都**不造成伤害** ⇒ 不在本函数口径内（状态与炸弹的代价由别的项管）。
 func _on_move_hit_on(sim: Sim, a: SimUnit, t: SimUnit, cell: Vector2i) -> float:
 	if a.silenced or a.stunned:
+		return 0.0
+	# 【2026-09-23 深夜·用户口径】**移动力为 0 ⇒ "移动后触发"的技能整个放不出来**。
+	#   病灶（用户看 AI 决策日志当场指出）：真实规则里 `[荆棘]`（荆棘树人命中挂）与 `[眩晕]` 都会让
+	#   `Unit.effective_move()` 返回 **0** ⇒ 它**根本不能移动** ⇒ `heroes/hero_17_烛火.gd::on_move()`
+	#   这类"移动后"技能压根不会被调用（末日 hero_31 / 涌电技师 hero_38 同理）。
+	#   原来这里只挡了 `silenced / stunned`，于是**被钉住的后勤**在"已经贴着目标"的那些格子上
+	#   （`_sim_reach_adjacent` 第一行 `distance == 1 ⇒ return true`）仍被记一笔技能伤害 ⇒ 偏乐观，
+	#   而且"钉住它 = 让它哑火"这笔账**结构上读不到**（⑥规则B / ⑦核心风险 / ⑮必死折 全走这里）。
+	#   补这道门之后：AI 一旦把后勤/远程钉住，它那笔技能伤害会从**挨打合计**里消失 ⇒ 钉人的价值
+	#   由现有那套账**按实际否掉的伤害**自动计价（比 ⑱`THORN_PIN_*_W` 的静态代理价更准，两者是互补的）。
+	#   用 `emove <= 0` 而不是只看 `thorn`：眩晕、冰冻压到 0 同样"动不了 ⇒ 技能放不出"，同一把尺子。
+	if a.emove <= 0:
 		return 0.0
 	match a.hero_id:
 		"hero_17":

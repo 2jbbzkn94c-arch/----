@@ -38,7 +38,7 @@ param(
     #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
     #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
     [int]$NmBeam = 0,
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -267,6 +267,27 @@ if ($Mode -eq 'taunt') {
     }
     $GROUPS = @(@{ slug = 'TS'; base = 'RL\weights\噩梦.json'; tiers = @($TS_ARMS.Keys) })
 }
+# ---- 模式 P1（`p1beam`）：两阶段搜索的**阶段 1 每层宽度**剂量（`TWO_PHASE_P1_BEAM`）—— 2026-09-23 深夜
+#   用户拍板「5 试试」（目标：找"**不降水平**地减少搜索路径"的那个点）。病灶：实机 `[搜索分账]` 显示
+#   阶段 1 花 10.6~13.5s 枚举 `BEAM`(线上 400) 套阵型，而下游 `TWO_PHASE_LAYOUTS` **只用 16 套** ⇒ 后 384 套白算。
+#   · 三臂全部跑在 **`噩梦.json`** 上，唯一变量 = `TWO_PHASE_P1_BEAM`（theta 注入 ⇒ 各自 cand_*.json 只差一行）
+#   · `b0`   = 0（沿用 `BEAM`；⚠️ 走查台的 spec 把 `beam` 显式设 200 ⇒ 本批实际 = 200）= **对照臂**
+#   · `b96`  = 96（线上现役值；在走查台口径下是 200 → 96 的"腰斩"，**比线上 400 → 96 更狠** ⇒ 结论更保守）
+#   · `b192` = 192（几乎不动 = **噪音对照**：若它与 b0 也差出好几个点，说明本批分辨率不足、别急着下结论）
+#   · 读法：配对 Δpts(臂 − b0) + 生产侧胜率；⚠️ 本批**量不到"省了多少秒"** —— 走查台 `time_budget_ms = 0`
+#     （不限时求可复现）⇒ 提速只能回实机看 `[搜索分账]` 里阶段 1 的秒数。登记：`1_通用策略.md` §五 T22。
+$PB_ARMS = [ordered]@{
+    'b0'   = 0      # 沿用 BEAM（走查台 beam = 200）= 对照
+    'b96'  = 96     # 线上现役值
+    'b192' = 192    # 噪音对照
+}
+if ($Mode -eq 'p1beam') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $PB_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_P1_BEAM = [int]$PB_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'PB'; base = 'RL\weights\噩梦.json'; tiers = @($PB_ARMS.Keys) })
+}
 
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；
@@ -368,6 +389,12 @@ if ($Mode -eq 'taunt') {
     Write-Host ("[基线 sha12] 噩梦.json = {0}（㉕ 的现役值就在这份文件里）" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
+if ($Mode -eq 'p1beam') {
+    Write-Host '[档位·p1beam] b0 = 沿用 BEAM（走查台 beam=200，对照）／ b96 = 96（线上现役值）／ b192 = 192（噪音对照）；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·p1beam] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − b0)**；本批量的是**棋力有没有掉**，"省了多少秒"要回实机看 `[搜索分账]`（走查台不限时、量不到提速）'
+    Write-Host ("[基线 sha12] 噩梦.json = {0}（TWO_PHASE_P1_BEAM 的现役值就在这份文件里）" -f `
+        (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
+}
 $key = @{}
 foreach ($r in $rows) { $key["$($r.arm)|$($r.deck)|$($r.seed)|$($r.first)"] = $r }
 $ctl = 'hard'
@@ -379,6 +406,8 @@ if ($Mode -eq 'merge') { $ctl = 'mg0' }
 if ($Mode -eq 'smode') { $ctl = 'sm0' }
 # 【2026-09-23】`taunt` 模式四臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役值 `t3`**（Δpts 读作 `臂 − 3.0`）。
 if ($Mode -eq 'taunt') { $ctl = 't3' }
+# 【2026-09-23 深夜】`p1beam` 模式三臂都跑在 `噩梦.json` 上 ⇒ 对照 = **沿用 BEAM 的 `b0`**（Δpts 读作 `臂 − b0`）。
+if ($Mode -eq 'p1beam') { $ctl = 'b0' }
 $out = @()
 foreach ($k in $TIERS.Keys) {
     $a = @($rows | Where-Object { $_.arm -eq $k })
