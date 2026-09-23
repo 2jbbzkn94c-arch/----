@@ -38,7 +38,7 @@ param(
     #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
     #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
     [int]$NmBeam = 0,
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -289,6 +289,39 @@ if ($Mode -eq 'p1beam') {
     $GROUPS = @(@{ slug = 'PB'; base = 'RL\weights\噩梦.json'; tiers = @($PB_ARMS.Keys) })
 }
 
+# ---- 模式 L（`poison`）：⑫猛毒计价的「(每跳单价, 跳数上限)」剂量批 ----
+# 起因（2026-09-23 深夜·用户原话）：「我是觉得 4 和 2.5 不合理。4 血这也太苛刻了」。
+# 查证成立且更严重：真实血量区间 **13~40**（`Data/Hero/Source/角色列表.json`，中位 19；50 个英雄里
+#   ≤4 血的只有骷髅兵）⇒ `min(血,4)` 对**全部真英雄满血都等于 4** ⇒ ⑫ 退化成"有毒 = +10"的纯开关
+#   （设计意图"目标选择偏向毒优势最大的"零实现）；而唯一有区分度的区间（≤4 血）方向还是反的。
+# ⚠️ 两个数**必须一起扫**：封顶低 ⇒ 单价 2.5 那条"打瘦倒扣 2.5/血、而 ③只给 1.0/血"的反向激励
+#   只在 ≤4 血时发作、平时看不见；**只抬封顶不降单价**会让它扩散到全程（AI 更不愿打已中毒的人）。
+#   硬约束 = **单价 ≤ 1.0** 才保证"打已中毒的人"不亏（净值 = ③的 1.0 − 单价）。
+# 臂（`POISON_TICK_VALUE` × `POISON_MAX_TICKS`）：
+#   · `p0`     = 0 / 4    ⇒ **关掉 ⑫**（看这一项总共值多少分）
+#   · `p25t4`  = 2.5 / 4  ⇒ **现役口径**（对照臂，Δpts 读作 `臂 − p25t4`）
+#   · `p05t20` = 0.5 / 20 （① 上限 10；中位 19 血 ≈ 9.5 ≈ 现役，13~20 血开始区分）
+#   · `p05t40` = 0.5 / 40 （② **真正"血越多越值"**；塔盾 40 血 = 20 分）
+#   · `p025t40`= 0.25 / 40（③ 上限 10；区分度最好、力度最小）
+# ⚠️ **默认牌组里只有 1/6 含毒蛇**（`hero_42,hero_03,hero_17`）⇒ 不指定 `-Decks` 的话 5/6 的牌组里
+#   ⑫ 恒为 0、纯属白跑。推荐配一组**全部含 hero_03** 的牌组，见 `1_通用策略.md` §五 T25。
+$PO_ARMS = [ordered]@{
+    'p0'      = @{ v = 0.0;  t = 4  }
+    'p25t4'   = @{ v = 2.5;  t = 4  }
+    'p05t20'  = @{ v = 0.5;  t = 20 }
+    'p05t40'  = @{ v = 0.5;  t = 40 }
+    'p025t40' = @{ v = 0.25; t = 40 }
+}
+if ($Mode -eq 'poison') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $PO_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{
+            POISON_TICK_VALUE = [double]$PO_ARMS[$k].v
+            POISON_MAX_TICKS  = [int]$PO_ARMS[$k].t
+        } }
+    }
+    $GROUPS = @(@{ slug = 'PO'; base = 'RL\weights\噩梦.json'; tiers = @($PO_ARMS.Keys) })
+}
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；
 #   用户要的是**现在线上跑的那一档**（噩梦 = `噩梦.json`，**通用键 + hero_XX 英雄段在同一份文件里**）。
@@ -390,7 +423,14 @@ if ($Mode -eq 'taunt') {
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
 if ($Mode -eq 'p1beam') {
-    Write-Host '[档位·p1beam] b0 = 沿用 BEAM（走查台 beam=200，对照）／ b96 = 96（线上现役值）／ b192 = 192（噪音对照）；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+if ($Mode -eq 'poison') {
+    Write-Host '[档位·poison] p0 = 0/4（关掉 ⑫）／ p25t4 = 2.5+4（现役口径，**对照臂**）／ p05t20 = 0.5+20（①）／ p05t40 = 0.5+40（②"血越多越值"）／ p025t40 = 0.25+40（③）；五臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·poison] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − p25t4)**（配对口径同其它模式）⇒ `p0 − p25t4` = ⑫ 这一项总共值多少分'
+    Write-Host '[档位·poison] ⚠️ ⑫ **只在场上有毒蛇淑女（hero_03）时非零** ⇒ 牌组必须含它（见 §五 T25 的 `-Decks` 建议）'
+    Write-Host '[档位·poison] 候选/对手宽度 beam = 200/200；⏱ 五臂 × 牌组数 × 4 种子'
+    Write-Host ("[基线 sha12] 噩梦.json = {0}（现役口径 2.5 + 4 就在这份文件里）" -f `
+        (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
+}    Write-Host '[档位·p1beam] b0 = 沿用 BEAM（走查台 beam=200，对照）／ b96 = 96（线上现役值）／ b192 = 192（噪音对照）；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
     Write-Host '[档位·p1beam] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − b0)**；本批量的是**棋力有没有掉**，"省了多少秒"要回实机看 `[搜索分账]`（走查台不限时、量不到提速）'
     Write-Host ("[基线 sha12] 噩梦.json = {0}（TWO_PHASE_P1_BEAM 的现役值就在这份文件里）" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
@@ -408,6 +448,8 @@ if ($Mode -eq 'smode') { $ctl = 'sm0' }
 if ($Mode -eq 'taunt') { $ctl = 't3' }
 # 【2026-09-23 深夜】`p1beam` 模式三臂都跑在 `噩梦.json` 上 ⇒ 对照 = **沿用 BEAM 的 `b0`**（Δpts 读作 `臂 − b0`）。
 if ($Mode -eq 'p1beam') { $ctl = 'b0' }
+# 【2026-09-23 深夜】`poison` 模式五臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役口径 `p25t4`**（Δpts 读作 `臂 − 2.5/4`）。
+if ($Mode -eq 'poison') { $ctl = 'p25t4' }
 $out = @()
 foreach ($k in $TIERS.Keys) {
     $a = @($rows | Where-Object { $_.arm -eq $k })

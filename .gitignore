@@ -53,4 +53,5 @@ RL/ai/_prev_*.gd
 RL/ai/_prev_*.gd.uid
 # RL 探针的一次性输出（跑完即弃，不入库）
 RL/probe/_*.txt
+RL/probe/_*.log
 

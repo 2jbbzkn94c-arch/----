@@ -2711,6 +2711,13 @@ func _begin_side(side: int) -> void:
 # 两端在同一触发点执行:行动方补位完成后(或无需补位时)由行动端广播 side_skills,两端同跑,
 # 保证金矿/道具等 rng 落点与单位集合一致。单机/等待端均经由本函数统一收尾。
 func _run_side_skills(side: int) -> void:
+	# 【2026-09-23 深夜修·用户报「连点两次重开，烛火/圣光的移动范围多 1 格」】本序列属于**哪一局**：
+	#   `reset_match()` 每次重开把 `_session_id` +1，而**上一局的序列还停在 await 里**时新局已经建好
+	#   ⇒ 旧序列醒来后跑的是 `_trigger_turn_start_all()`，而它遍历的是**当前**的 `units`（= 新局单位）
+	#   ⇒ **新风语者的"全体队友 +1 移动力"被两条序列各触发一次**（风语者自己不吃自己的光环
+	#   ⇒ 只有队友多 1 格，正好是用户看到的现象；猛毒也会跟着多 tick 一次）。
+	#   ⇒ 每个 await 之后都比一次代号，变了就当场收工（新局那一条序列会把该做的做完）。
+	var gen := _session_id
 	# 【2026-09-21 用户要求】回合开始 → 英雄开始放技能之间**先停一下**（见 `TURN_START_SKILL_DELAY`）。
 	#   放在这里而不是 `_begin_side()` 开头：`_begin_side()` 前半段是"清账/结算状态"（重置回合旗标、
 	#   还原变身、猛毒 tick），那些是"回合开始的账"、不该被延迟拉开；玩家能看到的演出（逐个放技能、
@@ -2718,6 +2725,8 @@ func _run_side_skills(side: int) -> void:
 	#   联机：两端都走本函数、同一时点 ⇒ 同步不受影响。
 	if TURN_START_SKILL_DELAY > 0.0:
 		await get_tree().create_timer(TURN_START_SKILL_DELAY).timeout
+	if gen != _session_id:
+		return   # 这一局已经被重开掉：下面的毒伤/回合开始技都不能再往新局上落一遍
 	# 【2026-09-21 用户要求】猛毒等"回合开始结算的伤害"放在**这里**（原来在 `_begin_side()` 里、
 	#   替补落位之前就结算完了）：本端回合开始若有替补要落位，技能段会被顺延到补位完成
 	#   （`_defer_side_skills` ⇒ `_resume_after_sub` ⇒ 本函数），毒伤却已经先算完 ⇒
@@ -2729,6 +2738,8 @@ func _run_side_skills(side: int) -> void:
 		_gold_tick_round = GameState.round_number
 		_tick_gold_age()
 	await _trigger_turn_start_all(side)   # 回合开始的角色技能（逐个触发+边框闪烁
+	if gen != _session_id:
+		return   # 旧序列不许再收尾（限时/输入态由新局那一条序列负责）
 	# 阵营级回合开始同步：需要"整队取样再赋值"的英雄自行实现（如共鸣者）。
 	# 每方只派发一次（由第一个声明需要的英雄负责处理整队），Battle 不认具体英雄。
 	for u in units:
@@ -2883,8 +2894,13 @@ func _sub_roster() -> Array:
 
 # 回合开始：该阵营单位的回合开始技能（逐个触发，带触发边框闪烁
 func _trigger_turn_start_all(faction: int) -> void:
+	# 【2026-09-23 深夜修】旧序列不许把技能放到新局上：见 `_run_side_skills()` 开头那段
+	#   （两条序列都遍历**当前** `units` ⇒ 同一位英雄的回合开始技会被触发两次）。
+	var gen := _session_id
 	# 遍历快照：触发中可能杀移除单位，避免抹除元素导致漏处理
 	for u in units.duplicate():
+		if gen != _session_id:
+			return
 		if u == null or not is_instance_valid(u):
 			continue
 		if u.alive and u.faction == faction:
@@ -2896,11 +2912,17 @@ func _trigger_turn_start_all(faction: int) -> void:
 				if not is_inside_tree():
 					return   # 已脱离场景树（点击重开/reload/切场景）：安全退出
 				await get_tree().create_timer(0.35, false).timeout
+				if gen != _session_id:
+					return
 
 # 回合结束：该阵营单位的回合结束技能（逐个触发，带触发边框闪烁
 func _trigger_turn_end_all(faction: int) -> void:
+	# 【2026-09-23 深夜修】同 `_trigger_turn_start_all()`：旧序列不许动新局（重开竞态）
+	var gen := _session_id
 	# 遍历快照：触发中可能杀死单位（如骷髅兵消散），避免抹除元素导致漏处
 	for u in units.duplicate():
+		if gen != _session_id:
+			return
 		if u == null or not is_instance_valid(u):
 			continue
 		if u.alive and u.faction == faction:
@@ -2909,6 +2931,8 @@ func _trigger_turn_end_all(faction: int) -> void:
 				if not is_inside_tree():
 					return   # 已脱离场景树：安全退出
 				await get_tree().create_timer(0.35, false).timeout
+				if gen != _session_id:
+					return   # 重开竞态：见 `_trigger_turn_start_all()`
 
 # 共鸣者（hero_47）：己方回合开始时，"攻击力增加所有队友攻击力之和"直到我方回合结束。
 # 先统一取样所有共鸣者的总和再逐个赋值（若有多名共鸣者，避免后者把前者的新加成又算进去）。

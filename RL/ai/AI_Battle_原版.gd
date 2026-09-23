@@ -351,6 +351,11 @@ var last_tp_phase2_ms := 0        # 阶段 2（出手）耗时
 var last_tp_layouts_built := 0    # 阶段 1 一共产出多少套阵型
 var last_tp_layouts_used := 0     # 经漏斗送进阶段 2 的阵型数（受 TWO_PHASE_LAYOUTS 封顶）
 var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个数
+# 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】阶段 1 的两笔去重账：
+#   `evals` = 真正跑了多少次完整 `_evaluate`（= 没去重时的候选条数）；`dups` = 其中"同末态"被丢掉的条数。
+#   两笔都**与开关无关地统计**（关着也数）⇒ 用户在自己实机里就能看到 n! 水分有多大，不用另跑批。
+var last_tp_p1_evals := 0         # 阶段 1 评分次数
+var last_tp_p1_dups := 0          # 阶段 1 被"同末态去重"丢掉的条数
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -404,7 +409,17 @@ const POISON_TICK_VALUE := 0.0
 # 量纲参考：1 点伤害 = 1.0 分；给一个新目标上毒会同时让 ⑫ 跳到 `2.5 × min(其血,4)`（≤10）⇒ 本项取 2~5。
 # 回退：删掉权重文件里那一行（= 0 = 关）。
 const POISON_APPLY_W := 0.0
-const POISON_MAX_TICKS := 4          # 毒最多按 4 跳计（不是可调键：估计上限，写死避免又一个旋钮）
+# 【2026-09-23 深夜·用户拍板】**这个数原来写死，现在提升成可调键。**
+#   用户口径原话：「我是觉得 4 和 2.5 不合理。4 血这也太苛刻了」。查证属实且比他说的更糟：
+#   ① 真实血量区间是 **13~40**（`Data/Hero/Source/角色列表.json`，中位 19；50 个英雄里 ≤4 血的
+#      只有骷髅兵一个）⇒ `min(血,4)` 对**全部真英雄满血都等于 4** ⇒ ⑫ 退化成"有毒 = +10"的
+#      **纯开关**，"目标选择偏向毒优势最大的"这个设计意图**一点没实现**（毒红帽与毒塔盾同分）；
+#   ② 唯一有区分度的区间（≤4 血）方向还是**反的**（打瘦倒扣）。
+#   ⚠️ `2.5` 与 `4` 是**互相掩盖**的：封顶低 ⇒ 2.5 那条"打瘦倒扣 2.5/血、而 ③ 只给 1.0/血"的
+#      反向激励只在 ≤4 血时发作、平时看不见；**只抬封顶不降单价**会让它扩散到全程 ⇒ AI 会比
+#      现在**更不愿打已中毒的人**（"咬一口就走"恶化）。⇒ 两个数必须一起调，所以封顶也要能扫。
+#   键 = `POISON_MAX_TICKS`：**默认 4 ⇒ 生产三档逐位不变**；0 = ⑫ 恒 0（等价于关掉这一项）。
+const POISON_MAX_TICKS := 4
 const POSSESS_TARGET_W := 0.0
 const SOLID_HOLD_W := 0.0            # 全英雄兜底值；实际读取见上面"按英雄覆盖"那条
 # ============ 【2026-09-21 新增·默认关】B 档英雄特化项（hero_XX 段注入；4 个键全 0 ⇒ 整段不生效）============
@@ -893,6 +908,8 @@ var w_gold_take_low := GOLD_TAKE_VALUE_LOW
 var w_gold_oc := GOLD_OPPORTUNITY_W
 # 【2026-09-19 新增·默认 0 = 关】A 档英雄特化项（见文件上方常量块）
 var w_poison_tick := POISON_TICK_VALUE
+# 【2026-09-23 深夜·默认 4 ⇒ 逐位不变】⑫ 的"毒还剩几跳"上限（见 const POISON_MAX_TICKS 处说明）。
+var w_poison_max_ticks := POISON_MAX_TICKS
 # 【2026-09-20·默认关】T6「这一击新挂上毒」的动作收益（见 const POISON_APPLY_W 处说明）
 var w_poison_apply := POISON_APPLY_W
 var w_possess_target := POSSESS_TARGET_W
@@ -940,6 +957,8 @@ var w_weak_seed := WEAK_SEED
 var w_search_mode := SEARCH_MODE
 # 【2026-09-23 深夜·默认关】阶段 1 每层保留宽度（0 = 沿用 `BEAM`），见 `const TWO_PHASE_P1_BEAM` 处说明。
 var w_tp_p1_beam := TWO_PHASE_P1_BEAM
+# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开），见 `const TWO_PHASE_DEDUP` 处说明。
+var w_tp_dedup := TWO_PHASE_DEDUP
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
 var w_sub_finish_w := SUB_FINISH_W
@@ -1146,6 +1165,8 @@ func set_weights(t: Dictionary) -> void:
 			"ENGAGE_PULL_PER_CELL": w_engage_pull = float(v)
 			# 【2026-09-19】A 档英雄特化项（默认 0 = 关）
 			"POISON_TICK_VALUE": w_poison_tick = float(v)
+			# 【2026-09-23 深夜·默认 4】⑫ 的跳数上限（0 = ⑫ 恒 0 = 等价于关）
+			"POISON_MAX_TICKS": w_poison_max_ticks = int(v)
 			# 【2026-09-20·默认关】T6「这一击新挂上毒」的动作收益（见 const POISON_APPLY_W 处说明）
 			"POISON_APPLY_W": w_poison_apply = float(v)
 			"POSSESS_TARGET_W": w_possess_target = float(v)
@@ -1172,6 +1193,8 @@ func set_weights(t: Dictionary) -> void:
 			"SEARCH_MODE": w_search_mode = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1 每层保留宽度（算力分配键，见 const TWO_PHASE_P1_BEAM 处说明）
 			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
+			# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开；见 const TWO_PHASE_DEDUP 处说明）
+			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
@@ -1462,6 +1485,24 @@ const TWO_PHASE_LAYOUTS := 16
 #   ⚠️ 这是**算力分配键**（不动任何评分）⇒ 想定型要走剂量批（`难度体检 -Mode smode`）：
 #     先试 96（预计阶段 1 从 ~11s 降到 ~3s，把 8 秒让给阶段 2），看 ① 还超不超时 ② Δpts。
 const TWO_PHASE_P1_BEAM := 0
+# 【2026-09-23 深夜·用户拍板「A 阶段 1 去重」】**阶段 1 的"同末态去重"**。
+#   病灶（读代码 + 一组剂量批读数共同确认）：阶段 1 是**逐层决定"谁先挪"**的 BFS ——
+#   三个单位最后落在同一组格子上，可以有 3! = 6 条"决定顺序"不同的路径，它们在 `merged` 里是
+#   **6 个独立条目**，而 `_layout_score()` 第一件事就是完整 `_evaluate(sim, …)` ⇒
+#   **同一个末态被完整评分 6 遍**（4 人队 24 遍、死灵法师那种召唤队 120~720 遍）。
+#   ⇒ 这就是"单位一多就必超时"的主因，也是 `TWO_PHASE_P1_BEAM` 那批的读数成因：
+#     `b192` 与 `b0`(=400) **16/16 逐格完全相同**（砍掉的全是水分），`b96` 才真的改行为（14/16 格变）。
+#   本键 = 同一层内**按模拟状态指纹去重**（`_sim_digest()`），保留先出现的那条：
+#     0 = 关（**逐位不变**，但仍然统计"重复多少条"打到 `[搜索分账]`）· 1 = 开。
+#   ⚠️ 为什么原则上**不掉水平**：被丢掉的那条与留下的那条**末态完全相同** ⇒ 分数必然相同
+#     （`_layout_score` 是 `s2` 的纯函数）⇒ 阶段 2 拿到的 top-16 一套都不变，只是不再重复算。
+#   ⚠️ 顺序真的会影响结果的情形**不会被误合并**：风语者光环、医护兵移动治疗、位移类技能会让
+#     "先挪谁"改变模拟状态（血量/移动力/补位）⇒ 指纹不同 ⇒ 两条都留着。
+#   ⚠️ 指纹必须覆盖 `_evaluate` 读到的**每一个会变的量**（单位字段走脚本自枚举，见 `_sim_digest()`）；
+#     宁可多算（少去重）也不能漏 —— 漏一个字段就是"悄悄丢状态"。
+#   ⚠️ 副作用：并列（同分）时保留哪一条由"生成顺序"决定（今天是 `sort_custom` 不稳定排序任选一条）
+#     ⇒ 末态相同，只有 `path` 里步骤的先后（纯演出顺序）可能不同。
+const TWO_PHASE_DEDUP := 0
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
 func search(sim: Sim, enemy_faction: int) -> Array:
@@ -1479,6 +1520,8 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_tp_layouts_built = 0
 	last_tp_layouts_used = 0
 	last_tp_leaves = 0
+	last_tp_p1_evals = 0
+	last_tp_p1_dups = 0
 	var enemy_idxs: Array = []
 	for i in sim.units.size():
 		if sim.units[i].fn == enemy_faction and sim.units[i].alive:
@@ -1683,6 +1726,80 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 ##     一格打不到人的位置后，候选表里自然没有 `atk >= 0` ⇒ **一分不罚** ⇒ 模式 2 把"挪了位却没出手"
 ##     变成了零成本（用户实机症状：「莫名其妙的不打」）。现改为**本回合开始时**的判据
 ##     （`_actions_for()` 里有没有 `atk >= 0`，与现役逐字同一把尺子 ⇒ "原位打 / 走一步再打都算"）。
+# `_sim_digest()` 的单位字段名单缓存（第一次调用时从 `SimUnit` 自身枚举，见该函数说明）。
+var _unit_digest_fields: Array = []
+
+## 【2026-09-23 深夜·用户拍板 A】**阶段 1 去重用的"模拟状态指纹"**。
+##   用途：`_search_two_phase()` 的逐层展开会把**同一个末态**按"谁先挪"的决定顺序复制 n! 份
+##   （3 人队 6 份、4 人队 24 份、召唤队 120~720 份），而每份都要跑一次完整 `_evaluate`
+##   ⇒ 这就是"单位一多就必超时"的主因（也是 `b192≡b0`、`b96` 才变行为的成因）。
+##   指纹相同 ⇒ `s2` 的**每一个会变的字段都相同** ⇒ `_layout_score()` 必然给出同一个分数
+##   ⇒ 可以只算一次、其余直接丢（阶段 2 拿到的 top-16 一套都不变）。
+## ⚠️ **完整性靠"脚本自枚举"**：单位字段不手抄，从 `SimUnit` 自身的 `get_property_list()` 取
+##   （只取 `PROPERTY_USAGE_SCRIPT_VARIABLE` = 脚本里声明的 `var`）⇒ 以后加字段**不会漏**。
+##   名单只枚举一次、之后缓存（`_unit_digest_fields`）。
+## ⚠️ **Sim 侧那几个"累积量/环境量"必须手写**（它们是 `_evaluate` 的输入、又不在 `units` 里）：
+##   击杀数 / 拾取账 / 毒·沉默·荆棘·麻痹·破盾的动作账 / 墓碑·障碍·炸弹·道具格与归属 /
+##   待结算队列 `pending_*` / 负墟记账 / 行动方阵营。[新增这类字段时要一起加！]
+## ⚠️ **保守优先**：任何"拿不准"的值（对象引用、字典键序）都会让指纹**不同** ⇒ 只是少去重一条，
+##   绝不误合并。宁可少省一点时间，也不能悄悄丢状态。
+func _sim_digest(sim: Sim) -> String:
+	if _unit_digest_fields.is_empty():
+		# ⚠️ 用**场上已有的单位**枚举字段名单（别 `SimUnit.new()` 造临时实例 —— 那只是白造一个对象）。
+		#   注：进程退出时那句 `ObjectDB instances were leaked` **与本函数无关**（2026-09-23 实测：
+		#   换成零分配后告警照旧；用困难档权重 = 根本进不到本函数时反而报 4 个）⇒ 那是既有行为。
+		var probe: SimUnit = null
+		for u0 in sim.units:
+			if u0 != null:
+				probe = u0
+				break
+		if probe == null:
+			return ""
+		var fns: Array = []
+		for p in probe.get_property_list():
+			if int(p["usage"]) & PROPERTY_USAGE_SCRIPT_VARIABLE:
+				fns.append(String(p["name"]))   # 存 String（`Array.sort()` 对 String 一定可用）
+		fns.sort()                 # 定死顺序：以后挪字段位置不会换指纹
+		_unit_digest_fields = fns
+	var parts := PackedStringArray()
+	for f in _unit_digest_fields:
+		parts.append(String(f))
+		for u in sim.units:
+			parts.append("_" if u == null else _digest_val(u.get(f), sim))
+	parts.append("|k%d|bt%.3f|gt%d|pa%d|pav%.3f|sv%.3f|pv%.3f|zv%.3f|sb%.3f|af%d|neg%s|pmd%d|eng%d" % [
+		sim.killed_players, sim.buff_taken, sim.gold_taken, sim.poison_applied, sim.poison_apply_val,
+		sim.silence_val, sim.pin_val, sim.paralyze_val, sim.shield_break_val, int(sim.active_fn),
+		_digest_val(sim._neg_gained, sim), sim._pos_mirror_depth, 1 if sim.engaged0 else 0])
+	parts.append("|gr%s|ob%s|bm%s|bc%s|bo%s|gc%s|rs%s|as%s|pg%s" % [
+		_digest_val(sim.graves, sim), _digest_val(sim.obstacles, sim), _digest_val(sim.bombs, sim),
+		_digest_val(sim.buff_cells, sim), _digest_val(sim.buff_owner, sim), _digest_val(sim.gold_cells, sim),
+		_digest_val(sim.rosters, sim), _digest_val(sim.auto_sub, sim), _digest_val(sim.pending_guard, sim)])
+	parts.append("|pv%s|pd%s|ps%s" % [
+		_digest_val(sim.pending_vanish, sim), _digest_val(sim.pending_died, sim),
+		_digest_val(sim.pending_sub, sim)])
+	return "".join(parts)
+
+## 【2026-09-23 深夜】`_sim_digest()` 的取值序列化（保守优先：拿不准就让它**不同**）。
+##   · 字典**不排序**（克隆保留插入顺序 ⇒ 同内容通常同序）；万一键序不同 ⇒ 指纹不同 ⇒ 少去重一条。
+##   · 对象引用（`pending_*` 里的单位）换成"它在 `units` 里的下标"，避免实例 id 不确定。
+func _digest_val(v: Variant, sim: Sim) -> String:
+	if v == null:
+		return "-"
+	if v is Dictionary:
+		var seg := PackedStringArray()
+		var d: Dictionary = v
+		for k in d.keys():
+			seg.append("%s=%s" % [str(k), _digest_val(d[k], sim)])
+		return "{" + ",".join(seg) + "}"
+	if v is Array:
+		var seg2 := PackedStringArray()
+		for e in (v as Array):
+			seg2.append(_digest_val(e, sim))
+		return "[" + ",".join(seg2) + "]"
+	if v is Object:
+		return "u%d" % sim.units.find(v)
+	return str(v)
+
 func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var t0 := Time.get_ticks_msec()   # 【取证】抬头行要用"这次搜索花了多久"
 	var deadline := (t0 + time_budget_ms) if time_budget_ms > 0 else 0
@@ -1718,6 +1835,10 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	while true:
 		var pending := false
 		var merged: Array = []
+		# 【2026-09-23 深夜·用户拍板 A】本层的"同末态去重"表（**每层重置**：
+		#   第 3 层里"某单位原地不动"的条目与第 2 层父状态**末态相同但 `done` 不同**，
+		#   父状态还要继续展开 ⇒ 跨层去重会丢东西。只在**同一层内**去重才是安全的。
+		var seen_digest: Dictionary = {}
 		for st in layouts:
 			var remaining: Array = []
 			for i in enemy_idxs:
@@ -1737,6 +1858,18 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 					if a["move"] != null:
 						path.append({ "idx": idx, "action": a })   # 原地不生成步骤（省一次回放亮边）
 					var full: bool = done2.size() >= enemy_idxs.size()
+					# 【2026-09-23 深夜·同末态去重】同一个末态会被"谁先挪"的决定顺序复制 n! 份
+					#   （3 人队 6 份、召唤队上百份），每份都要跑一次完整 `_evaluate`。
+					#   `_layout_score` 是 `s2` 的纯函数 ⇒ 指纹相同就必然同分 ⇒ 只算一次。
+					#   ⚠️ 去重**只省算、不改漏斗内容**：留下的是同分同末态的那条，
+					#     被丢的那些在阶段 2 里也只会给出完全一样的末态。
+					if w_tp_dedup > 0:
+						var dg := _sim_digest(s2)
+						if seen_digest.has(dg):
+							last_tp_p1_dups += 1
+							continue
+						seen_digest[dg] = true
+					last_tp_p1_evals += 1
 					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full)))
 				if abort_requested:
 					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
@@ -2353,6 +2486,16 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			maxi(TWO_PHASE_LAYOUTS, 1)]
 		txt += " · 阶段2（出手）%.1fs：完整计划 %d 个" % [
 			float(last_tp_phase2_ms) / 1000.0, last_tp_leaves]
+		# 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】把阶段 1 的**去重账**打出来：
+		#   `评分 N 次` = 真正跑了多少次完整 `_evaluate`；`丢 M 条 = X%` = 其中"同末态"（同一个阵型
+		#   被"谁先挪"的决定顺序复制出来的那几份）占多少。**X% 就是 n! 水分的直接读数**。
+		#   ⚠️ 去重关着时 M 恒为 0（不算指纹就数不出来）⇒ 想看这个数就得把 `TWO_PHASE_DEDUP` 开起来。
+		txt += " · 阶段1 评分 %d 次" % last_tp_p1_evals
+		if last_tp_p1_dups > 0:
+			txt += "（同末态去重丢 %d 条 = %.0f%%）" % [last_tp_p1_dups,
+				float(last_tp_p1_dups) * 100.0 / float(maxi(last_tp_p1_evals + last_tp_p1_dups, 1))]
+		elif w_tp_dedup <= 0:
+			txt += "（去重未开）"
 	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
 	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
 	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。
@@ -2426,7 +2569,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 							_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
 							_plain_reason(bd0, bd_alt2, ur.skills.has(DataRegistry.Skill.TAUNT))]
 					# 【2026-09-23 深夜·用户拍板「加」】同一条明细也挂在这里（"没选的那一手"那一支）
-					var g5 := _plain_gap_terms(bd1, bd_alt2)
+					var g5 := _plain_gap_terms(bd1, bd_alt2, gap)
 					if g5 != "":
 						alt_note += "\n     分差明细（现在这一手 − 没选的那一手）：" + g5
 		# 【2026-09-23 用户要求·第三版】这一步**打的是这个目标，为什么不打那个**：
@@ -2494,7 +2637,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				#   ⇒ 一眼看出是哪一项在付钱（④集火 / ⑱钉人 / ③血量账 / ⑦暴露…），不用再靠推理。
 				#   ⚠️ 两边都是 `end_of_turn = false`（中途态）⇒ ⑳㉑㉒㉓㉕ 在这条明细里恒为 0、不会出现
 				#     （它们只在"全队都行动完"的末态结算；想看它们得开 `log_verbose` 的详细版）。
-				var g6 := _plain_gap_terms(bd1, scored[0]["bd"])
+				var g6 := _plain_gap_terms(bd1, scored[0]["bd"], float(scored[0]["gap"]))
 				if g6 != "":
 					tr_note += "\n     分差明细（现在这一手 − 那条备选）：" + g6
 			else:
@@ -2626,23 +2769,42 @@ func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> St
 ##   只给决策日志用（`_print_decision()` 的两处诊断）；两侧同口径 —— 都取 `end_of_turn = false`（中途态）
 ##   ⇒ ⑳㉑㉒㉓㉕ 恒为 0、不会出现在这条明细里（它们只在"全队都行动完"的末态结算）。
 ##   只列 |差| ≥ 0.05 的前 `max_n` 项（避免刷屏）；各项之和 ≈ 上层报的那个"会少 X 分"。
-func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, max_n: int = 5) -> String:
+## `gap` = 这一对的**真实总分差**（由调用点用 `_evaluate()` 算好传进来）。传了就补一行
+## **「其它(未列)」**做自校验 —— 与 `_breakdown_line()` 同一手法。
+## 【2026-09-23 深夜·用户实机日志暴露】原来**不补这一行** ⇒ 明细"加不出总数"：
+##   用户那条日志里 `③血量账 −3.0 · ④集火frac² −0.4 · ⑦核心风险 −0.3`（合计 **−3.7**），
+##   而总差只有 **−1.7** ⇒ 差 **+2.0** 无处交代。真因：`_eval_breakdown()` 只列固定的通用项，
+##   **英雄特化项（金矿 `GOLD_*` / A 档英雄项 / 血锁开团 / ⑯⑰⑱⑲ 的施加者覆盖值…）根本不进字典**
+##   ⇒ 它们只能落进「其它(未列)」。（那局走的正是黄金矿工，+2.0 极可能就是"离矿更近"那笔。）
+##   同一行也顺手交代被 `max_n` 截掉的已列项，否则读者会以为明细就是全部。
+func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, max_n: int = 5) -> String:
 	var keys := {}
 	for k in bd_now.keys():
 		keys[String(k)] = true
 	for k in bd_alt.keys():
 		keys[String(k)] = true
 	var diffs: Array = []
+	var total := 0.0
 	for k in keys.keys():
 		var d := float(bd_now.get(k, 0.0)) - float(bd_alt.get(k, 0.0))
+		total += d                     # 全量合计（含被 0.05 阈值滤掉的小项）⇒ 残差才算得准
 		if absf(d) >= 0.05:
 			diffs.append({ "k": String(k), "d": d })
-	if diffs.is_empty():
-		return ""
 	diffs.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
 	var parts: Array[String] = []
 	for i in mini(max_n, diffs.size()):
 		parts.append("%s %+.1f" % [String(diffs[i]["k"]), float(diffs[i]["d"])])
+	if diffs.size() > max_n:
+		var cut := 0.0
+		for i in range(max_n, diffs.size()):
+			cut += float(diffs[i]["d"])
+		parts.append("其余已列 %d 项合计 %+.1f" % [diffs.size() - max_n, cut])
+	if not is_nan(gap):
+		var other := float(gap) - total
+		if absf(other) >= 0.05 or parts.is_empty():
+			parts.append("其它(未列) %+.1f" % other)
+	if parts.is_empty():
+		return ""
 	return " · ".join(parts)
 
 ## 把"这一步的评分变化"翻译成人话：取变化最大的 1~3 项，各配一句短语（`_term_phrase`）。
@@ -2767,7 +2929,7 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 	var dlt := _evaluate(s_alt, true) - _evaluate(end_sim, true)
 	# 【2026-09-23 深夜·用户拍板「加」】同一套**逐项分差**也挂在这条"整回合没动作"的诊断上。
 	#   ⚠️ 这里两边都是 `end_of_turn = true`（**末态**口径）⇒ ⑳㉑㉒㉓㉕ 会正常出现（与上面两处不同）。
-	var g8 := _plain_gap_terms(bd_b, bd_a)
+	var g8 := _plain_gap_terms(bd_b, bd_a, dlt)
 	var g8_tail := ("\n     分差明细（补上这一手 − 现在这样）：" + g8) if g8 != "" else ""
 	if dlt > 0.5:
 		return head + "，而且补上它分数更高（多赚 %.1f 分）⇒ 这一步像是被搜索漏掉了（剪枝），值得查" % dlt + g8_tail
@@ -2999,7 +3161,7 @@ func _term_defs() -> Array:
 		["⑨搏命激励", "Σ 我方「必死且本回合已攻击」 + 6.0 + 1.5×吃攻"],
 		["⑩终局项", "TERMINAL_W(%.2f) × 存活数凸曲线（我方 3/2/1/0 → 0/−10/−100/−1000；对面 → 0/+10/+100/+1000）" % w_terminal],
 		["⑮必死折", "−Σ_我方[「**挨打合计**」≥ 当前血 ⇒ 身价 × THREAT_DEAD_FOLD(%.2f)]（与 ⑦ 共用同一份 `_incoming_incs()`）（「下回合会被打掉」的唯一罚分；判据与 ⑥规则B / 撤退过滤**同一把尺子**：`_incoming_total_on()` = 按目标求和的真实单击 + 移动后技能 + 毒 + 盾修正）。⚠️ 2026-09-20 用户拍板：原来的**分摊总量**（`THREAT_ALLOC_W` × Σ分到的伤害 × 核心系数）与 ⑦核心风险（`RISK_W`/`RISK_CORE_POW`）**整族删除** —— 那本账要手工建模「对手能打到几个人（走位）+ 各技能」，永远算不全（实测它在棋力层中性，§14#174）；而「下回合会不会挨打」现在由**必死折 + ⑥规则B + 终选层的 T13 真推演**覆盖" % [w_threat_dead_fold]],
-		["⑫猛毒计价", "毒蛇(hero_03)：敌方每只带[猛毒]的单位 +POISON_TICK_VALUE(%.2f) × min(其血, POISON_MAX_TICKS)（=『毒还剩几跳』值多少分）。**值按施加者英雄覆盖读**（`_wh(施加者.hero_id, ...)`；查不到施加者 ⇒ 用这个扁平兜底值）" % w_poison_tick],
+		["⑫猛毒计价", "毒蛇(hero_03)：敌方每只带[猛毒]的单位 +POISON_TICK_VALUE(%.2f) × min(其血, POISON_MAX_TICKS=%d)（=『毒还剩几跳』值多少分）。**值按施加者英雄覆盖读**（`_wh(施加者.hero_id, ...)`；查不到施加者 ⇒ 用这个扁平兜底值）" % [w_poison_tick, w_poison_max_ticks]],
 		["⑬附体(宿魂)", "宿魂(hero_46)：敌方被[附体]的单位 +POSSESS_TARGET_W(%.2f) × 身价/20。**值按施加者（宿魂）英雄覆盖读**（`_wh`）" % w_possess_target],
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且**真被够得着** ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取。⚠️ 2026-09-23：够得着 = 与 ⑥⑦ 同一把尺 —— 射程＋视线＋**单位身体**＋嘲讽门，**躲在队友后面、玩家其实打不到它 ⇒ 不给这 5 分**）" % w_solid_hold],
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
@@ -3129,7 +3291,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 			if pu != null:
 				w_pt = _wh(pu.hero_id, "POISON_TICK_VALUE", w_poison_tick)
 		if w_pt != 0.0 and hu.poisoned:
-			var p1 := w_pt * float(mini(hu.hp, POISON_MAX_TICKS))
+			var p1 := w_pt * float(mini(hu.hp, maxi(w_poison_max_ticks, 0)))
 			pv += p1 if is_foe else -p1
 		# 【2026-09-20·用户拍板】⑬ 同理：按**施加附体的宿魂**英雄覆盖读（`possessed_by` 存的就是它的 sim_index）。
 		var w_pw := w_possess_target
@@ -6001,7 +6163,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 				if pu != null:
 					w_pt = _wh(pu.hero_id, "POISON_TICK_VALUE", w_poison_tick)
 			if w_pt != 0.0 and hu.poisoned:
-				var pv := w_pt * float(mini(hu.hp, POISON_MAX_TICKS))
+				var pv := w_pt * float(mini(hu.hp, maxi(w_poison_max_ticks, 0)))
 				score += pv if is_foe else -pv
 			# 宿魂：敌人被[附体]⇒ 我挨打时它同伤 = 绕过前排的手段（按目标身价给分）。
 			# 【2026-09-20·用户拍板】值按**施加附体的宿魂**英雄覆盖读（`possessed_by` 就是它的 sim_index）。
