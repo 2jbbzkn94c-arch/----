@@ -13,6 +13,7 @@
 # 每个模式的完整输出同时存到 RL\train\results\chain_<模式>.log。
 param(
     [string[]]$Modes = @('dedup', 'shield', 'taunt', 'apply', 'split', 'spread', 'hpacc'),
+    [string]$WaitPath = '',                    # 等这个**文件**（相对 RL\train\results）出现；空 = 退回用 $WaitFor 的 measure.csv
     [string]$WaitFor = 'ladder6_pois2_L6PO',   # 等这个 run 的 measure.csv 出现（= 前一批最后一组跑完）
     [string]$WatchPrefix = 'ladder6_pois2_',   # 盯这个前缀的目录，看还有没有新写入
     [int]$StallMin = 25,                       # 连续这么多分钟没有任何写入 ⇒ 才判定"前一批已停"
@@ -37,10 +38,17 @@ function Get-HeadlessGodotCount() {
         Where-Object { [string]::IsNullOrEmpty($_.MainWindowTitle) }).Count
 }
 
+# 【2026-09-24 修】等什么：优先 `-WaitPath` 指定的哨兵文件（相对 RL\train\results）。
+#   为什么加它：等 `L6PO\measure.csv` 有个竞态 —— T25 的第 6 组**可能因为组级硬超时没产出 measure.csv**
+#   （2026-09-24 实测：第 2 组撞 `-TimeoutSec 300 ⇒ 组级预算 300×2+300 = 900s` 被砍掉一半工人、
+#   `refusing to merge` ⇒ 那一组没有表），这时链会在"停写 25 分钟 + 无 headless Godot"那一刻
+#   **抢跑**，正好撞上我随后补跑那几组的进程 ⇒ 12 个 worker 抢 12 核。哨兵文件把"T25 真的补完了"
+#   这件事变成显式信号，人（我）补完再落这个文件。
+$waitPath = if ($WaitPath) { Join-Path $res $WaitPath } else { Join-Path $res ($WaitFor + '\measure.csv') }
 $t0 = Get-Date
-Write-Host ('[chain] 启动 ' + $t0.ToString('HH:mm:ss') + ' · 等 `' + $WaitFor + '` 的 measure.csv（上限 ' + $WaitMaxMin + ' 分钟；停写 ' + $StallMin + ' 分钟且无 headless Godot 才判停）')
+Write-Host ('[chain] 启动 ' + $t0.ToString('HH:mm:ss') + ' · 等 `' + $waitPath + '`（上限 ' + $WaitMaxMin + ' 分钟；停写 ' + $StallMin + ' 分钟且无 headless Godot 才判停）')
 while ($true) {
-    if (Test-Path (Join-Path $res ($WaitFor + '\measure.csv'))) { Write-Host '[chain] 前一批已完成 ✓'; break }
+    if (Test-Path $waitPath) { Write-Host '[chain] 前一批已完成 ✓'; break }
     if (((Get-Date) - $t0).TotalMinutes -gt $WaitMaxMin) { Write-Host '[chain] ⚠️ 等太久 ⇒ 直接开始'; break }
     $latest = Get-LatestWrite $res $WatchPrefix
     $idle = if ($null -eq $latest) { 999.0 } else { ((Get-Date) - $latest).TotalMinutes }
@@ -55,7 +63,10 @@ foreach ($m in $Modes) {
     $tag = 'b' + $m
     $log = Join-Path $res ('chain_' + $m + '.log')
     Write-Host ('[chain] ===== 开始 -Mode ' + $m + ' -Tag ' + $tag + '  @ ' + (Get-Date).ToString('HH:mm:ss') + ' =====')
-    & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag *>&1 | Tee-Object -FilePath $log | Out-Null
+    # ⚠️ `-TimeoutSec 900` **必须显式给**：`难度体检` 默认 300，而组级硬预算是 `TimeoutSec*2+300` = 900s
+    #   ⇒ 慢牌组（如 hero_03,hero_24,hero_09 实测每组要 ~1300s）会在半途被砍、`refusing to merge`，
+    #   那一组**没有 measure.csv**（T25 第 2 组就是这么丢的）。900 ⇒ 组级 2100s，留足余量。
+    & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 900 *>&1 | Tee-Object -FilePath $log | Out-Null
     Write-Host ('[chain] ===== 结束 -Mode ' + $m + '  @ ' + (Get-Date).ToString('HH:mm:ss') + '（输出：' + $log + '）=====')
 }
 Write-Host ('[chain] 全部模式跑完 @ ' + (Get-Date).ToString('HH:mm:ss'))
