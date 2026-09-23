@@ -313,6 +313,13 @@ class Sim:
 var grid: HexGrid
 var difficulty := 1   # 0 简单 / 1 普通 / 2 困难
 var log_decisions := true   # 每次敌方行动后把"评分+决策理由"打到控制台（分析用）
+## 【2026-09-23 用户要求】日志改成**人话版**：默认只说「某个英雄做了什么、出于什么原因」。
+##   用户原话：「现在的日志我其实看不懂，比如那些分数什么的数据，你自己知道就行了……
+##   你就告诉我，某个英雄做了什么，出于什么原因这样做」。
+##   ⇒ `log_decisions = true` 时打的是**人话版**（动作 + 原因，原因由当步评分变化最大的几项翻译而来）；
+##   原来那套「总评分 / 每步 Δ / 逐项 Δ Δ」**一个字没删**，整段搬进 `_print_decision_detailed()`，
+##   想看细节时把 `log_verbose` 打开（默认关 ⇒ 你侧只看到人话）。
+var log_verbose := false
 ## 单次搜索的思考时间上限（毫秒；<=0 = 不限）。
 ## 它是**上限**而不是固定等待：搜完就返回。给足预算让 beam 能铺开，逼近最优路线；
 ## 超时后剩下的单位改用贪心收尾（见 _greedy_finish），保证计划始终完整。
@@ -418,6 +425,8 @@ const SHIELD_BREAK_DMG_REF := 1.0
 #   **⑦核心风险是 max 型**（只罚最危险的那一个）⇒「脆皮因为坦克挡在前面而不挨打」这件事**没有任何一项在读**
 #   ⇒ 坦克往前站 = 自己挨打上升 + 收益 0，而躲在队友后面还有 ⑭`SOLID_HOLD_W` 那笔白钱 ⇒ 不动成了当时的最优解。
 #   本项的语义就是"嘲讽到底替队伍挡下了多少火力"：躲在后排 ⇒ 差额 0 ⇒ 一分不得；站到火力线上 ⇒ 一分一分地赚。
+#   ⚠️ **2026-09-23 深夜·用户拍板：只在末态结算**（`end_of_turn`，与 ⑳㉑㉒㉓ 同款）。原来逐步都算 ⇒
+#     "先走的那个单位"会因为队友还没跟上来而被记成"离开掩护位"（用户实机日志里复仇者那一行）。
 # 开销：只在"我方有存活嘲讽单位"时才算（其余局面直接 0）；对每个非嘲讽单位先算"关掉嘲讽"的挨打合计，
 #   为 0 就跳过第二次 ⇒ 常见局面只多一趟。默认 0 = 关（简单/普通/困难与 RL 跑批逐位不变）。
 # ⚠️ 新评分项 ⇒ 值要靠剂量批定（登记在 `1_通用策略.md` §五 T21）。
@@ -2219,8 +2228,326 @@ func _greedy_finish(states_in: Array, enemy_idxs: Array) -> Array:
 	out.sort_custom(func(a, b): return a["score"] > b["score"])
 	return out
 
-# 控制台输出本次敌方决策说明：总评分 + 每步行动的理由 + 每步得分变化（分析 AI 用）
+# ============ 【2026-09-23 用户要求】默认日志 = 人话版（谁做了什么 · 为什么）============
+# 结构：① 有动作的单位按计划顺序一行一条；② **计划里没有步骤**的单位也写出来（原来它们整个消失）；
+#   每条后面那行「为什么」= 把这一步评分变化最大的 1~3 项**翻译成人话**（`_plain_reason()`）。
+# 想要分数明细（原来那套）⇒ 把 `log_verbose` 打开，会追加 `_print_decision_detailed()` 的完整输出。
 func _print_decision(sim: Sim, chosen: Dictionary) -> void:
+	var path: Array = chosen["path"]
+	var acted := {}
+	for st0 in path:
+		acted[int(st0["idx"])] = true
+	var txt := "\n===== 敌方 AI 本回合：%d 个单位 · %d 步 =====" % [_ai_unit_count(sim), path.size()]
+	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
+	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
+	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。
+	var end_sim := sim.clone()
+	for st_e in path:
+		_apply(end_sim, int(st_e["idx"]), st_e["action"])
+	end_sim.walk_cache = {}
+	end_sim.walk_cache_pass = {}
+	# 【2026-09-23 修正】模式 2 会把"移动"和"出手"**拆成两步** ⇒ 一个只走位的步骤后面往往还有
+	#   它自己的攻击步。所以"没选的那一手"**只对该单位整回合都没出手时**才算，否则会出现假警报
+	#   （第一版就把"走过去 + 待会儿打"误判成"不打"，报出 +5.5 分的剪枝嫌疑 —— 那是重复计算）。
+	var attacked_ids := {}
+	for st_a in path:
+		if int((st_a["action"] as Dictionary).get("atk", -1)) >= 0:
+			attacked_ids[int(st_a["idx"])] = true
+	# ① 有动作的单位（按计划顺序：先动谁、后动谁就是它实际出手的顺序）
+	var replay := sim.clone()
+	for st in path:
+		var idx := int(st["idx"])
+		var u0: SimUnit = sim.units[idx]
+		var ur: SimUnit = replay.units[idx]
+		var a: Dictionary = st["action"]
+		var bd0 := _eval_breakdown(replay)
+		var pre := replay.clone()          # 这一步之前的局面（"没选的那一手"要在它上面做反事实）
+		var pu: SimUnit = pre.units[idx]
+		var is_atk_step := int(a.get("atk", -1)) >= 0
+		var what := _plain_action_desc(sim, replay, ur, a)
+		_apply(replay, idx, a)
+		var bd1 := _eval_breakdown(replay)
+		var landed: Vector2i = ur.cell if a.get("move") == null else Vector2i(a["move"])
+		# 【2026-09-23 用户要求·第二版】这一步**没选的那一手**：若能打到人却没打（比如去敲障碍 / 纯走位），
+		#   把"最好的一击"补在**同一局面（`pre`）**上算分差 ⇒ 直接回答用户那句「为什么不去打」。
+		#   `gap = 现在这一手 − 打那一手`：>0 = 没选它是对的（把两边各自赢在哪打出来）；
+		#   <0 = **那一手更值却没选** ⇒ 说明是搜索漏掉了（剪枝），日志直接点出来。
+		var alt_note := ""
+		if int(a.get("atk", -1)) < 0 and not attacked_ids.has(idx):
+			var alt_combo: Dictionary = {}
+			var alt_dmg := -1.0
+			var alt_name := ""
+			for aa2 in _actions_for(pre, idx):
+				var at2 := int(aa2.get("atk", -1))
+				if at2 < 0 or at2 >= pre.units.size():
+					continue
+				var tg2: SimUnit = pre.units[at2]
+				if tg2 == null or not tg2.alive:
+					continue
+				var dm2 := _hit_after_target_mods(pre, tg2, tg2.cell, float(pu.eatk))
+				if dm2 > alt_dmg:
+					alt_dmg = dm2
+					alt_combo = aa2
+					alt_name = tg2.name
+			if alt_combo.is_empty():
+				# 整回合没出手、而且**一条攻击候选都没有** ⇒ 直接写清被什么挡住（与"没动作"那段同一套口径）
+				alt_note = "\n     这一手不是攻击，而且它本回合没有任何能打到人的出招：" + _plain_no_attack_why(pre, idx)
+			if not alt_combo.is_empty():
+				var mc3: Variant = alt_combo.get("move")
+				var occ_ok := not (mc3 != null and pre.occ.has(mc3) and (pre.occ[mc3] as SimUnit) != pu)
+				if occ_ok:
+					var desc3 := ("在 %s 原地打 %s" % [str(pu.cell), alt_name]) if mc3 == null \
+						else ("从 %s 走到 %s 打 %s" % [str(pu.cell), str(mc3), alt_name])
+					var s_alt2 := pre.clone()
+					_apply(s_alt2, idx, alt_combo)
+					var bd_alt2 := _eval_breakdown(s_alt2)
+					var gap := _evaluate(replay, false) - _evaluate(s_alt2, false)
+					if gap < -0.5:
+						alt_note = "\n     ⚠️ 没选的那一手更值：%s（约 %.0f 伤），选它本可多赚 %.1f 分 ⇒ 疑似被搜索漏掉（剪枝）" % [
+							desc3, alt_dmg, absf(gap)]
+					else:
+						alt_note = "\n     没选的那一手：%s（约 %.0f 伤）。换成它会少 %.1f 分 —— 现在这一手赢在「%s」，它只赢在「%s」" % [
+							desc3, alt_dmg, maxf(gap, 0.0),
+							_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
+							_plain_reason(bd0, bd_alt2, ur.skills.has(DataRegistry.Skill.TAUNT))]
+		# 【2026-09-23 用户要求·第三版】这一步**打的是这个目标，为什么不打那个**：
+		#   用户原话「雪拳为什么在…打 5 血的圣光和…打 9 血的红帽之间选择了打红帽」——"选了谁"回答了，
+		#   "为什么选它"没有。这里对**其它每个目标**各取"最疼的一手"，在同一局面上算分差，
+		#   把"差在哪一项"写成一句话（只列最接近的两个备选，避免日志爆）。
+		if is_atk_step:
+			var chosen_t := int(a.get("atk", -1))
+			var alt_alts: Array = []
+			for aa3 in _actions_for(pre, idx):
+				var at3 := int(aa3.get("atk", -1))
+				if at3 < 0 or at3 == chosen_t or at3 >= pre.units.size():
+					continue
+				var tg3: SimUnit = pre.units[at3]
+				if tg3 == null or not tg3.alive:
+					continue
+				var dm3 := _hit_after_target_mods(pre, tg3, tg3.cell, float(pu.eatk))
+				alt_alts.append({ "combo": aa3, "t": at3, "dmg": dm3, "name": tg3.name })
+			# 每个目标只留"最疼的那一手"
+			var best_by_t := {}
+			for o in alt_alts:
+				var k3 := int(o["t"])
+				if not best_by_t.has(k3) or float(o["dmg"]) > float(best_by_t[k3]["dmg"]):
+					best_by_t[k3] = o
+			var scored: Array = []
+			for k4 in best_by_t.keys():
+				var o4: Dictionary = best_by_t[k4]
+				var mc4: Variant = (o4["combo"] as Dictionary).get("move")
+				if mc4 != null and pre.occ.has(mc4) and (pre.occ[mc4] as SimUnit) != pu:
+					continue
+				var s4 := pre.clone()
+				_apply(s4, idx, o4["combo"])
+				var gap4 := _evaluate(replay, false) - _evaluate(s4, false)
+				scored.append({ "o": o4, "gap": gap4, "bd": _eval_breakdown(s4) })
+			scored.sort_custom(func(a2, b2): return float(a2["gap"]) < float(b2["gap"]))
+			var lines: Array[String] = []
+			for i4 in mini(2, scored.size()):
+				var o5: Dictionary = scored[i4]["o"]
+				var mc5: Variant = (o5["combo"] as Dictionary).get("move")
+				var from5 := ("原地" if mc5 == null else ("从 %s 走到 %s" % [str(pu.cell), str(mc5)]))
+				lines.append("%s%s（约 %.0f 伤）会少 %.1f 分" % [from5, String(o5["name"]), float(o5["dmg"]),
+					maxf(float(scored[i4]["gap"]), 0.0)])
+			if lines.size() > 0:
+				txt += "\n     为什么打的是它：换成「%s」—— 打它赢在「%s」，那些备选只赢在「%s」" % [
+					"；".join(lines),
+					_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
+					_plain_reason(bd0, scored[0]["bd"], ur.skills.has(DataRegistry.Skill.TAUNT))]
+		txt += "\n · %s：%s\n     原因：%s%s\n     %s" % [u0.name, what,
+			_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)), alt_note,
+			_plain_incoming(end_sim, idx, landed)]
+	# ② 计划里没有步骤的单位（= "整回合没动作"）：说明它本来能不能打、以及为什么没打
+	for ii in sim.units.size():
+		var iu: SimUnit = sim.units[ii]
+		if iu == null or not iu.alive or iu.fn != DataRegistry.Faction.ENEMY or acted.has(ii):
+			continue
+		txt += "\n · %s：整回合没动作（原地不动、也没出手）\n     原因：%s\n     %s" % [
+			iu.name, _plain_idle_reason(sim, chosen, ii), _plain_incoming(end_sim, ii, iu.cell)]
+	txt += "\n===== 本回合决策结束 ====="
+	print(txt)
+	if log_verbose:
+		_print_decision_detailed(sim, chosen)
+
+## 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"—— 旧日志里的 `阈值比较X.X(来源…)` 那笔，
+##   用户点名要留着（原话：「怎么把会受到多少伤害给删了」）。它是真数据、不是评分：
+##   在"本回合全部走完"的 `end_sim` 上，按该单位这一步的落点算「对手能打到它的伤害总和 + 来源」。
+func _plain_incoming(end_sim: Sim, idx: int, cell: Vector2i) -> String:
+	if idx < 0 or idx >= end_sim.units.size():
+		return "下回合挨打：—"
+	var eu: SimUnit = end_sim.units[idx]
+	if eu == null or not eu.alive:
+		return "下回合挨打：—（它已经不在了）"
+	var info := {}
+	var inc := _incoming_total_on(end_sim, eu, cell, info)
+	if inc <= 0.0:
+		return "下回合在这一格挨不到打（0 伤）"
+	var parts: Array = info.get("parts", [])
+	var src: Array[String] = []
+	for p in parts:
+		if p is Array and (p as Array).size() >= 2:
+			src.append("%s%.0f" % [String(p[0]), float(p[1])])
+	var tail := ("（%s）" % "＋".join(src)) if src.size() > 0 else ""
+	return "下回合在这一格会挨 %.0f 伤%s" % [inc, tail]
+
+## 把一步动作写成一句人话（不含任何分数）。
+func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> String:
+	var mv: Variant = a.get("move")
+	var atk := int(a.get("atk", -1))
+	if atk == -2:
+		return "敲掉障碍 %s（清路）" % str(a.get("atk_obs", "?"))
+	if atk >= 0 and atk < replay.units.size():
+		var t: SimUnit = replay.units[atk]
+		var dmg := _hit_after_target_mods(sim, t, t.cell, float(ur.eatk))
+		var extra := ""
+		if float(t.hp) <= dmg:
+			extra = "，这一击能击杀"
+		elif t.skills.has(DataRegistry.Skill.TAUNT):
+			extra = "（打的是嘲讽单位）"
+		if mv != null and Vector2i(mv) != ur.cell:
+			return "走到 %s，然后打 %s（约 %.0f 伤%s）" % [str(mv), t.name, dmg, extra]
+		return "原地打 %s（约 %.0f 伤%s）" % [t.name, dmg, extra]
+	if mv != null and Vector2i(mv) != ur.cell:
+		return "只走到 %s（这一步不出手）" % str(mv)
+	return "原地不动、也没出手"
+
+## 把"这一步的评分变化"翻译成人话：取变化最大的 1~3 项，各配一句短语（`_term_phrase`）。
+## `is_taunt` = **走这一步的单位自己是不是嘲讽单位** —— 只有 ㉕ 用得到：
+##   ㉕ 是**全队账**（谁少挨的血都算一起），同一句话在"坦克自己顶上去"与"脆皮躲进掩护圈"两种情况下
+##   含义完全相反 ⇒ 必须按走步者身份分两句话说（用户 2026-09-23 指出原措辞会读反）。
+func _plain_reason(bd0: Dictionary, bd1: Dictionary, is_taunt: bool = false) -> String:
+	var deltas: Array = []
+	for k in bd1.keys():
+		var d := float(bd1[k]) - float(bd0.get(k, 0.0))
+		if absf(d) >= 0.4:
+			deltas.append({ "k": String(k), "d": d })
+	deltas.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
+	var out: Array[String] = []
+	for i in mini(3, deltas.size()):
+		out.append(_term_phrase(String(deltas[i]["k"]), float(deltas[i]["d"]), is_taunt))
+	if out.is_empty():
+		return "各评分项几乎没有变化（这一步与上一步基本等价）"
+	return "、".join(out)
+
+## 术语 → 人话。`better = true` 表示这一项**变好**（分数上升）。
+func _term_phrase(k: String, d: float, is_taunt: bool = false) -> String:
+	var better := d > 0.0
+	match k:
+		"①障碍绕路": return "少绕路" if better else "被墙逼着绕远路"
+		"②身价": return "换掉对面更值钱的单位" if better else "己方损失更值钱的单位"
+		"③血量账": return "打掉对面的血" if better else "自己这边要掉血"
+		"④集火frac²": return "继续集火同一个目标" if better else "火力分散了"
+		"⑤位置拉力": return "往前压（离战场太远）" if better else "往后缩"
+		"⑥规则B": return "这一格挨打收在阈值内" if better else "这一格挨打超出阈值"
+		"⑦核心风险": return "站这里更安全" if better else "站这里更容易被集火"
+		"⑧道具": return "顺路吃到道具" if better else "道具让对面吃了"
+		"⑨搏命激励": return "反正跑不掉，打出去" if better else "不用拼命了"
+		"⑩终局项": return "更接近赢" if better else "更接近输"
+		"⑫猛毒计价": return "对面身上的毒更值钱" if better else "对面的毒没了"
+		"⑬附体(宿魂)": return "附体对面" if better else "附体目标没了"
+		"⑭坚固(堡垒)": return "没移动 ⇒ 拿到[坚固]" if better else "移动了 ⇒ 丢掉[坚固]"
+		"⑮必死折": return "这一格下回合不会被打死" if better else "这一格下回合会被打死"
+		"⑯猛毒新挂": return "给对面新挂上毒" if better else "没挂上毒"
+		"⑰沉默计价": return "封住对面的技能" if better else "对面技能恢复"
+		"⑱荆棘封锁": return "把对面钉住（不能移动）" if better else "封锁没做成"
+		"⑲麻痹零攻": return "把对面的攻击力打到 0" if better else "没打掉对面攻击力"
+		"⑳抱团": return "和队友靠在一起" if better else "离队友远了"
+		"㉑退路/被夹": return "不让自己被夹住/留退路" if better else "把自己挤进死角或被夹"
+		"㉒隔断": return "把玩家之间的路卡住" if better else "隔断没做成"
+		"㉓离队距离": return "别掉单" if better else "离队友太远"
+		"㉔破盾": return "打掉对面的圣盾" if better else "自己的盾被打掉"
+		"㉕嘲讽吸火": return ("自己顶到火力线上、替后排挡刀" if better else "自己离开了掩护位（后排会多挨刀）") if is_taunt \
+			else ("躲进坦克的掩护圈（自己少挨刀）" if better else "离开坦克的掩护圈（自己要多挨刀）")
+	return ("%s 变好" % k) if better else ("%s 变差" % k)
+
+## 【2026-09-23】"它这一回合为什么一条攻击候选都没有" —— 人话版原因（两处共用：整回合没动作的、
+##   以及"走了位/敲了障碍却始终没出手"的）。
+func _plain_no_attack_why(sim: Sim, ii: int) -> String:
+	var iu: SimUnit = sim.units[ii]
+	var why: Array[String] = []
+	var cannot := false
+	if iu.skills.has(DataRegistry.Skill.LOGISTICS):
+		why.append("它是「后勤」，规则上不能主动攻击")
+		cannot = true
+	if iu.stunned:
+		why.append("它被眩晕了")
+		cannot = true
+	if iu.attacked:
+		why.append("它本回合已经出过手")
+		cannot = true
+	# ⚠️ 只有"本来能打却一条候选都没有"时才追问距离/遮挡 —— 否则会给出误导性的解释
+	#   （例如后勤单位被写成"名义上够得着却被挡住了"，其实它压根不能攻击）。
+	if not cannot:
+		var min_d := 99
+		for jj in sim.units.size():
+			var pj: SimUnit = sim.units[jj]
+			if pj != null and pj.alive and pj.fn != iu.fn:
+				min_d = mini(min_d, grid.distance(iu.cell, pj.cell))
+		var gate := maxi(iu.emove, 0) + maxi(iu.atk_range, 1)
+		if min_d > gate:
+			why.append("离最近的对手 %d 格，而它射程%d＋移动%d 只够到 %d 格 ⇒ 这一回合够不着" % [
+				min_d, iu.atk_range, iu.emove, gate])
+		else:
+			why.append("名义上够得着（最近 %d 格 ≤ %d）却一条攻击候选都没有 ⇒ 被嘲讽门/视线/单位占位挡住了" % [min_d, gate])
+	return "、".join(why)
+
+## "整回合没动作"的单位：说清它**本来能不能打到人**，以及为什么最后没打。
+func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
+	var iu: SimUnit = sim.units[ii]
+	# 本回合本来有没有能打到人的出招
+	var best_combo: Dictionary = {}
+	var best_dmg := -1.0
+	var best_name := ""
+	for aa in _actions_for(sim, ii):
+		var at := int(aa.get("atk", -1))
+		if at < 0 or at >= sim.units.size():
+			continue
+		var tg: SimUnit = sim.units[at]
+		if tg == null or not tg.alive:
+			continue
+		var dm := _hit_after_target_mods(sim, tg, tg.cell, float(iu.eatk))
+		if dm > best_dmg:
+			best_dmg = dm
+			best_combo = aa
+			best_name = tg.name
+	if best_combo.is_empty():
+		return _plain_no_attack_why(sim, ii)
+	# 有得打却没打：把"补上这一手"的分数差翻译成人话
+	var mv_txt := ("在 %s 原地打 %s" % [str(iu.cell), best_name]) if best_combo.get("move") == null \
+		else ("从 %s 走到 %s 打 %s" % [str(iu.cell), str(best_combo["move"]), best_name])
+	var end_sim := sim.clone()
+	for st in (chosen["path"] as Array):
+		_apply(end_sim, int(st["idx"]), st["action"])
+	end_sim.walk_cache = {}
+	end_sim.walk_cache_pass = {}
+	var head := "其实有得打（%s，约 %.0f 伤）" % [mv_txt, best_dmg]
+	var mc: Variant = best_combo.get("move")
+	if end_sim.units[ii] == null or not (end_sim.units[ii] as SimUnit).alive or (end_sim.units[ii] as SimUnit).attacked:
+		return head + "，但它在「走完之后的局面」里已经出手/阵亡 ⇒ 这一手补不回去，没法比较"
+	if mc != null and end_sim.occ.has(mc) and (end_sim.occ[mc] as SimUnit) != end_sim.units[ii]:
+		return head + "，但走完之后 %s 那格已经被自己人占了 ⇒ 这一手补不回去" % str(mc)
+	var bd_a := _eval_breakdown(end_sim, true)
+	var s_alt := end_sim.clone()
+	_apply(s_alt, ii, best_combo)
+	var bd_b := _eval_breakdown(s_alt, true)
+	var dlt := _evaluate(s_alt, true) - _evaluate(end_sim, true)
+	if dlt > 0.5:
+		return head + "，而且补上它分数更高（多赚 %.1f 分）⇒ 这一步像是被搜索漏掉了（剪枝），值得查" % dlt
+	return head + "，但换成打这一手更不划算（少 %.1f 分）⇒ 原因：%s" % [absf(dlt),
+		_plain_reason(bd_a, bd_b, iu.skills.has(DataRegistry.Skill.TAUNT))]
+
+## 本局面里"我方（AI 阵营）还活着几个单位" —— 只给日志表头用。
+func _ai_unit_count(sim: Sim) -> int:
+	var n := 0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u != null and u.alive and u.fn == DataRegistry.Faction.ENEMY:
+			n += 1
+	return n
+
+# 控制台输出本次敌方决策说明：总评分 + 每步行动的理由 + 每步得分变化（分析 AI 用）
+func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 	var path: Array = chosen["path"]
 	var txt := "\n===== 敌方AI 行动方案 · 总评分 %.1f · %d 步 =====" % [float(chosen["score"]), path.size()]
 	# 【2026-09-20 新增·只为诊断】把"可接受伤害"的当前状态打在标题上 —— 用户要能一眼看出
@@ -2337,6 +2664,80 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 		line += "  [本步 Δ%+.1f]" % delta
 		txt += "\n" + line
 		txt += "\n" + _breakdown_line(bd0, bd1, delta)
+	# ---- 【2026-09-23 用户要求】"整回合什么都没做"的单位也要打出来，并说清原因 ----
+	# 原来只按 `path`（计划里的步骤）逐行打印 ⇒ 一个"原地不动、也没出手"的单位在日志里**彻底消失**，
+	#   用户看到的就只有"莫名其妙"（原话：「原地不动的也要写出来什么原因」）。这里补一段：对每个
+	#   **计划里没有步骤**的存活我方单位，打印
+	#     ① 它本回合**本来能不能打到人**（真实动作生成器 `_actions_for()`：含射程/视线/嘲讽/后勤/已动已打）；
+	#     ② 若能打 ⇒ 最好的一击是谁、预估多少伤；再把这一手**补在末态上**做反事实，
+	#        用 `_breakdown_line()` 逐项列出"补上这一手 vs 不动"的分差（与每步那行同一套自校验）；
+	#     ③ 若不能打 ⇒ 直接写清被什么挡住（后勤 / 已移动 / 已攻击 / 最近对手多少格 vs 射程+移动力）。
+	# ⚠️ **只在 `log_decisions = true` 时跑**（`_print_decision()` 本来就只被那条 if 调用）⇒ 不进任何决策路径。
+	var acted_ids := {}
+	for st_id in path:
+		acted_ids[int(st_id["idx"])] = true
+	for ii in sim.units.size():
+		var iu: SimUnit = sim.units[ii]
+		if iu == null or not iu.alive or iu.fn != DataRegistry.Faction.ENEMY or acted_ids.has(ii):
+			continue
+		var idle_txt := " · %s **整回合没动作**（原地不动、也没出手）" % iu.name
+		# 最好的一击（可能含"先挪一步再打"）：按预估伤害取最高（目标侧修正一并算：重伤+1/坚固−1/塔盾代扛−1）
+		var best_combo: Dictionary = {}
+		var best_dmg := -1.0
+		var best_name := ""
+		for aa in _actions_for(sim, ii):
+			var at := int(aa.get("atk", -1))
+			if at < 0 or at >= sim.units.size():
+				continue
+			var tg: SimUnit = sim.units[at]
+			if tg == null or not tg.alive:
+				continue
+			var dm := _hit_after_target_mods(sim, tg, tg.cell, float(iu.eatk))
+			if dm > best_dmg:
+				best_dmg = dm
+				best_combo = aa
+				best_name = tg.name
+		if best_combo.is_empty():
+			var why: Array[String] = []
+			if iu.skills.has(DataRegistry.Skill.LOGISTICS):
+				why.append("后勤：不能主动攻击")
+			if iu.stunned:
+				why.append("被眩晕")
+			if iu.moved:
+				why.append("本回合已移动过")
+			if iu.attacked:
+				why.append("本回合已攻击过")
+			var min_d := 99
+			for jj in sim.units.size():
+				var pj: SimUnit = sim.units[jj]
+				if pj != null and pj.alive and pj.fn != iu.fn:
+					min_d = mini(min_d, grid.distance(iu.cell, pj.cell))
+			var gate := maxi(iu.emove, 0) + maxi(iu.atk_range, 1)
+			why.append("最近对手 %d 格 vs 射程%d+移动%d=%d" % [min_d, iu.atk_range, iu.emove, gate])
+			if min_d <= gate:
+				why.append("⚠️ 名义上够得着却一个候选都没有 ⇒ 查嘲讽门/视线/单位挡路/红帽点杀检查")
+			idle_txt += "\n   ↳ **没有任何能打到人的出招**：" + "；".join(why)
+		else:
+			var where_txt := ("在 %s 原地打 %s" % [str(iu.cell), best_name]) if best_combo.get("move") == null \
+				else ("从 %s 走到 %s 打 %s" % [str(iu.cell), str(best_combo["move"]), best_name])
+			idle_txt += "\n   ↳ 本回合**能打到人**（最好一击：%s，预估 %.1f 伤）却没出手 —— 以下是「补上这一手 vs 不动」的逐项对比：" % [
+				where_txt, best_dmg]
+			var mc2: Variant = best_combo.get("move")
+			var ok_alt := end_sim.units[ii] != null and (end_sim.units[ii] as SimUnit).alive \
+				and not (end_sim.units[ii] as SimUnit).attacked
+			if mc2 != null and end_sim.occ.has(mc2) and (end_sim.occ[mc2] as SimUnit) != end_sim.units[ii]:
+				ok_alt = false   # 末态里那个落点已被别人占了 ⇒ 这一手补不回去，硬算会给出假数
+				idle_txt += "\n   ↳ （不做数值对比：末态里 %s 已被占）" % str(mc2)
+			if ok_alt:
+				var bd_a := _eval_breakdown(end_sim, true)
+				var s_alt := end_sim.clone()
+				_apply(s_alt, ii, best_combo)
+				var bd_b := _eval_breakdown(s_alt, true)
+				var dlt := _evaluate(s_alt, true) - _evaluate(end_sim, true)
+				idle_txt += "\n" + _breakdown_line(bd_a, bd_b, dlt)
+			elif mc2 == null:
+				idle_txt += "\n   ↳ （不做数值对比：末态里它已出手/已阵亡）"
+		txt += "\n" + idle_txt
 	txt += "\n · 局面纯评分：%.1f → %.1f（决策总评含难度抖动=%.1f）" % [start_score, prev, float(chosen["score"])]
 	# 【2026-09-22 晚·已删】这里原来还会打一行「真推演对方一回合：我方共掉 X 血」——该层
 	#   （`ROLLOUT_TOPK` / `_rollout_enemy_turn()` / `_rollout_incoming()`）已按用户拍板**整段删除**：
@@ -2378,7 +2779,7 @@ func _term_defs() -> Array:
 ## ⚠️ 只在 `log_decisions = true` 时被调用，**不参与任何决策**。它与 `_evaluate()` 必须同口径 ——
 ##   校验办法：`_print_decision` 里打印 `_evaluate() 实测 − Σ已知项`，不为 0 就是漂移（自校验）。
 ##   未列的项（金矿 hero_42 / A 档英雄项 / 血锁开团等）会自动落进「其它(未列)」。
-## `end_of_turn` 与 `_evaluate()` 同义：⑳㉑ **只在末态列出来**（中途不放进 `d`）⇒ 否则 Σ 自校验会差一个 ±3。
+## `end_of_turn` 与 `_evaluate()` 同义：⑳㉑㉒㉓㉕ **只在末态列出来**（中途不放进 `d`）⇒ 否则 Σ 自校验会差一个 ±3。
 func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	_sim_sync_pins(sim)   # 与 `_evaluate()` 第一步一致（否则"远程被贴"的攻击力口径会漂）
 	var d := {}
@@ -2469,7 +2870,8 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	if w_shield_break != 0.0 and sim.shield_break_val != 0.0:
 		d["㉔破盾"] = w_shield_break * sim.shield_break_val
 	# 【2026-09-23 新增·默认关】㉕嘲讽吸火（同上：与 `_evaluate()` 逐字同口径，否则 Σ 自校验会报漂移）
-	if w_taunt_soak != 0.0:
+	#   ⚠️ 2026-09-23 深夜起**只在末态列出来**（与 ⑳㉑㉒㉓ 同款）⇒ 两处必须同改，否则 Σ 会差一个 ±3。
+	if end_of_turn and w_taunt_soak != 0.0:
 		d["㉕嘲讽吸火"] = w_taunt_soak * _taunt_soak(sim)
 	# 【2026-09-20 补】A 档英雄特化项（毒蛇猛毒 / 宿魂附体 / 装甲堡垒坚固）也逐项列出来，
 	# 否则它们会落在「其它(未列)」里看不懂 —— 毒蛇与装甲堡垒的特化段现在就在 `噩梦.json` 里（2026-09-20 并档）。
@@ -5222,7 +5624,12 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 		score += w_shield_break * sim.shield_break_val
 	# 【2026-09-23 新增·默认关】㉕嘲讽吸火（见 `const TAUNT_SOAK_W` 处说明）：坦克站在火力线上、
 	#   我方非嘲讽单位因此少挨的那部分伤害。躲在后排 ⇒ 差额 0 ⇒ 白站拿不到分。
-	if w_taunt_soak != 0.0:
+	# 【2026-09-23 深夜·用户拍板"改成末态"】⚠️ **只在末态结算**（与 ⑳㉑㉒㉓ 同款）：原来它每一步都算，
+	#   而它的 Σ 是"拿队友**现在**站的位置"去算嘲讽门挡下了多少 ⇒ 复仇者这类**先走**的单位会因为
+	#   "我这一步暂时不挡了"被扣分。用户实机日志（`_print_decision` 那行「原因」）正是这个：
+	#   复仇者先动 ⇒ 报「自己离开了掩护位（后排会多挨刀）」，可队友随后走回来、末态其实还粘在一起。
+	#   判据与 ⑳㉑ 同一句话：**不看过程、按"全队都行动完"的站位算**。
+	if end_of_turn and w_taunt_soak != 0.0:
 		score += w_taunt_soak * _taunt_soak(sim)
 	# 集火推进（凸性奖励）：对**同一目标**累计的本回合伤害越集中，越接近"合力必杀"。
 	# 为什么单靠"伤害线性项 + 末端击杀奖励"不够：3+3 分摊给两人 与 6 全压一人 同分，
@@ -5636,7 +6043,9 @@ func _dead_fold(sim: Sim, incs: Array) -> float:
 ## 【2026-09-23 新增·默认关】㉕嘲讽吸火（`TAUNT_SOAK_W`，口径见文件上方 const 处的长说明）：
 ##   对每个**存活的我方非嘲讽单位** X：`关掉嘲讽门时的挨打合计(X) − 实际挨打合计(X)`（> 0 = 嘲讽门替它挡下了这些伤害），
 ##   再乘 `_incoming_pool_mult(X)`（与 ③血量账 同一套血量池折算 ⇒「坦克拿 2 点换脆皮 4 点」自动变成赚）。
-## 只读**当前局面**（单位现在站的位置），不看候选落点 ⇒ 与 ⑥⑦ 同层、可被任意一步的行动改变。
+## 只读**当前局面**（单位现在站的位置），不看候选落点。
+##   ⚠️ **2026-09-23 深夜起只在末态调用**（`_evaluate(..., end_of_turn=true)`）：中途那些局面里队友还没走完，
+##   "我这一步暂时不挡了"是**假损失**（用户实机：复仇者先动 ⇒ 日志误报「离开掩护位」，可队友随后走回来）。
 ## ⚠️ 性能：① 只在"我方有存活嘲讽单位"时才算（没有嘲讽 = 整项 0 开销）；
 ##   ② 每个非嘲讽单位**先算"关掉嘲讽"的那一趟**，为 0（没人够得到它）就直接跳过第二趟 ⇒ 常见局面只多一趟；
 ##   ③ 嘲讽单位自己**不算**（它挨打本来就是本分；它的收益在 ⑭`SOLID_HOLD_W` 那笔"站着换[坚固]"与 ③⑦ 的少挨账里）。
