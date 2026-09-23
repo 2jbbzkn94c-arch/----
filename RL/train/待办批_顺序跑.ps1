@@ -63,13 +63,14 @@ foreach ($m in $Modes) {
     $tag = 'b' + $m
     $log = Join-Path $res ('chain_' + $m + '.log')
     Write-Host ('[chain] ===== 开始 -Mode ' + $m + ' -Tag ' + $tag + '  @ ' + (Get-Date).ToString('HH:mm:ss') + ' =====')
-    # ⚠️ `-TimeoutSec 900` **必须显式给**：`难度体检` 默认 300，而组级硬预算是 `TimeoutSec*2+300` = 900s
-    #   ⇒ 慢牌组（如 hero_03,hero_24,hero_09 实测每组要 ~1300s）会在半途被砍、`refusing to merge`，
-    #   那一组**没有 measure.csv**（T25 第 2 组就是这么丢的）。900 ⇒ 组级 2100s，留足余量。
+    # ⚠️ `-TimeoutSec` **必须显式给、而且要给大**：`难度体检` 默认 300，而组级硬预算是 `TimeoutSec*2+300`。
+    #   两次实测：300 ⇒ 900s，T25 第 2 组跑 901s 被砍；900 ⇒ 2100s，shield 的 L6SH（`hero_06,hero_08,hero_43`
+    #   四个臂 32 格）跑到 **2101s**、只差 1 秒又被砍（`GLOBAL DEADLINE HIT` + `refusing to merge`）。
+    #   ⇒ 改成 **1500 ⇒ 组级 3300s**（单格上限 25 分钟；实测最慢的格 ~572s，所以这个上限不误伤）。
     # ⚠️ 无人值守 ⇒ 单个模式抛错（例如某组撞 `INCOMPLETE RUN` 硬闸门）**不能拖垮整条链**：
     #   包 try/catch、记进日志、继续下一个模式；每个模式收尾再列一次"哪几组没有表"，方便事后补跑。
     try {
-        & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 900 *>&1 | Tee-Object -FilePath $log | Out-Null
+        & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 1500 *>&1 | Tee-Object -FilePath $log | Out-Null
     } catch {
         $em = $_.Exception.Message
         Write-Host ('[chain] !! -Mode ' + $m + ' 抛错，已跳过、继续下一个模式：' + $em)
