@@ -51,8 +51,9 @@ var _reveal_pending := { "my": 0, "op": 0 }
 var _mark_filled := { "my": 0, "op": 0 }
 var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上角）
 var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
-var _last_pd := -1
-var _last_ed := -1
+# 【2026-09-23 深夜·用户贴的 `HUD.gd:54 UNUSED_PRIVATE_CLASS_VARIABLE`】这两行是老"整行文字"版阵亡栏
+#   留下的计数器（`_last_pd`/`_last_ed`）—— 2026-09-23 改成**逐槽 DeathMark** 后，界面状态改由
+#   `_reveal_pending` / `_mark_filled` 记录 ⇒ 这两个再没人读写，已删除（纯删死变量，行为零变化）。
 var _last_my_text := ""   # 上次刷新的"我方"侧文字（联机=姓名；用于姓名变化时补刷新）
 var _last_op_text := ""   # 上次刷新的"敌方"侧文字（联机=姓名）
 var _end_btn: Button          # 结束回合（仅我方回合可点）

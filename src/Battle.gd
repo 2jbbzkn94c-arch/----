@@ -47,43 +47,60 @@ class Projectile:
 #   · 用户口径：「为远程攻击增加演出，发射一条射线到目标；**默认白色**，**部分英雄给点效果**」
 #     ⇒ 颜色/样式由 `DataRegistry.hero_ray(hero_id)` 给（没配的英雄 = 纯白 `beam`）。
 #   · 节点局部坐标：起点恒为 `(0,0)`、整条射线沿 **+X** 方向画；`rotation` 朝向目标 ⇒ 无需换算。
-#   · `progress` 0→1 = 光束头部扫到哪儿（由 `Battle._spawn_ranged_ray` 用 `tween_method` 推进，
-#     时长**沿用原来那颗投掷物的 `flight` 公式** ⇒ 出手节奏与改动前一模一样）。
+#   · `progress` 0→1 = 流光头部飞到哪儿（由 `Battle._spawn_ranged_ray` 用 `tween_method` 推进，
+#     时长由 `Battle._ray_flight()` 给：0.07~0.14 秒，一瞬就到）。
 #   · 样式（`_draw()` 里分两支：光束族 / 弹道族）：
 #       beam 默认光束 · ice 冰晶+霜环 · magic 符文环+法阵 · fire 火星 · star 星芒 ·
 #       wind 风刃 · nature 叶影 · necro 魂点 · shadow 残影（以上都走"光束族 + 附加装饰"）
 #       bullet 细曳光+枪口闪 · shell 粗弹体+尾烟 · lightning 锯齿闪电（这两支单独画）
-#   · 【2026-09-23 晚·用户口径「远程的射线有点太实了」】三族一起调轻：光束族由"枪口到目标等宽等亮的
-#     三层实线"改成**锥形曳光**（每层只画靠头部的一段 ⇒ 近目标亮、朝枪口渐隐），弹道/闪电同步变细降透明度。
-#     ⚠️ 想再淡/再浓：**只改本类顶部那几个常量**（`W_*` 宽 / `A_*` 透明度 / `HEAD_*` 头部光点 /
-#     `MUZZLE_A` 枪口光 / `DECO_A` 沿线装饰倍率），别去改 `_draw_*` 里的算式。
+#   · 【2026-09-23 晚·用户口径「远程的射线有点太实了」】三族一起调轻：变细、降透明度、沿线装饰统一乘 `DECO_A`。
+#   · 【2026-09-23 深夜·用户口径「我要那种 xiu 一下的感觉，不是一条线就过去了」】画面从"枪口到目标的
+#     一条线"改成**一道拖着尾巴的流光**：只画头部后面 `streak` 像素（`setup` 里算），出手补 2~3 帧起手闪，
+#     命中后淡出 0.10 秒。**命中时刻也跟着提前了**（见 `Battle._ray_flight()`：0.15~0.4 秒 → 0.07~0.14 秒），
+#     否则"画面已经打到了、血还没掉"。想让命中慢回来：改 `RAY_FLIGHT_*` 三个常量即可。
+#     ⚠️ 想调浓淡：改本类顶部常量（`W_*` 宽 / `A_*` 透明度 / `HEAD_*` 头部光点 / `HALO_*` 弹头光晕 /
+#     `MUZZLE_A` 起手闪 / `DECO_A` 装饰倍率）；想调流光长短：改 `streak` 的算式（在 `setup` 里）。
+#   · 【2026-09-23 深夜·用户口径「太小了」】整体放大一档（宽 7→14 · 亮芯 1→2 · 头部光点 5→10 ·
+#     流光 44~150→110~260px · 命中闪光 12→18），并给弹头补一圈大光晕。**大而不"实"靠形状**：
+#     只有靠近头部的一小段是亮的（起画比例 0 / .45 / .24 / .12），尾巴一路渐隐 ⇒ 有分量的一发流光。
 class RangedRay:
 	extends Node2D
-	var len := 0.0
+	var dist := 0.0   # 起点→目标的距离。⚠️ **不能叫 `len`**：那是 GDScript 内置函数名，Godot 4.7 会报
+					  #   `SHADOWED_GLOBAL_IDENTIFIER`（用户实机贴的 `Battle.gd:68 @ GDScript::reload()`）。
 	var progress := 0.0
 	var style := "beam"
 	var color := Color(1.0, 1.0, 1.0)
 	var fade := 1.0
+	var streak := 60.0   # 流光长度（像素）：只画头部后面这一段（算式见 setup）
 	var _seed := 0.0
 
 	# 【2026-09-23 晚·用户口径「远程的射线有点太实了」】"实不实"的旋钮**全在这几个常量里**，
-	#   想再淡/再浓只改这里（括号里是改动前的旧值）。锥形曳光的层数与起止位置见 `_draw_beam`。
-	const W_GLOW := 7.0      # 外层余晖宽（旧 11.0）
-	const A_GLOW := 0.09     # （旧 0.16）
-	const W_MID := 3.4       # 中段宽（旧 5.0）
-	const A_MID := 0.16      # （旧 0.42）
-	const W_LIT := 1.9       # 亮柱宽
-	const A_LIT := 0.30
-	const W_CORE := 1.0      # 白芯宽（旧 2.0）
-	const A_CORE := 0.70     # （旧 0.85）
-	const HEAD_R := 5.0      # 头部光点半径（旧 6.5）
-	const HEAD_A := 0.45     # （旧 0.75）
-	const MUZZLE_A := 0.35   # 枪口/起手光（旧 0.55）
-	const DECO_A := 0.75     # 沿线主题装饰（冰晶/符文/火星…）整体透明度倍率（旧值各写 0.55~0.8）
+	#   想再淡/再浓只改这里（括号里是改动前的旧值）。
+	# 【2026-09-23 深夜·用户口径「太小了」】整体放大一档：宽 7→14、亮芯 1→2、头 5→10，并给弹头加一圈
+	#   大光晕 `HALO_*`。**大而不"实"靠的是形状不在总量**：只有靠近头部的那一小段是亮的，尾巴一路渐隐
+	#   （见 `_draw_beam` 里那几个起画比例），所以看着是一发有分量的流光，而不是一根等粗的棍子。
+	const W_GLOW := 14.0     # 外层余晖宽（旧 7.0 / 更早 11.0）
+	const A_GLOW := 0.16     # （旧 0.09 / 更早 0.16）
+	const W_MID := 7.0       # 中段宽（旧 3.4 / 更早 5.0）
+	const A_MID := 0.34      # （旧 0.16 / 更早 0.42）
+	const W_LIT := 4.0       # 亮柱宽（旧 1.9）
+	const A_LIT := 0.55      # （旧 0.30）
+	const W_CORE := 2.0      # 白芯宽（旧 1.0 / 更早 2.0）
+	const A_CORE := 0.95     # （旧 0.70 / 更早 0.85）
+	const HEAD_R := 10.0     # 头部光点半径（旧 5.0 / 更早 6.5）
+	const HEAD_A := 0.72     # （旧 0.45 / 更早 0.75）
+	const HALO_R := 20.0     # 弹头大光晕半径（新增：让"弹头"有分量，一眼看得见）
+	const HALO_A := 0.14
+	const MUZZLE_A := 0.55   # 起手闪（旧 0.35 / 更早 0.55）
+	const DECO_A := 0.9      # 主题装饰（冰晶/符文/火星…）透明度倍率（旧 0.75）
 
 	func setup(from_pos: Vector2, to_pos: Vector2, st: String, col: Color) -> void:
 		position = from_pos
-		len = from_pos.distance_to(to_pos)
+		dist = from_pos.distance_to(to_pos)
+		# 【2026-09-23 晚·用户口径「xiu 一下」】流光长度：约全程的 3/4，夹在 110~260px
+		#   （棋盘 hex_size≈73px ⇒ 射程 2 的一发约 130~220px，流光就是 110~165px，看得清又不拖到全程）。
+		#   2026-09-23 深夜"太小了" ⇒ 由 `clampf(距离*0.5, 44, 150)` 放到现在这组。想更短/更长只改这一行。
+		streak = clampf(dist * 0.75, 110.0, 260.0)
 		rotation = (to_pos - from_pos).angle()
 		style = st
 		color = col
@@ -102,9 +119,9 @@ class RangedRay:
 	func _draw() -> void:
 		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
 			return
-		if len <= 1.0:
+		if dist <= 1.0:
 			return
-		var head := len * clampf(progress, 0.0, 1.0)
+		var head := dist * clampf(progress, 0.0, 1.0)
 		if head <= 0.5:
 			head = 0.5
 		match style:
@@ -114,30 +131,40 @@ class RangedRay:
 				_draw_lightning(head)
 			_:
 				_draw_beam(head)
-		# 命中闪光（头部抵达后爆一下）
+		# 命中闪光（头部抵达后爆一下）—— 【2026-09-23 深夜「太小了」】跟着流光一起放大一圈，
+		# 并补一层更大更淡的外圈 ⇒ 命中那一下有"炸开"的体量
 		if progress >= 0.999:
-			var r := 16.0 if style == "shell" else 12.0
-			draw_circle(Vector2(head, 0.0), r, Color(color.r, color.g, color.b, 0.35 * fade))
-			draw_circle(Vector2(head, 0.0), r * 0.45, Color(1.0, 1.0, 1.0, 0.8 * fade))
+			var r := 24.0 if style == "shell" else 18.0
+			draw_circle(Vector2(head, 0.0), r * 1.6, Color(color.r, color.g, color.b, 0.12 * fade))
+			draw_circle(Vector2(head, 0.0), r, Color(color.r, color.g, color.b, 0.40 * fade))
+			draw_circle(Vector2(head, 0.0), r * 0.45, Color(1.0, 1.0, 1.0, 0.9 * fade))
 
-	# ---- 光束族：锥形曳光（近目标亮、朝枪口渐隐）+ 头部亮点 + 主题装饰 ----
+	# ---- 光束族：一道"咻"过去的流光（只画头部后面 streak 像素）+ 起手闪 + 主题装饰 ----
 	func _draw_beam(head: float) -> void:
-		# 【2026-09-23 晚·用户口径「远程的射线有点太实了」】原来是三层"从枪口到目标**等宽等亮**"的实线
-		#   ⇒ 看着像一根棍子。现在改成**锥形曳光**：每一层都只画"靠头部的一段"，越靠枪口层数越少、越淡
-		#   ⇒ 近目标亮、朝枪口渐隐。仍然全部走 `_seg`（= draw_line 抗锯齿）⇒ 斜线不起毛边、同层无接缝。
-		_seg(0.0, head, color, W_GLOW, A_GLOW)                        # 尾段：只剩一层很淡的余晖
-		_seg(head * 0.30, head, color, W_MID, A_MID)                  # 中段
-		_seg(head * 0.58, head, color, W_LIT, A_LIT)                  # 亮柱
-		_seg(head * 0.80, head, Color(1.0, 1.0, 1.0), W_CORE, A_CORE) # 白芯
+		# 【2026-09-23 晚·用户口径「我要那种 xiu 一下的感觉，不是一条线就过去了」】原来是"从枪口一路
+		#   拉到目标"的线（长长一条挂在那儿）。现在只画**头部后面 `streak` 像素** ⇒ 画面上就是一发
+		#   拖着尾巴的流光飞过去，尾巴渐细渐隐。仍然全走 `_seg`（抗锯齿）⇒ 斜线不起毛边、同层无接缝。
+		var tail := maxf(head - streak, 0.0)
+		var sp := maxf(head - tail, 1.0)   # 出膛瞬间还没展开 ⇒ 从很短的一小截"喷"出来再拉开
+		# 越靠头越亮越粗：比例（0 / .45 / .24 / .12）= 只把"靠头的这一小段"堆亮，尾巴一路渐隐
+		_seg(tail, head, color, W_GLOW, A_GLOW)                              # 尾段：一层很淡的余晖
+		_seg(head - sp * 0.45, head, color, W_MID, A_MID)                    # 中段
+		_seg(head - sp * 0.24, head, color, W_LIT, A_LIT)                    # 亮柱
+		_seg(head - sp * 0.12, head, Color(1.0, 1.0, 1.0), W_CORE, A_CORE)   # 白芯
+		# 弹头：大光晕 + 光点 + 白芯（三层叠出"有分量"的头部）
+		draw_circle(Vector2(head, 0.0), HALO_R, Color(color.r, color.g, color.b, HALO_A * fade))
 		draw_circle(Vector2(head, 0.0), HEAD_R, Color(color.r, color.g, color.b, HEAD_A * fade))
-		draw_circle(Vector2(head, 0.0), HEAD_R * 0.42, Color(1.0, 1.0, 1.0, 0.75 * fade))
-		# 枪口/起手光
-		draw_circle(Vector2.ZERO, 4.0, Color(color.r, color.g, color.b, MUZZLE_A * fade))
-		var n := 5                       # 沿线装饰个数
+		draw_circle(Vector2(head, 0.0), HEAD_R * 0.42, Color(1.0, 1.0, 1.0, 0.95 * fade))
+		# 起手闪：刚出膛的那 2~3 帧（progress 过半就没了）
+		if progress < 0.55:
+			var k := (0.55 - progress) / 0.55
+			_seg(0.0, minf(30.0, dist * 0.35), Color(1.0, 1.0, 1.0), 5.0, 0.5 * k)
+			draw_circle(Vector2.ZERO, 9.0, Color(color.r, color.g, color.b, MUZZLE_A * k * fade))
+		var n := 5                       # 主题装饰个数（现在贴在流光这段上，跟着头一起飞）
 		for i in n:
 			var t := (float(i) + 0.5) / float(n)
-			var x := head * t
-			if x <= 2.0 or x >= head - 2.0:
+			var x := tail + sp * t
+			if x <= tail + 1.0 or x >= head - 1.0:
 				continue
 			match style:
 				"ice":
@@ -171,15 +198,20 @@ class RangedRay:
 				_:
 					pass
 
-	# ---- 弹道族：细/粗曳光 + 枪口闪（2026-09-23 晚随"射线太实"一起调轻：锥形 + 降透明度）----
+	# ---- 弹道族：同一套"流光"画法（细/粗）+ 起手闪 ----
 	func _draw_tracer(head: float) -> void:
-		var thick := 2.2 if style == "bullet" else 5.0     # 旧 3.0 / 7.0
-		_seg(0.0, head, color, thick * 2.0, 0.11)          # 旧 0.18
-		_seg(head * 0.34, head, color, thick, 0.55)        # 旧 0.75（等长）
-		_seg(head * 0.72, head, Color(1.0, 1.0, 1.0), thick * 0.42, 0.75)   # 旧 0.9
-		draw_circle(Vector2(head, 0.0), thick * 0.72, Color(1.0, 1.0, 0.92, 0.7 * fade))
-		# 枪口/炮口闪
-		draw_circle(Vector2.ZERO, 5.0 if style == "bullet" else 8.0, Color(1.0, 0.9, 0.6, 0.38 * fade))
+		var thick := 3.2 if style == "bullet" else 7.5
+		var tail := maxf(head - streak, 0.0)
+		var sp := maxf(head - tail, 1.0)
+		_seg(tail, head, color, thick * 2.0, 0.13)
+		_seg(head - sp * 0.45, head, color, thick, 0.45)
+		_seg(head - sp * 0.22, head, Color(1.0, 1.0, 1.0), thick * 0.45, 0.85)
+		draw_circle(Vector2(head, 0.0), thick * 1.5, Color(color.r, color.g, color.b, 0.14 * fade))   # 弹头大光晕
+		draw_circle(Vector2(head, 0.0), thick * 0.85, Color(1.0, 1.0, 0.92, 0.85 * fade))
+		# 枪口/炮口闪（与光束族同款：只在刚出膛那几帧）
+		if progress < 0.55:
+			draw_circle(Vector2.ZERO, 8.0 if style == "bullet" else 13.0,
+				Color(1.0, 0.9, 0.6, 0.5 * ((0.55 - progress) / 0.55) * fade))
 
 	# ---- 锯齿闪电：7 段折线（每帧位移抖动）；2026-09-23 晚随"射线太实"一起调细调淡 ----
 	func _draw_lightning(head: float) -> void:
@@ -3673,7 +3705,7 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> vo
 func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var from := board_view.cell_world_center(u.cell)
 	var to := board_view.cell_world_center(cell)
-	var flight := clampf(float(grid.distance(u.cell, cell)) * 0.08, 0.15, 0.4)
+	var flight := _ray_flight(u.cell, cell)
 	_spawn_ranged_ray(u, from, to, flight, func():
 		_impact_obstacle(u, cell, for_enemy))
 
@@ -4298,19 +4330,32 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		back.tween_property(attacker, "position", apos, 0.1)
 		back.tween_callback(func(): _apply_attack(attacker, target, for_enemy)))
 
+# ---- 远程演出的"咻"时长（普攻 / 远程反击 / 远程拆障碍 三条路径共用）----
+# 【2026-09-23 深夜·用户口径「我要那种 xiu 一下的感觉，不是一条线就过去了」】原来三条路径各写一份
+#   `clampf(距离 * 0.08, 0.15, 0.4)`（最远 0.4 秒 = 线条慢慢爬过去）。现在统一走这里：
+#   距离每格 +0.03 秒、整体夹在 0.07~0.14 秒 ⇒ 一瞬就到。
+#   ⚠️ 这个值**同时是命中结算时刻**（`_spawn_ranged_ray` 用它等 `on_hit`），画面与掉血因此同步；
+#     嫌伤害到得太快/太慢只改这三个常量。headless（RL 跑批）走同一个值 ⇒ 与实机同一套口径。
+const RAY_FLIGHT_PER_CELL := 0.03
+const RAY_FLIGHT_MIN := 0.07
+const RAY_FLIGHT_MAX := 0.14
+
+func _ray_flight(a: Vector2i, b: Vector2i) -> float:
+	return clampf(float(grid.distance(a, b)) * RAY_FLIGHT_PER_CELL, RAY_FLIGHT_MIN, RAY_FLIGHT_MAX)
+
 # 远程攻击演出：**朝目标射一条射线**（2026-09-23 用户要求；原来是那颗小光点 `Projectile` 飞过去）。
 # 射线样式/颜色由 `DataRegistry.hero_ray(hero_id)` 决定（未配置的英雄 = 纯白光束），
-# 命中结算的**时刻与节奏不变**（沿用同一套 `flight` 公式，见 `_spawn_ranged_ray`）。
+# 命中时刻由 `_ray_flight()` 给（2026-09-23 深夜起从 0.15~0.4 秒压到 0.07~0.14 秒 = "咻"）。
 func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	var from := board_view.cell_world_center(attacker.cell)
 	var to := board_view.cell_world_center(target.cell)
-	var flight := clampf(grid.distance(attacker.cell, target.cell) * 0.08, 0.15, 0.4)
+	var flight := _ray_flight(attacker.cell, target.cell)
 	_spawn_ranged_ray(attacker, from, to, flight, func():
 		_apply_attack(attacker, target, for_enemy))
 
-## 【2026-09-23 新增·用户要求】远程攻击的射线演出（普攻与远程反击共用一条实现）：
-##   `from → to` 扫过去，`flight` 秒后触发 `on_hit`（= 原来的伤害结算点；**公式一字未改** ⇒ 出手节奏不变）。
-##   ⚠️ headless（RL 跑批 / 无窗口自检）：**不建节点、只等同样长的时间** ⇒ 时序逐位一致、零绘制开销。
+## 【2026-09-23 新增·用户要求】远程攻击的射线演出（普攻 / 远程反击 / 远程拆障碍共用一条实现）：
+##   `from → to` **咻地飞过去**，`flight` 秒后触发 `on_hit`（`flight` 由 `_ray_flight()` 给，画面上"打到"与掉血同步）。
+##   ⚠️ headless（RL 跑批 / 无窗口自检）：**不建节点、只等同样长的时间** ⇒ 与实机同一套时序、零绘制开销。
 func _spawn_ranged_ray(shooter: Unit, from: Vector2, to: Vector2, flight: float, on_hit: Callable) -> void:
 	if DisplayServer.get_name() == "headless":
 		var tw := create_tween()
@@ -4325,15 +4370,16 @@ func _spawn_ranged_ray(shooter: Unit, from: Vector2, to: Vector2, flight: float,
 	ray.setup(from, to, String(spec.get("style", "beam")), spec.get("color", Color(1, 1, 1)))
 	add_child(ray)
 	var t := create_tween()
-	# 头部扫过去（EASE_OUT 与原来那颗投掷物的手感一致）
+	# 【2026-09-23 深夜·"咻"】EASE_IN：起步稍慢、命中那一下最快 ⇒ 像被"射"出去而不是飘过去
+	#   （旧写法 EASE_OUT 越接近目标越慢 = 拖沓）。时长本身已经压到 0.07~0.14 秒，见 `_ray_flight()`。
 	t.tween_method(func(v: float):
 		ray.progress = v
-		ray.queue_redraw(), 0.0, 1.0, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		ray.queue_redraw(), 0.0, 1.0, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	t.tween_callback(func():
 		ray.hit_flash()
 		on_hit.call())
-	# 命中后整条光束淡出（这段时间与原来的 `proj.queue_free()` 等价，只是更"有余味"）
-	t.tween_property(ray, "fade", 0.0, 0.16)
+	# 命中后流光淡出：0.10 秒（旧 0.16 ⇒ 拖尾挂太久就不"咻"了）
+	t.tween_property(ray, "fade", 0.0, 0.10)
 	t.tween_callback(ray.queue_free)
 
 # 【演出·大伤害震屏】一次完整震动约 0.23 秒：5 段递减抖动 + 回中。
@@ -4499,7 +4545,7 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		return
 	var from := board_view.cell_world_center(counterer.cell)
 	var to := board_view.cell_world_center(attacker.cell)
-	var flight := clampf(grid.distance(counterer.cell, attacker.cell) * 0.08, 0.15, 0.4)
+	var flight := _ray_flight(counterer.cell, attacker.cell)
 	# 【2026-09-23】远程反击同样改成"射一条射线"（用反击者自己的英雄配色/样式）
 	_spawn_ranged_ray(counterer, from, to, flight, func():
 		if is_instance_valid(attacker):

@@ -59,7 +59,8 @@ const C_OBS_ATK := Vector2i(2, 3) # 被直接攻击的障碍格（占用原假�
 const C_NEG_FAR := Vector2i(2, 2) # 距离 2 的负面来源位（沉默术士这类远程：不被贴身才会挂状态）
 
 var _b: Battle = null
-var _fail := 0
+# 【2026-09-23 深夜】删掉 `var _fail := 0`：全文件只有这一处声明、从没读写过 ⇒ Godot 报
+#   `UNUSED_PRIVATE_CLASS_VARIABLE`（纯删死变量，行为零变化）。
 var _ai_fork = null
 var _req := {}
 var _req_player_raw := {}

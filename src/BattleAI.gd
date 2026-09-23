@@ -1628,7 +1628,10 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var deadline := (Time.get_ticks_msec() + time_budget_ms) if time_budget_ms > 0 else 0
 	var beam := _beam()
-	var inner := maxi(4, beam / 8)   # 阶段 2 每套阵型的内层宽度（阵型数 × 内层宽度 ≈ 与现役同量级）
+	# ⚠️ 内层宽度必须是整数：这里用 **8.0** 走浮点除再 `int()` 取整，避免编辑器那条
+	#   `INTEGER_DIVISION`（"Integer division. Decimal part will be discarded."）警告 ——
+	#   `beam` 恒为正 ⇒ 截断与整数除完全等价，行为逐位不变（2026-09-23 用户报的那条警告）。
+	var inner := maxi(4, int(beam / 8.0))   # 阶段 2 每套阵型的内层宽度（阵型数 × 内层宽度 ≈ 与现役同量级）
 	# 【2026-09-23 深夜③】阶段 2 的 `IDLE_HIT_PENALTY` 判据：**在阶段 1 动任何人之前**先记下
 	#   "这个单位本回合有没有能打到人的出招"（与现役 `search()` 里那段同一把尺子）。
 	var start_can_hit: Dictionary = {}
@@ -4801,8 +4804,9 @@ func _formation_parts(sim: Sim) -> Vector3:
 		#   格距 2 才看那两个"中间格"是不是被地形堵死 ⇒ **隔墙不算抱团**（用户 2026-09-21 要求）。
 		#   ⚠️ **不模拟"走不走得过去"**（用户 2026-09-21 深夜口径）：中间站着单位**不算墙**
 		#   —— 那是走位过程，不是站位问题；本项纯看站位 + 地形，不做任何寻路/BFS。
-		var buddy := 0
-		# 判据已抽到 `_has_buddy()`（㉒隔断复用同一把尺子）—— 这里只改成调用，**行为逐位不变**。
+		# 判据已抽到 `_has_buddy()`（㉒隔断复用同一把尺子）—— 这里只调用它，**行为逐位不变**。
+		# 【2026-09-23 用户报】原来这里还留着一行 `var buddy := 0`（抽取 `_has_buddy()` 时的残留死变量，
+		#   全程没人读）⇒ 编辑器报 `UNUSED_VARIABLE`，**已删**（纯删死代码，行为零变化）。
 		var has_buddy := _has_buddy(sim, u)
 		if not merged and not has_buddy:
 			coh += 1.0
@@ -6029,8 +6033,11 @@ func _threat_hit_value(sim: Sim, t: SimUnit, d: int, discount: bool = true) -> f
 	# ⚠️ 共鸣值**覆盖**"远程被贴身压 1"（真实 `Unit.effective_atk()` 在 `echo_set >= 0` 时**提前 return**）
 	#   ⇒ 共鸣中的共鸣者不做贴身回落（共鸣者本身是近战、走不到这一支，留着只为将来变身/改表时不埋雷）。
 	if pinned and not _echo_active(t):
-		var buff: int = maxi(base_atk - float(t.atk), 0.0)
-		dmg = 1.0 + float(buff)
+		# ⚠️ 这里**必须用 `maxf`**：`maxi` 收 float 参数会触发 Godot 4.7 的 NARROWING_CONVERSION 报错
+		#   （用户 2026-09-23 深夜贴的 `BattleAI.gd:6036`）。`base_atk` 出自 `_echo_atk_now()`，
+		#   它只由整数值拼出来 ⇒ 改用 float 写法与原来**数值完全一致**（`dmg` 本来也是浮点）。
+		var buff := maxf(base_atk - float(t.atk), 0.0)
+		dmg = 1.0 + buff
 	if discount and d > range_at:
 		dmg *= w_threat_discount
 	return dmg

@@ -864,18 +864,18 @@ func _record_death(u: Unit, r: Dictionary) -> void:
 # ================= 落盘 =================
 
 func _ensure_out_dir() -> void:
-	var abs := _out_dir
+	var abs_dir := _out_dir   # ⚠️ 别叫 `abs`：那是 GDScript 内置函数名（SHADOWED_GLOBAL_IDENTIFIER）
 	if _out_dir.begins_with("res://") or _out_dir.begins_with("user://"):
-		abs = ProjectSettings.globalize_path(_out_dir)
+		abs_dir = ProjectSettings.globalize_path(_out_dir)
 	elif not _out_dir.is_absolute_path():
-		abs = ProjectSettings.globalize_path("res://").path_join(_out_dir)
-		_out_dir = abs
-	DirAccess.make_dir_recursive_absolute(abs)
+		abs_dir = ProjectSettings.globalize_path("res://").path_join(_out_dir)
+		_out_dir = abs_dir
+	DirAccess.make_dir_recursive_absolute(abs_dir)
 	# ★ 关掉 Godot 的**资源导入扫描**：CSV 是 Godot 注册的"翻译表"格式，res:// 下的 .csv
 	#   会被导入器扫成 `*.csv.import` + 一堆 `*.translation`（实测跑一局就生成上百个垃圾文件）。
 	#   放一个 `.gdignore`，导入器就整目录跳过；未导出的项目里 res:// 就是磁盘目录，
 	#   FileAccess 读写完全不受影响。
-	var ignore := abs.path_join(".gdignore")
+	var ignore := abs_dir.path_join(".gdignore")
 	if not FileAccess.file_exists(ignore):
 		var g := FileAccess.open(ignore, FileAccess.WRITE)
 		if g != null:
