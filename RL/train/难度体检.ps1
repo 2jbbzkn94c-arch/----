@@ -38,7 +38,7 @@ param(
     #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
     #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
     [int]$NmBeam = 0,
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -244,6 +244,30 @@ if ($Mode -eq 'smode') {
     $GROUPS = @(@{ slug = 'SM'; base = 'RL\weights\噩梦.json'; tiers = @($SM_ARMS.Keys) })
 }
 
+# ---- 模式 T（`taunt`）：「嘲讽吸火」剂量（`TAUNT_SOAK_W`）—— 2026-09-23 用户实机点名「装甲堡垒站在
+#   其他英雄的后面，起不到嘲讽的作用」⇒ 同一次改动做了两件事：① ⑭坚固的"够得着"判据换成真尺子
+#   （`_threat_can_hit`，**代码里的判据修正，对四个臂同样生效**）；② 新增 ㉕`TAUNT_SOAK_W`。本批只扫 ② 的剂量。
+#   · 四臂全部跑在 **`噩梦.json`** 上，唯一变量 = `TAUNT_SOAK_W`（theta 注入 ⇒ 各自 cand_*.json 只差一行）
+#   · `t0`  = 关（只剩 ① 判据修正）⇒ **把"判据修正"与"新评分项"两笔效果分开的基准**
+#   · `t3`  = 现役值（**对照臂**：`噩梦.json` 里就是 3.0）
+#   · 读五样：配对 Δpts（相对 t3）· 生产侧胜率 · **挨打量 `dmgB`（该降）** · 打出量 `dmgA`（不该塌）· 回合数
+#   ⚠️ **逐单位**的行为量（装甲堡垒前压格数 / 后排挨打血点 / 它自己挨打血点）**这批读不到** ——
+#      `measure.csv` 只有全队 dmgA/dmgB ⇒ 要看它得另开探针；本批能间接看的是**第 4 队**
+#      （`hero_48,hero_14,hero_25`，我方带装甲堡垒）在各臂之间的差异。
+$TS_ARMS = [ordered]@{
+    't0'  = 0.0    # 关（只有 ⑭判据修正那一笔）
+    't15' = 1.5
+    't3'  = 3.0    # 对照（= 现役 `噩梦.json`）
+    't6'  = 6.0    # 更狠（看曲线有没有拐点）
+}
+if ($Mode -eq 'taunt') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $TS_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TAUNT_SOAK_W = [double]$TS_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'TS'; base = 'RL\weights\噩梦.json'; tiers = @($TS_ARMS.Keys) })
+}
+
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；
 #   用户要的是**现在线上跑的那一档**（噩梦 = `噩梦.json`，**通用键 + hero_XX 英雄段在同一份文件里**）。
@@ -338,6 +362,12 @@ if ($Mode -eq 'tiers2') {
     Write-Host ("[基线 sha12] nmare = {0}" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
+if ($Mode -eq 'taunt') {
+    Write-Host '[档位·taunt] t0 = 关（只有 ⑭判据修正）／ t15 = 1.5 ／ t3 = 3.0（现役，对照）／ t6 = 6.0；四臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·taunt] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − 3.0)**；`dmgB` = 我方挨打量（该降）、`dmgA` = 我方打出量（不该塌）'
+    Write-Host ("[基线 sha12] 噩梦.json = {0}（㉕ 的现役值就在这份文件里）" -f `
+        (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
+}
 $key = @{}
 foreach ($r in $rows) { $key["$($r.arm)|$($r.deck)|$($r.seed)|$($r.first)"] = $r }
 $ctl = 'hard'
@@ -347,6 +377,8 @@ if ($Mode -eq 'merge') { $ctl = 'mg0' }
 # 【2026-09-23】`smode` 模式两臂都跑在 `噩梦.json` 上 ⇒ 对照 = **旧搜索模式 `sm0`**（那一列读作
 #   `Δpts(sm2 − sm0)`，即"模式 2 比模式 0 强多少"）。
 if ($Mode -eq 'smode') { $ctl = 'sm0' }
+# 【2026-09-23】`taunt` 模式四臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役值 `t3`**（Δpts 读作 `臂 − 3.0`）。
+if ($Mode -eq 'taunt') { $ctl = 't3' }
 $out = @()
 foreach ($k in $TIERS.Keys) {
     $a = @($rows | Where-Object { $_.arm -eq $k })

@@ -79,6 +79,12 @@ func refresh_identity() -> void:
 func skips_lunge_anim() -> bool:
 	return true
 
+## 【2026-09-23 新增·与暗域同一处修复】结算后钩爪整段还要放 0.34s
+##   （飞出 0→0.12 / 咬住 →0.16 / 收链 + 把目标拖到位 →0.34，见 `_play_hook_fx` 的时间轴）
+##   ⇒ 反击要等它放完再加标准停顿，否则"拖人还没到位反击就冲上来了"。
+func attack_settle_delay() -> float:
+	return 0.34
+
 # ---- 射程 +2 的沉默/眩晕退化（照坠炮手的 suppressed_attack_range 那套）----
 # 为什么需要它：on_spawn() 把 +2 硬写进了 unit.attack_range（出生一次性），
 # 但"射程+2"是技能效果、会随沉默/眩晕失效；直接改 attack_range 会让它永久生效。

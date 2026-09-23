@@ -9,11 +9,17 @@ signal sub_select_requested              # 触发替补选择（HUD 弹列表）
 signal sub_placed                        # 替补成功落位（HUD 可关闭替补面板）
 signal action_finished                   # 某单位一招（移动/攻击）动画完全结束后发出（敌方回放等待用
 signal team_updated                      # 英雄阵容变化（上替补/变身/阵亡）——HUD 刷新下方队伍展示
+# 【2026-09-23 新增·用户要求】某单位**死亡瞬间**（比 `Unit.died` 早 0.3s）：HUD 接它播
+#   "卡面破碎升天 → 飞向顶部阵亡标志 → 标志出现并摇晃"的特效。只转发，不参与任何判定。
+signal unit_dying(u: Unit)
 signal enemy_turn_waiting                # 联机：敌方回合已开始，等待对端真人发行动指
 signal peer_message(text: String)        # 联机:收到对端快捷喊话(顶栏下方弹气泡)
 enum State { IDLE, PLAYER_INPUT, ANIMATING, ENEMY_TURN, DEPLOY, PLACE_DEPLOY, SUBSTITUTING, PLACE_SUB, PLACE_BOMB, ARENA_DRAFT, DECK_PICK, ENDED }
 
 # 远程攻击的投掷物：飞向目标后命中
+# 【2026-09-23 起·用户要求】普攻/远程反击改走 `RangedRay`（"发射一条射线到目标"）⇒ 本类**不再被
+#   远程攻击路径使用**；保留着是为了"物理弹道"类演出还能复用它（要回退射线改动，把 `_launch_projectile`
+#   / `_launch_counter_projectile` 换回这里的写法即可）。
 class Projectile:
 	extends Node2D
 	var color := Color(1.0, 0.78, 0.25)
@@ -36,6 +42,158 @@ class Projectile:
 		draw_circle(Vector2.ZERO, radius, color)
 		draw_arc(Vector2.ZERO, radius, 0.0, TAU, 40, Color(0.55, 0.32, 0.05), 2.0, true)
 		draw_circle(Vector2.ZERO, radius * 0.5, Color(1.0, 0.97, 0.82))
+
+# 【2026-09-23 新增·用户要求】远程攻击的**射线演出**：从攻击者射一条射线到目标。
+#   · 用户口径：「为远程攻击增加演出，发射一条射线到目标；**默认白色**，**部分英雄给点效果**」
+#     ⇒ 颜色/样式由 `DataRegistry.hero_ray(hero_id)` 给（没配的英雄 = 纯白 `beam`）。
+#   · 节点局部坐标：起点恒为 `(0,0)`、整条射线沿 **+X** 方向画；`rotation` 朝向目标 ⇒ 无需换算。
+#   · `progress` 0→1 = 光束头部扫到哪儿（由 `Battle._spawn_ranged_ray` 用 `tween_method` 推进，
+#     时长**沿用原来那颗投掷物的 `flight` 公式** ⇒ 出手节奏与改动前一模一样）。
+#   · 样式（`_draw()` 里分两支：光束族 / 弹道族）：
+#       beam 默认光束 · ice 冰晶+霜环 · magic 符文环+法阵 · fire 火星 · star 星芒 ·
+#       wind 风刃 · nature 叶影 · necro 魂点 · shadow 残影（以上都走"光束族 + 附加装饰"）
+#       bullet 细曳光+枪口闪 · shell 粗弹体+尾烟 · lightning 锯齿闪电（这两支单独画）
+#   · 【2026-09-23 晚·用户口径「远程的射线有点太实了」】三族一起调轻：光束族由"枪口到目标等宽等亮的
+#     三层实线"改成**锥形曳光**（每层只画靠头部的一段 ⇒ 近目标亮、朝枪口渐隐），弹道/闪电同步变细降透明度。
+#     ⚠️ 想再淡/再浓：**只改本类顶部那几个常量**（`W_*` 宽 / `A_*` 透明度 / `HEAD_*` 头部光点 /
+#     `MUZZLE_A` 枪口光 / `DECO_A` 沿线装饰倍率），别去改 `_draw_*` 里的算式。
+class RangedRay:
+	extends Node2D
+	var len := 0.0
+	var progress := 0.0
+	var style := "beam"
+	var color := Color(1.0, 1.0, 1.0)
+	var fade := 1.0
+	var _seed := 0.0
+
+	# 【2026-09-23 晚·用户口径「远程的射线有点太实了」】"实不实"的旋钮**全在这几个常量里**，
+	#   想再淡/再浓只改这里（括号里是改动前的旧值）。锥形曳光的层数与起止位置见 `_draw_beam`。
+	const W_GLOW := 7.0      # 外层余晖宽（旧 11.0）
+	const A_GLOW := 0.09     # （旧 0.16）
+	const W_MID := 3.4       # 中段宽（旧 5.0）
+	const A_MID := 0.16      # （旧 0.42）
+	const W_LIT := 1.9       # 亮柱宽
+	const A_LIT := 0.30
+	const W_CORE := 1.0      # 白芯宽（旧 2.0）
+	const A_CORE := 0.70     # （旧 0.85）
+	const HEAD_R := 5.0      # 头部光点半径（旧 6.5）
+	const HEAD_A := 0.45     # （旧 0.75）
+	const MUZZLE_A := 0.35   # 枪口/起手光（旧 0.55）
+	const DECO_A := 0.75     # 沿线主题装饰（冰晶/符文/火星…）整体透明度倍率（旧值各写 0.55~0.8）
+
+	func setup(from_pos: Vector2, to_pos: Vector2, st: String, col: Color) -> void:
+		position = from_pos
+		len = from_pos.distance_to(to_pos)
+		rotation = (to_pos - from_pos).angle()
+		style = st
+		color = col
+		_seed = randf() * 12.0
+		z_index = 30        # 压在棋子(2/10)之上、钩爪(40)之下：看得见又不挡人
+		queue_redraw()
+
+	## 命中那一刻：头部爆一下（`_draw` 用 `progress >= 1` 判断）
+	func hit_flash() -> void:
+		progress = 1.0
+		queue_redraw()
+
+	func _seg(x0: float, x1: float, c: Color, w: float, alpha: float) -> void:
+		draw_line(Vector2(x0, 0.0), Vector2(x1, 0.0), Color(c.r, c.g, c.b, c.a * alpha * fade), w, true)
+
+	func _draw() -> void:
+		if not (is_finite(position.x) and is_finite(position.y) and is_finite(rotation)):
+			return
+		if len <= 1.0:
+			return
+		var head := len * clampf(progress, 0.0, 1.0)
+		if head <= 0.5:
+			head = 0.5
+		match style:
+			"bullet", "shell":
+				_draw_tracer(head)
+			"lightning":
+				_draw_lightning(head)
+			_:
+				_draw_beam(head)
+		# 命中闪光（头部抵达后爆一下）
+		if progress >= 0.999:
+			var r := 16.0 if style == "shell" else 12.0
+			draw_circle(Vector2(head, 0.0), r, Color(color.r, color.g, color.b, 0.35 * fade))
+			draw_circle(Vector2(head, 0.0), r * 0.45, Color(1.0, 1.0, 1.0, 0.8 * fade))
+
+	# ---- 光束族：锥形曳光（近目标亮、朝枪口渐隐）+ 头部亮点 + 主题装饰 ----
+	func _draw_beam(head: float) -> void:
+		# 【2026-09-23 晚·用户口径「远程的射线有点太实了」】原来是三层"从枪口到目标**等宽等亮**"的实线
+		#   ⇒ 看着像一根棍子。现在改成**锥形曳光**：每一层都只画"靠头部的一段"，越靠枪口层数越少、越淡
+		#   ⇒ 近目标亮、朝枪口渐隐。仍然全部走 `_seg`（= draw_line 抗锯齿）⇒ 斜线不起毛边、同层无接缝。
+		_seg(0.0, head, color, W_GLOW, A_GLOW)                        # 尾段：只剩一层很淡的余晖
+		_seg(head * 0.30, head, color, W_MID, A_MID)                  # 中段
+		_seg(head * 0.58, head, color, W_LIT, A_LIT)                  # 亮柱
+		_seg(head * 0.80, head, Color(1.0, 1.0, 1.0), W_CORE, A_CORE) # 白芯
+		draw_circle(Vector2(head, 0.0), HEAD_R, Color(color.r, color.g, color.b, HEAD_A * fade))
+		draw_circle(Vector2(head, 0.0), HEAD_R * 0.42, Color(1.0, 1.0, 1.0, 0.75 * fade))
+		# 枪口/起手光
+		draw_circle(Vector2.ZERO, 4.0, Color(color.r, color.g, color.b, MUZZLE_A * fade))
+		var n := 5                       # 沿线装饰个数
+		for i in n:
+			var t := (float(i) + 0.5) / float(n)
+			var x := head * t
+			if x <= 2.0 or x >= head - 2.0:
+				continue
+			match style:
+				"ice":
+					# 碎冰晶：上下各一枚小菱形 + 斜向偏移（像冰棱）
+					var off := 5.0 + 3.0 * sin(float(i) * 2.1)
+					draw_colored_polygon(PackedVector2Array([
+						Vector2(x, off), Vector2(x + 3.0, off + 3.0), Vector2(x, off + 6.0), Vector2(x - 3.0, off + 3.0)]),
+						Color(0.75, 0.93, 1.0, 0.8 * DECO_A * fade))
+					draw_colored_polygon(PackedVector2Array([
+						Vector2(x, -off), Vector2(x + 3.0, -off - 3.0), Vector2(x, -off - 6.0), Vector2(x - 3.0, -off - 3.0)]),
+						Color(0.75, 0.93, 1.0, 0.8 * DECO_A * fade))
+				"magic":
+					draw_arc(Vector2(x, 0.0), 7.0 + 2.0 * float(i % 2), 0.0, TAU, 18, Color(color.r, color.g, color.b, 0.7 * DECO_A * fade), 2.0, true)
+				"fire":
+					draw_circle(Vector2(x, randf_range(-3.0, 3.0)), 2.6, Color(1.0, 0.75, 0.3, 0.75 * DECO_A * fade))
+				"star":
+					for k in 4:
+						var a := TAU * float(k) / 4.0 + 0.6
+						draw_line(Vector2(x, 0.0), Vector2(x, 0.0) + Vector2(cos(a), sin(a)) * 7.0,
+							Color(1.0, 1.0, 1.0, 0.55 * DECO_A * fade), 1.5, true)
+				"wind":
+					draw_arc(Vector2(x, 0.0), 9.0, -0.9, 0.9, 12, Color(color.r, color.g, color.b, 0.6 * DECO_A * fade), 2.0, true)
+				"nature":
+					draw_colored_polygon(PackedVector2Array([
+						Vector2(x - 5.0, 0.0), Vector2(x, -4.0), Vector2(x + 5.0, 0.0), Vector2(x, 4.0)]),
+						Color(0.55, 0.95, 0.5, 0.7 * DECO_A * fade))
+				"necro":
+					draw_circle(Vector2(x, 0.0), 3.2, Color(0.6, 1.0, 0.55, 0.6 * DECO_A * fade))
+				"shadow":
+					_seg(x - 8.0, x + 8.0, Color(0.15, 0.1, 0.25), 3.0, 0.5 * DECO_A)
+				_:
+					pass
+
+	# ---- 弹道族：细/粗曳光 + 枪口闪（2026-09-23 晚随"射线太实"一起调轻：锥形 + 降透明度）----
+	func _draw_tracer(head: float) -> void:
+		var thick := 2.2 if style == "bullet" else 5.0     # 旧 3.0 / 7.0
+		_seg(0.0, head, color, thick * 2.0, 0.11)          # 旧 0.18
+		_seg(head * 0.34, head, color, thick, 0.55)        # 旧 0.75（等长）
+		_seg(head * 0.72, head, Color(1.0, 1.0, 1.0), thick * 0.42, 0.75)   # 旧 0.9
+		draw_circle(Vector2(head, 0.0), thick * 0.72, Color(1.0, 1.0, 0.92, 0.7 * fade))
+		# 枪口/炮口闪
+		draw_circle(Vector2.ZERO, 5.0 if style == "bullet" else 8.0, Color(1.0, 0.9, 0.6, 0.38 * fade))
+
+	# ---- 锯齿闪电：7 段折线（每帧位移抖动）；2026-09-23 晚随"射线太实"一起调细调淡 ----
+	func _draw_lightning(head: float) -> void:
+		var pts := PackedVector2Array()
+		var n := 7
+		for i in n + 1:
+			var t := float(i) / float(n)
+			var y := 0.0
+			if i > 0 and i < n:
+				y = sin(_seed + float(i) * 2.3 + Time.get_ticks_msec() * 0.05) * 7.0
+			pts.append(Vector2(head * t, y))
+		draw_polyline(pts, Color(color.r, color.g, color.b, 0.22 * fade), 6.0, true)   # 旧 0.35 / 9.0
+		draw_polyline(pts, Color(color.r, color.g, color.b, 0.65 * fade), 2.4, true)   # 旧 0.9 / 3.5
+		draw_polyline(pts, Color(1.0, 1.0, 1.0, 0.7 * fade), 1.0, true)                # 旧 0.85 / 1.4
 
 # 长剑的剑气：一道弧形刃光沿直线飞出（当前未使用）
 
@@ -2377,6 +2535,7 @@ func _spawn_unit(hero_id: String, faction: int, cell: Vector2i) -> Unit:
 	u.hp_changed.connect(_on_unit_hp_changed)
 	u.damaged.connect(_on_unit_damaged)
 	u.died.connect(_on_unit_died)
+	u.dying.connect(_on_unit_dying)   # 【2026-09-23】死亡瞬间 → HUD 播特效（只转发，不改判定）
 	add_child(u)
 	units.append(u)
 	occupancy[cell] = u
@@ -3508,19 +3667,14 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> vo
 	else:
 		_melee_obstacle_hit(u, cell, for_enemy)
 
-# 远程攻击障碍物：投掷物飞向障碍格，命中后结算
+# 远程攻击障碍物：**射线**射向障碍格，命中后结算
+# 【2026-09-23】与普攻/反击统一走 `_spawn_ranged_ray`（同一条射线演出、按英雄配色）；原来那颗小光点
+#   `Projectile` 在这里也退役了（要回退就把本函数换回它）。
 func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var from := board_view.cell_world_center(u.cell)
 	var to := board_view.cell_world_center(cell)
-	var proj := Projectile.new()
-	proj.position = from
-	proj.rotation = (to - from).angle()
-	add_child(proj)
 	var flight := clampf(float(grid.distance(u.cell, cell)) * 0.08, 0.15, 0.4)
-	var t := create_tween()
-	t.tween_property(proj, "position", to, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.tween_callback(func():
-		proj.queue_free()
+	_spawn_ranged_ray(u, from, to, flight, func():
 		_impact_obstacle(u, cell, for_enemy))
 
 # 近战攻击障碍物：攻击者向障碍轻挥（小前冲+回位），命中后结算
@@ -4144,21 +4298,43 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		back.tween_property(attacker, "position", apos, 0.1)
 		back.tween_callback(func(): _apply_attack(attacker, target, for_enemy)))
 
-# 远程攻击演出：出生点生成投影物，沿直线飞到目标并命中
+# 远程攻击演出：**朝目标射一条射线**（2026-09-23 用户要求；原来是那颗小光点 `Projectile` 飞过去）。
+# 射线样式/颜色由 `DataRegistry.hero_ray(hero_id)` 决定（未配置的英雄 = 纯白光束），
+# 命中结算的**时刻与节奏不变**（沿用同一套 `flight` 公式，见 `_spawn_ranged_ray`）。
 func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	var from := board_view.cell_world_center(attacker.cell)
 	var to := board_view.cell_world_center(target.cell)
-	var proj := Projectile.new()
-	proj.position = from
-	# 朝向目标，拖尾自然指向飞行反方向
-	proj.rotation = (to - from).angle()
-	add_child(proj)
 	var flight := clampf(grid.distance(attacker.cell, target.cell) * 0.08, 0.15, 0.4)
-	var t := create_tween()
-	t.tween_property(proj, "position", to, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.tween_callback(func():
-		proj.queue_free()
+	_spawn_ranged_ray(attacker, from, to, flight, func():
 		_apply_attack(attacker, target, for_enemy))
+
+## 【2026-09-23 新增·用户要求】远程攻击的射线演出（普攻与远程反击共用一条实现）：
+##   `from → to` 扫过去，`flight` 秒后触发 `on_hit`（= 原来的伤害结算点；**公式一字未改** ⇒ 出手节奏不变）。
+##   ⚠️ headless（RL 跑批 / 无窗口自检）：**不建节点、只等同样长的时间** ⇒ 时序逐位一致、零绘制开销。
+func _spawn_ranged_ray(shooter: Unit, from: Vector2, to: Vector2, flight: float, on_hit: Callable) -> void:
+	if DisplayServer.get_name() == "headless":
+		var tw := create_tween()
+		tw.tween_interval(flight)
+		tw.tween_callback(func(): on_hit.call())
+		return
+	var hid := ""
+	if shooter != null and is_instance_valid(shooter):
+		hid = shooter.hero_id
+	var spec := DataRegistry.hero_ray(hid)
+	var ray := RangedRay.new()
+	ray.setup(from, to, String(spec.get("style", "beam")), spec.get("color", Color(1, 1, 1)))
+	add_child(ray)
+	var t := create_tween()
+	# 头部扫过去（EASE_OUT 与原来那颗投掷物的手感一致）
+	t.tween_method(func(v: float):
+		ray.progress = v
+		ray.queue_redraw(), 0.0, 1.0, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	t.tween_callback(func():
+		ray.hit_flash()
+		on_hit.call())
+	# 命中后整条光束淡出（这段时间与原来的 `proj.queue_free()` 等价，只是更"有余味"）
+	t.tween_property(ray, "fade", 0.0, 0.16)
+	t.tween_callback(ray.queue_free)
 
 # 【演出·大伤害震屏】一次完整震动约 0.23 秒：5 段递减抖动 + 回中。
 # 连续两下大伤害（先挨打、再被反击）时重开一次，而不是把两次抖动叠在一起。
@@ -4252,9 +4428,17 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		target.counter_used_this_turn = true
 	_clear_selection()
 	# 攻击结算完成：稍作停顿让攻击命中呈现完整，再开始反击（先攻击、后反击，动画与结算错开
+	# 【2026-09-23 修·用户实机「暗域换位动画结束，反击就来了」】停顿时长 = 标准 0.15s
+	#   **＋ 攻击者自己的剩余演出** `_hero(attacker).attack_settle_delay()`：
+	#   暗域换位 0.2s（`_swap_units` 的位移 tween）/ 血锁钩爪 0.34s（飞出+咬住+收链拖人）；
+	#   其余英雄该钩子默认返回 0.0 ⇒ **逐位不变**。原理：这两位"跳过前冲动画"的英雄，
+	#   伤害是在演出**开始**时结算的，而普通近战的 0.22s 前冲是在伤害**之前**放完的
+	#   ⇒ 只等固定的 0.15s 会让反击"贴着"换位/拖人的尾巴落地。
+	# ⚠️ 纯演出间隔：不改伤害、不改判定，也不改 `action_finished` 的时机语义
+	#   （跑批 `Engine.time_scale = 20` ⇒ 这点延迟对跑批墙钟可忽略）。
 	if can_counter:
 		var gap := create_tween()
-		gap.tween_interval(0.15)
+		gap.tween_interval(0.15 + _hero(attacker).attack_settle_delay())
 		gap.tween_callback(func(): _play_counter(attacker, target, for_enemy))
 	else:
 		_finish_attack(attacker, for_enemy)
@@ -4315,15 +4499,9 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 		return
 	var from := board_view.cell_world_center(counterer.cell)
 	var to := board_view.cell_world_center(attacker.cell)
-	var proj := Projectile.new()
-	proj.position = from
-	proj.rotation = (to - from).angle()
-	add_child(proj)
 	var flight := clampf(grid.distance(counterer.cell, attacker.cell) * 0.08, 0.15, 0.4)
-	var t := create_tween()
-	t.tween_property(proj, "position", to, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	t.tween_callback(func():
-		proj.queue_free()
+	# 【2026-09-23】远程反击同样改成"射一条射线"（用反击者自己的英雄配色/样式）
+	_spawn_ranged_ray(counterer, from, to, flight, func():
 		if is_instance_valid(attacker):
 			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
 			var chp_before := attacker.hp
@@ -5035,6 +5213,7 @@ func _summon_skeletons(u: Unit) -> void:
 		s.position = board_view.cell_world_center(slots[i])
 		s.hp_changed.connect(_on_unit_hp_changed)
 		s.died.connect(_on_unit_died)
+		s.dying.connect(_on_unit_dying)   # 【2026-09-23】召唤物也播特效（只破碎升天、不占阵亡标志位）
 		s.modulate.a = 0.0
 		add_child(s)
 		units.append(s)
@@ -5193,6 +5372,13 @@ func _my_sub_quota(fn: int = -1) -> int:
 	if _sub_faction == f and (state == State.SUBSTITUTING or state == State.PLACE_SUB):
 		q += 1
 	return q
+
+## 【2026-09-23 新增·用户要求】死亡**瞬间**的转发（特效专用）：
+##   比 `_on_unit_died` 早 0.3s（`Unit.die()` 先发 `dying`、0.3s 后才发 `died`）⇒ HUD 有足够时间
+##   播完"卡面破碎升天 → 飞向顶部阵亡标志"，而墓碑/替补/胜负判定照旧挂在 `died` 上、时序不变。
+##   本函数**不读不改任何战斗状态**（纯转发），headless 下 `Unit.die()` 根本不发这个信号 ⇒ 跑批零开销。
+func _on_unit_dying(u: Unit) -> void:
+	unit_dying.emit(u)
 
 func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = true) -> void:
 	if u == null or not is_instance_valid(u):
@@ -6400,6 +6586,7 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	u.hp_changed.connect(_on_unit_hp_changed)
 	u.damaged.connect(_on_unit_damaged)
 	u.died.connect(_on_unit_died)
+	u.dying.connect(_on_unit_dying)   # 【2026-09-23】死亡瞬间 → HUD 播特效（只转发，不改判定）
 	u.modulate = Color(0.6, 1.0, 0.6, 1.0)   # 替补入场的标记色
 	var t := create_tween()
 	u.modulate.a = 0.0

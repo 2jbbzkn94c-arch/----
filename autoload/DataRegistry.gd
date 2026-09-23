@@ -573,6 +573,41 @@ const HERO_FX := {
 # 取某英雄的技能特效（颜色 + 文案），返回 {color, text}
 func hero_fx(id: String) -> Dictionary:
 	return HERO_FX.get(id, { "color": Color(1.0, 1.0, 1.0), "text": "" })
+
+# 【2026-09-23 新增·用户要求】远程攻击的**射线演出**：id -> { style, color? }。
+#   用户口径：「为远程攻击增加演出，发射一条射线到目标。这个射线**默认白色**，**部分英雄给点效果**。
+#   比如白游侠的是冰冻，所以是蓝色。沉默术士是魔法，可以用紫色」。
+#   ⇒ **没列在这里的英雄 = 纯白默认光束**（`style:"beam"`）；列出来的英雄默认沿用 `HERO_FX` 里
+#     已有的主题色（那张表本来就是按英雄机制配的色），要单独改色就在条目里写 `"color"`。
+#   `style` 可选值见 `src/Battle.gd::RangedRay._draw()`：
+#     `beam` 默认光束 / `bullet` 枪弹曳光 / `lightning` 锯齿闪电 / `shell` 粗弹体+尾烟 /
+#     `ice` 冰晶+霜环 / `magic` 符文环+法阵 / `fire` 火星 / `star` 星芒 / `wind` 风刃 /
+#     `nature` 叶影 / `necro` 魂点 / `shadow` 残影。
+const HERO_RAY := {
+	"hero_09": { "style": "bullet" },      # 火枪手：就是一杆枪 ⇒ 细曳光 + 枪口闪
+	"hero_10": { "style": "ice" },         # 白游侠：远程一并伤害相邻 + [冰冻] ⇒ 冰蓝晶束（用户点名）
+	"hero_34": { "style": "magic" },       # 沉默术士：命中挂[沉默]（魔法）⇒ 紫色符文束（用户点名）
+	"hero_19": { "style": "fire" },        # 烈焰祭司：全场攻击 +1 的火焰祭司 ⇒ 火束带火星
+	"hero_20": { "style": "bullet" },      # 赏金猎人：枪械赏金 ⇒ 金色弹道
+	"hero_21": { "style": "star" },        # 超新星：冲击波/击退 ⇒ 星芒射线
+	"hero_07": { "style": "shadow" },      # 影丸：暗杀者 ⇒ 暗色残影
+	"hero_43": { "style": "wind" },        # 风语者：全队<疾行>+风 ⇒ 风刃
+	"hero_08": { "style": "nature" },      # 德鲁伊：回合末治愈全队 ⇒ 自然绿束
+	"hero_33": { "style": "necro" },       # 死灵法师：召唤骷髅 ⇒ 亡灵魂点
+	"hero_35": { "style": "shell" },       # 炸弹人：爆破 ⇒ 粗弹体拖烟
+	"hero_45": { "style": "shell" },       # 坠炮手：全场炮击、弹道无视阻挡 ⇒ 炮弹轨迹（粗、带烟）
+	"hero_05": { "style": "magic" },       # 傀儡师：操控敌人位移 ⇒ 紫线操控（同魔法家族）
+	"hero_06": { "style": "nature" },      # 医护兵：治疗 ⇒ 柔和绿束（同自然家族）
+}
+
+# 取某英雄的远程射线规格：没配置 = **纯白默认光束**；配置了 = 主题样式 + 主题色（可单独覆盖）
+func hero_ray(id: String) -> Dictionary:
+	if not HERO_RAY.has(id):
+		return { "style": "beam", "color": Color(1.0, 1.0, 1.0) }
+	var d: Dictionary = HERO_RAY[id]
+	var col: Color = d.get("color", HERO_FX.get(id, {}).get("color", Color(1.0, 1.0, 1.0)))
+	return { "style": String(d.get("style", "beam")), "color": col }
+
 var heroes: Dictionary = {}
 # id -> HeroDef（衍生物/召唤单位）
 var summons: Dictionary = {}

@@ -12,12 +12,17 @@ var _side := 0              # 当前编辑的队伍：0=我方 1=敌方
 var _sel_p: Array[String] = []
 var _sel_e: Array[String] = []
 var _btns: Dictionary = {}  # hero_id -> HexCard
-var _count_label: Label
 var _status_label: Label
-var _side_label: Label
+var _side_btns: Array = []   # 【2026-09-23】「编辑我方/编辑敌方」两个按钮（高亮表示当前编辑哪一方）
 var _start_btn: Button
 var _pool_scroll: ScrollContainer = null   # 英雄池滚动容器（触屏拖动）
+var _pool_host: Control = null             # 英雄池宿主（筛选后整块重建）
+var _filter_btn: Button = null             # 筛选按钮（与普通模式同款）
+var _filter_info: Label = null             # 筛选按钮右侧"共 N 名 / 筛选后 N / M"提示
+var _filter: Menu.HeroFilter = null        # 筛选状态机 = 普通模式那份实现（Menu 的嵌套类）
 var _pool_touch_down := false              # 触屏按住英雄池中
+var _squad_cap: Label = null               # 英雄池下方"已选队伍"标题行
+var _squad_host: Control = null            # "已选队伍"小卡宿主（每次刷新整块重建）
 var _enemy_ai := false                     # 敌方是否交给 AI（不勾选=双控，双方都归玩家）
 var _diff_opt: OptionButton = null          # AI 难度下拉（敌方为 AI 时生效）
 const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]   # 与 Menu 的四档一致（2026-09-20 删除第 5 档「噩梦+」）
@@ -25,6 +30,14 @@ const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]   # 与 Menu 的
 # 测试场里各队可上场的格子（底部行我方 / 第一满行敌方），只放首发 3 个
 const PLAYER_CELLS := [Vector2i(0, 6), Vector2i(2, 6), Vector2i(4, 6)]
 const ENEMY_CELLS := [Vector2i(0, 1), Vector2i(2, 1), Vector2i(4, 1)]
+
+# ---- 队伍存档（我方 / 敌方各 1 组，分开存；改动即自动保存、进页自动载入）----
+# 【2026-09-23 用户要求】自由部署也加队伍保存：我方、敌方**分开**存，每侧只留 1 组
+#   （不像普通模式那样 3 个卡组槽）。手感与普通模式卡组一致：**改动立刻写盘**，
+#   再进本页 / 重启游戏都会自动恢复上次的两支队伍。
+# 存档写在自己的 cfg 里，**不碰 `DeckStore` 的 3 个卡组槽** —— 那 3 个槽会被战斗内
+#   "选择卡组"面板逐个列出来，沙箱队伍混进去会污染正常对局的选卡组界面。
+const TEAM_SAVE_PATH := "user://quicktest_teams.cfg"
 
 func _ready() -> void:
 	_build()
@@ -153,6 +166,7 @@ func _make_cover_bg() -> TextureRect:
 	return null
 
 func _build() -> void:
+	_load_teams()   # 【队伍存档】先把上次的我方/敌方队伍恢复出来，再搭界面（下面 _refresh() 才能显示对）
 	var vsize := get_viewport().get_visible_rect().size
 	# 背景：深色纯色底 → 界面背景贴图（等比裁切铺满，与主菜单/联机大厅同一张）。
 	# 贴图缺失/加载失败 ⇒ 只剩纯色底，不影响页面。
@@ -178,27 +192,31 @@ func _build() -> void:
 	vbox.add_child(title)
 
 	# 队伍切换：我方 / 敌方
+	# 【2026-09-23 用户要求】原来这里左边有个常驻标签「当前编辑：我方」—— **已删**；
+	#   改由这两个按钮**自己高亮**表示"当前正在编辑哪一方"：按下态（toggle_mode + button_pressed）
+	#   ＋ 暖色字（与标题同色），另一方保持普通字色。切边按钮本来就一眼能看见，不用再占一行字。
 	var side_row := HBoxContainer.new()
 	side_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	side_row.add_theme_constant_override("separation", 16)
 	vbox.add_child(side_row)
-	_side_label = Label.new()
-	_side_label.add_theme_font_size_override("font_size", 22)
-	_side_label.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	side_row.add_child(_side_label)
 	for i in 2:
 		var sb := Button.new()
 		sb.text = "编辑敌方" if i == 1 else "编辑我方"
+		sb.toggle_mode = true                      # 用"按下态"当选中标记（纯视觉；点击仍走 pressed → _pick_side）
+		sb.focus_mode = Control.FOCUS_NONE
 		sb.custom_minimum_size = Vector2(150, 54)
 		sb.add_theme_font_size_override("font_size", 20)
 		sb.pressed.connect(_pick_side.bind(i))
 		side_row.add_child(sb)
+		_side_btns.append(sb)
 
-	_count_label = Label.new()
-	_count_label.add_theme_font_size_override("font_size", 22)
-	_count_label.add_theme_color_override("font_color", Color(0.9, 1.0, 0.75))
-	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(_count_label)
+	# 【2026-09-23 用户要求】原来这里有一行计数「我方 N/8   敌方 N/8」—— **整行删除**；
+	#   敌方人数**并进下面那一行**（见 `_refresh()` 里 `_status_label` 的「敌方 N/8：…」）。
+	#   ⇒ 我方人数不再单独显示（勾选状态看英雄池勾子、首发/替补看下面那排小卡）。
+
+	# 【2026-09-23 用户要求】原来这里有一行「队伍存档（改动即自动保存，重启不丢）：我方 N 名 · 敌方 N 名」
+	#   —— 与上面 `_count_label` 的「我方 N/8 敌方 N/8」重复，**整行删除**；存档逻辑本身一个字没动
+	#   （`_load_teams()` / `_save_teams()` 照旧：进页自动载入、勾选即写盘、重启不丢，只是不再用一行字报数）。
 
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", 19)
@@ -206,6 +224,25 @@ func _build() -> void:
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	vbox.add_child(_status_label)
+
+	# 英雄池筛选行（与普通模式选人页同款：筛选按钮 + 右侧计数）
+	# 【2026-09-23 用户要求「自由部署的英雄选人界面换成和普通模式一模一样」】筛选实现共用
+	#   `Menu.HeroFilter`（嵌套类）⇒ 按钮文案、弹层、勾选规则、选中配色与普通模式逐字一致。
+	var filter_row := HBoxContainer.new()
+	filter_row.add_theme_constant_override("separation", 12)
+	filter_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(filter_row)
+	_filter_btn = Button.new()
+	_filter_btn.text = "筛选"
+	_filter_btn.custom_minimum_size = Vector2(0, 38)
+	_filter_btn.add_theme_font_size_override("font_size", 16)
+	_filter_btn.pressed.connect(_open_filter)
+	filter_row.add_child(_filter_btn)
+	_filter_info = Label.new()
+	_filter_info.add_theme_font_size_override("font_size", 14)
+	_filter_info.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	_filter_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	filter_row.add_child(_filter_info)
 
 	# 英雄池：与普通模式选人页同款（5 列蜂窝 HexCard、纵向滚动、触屏拖动）
 	var scroll := ScrollContainer.new()
@@ -218,6 +255,21 @@ func _build() -> void:
 	hex_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(hex_host)
 	_build_hex_pool(hex_host)
+
+	# 已选英雄队伍（英雄池下方）：与普通模式"卡组预览"同款一行平顶蜂窝小卡。
+	# 【2026-09-23 用户要求】「在英雄池下方增加一个已选择英雄队伍，像普通模式那样，
+	#   点击英雄可以直接取消选择」⇒ 悬停看属性、**点小卡 = 取消选择**（见 `_on_squad_card_clicked`）。
+	#   排列顺序 = 勾选顺序 ⇒ 前 STARTERS 名就是首发（标题行里写明）；只显示当前编辑的那一侧。
+	_squad_cap = Label.new()
+	_squad_cap.add_theme_font_size_override("font_size", 15)
+	_squad_cap.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	_squad_cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_squad_cap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	vbox.add_child(_squad_cap)
+	_squad_host = Control.new()
+	_squad_host.size_flags_horizontal = Control.SIZE_SHRINK_CENTER   # 小卡整行居中（本页其它行也是居中）
+	vbox.add_child(_squad_host)
+	_refresh_filter_ui()   # 初始文案："共 N 名英雄"（与普通模式选人页同款）
 
 	# 敌方操控方式 + AI 难度（沙箱专用）：选 AI 时不启用双控，敌方回合由 AI 跑
 	var opt_row := HBoxContainer.new()
@@ -284,16 +336,12 @@ func _build() -> void:
 	_refresh()
 
 # 与普通模式英雄池同款：5 列平顶蜂窝 HexCard，按种族分组（人族→机械→兽族→精灵→魔族），超高可滚动
+# 【2026-09-23 用户要求】筛选也用普通模式那一套：**同一个实现** `Menu.HeroFilter`（嵌套类），
+#   连按钮文案/弹层/勾选规则/配色都一致 ⇒ 两个界面不会各自漂。本函数只负责"按筛选结果排卡"。
 func _build_hex_pool(host: Control) -> void:
-	var ids: Array = DataRegistry.heroes.keys()
-	ids.sort_custom(func(a: String, b: String):
-		var da := DataRegistry.get_hero(a)
-		var db := DataRegistry.get_hero(b)
-		var ra := da.race if da != null else 99
-		var rb := db.race if db != null else 99
-		if ra != rb:
-			return ra < rb
-		return a < b)
+	_pool_host = host
+	_btns.clear()            # 重建前清掉旧卡引用（筛掉的人不留在表里）
+	var ids: Array = _filtered_ids()
 	var avail_w: float = maxf(get_viewport().get_visible_rect().size.x - 64.0, 320.0)
 	var r: float = clampf(avail_w / 8.0, 30.0, 96.0)   # 5 列总宽 = 8r
 	var sq3 := sqrt(3.0)
@@ -314,8 +362,83 @@ func _build_hex_pool(host: Control) -> void:
 		_btns[id] = card
 		max_x = maxf(max_x, cx + r)
 		max_y = maxf(max_y, cy + sq3 * r * 0.5)
+	# 筛完一个都不剩：留一块可滚区域放"无符合条件"（别把池压成 0 高）
+	if ids.is_empty():
+		max_x = avail_w
+		max_y = r * 2.0
+		var empty := Label.new()
+		empty.text = "（没有符合条件的英雄）"
+		empty.add_theme_font_size_override("font_size", 20)
+		empty.add_theme_color_override("font_color", Color(1.0, 0.8, 0.6))
+		empty.position = Vector2(20, 20)
+		host.add_child(empty)
 	host.custom_minimum_size = Vector2(max_x, max_y)
 	host.size = Vector2(max_x, max_y)
+
+# ---- 英雄池筛选（与普通模式**同一个** `Menu.HeroFilter` 实现）----
+func _flt() -> Menu.HeroFilter:
+	if _filter == null:
+		_filter = Menu.HeroFilter.new()
+		_filter.host = self
+		_filter.on_changed = func():
+			_rebuild_pool()
+			_refresh_filter_ui()
+		_filter.shown_count = func() -> int:
+			return _filtered_ids().size()
+	return _filter
+
+# 卡池顺序：按种族分组（人族→机械→兽族→精灵→魔族）、同种族按 hero_id；再按筛选条件过滤。
+# ⚠️ 这段排序与 `Menu._pool_ids()` 逐字一致（用户要求"两个界面一模一样"）。
+func _filtered_ids() -> Array:
+	var ids: Array = DataRegistry.heroes.keys()
+	ids.sort_custom(func(a: String, b: String):
+		var da := DataRegistry.get_hero(a)
+		var db := DataRegistry.get_hero(b)
+		var ra := da.race if da != null else 99
+		var rb := db.race if db != null else 99
+		if ra != rb:
+			return ra < rb
+		return a < b)
+	var out: Array = []
+	for id in ids:
+		if _flt().passes(String(id)):
+			out.append(id)
+	return out
+
+# 筛选条件变化后整块重建卡池（与普通模式同做法：只重排池子，已选队伍不变）
+func _rebuild_pool() -> void:
+	if _pool_host == null or not is_instance_valid(_pool_host):
+		return
+	_hide_tooltip()
+	for c in _pool_host.get_children():
+		_pool_host.remove_child(c)
+		c.queue_free()
+	_build_hex_pool(_pool_host)
+	if _pool_scroll != null and is_instance_valid(_pool_scroll):
+		_pool_scroll.scroll_vertical = 0   # 筛完回到池顶
+	_refresh()   # 重新按"当前队伍已选"上选中状态
+
+# 池上方计数 + 筛选按钮文案（弹层内计数由 `HeroFilter.refresh_count()` 自己刷）
+func _refresh_filter_ui() -> void:
+	var total := DataRegistry.heroes.size()
+	if _filter_btn != null and is_instance_valid(_filter_btn):
+		_filter_btn.text = _flt().button_text()
+	if _filter_info != null and is_instance_valid(_filter_info):
+		if not _flt().is_active():
+			_filter_info.text = "共 %d 名英雄" % total
+		else:
+			var shown := _filtered_ids().size()
+			var hidden_sel := 0
+			for id in _cur():
+				if not _filtered_ids().has(id):
+					hidden_sel += 1
+			var extra := "（%d 名已选被隐藏，队伍不变）" % hidden_sel if hidden_sel > 0 else ""
+			_filter_info.text = "筛选后 %d / %d 名%s" % [shown, total, extra]
+	_flt().refresh_count()
+
+func _open_filter() -> void:
+	_hide_tooltip()
+	_flt().open()
 
 # 触屏拖动滚动英雄池（模拟器/手机上原生触摸拖动不总生效，与普通模式同处理）
 func _input(ev: InputEvent) -> void:
@@ -347,26 +470,135 @@ func _toggle(id: String) -> void:
 			(_btns[id] as HexCard).set_selected(false)
 			return
 		arr.append(id)
+	_save_teams()   # 【队伍存档】勾/取消立刻写盘（我方、敌方各存各的）
 	_refresh()
 
 func _refresh() -> void:
-	_side_label.text = "当前编辑：%s" % ("敌方" if _side == 1 else "我方")
-	_count_label.text = "我方 %d/%d   敌方 %d/%d" % [_sel_p.size(), TEAM_SIZE, _sel_e.size(), TEAM_SIZE]
+	# 【2026-09-23 用户要求 + 实机反馈】「当前编辑：…」那行删掉后，改由这两个按钮自己高亮。
+	#   ⚠️ 第一版**实机看不到高亮**（用户报「按钮没有高亮」），两个原因：
+	#     ① 只改了 `font_color`，而**按下态的按钮字色由 `font_pressed_color` 决定**
+	#        （主题 `theme/tavern_theme.tres` 里它是近白 `Color(1,1,1,1)`）⇒ 覆盖根本没生效；
+	#     ② 主题的 `sb_pressed` 只是把底板 `modulate_color` 压到 0.82（暗一点点），远看几乎没差别。
+	#   ⇒ 现在三管齐下：① 按下态字色（`font_pressed_color` / `font_hover_pressed_color`）也改成暖金；
+	#     ② 选中方**加亮**（`modulate` > 1）、另一方**压暗**（≈0.62）——`modulate` 画在主题样式之后，
+	#        主题盖不住，且两边亮度差 ~2 倍，一眼能看出；③ 仍保留 `button_pressed`（维持"按下"这块板的语义）。
+	for i in _side_btns.size():
+		var sb2: Button = _side_btns[i]
+		if sb2 == null or not is_instance_valid(sb2):
+			continue
+		var active := i == _side
+		var gold := Color(1, 0.85, 0.5)
+		sb2.button_pressed = active
+		sb2.add_theme_color_override("font_color", gold if active else Color(0.9, 0.92, 1.0))
+		sb2.add_theme_color_override("font_hover_color", gold if active else Color(1, 0.96, 0.8))
+		sb2.add_theme_color_override("font_pressed_color", gold)
+		sb2.add_theme_color_override("font_hover_pressed_color", gold)
+		sb2.add_theme_color_override("font_focus_color", gold if active else Color(1, 1, 1))
+		sb2.modulate = Color(1.25, 1.16, 0.92) if active else Color(0.62, 0.66, 0.76)
+	# 【2026-09-23 用户要求】原来这里刷「我方 N/8   敌方 N/8」计数行 —— **已删**，敌方人数并进下面那行。
 	# 我方至少 MIN_PLAYER 名；敌方可不选（0 名）→ 开局自动随机 8 名
 	var player_ok := _sel_p.size() >= MIN_PLAYER and _sel_p.size() <= TEAM_SIZE
 	var enemy_ok := _sel_e.size() == 0 or _sel_e.size() <= TEAM_SIZE
 	_start_btn.disabled = not (player_ok and enemy_ok)
 	for id in _btns.keys():
 		(_btns[id] as HexCard).set_selected(_cur().has(id))
-	if not player_ok or not enemy_ok:
-		var hint := "请组建我方队伍：最少 %d 名（上限 %d，前 %d 名首发，其余替补）。当前先编辑%s。" % [MIN_PLAYER, TEAM_SIZE, STARTERS, "敌方" if _side == 1 else "我方"]
-		if _sel_p.size() >= MIN_PLAYER and _sel_e.size() == 0:
-			hint += "\n敌方未选择：开局将自动随机 8 名。"
-		_status_label.text = hint
+	# 【2026-09-23 用户要求】原来队伍不合法时会把状态块换成「请组建我方队伍：最少 N 名（上限…)。
+	#   当前先编辑 X。」（还可能带第二行「敌方未选择：开局将自动随机 8 名。」）—— **整块删除**。
+	#   随后用户又点名删掉「敌方操控：…」这一行 —— 它与上面那一行的**下拉框**重复
+	#   （下拉框本身就写着「手动（你操控双方）/ AI（电脑操控敌方）」，旁边还有「AI 难度：」控件）
+	#   ⇒ 状态块现在**只剩一行**，且把**敌方人数**并了进来：「敌方 N/8：…」。
+	#   ⚠️ 副作用（用户明确要求，故保留）：队伍不合法时
+	#   开始按钮照样禁用，但屏幕上不再有一行字解释原因；"每队上限 N 人"那种**操作反馈**仍然保留（见 `_toggle()`）。
+	_status_label.text = "敌方 %d/%d：%s" % [_sel_e.size(), TEAM_SIZE,
+		("未选择（开局随机 8 名）" if _sel_e.size() == 0 else _names(_sel_e))]
+
+	_refresh_squad()
+	# 【2026-09-23 用户要求】原来这里刷新「队伍存档（…）：我方 N 名 · 敌方 N 名」那一行，**已删整行**。
+
+# ---- 队伍存档读写（我方 / 敌方各 1 组，分开存）----
+# 进本页时自动载入；`_toggle()` / `_on_clear()` 改动后自动写盘。
+func _load_teams() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(TEAM_SAVE_PATH) != OK:
+		return   # 没有存档（第一次进来）⇒ 保持两边空队伍
+	_sel_p = _sanitize_team(cfg.get_value("quicktest", "player", []))
+	_sel_e = _sanitize_team(cfg.get_value("quicktest", "enemy", []))
+
+func _save_teams() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("quicktest", "player", _sel_p)
+	cfg.set_value("quicktest", "enemy", _sel_e)
+	var err := cfg.save(TEAM_SAVE_PATH)
+	if err != OK:
+		print("自由部署队伍存档跳过（无法写入 user://）: ", err)
+
+# 回读存档时清洗一遍（存档被手改过 / 英雄被删过也不会把页面搞坏）：
+# 丢掉已不存在的英雄、去重、截到 TEAM_SIZE。顺序保持不变（= 前 3 名首发）。
+func _sanitize_team(raw: Array) -> Array[String]:
+	var out: Array[String] = []
+	for v in raw:
+		if out.size() >= TEAM_SIZE:
+			break
+		var id := String(v)
+		if out.has(id) or DataRegistry.get_hero(id) == null:
+			continue
+		out.append(id)
+	return out
+
+# ---- 英雄池下方的"已选英雄队伍"（与普通模式卡组预览同款；点小卡取消选择）----
+func _refresh_squad() -> void:
+	if _squad_cap == null or _squad_host == null:
+		return
+	var ids := _cur()
+	var side_name := "敌方" if _side == 1 else "我方"
+	if ids.is_empty():
+		_squad_cap.text = "%s队伍：空 —— 点上面英雄池的卡加入（前 %d 名首发，其余替补）" % [side_name, STARTERS]
 	else:
-		_status_label.text = "我方：%s\n敌方：%s\n敌方操控：%s" % [_names(_sel_p),
-			("未选择（开局随机 8 名）" if _sel_e.size() == 0 else _names(_sel_e)),
-			("AI（难度 %s）" % AI_DIFF_NAMES[clampi(GameState.ai_difficulty, 0, AI_DIFF_NAMES.size() - 1)] if _enemy_ai else "手动（你操控双方）")]
+		_squad_cap.text = "%s队伍 %d/%d —— 点小卡可取消选择（前 %d 名首发，其余替补）" % [side_name, ids.size(), TEAM_SIZE, STARTERS]
+	_build_squad_preview(ids)
+
+func _build_squad_preview(ids: Array) -> void:
+	for c in _squad_host.get_children():
+		_squad_host.remove_child(c)
+		c.queue_free()
+	if ids.is_empty():
+		_squad_host.custom_minimum_size = Vector2.ZERO
+		_squad_host.size = Vector2.ZERO
+		return
+	# 布局算式与 `Menu._build_deck_preview()` 一致：一行平顶蜂窝，卡数多时自动缩小
+	var avail: float = get_viewport().get_visible_rect().size.x - 80.0
+	var n := ids.size()
+	var r: float = minf(46.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
+	var sq3 := sqrt(3.0)
+	var col_step := 1.5 * r
+	var row_step := sq3 * r
+	var total_w := 2.0 * r + float(n - 1) * col_step
+	var total_h := 2.0 * row_step
+	_squad_host.custom_minimum_size = Vector2(total_w, total_h)
+	_squad_host.size = Vector2(total_w, total_h)
+	for i in n:
+		var hid := String(ids[i])
+		var def := DataRegistry.get_hero(hid)
+		if def == null:
+			continue
+		var cx := r + float(i) * col_step
+		var cy := r + (row_step / 2.0 if i % 2 == 1 else 0.0)
+		var card := HexCard.new(def, hid, r)
+		card.position = Vector2(cx - r, cy - row_step / 2.0)
+		card.hovered.connect(_on_hex_hovered)          # 悬停看属性（与英雄池同一套属性框）
+		card.clicked.connect(_on_squad_card_clicked)   # 点小卡 = 取消选择
+		_squad_host.add_child(card)
+
+# 点队伍里的小卡 = 直接从队伍里去掉这个英雄（与普通模式"点卡组小卡"同一手感）。
+# 不复用 `_toggle()`：那个是"点一下弹属性框"的加入手感，这里是明确的删除动作。
+func _on_squad_card_clicked(id: String) -> void:
+	var arr := _cur()
+	if not arr.has(id):
+		return
+	arr.erase(id)
+	_hide_tooltip()   # 这张小卡马上被重建、不会再发 mouse_exited ⇒ 属性框先收起，反馈更干净
+	_save_teams()     # 【队伍存档】改动即写盘
+	_refresh()        # 计数 + 池子高亮 + 重建这一行（被点的卡随之消失）
 
 func _names(arr: Array) -> String:
 	var ns: Array[String] = []
@@ -376,6 +608,7 @@ func _names(arr: Array) -> String:
 
 func _on_clear() -> void:
 	_cur().clear()
+	_save_teams()   # 「清空当前队伍」= 同时清掉该侧存档（自动保存）
 	_refresh()
 
 func _on_menu() -> void:

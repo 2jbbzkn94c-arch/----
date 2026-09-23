@@ -5,6 +5,18 @@
 #       · `1` / `2` / `3`  = 强制放进 强 / 中 / 弱 档（覆盖它原来所在的分区）
 #       · 没有数字         = 保持它在该 MD 里所属的分区（强 / 中 / 弱 三个小节）
 #       · `★`（紧跟数字或行首）= 该队也在"严格池"里（本脚本只读不改，纯提示）
+#   ⇒ **配方行**（`1.近战（…）+ 远程（…）+ 嘲讽（…）`）的行尾还能写 `★数字` = 该配方的**抽签权重**：
+#       · 例：`… + 嘲讽（排除替补和大骑士）★2` ⇒ 这条类型 `w = 2`（比其它类型多一倍出场率）；不写 = 1。
+#       · 游戏端 `Battle._pick_entry_weighted()` 按 `w` 加权抽类型（2026-09-23 新增，见 `5_选人策略.md` §现状⑤-8）。
+#       · ⚠️ 槽位文字里的三个关键词：含「随机」⇒ 整池均匀；含「根据」⇒ 按克制取最高分；**其余 ⇒ band 上位圈随机**。
+#   ⇒ **全局参数行**（独立一行，可写在 MD 任意位置；本池子写在文件末尾、收尾围栏之前）：
+#       · 写法：`@参数 圈宽=6 抖动=2`（也认英文 `@band 6` / `@jitter 2`；顺序随意、可只写一个）
+#       · 圈宽 = `meta.pick_band`：泛化槽取"最高分 − 圈宽"以内的人**均匀随机**（越大越摊平；3 = 紧、6 = 近战池全均匀）
+#       · 抖动 = `meta.pick_jitter`：每候选 `底分 + randf()×抖动`（一次克制 = 2.0 分 ⇒ 2.0 ≈ "七成按分数"）
+#       · ⚠️ **别写在配方行之前**：配方 id 是按**行号**生成的（`R{行号}`）⇒ 上面插一行会把 R04/R05 顶成 R05/R06。
+#       · 不写参数行 ⇒ 用默认 圈宽 3 / 抖动 2（脚本会打印实际取值，别靠猜）。
+#   ⚠️ `-RewriteMd` 目前**只重写队伍行**（配方行与参数行会被丢掉、且行号一变配方 id 也跟着变）⇒ 池子里有配方时
+#      脚本会直接**拒绝执行**这个开关（见文件末的守卫）；真要重排格式请手工改，或让我把重写补全。
 #   MD 里每行都带 `C###` 编号 ⇒ 牌组按编号从 `-CandFile`（车轮战导出的候选表）取，
 #   **不从那行文字里反解牌组名**（防止改名/空格导致错位）。
 #
@@ -178,6 +190,16 @@ function Resolve-SlotPool([string]$slotText) {
 # 产物与游戏端读取端（`src/Battle.gd::_normalize_recipe`）对齐：
 #   { id, note, slots: [ {fixed:"hero_xx"} | {pool:[...]} ], bench:[...], bench_multi:[{pool:[...],n:N}], w }
 function Convert-SpecToRecipe([string]$text, [int]$lineNo) {
+    # 【2026-09-23 新增】行尾 `★数字` = 该配方的**抽签权重**（游戏端 `Battle._pick_entry_weighted()` 按 w 加权；
+    #   不写 = 1）。例：`… + 嘲讽（排除替补和大骑士）★2` ⇒ w = 2。
+    #   ⚠️ 必须在解析槽位**之前**抠掉：否则它会留在最后一个槽的文字里（`★` 认不出 ⇒ 直接抛"槽位认不出"）；
+    #   顺便让写进池子/日志的 `note` 保持干净（note = 原始行文字，控制台会打）。
+    $wVal = 1.0
+    $mw = [regex]::Match($text, '\u2605\s*(\d+(?:\.\d+)?)\s*$')
+    if ($mw.Success) {
+        $wVal = [double]$mw.Groups[1].Value
+        $text = $text.Substring(0, $mw.Index).TrimEnd()
+    }
     $t = [regex]::Replace($text, '^\s*\d+\s*[.、]\s*', '')
     $main = $t
     $benchTxt = ''
@@ -235,7 +257,7 @@ function Convert-SpecToRecipe([string]$text, [int]$lineNo) {
         bench = @($bench)
         bench_multi = @($benchMulti)
         dynamic_bench = $dynamic
-        w = 1.0
+        w = $wVal
     }
 }
 
@@ -248,6 +270,10 @@ $section = ''
 $items = @()
 $specs = @()
 $recipes = @()
+# 【2026-09-23 新增】全局参数行 `@参数 圈宽=6 抖动=2` 的读取口（默认 = 脚本原先写死的 3.0 / 2.0 ⇒ 不写行为不变）
+$pickBand = 3.0
+$pickJitter = 2.0
+$paramSeen = $false
 $lineNo = 0
 foreach ($ln in $lines) {
     $lineNo++
@@ -261,13 +287,28 @@ foreach ($ln in $lines) {
         #   配方 = 槽位 + 候选集合 + 排除 + 条件 + 随机，当前池子格式（一档一串固定队伍）表达不了，
         #   落地方式待用户拍板（见文件头与 `5_选人策略.md` §现状⑤-3）。
         if ($t -match '^[`~]+$') { continue }
+        # 【2026-09-23 新增】全局参数行：`@参数 圈宽=6 抖动=2`（也认 `@band 6` / `@jitter 2`，顺序随意、可只写一个）。
+        #   认得出数值才生效；**一个都认不出就报警**（不静默忽略 —— 见 `5_选人策略.md` §现状⑤-6 的教训）。
+        if ($t -match '^@') {
+            $mb = [regex]::Match($t, '(圈宽|band)\s*[:：=]?\s*(\d+(?:\.\d+)?)')
+            $mj = [regex]::Match($t, '(抖动|jitter)\s*[:：=]?\s*(\d+(?:\.\d+)?)')
+            if ($mb.Success) { $pickBand = [double]$mb.Groups[2].Value }
+            if ($mj.Success) { $pickJitter = [double]$mj.Groups[2].Value }
+            if (-not $mb.Success -and -not $mj.Success) {
+                Write-Host ('[人工池] !! 第 {0} 行参数认不出（应写成 `@参数 圈宽=6 抖动=2`）：{1}' -f $lineNo, $t)
+            } else {
+                $paramSeen = $true
+                Write-Host ('[人工池] 参数（第 {0} 行）：圈宽 band={1} · 抖动 jitter={2}' -f $lineNo, $pickBand, $pickJitter)
+            }
+            continue
+        }
         if ($t -match '^\d+\s*[.、]') {
             # 编号配方行 ⇒ 解析成"类型（配方）"，与固定队伍一起写进同一档（游戏端两种元素都认）
             try {
                 $rec = Convert-SpecToRecipe $t $lineNo
                 $recipes += [pscustomobject]@{ tier = $section; rec = $rec; line = $lineNo }
-                Write-Host ('[人工池] 配方（第 {0} 行 → {1} 档）：{2} 槽 · 预设替补 {3} 名 / 多组 {4} 组 / 动态={5}' -f `
-                    $lineNo, $section, @($rec.slots).Count, @($rec.bench).Count, @($rec.bench_multi).Count, $rec.dynamic_bench)
+                Write-Host ('[人工池] 配方（第 {0} 行 → {1} 档）：{2} 槽 · 预设替补 {3} 名 / 多组 {4} 组 / 动态={5} · 权重 w={6}' -f `
+                    $lineNo, $section, @($rec.slots).Count, @($rec.bench).Count, @($rec.bench_multi).Count, $rec.dynamic_bench, $rec.w)
             } catch {
                 Write-Host ('[人工池] !! 第 {0} 行配方解析失败，已跳过：{1}' -f $lineNo, $_.Exception.Message)
             }
@@ -377,7 +418,7 @@ function Pack-Tier($entries) {
 }
 $pool = [ordered]@{
     _说明 = '标准单机敌方"队伍池"（**人工标注版 + 配方/类型 · 尚未启用**）。src/Battle.gd 的 _load_pick_pool() 按 GameState.ai_difficulty 取档：0=weak(弱) 1=mid(中) 2/3=strong(强)。⚠️ 档位键必须是 ASCII。要启用：把本文件复制成 RL\weights\队伍池.json（并删掉那份只读占位池）。'
-    _口径 = '档位 = 人工标注（来源 `队伍池.md`）。档内可混两种元素：① **固定队伍** = hero_id 数组；② **配方（类型）** = 字典（`slots` 首发槽候选池 + 可选 `bench` 预设替补；没写 bench ⇒ 替补在需要时从全英雄池按局面挑）。含配方的档按"每场随机抽 1 条"处理。'
+    _口径 = '档位 = 人工标注（来源 `队伍池.md`）。档内可混两种元素：① **固定队伍** = hero_id 数组；② **配方（类型）** = 字典（`slots` 首发槽候选池 + 可选 `bench` 预设替补；没写 bench ⇒ 替补在需要时从全英雄池按局面挑）。含配方的档按"每场按 w 加权随机抽 1 条"处理（w 默认 1；MD 配方行尾写 ★数字 可调，见 5_选人策略.md §现状⑤-8）。槽位文字：含「随机」⇒ 整池均匀 / 含「根据」⇒ 按克制取最高分 / 其余 ⇒ band 上位圈随机。'
     _回退 = '删掉 RL\weights\队伍池.json 即可（立即回到"按评分加权随机组队"）。'
     meta = [ordered]@{
         生成时间 = (Get-Date -Format 'yyyy-MM-dd HH:mm')
@@ -385,10 +426,12 @@ $pool = [ordered]@{
         权重sha12 = (Get-FileHash $wi -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
         排名口径 = ('人工标注（队伍池.md：C### 名单 + {0} 条配方）' -f $recipes.Count)
         # ★ 配方/候选挑人的"抖动"：一次克制 = 2.0 ⇒ 默认 2.0 ≈ 七成按分数、三成随缘（用户口径）
-        pick_jitter = 2.0
+        # 【2026-09-23】改成读 MD 的 `@参数 …抖动=N`（没写 = 2.0 = 原值，行为不变）
+        pick_jitter = $pickJitter
         # ★ 泛化槽（近战/远程/"随机1人"）的"上位圈宽度"：取"最高分 − pick_band"以内的候选随机。
         #   实测抖动撬不动（远程池最高分领先 1.9）⇒ 靠这个控制"敌人有多不固定"：0 = 永远最强，越大越随意。
-        pick_band = 3.0
+        # 【2026-09-23】改成读 MD 的 `@参数 圈宽=N`（没写 = 3.0 = 原值；用户拍板恢复成 6）
+        pick_band = $pickBand
         候选数 = @($items).Count; 配方数 = @($recipes).Count
         来源 = @((Split-Path -Leaf $mdPath))
     }
@@ -440,7 +483,11 @@ foreach ($t in @('weak', 'mid', 'strong')) {
     }
 }
 if ($unknown.Count -gt 0) { throw ('池子写坏了：有 ' + $unknown.Count + ' 个 hero_id 不在角色列表里（例：' + $unknown[0] + '）') }
-Write-Host ('[人工池] 自检通过：三个 ASCII 档位键都在 · 固定队伍 {0} 支（≥3 人）· 配方 {1} 条（槽位候选非空、hero_id 全部可解析）· pick_jitter={2}' -f $nDeck, $nRecipe, $pool.meta.pick_jitter)
+Write-Host ('[人工池] 自检通过：三个 ASCII 档位键都在 · 固定队伍 {0} 支（≥3 人）· 配方 {1} 条（槽位候选非空、hero_id 全部可解析）· pick_jitter={2} · pick_band={3}' -f $nDeck, $nRecipe, $pool.meta.pick_jitter, $pool.meta.pick_band)
+# 【2026-09-23 新增】参数行没写就明说用了默认值（免得"以为改了 band"却一直跑在 3 上）
+if (-not $paramSeen) {
+    Write-Host ('[人工池] 参数：MD 里没写 `@参数` 行 ⇒ 用默认 圈宽 band={0} · 抖动 jitter={1}（想改就在 MD 任意一行写 `@参数 圈宽=6 抖动=2`）' -f $pool.meta.pick_band, $pool.meta.pick_jitter)
+}
 
 # ---------- 与旧候选池对照（只打印）----------
 $cmpPath = Resolve-UnderRoot $CompareOld
@@ -462,6 +509,12 @@ if ($CompareOld -and (Test-Path $cmpPath)) {
 
 # ---------- 可选：把 MD 重写成"去数字 + 按最终档位归位"的版本 ----------
 if ($RewriteMd) {
+    # 【2026-09-23 新增守卫】重写只按 `$items`（队伍行）拼，**配方行与 `@参数` 行都不在 $items 里** ⇒
+    #   加了 -RewriteMd 会把 8 条配方连同 `★2` / 参数行一起从 MD 里删掉，而且行号一变配方 id（`R{行号}`）
+    #   也跟着变（R04/R05 → 别的）。这是"会吃掉用户手写数据"的操作 ⇒ 直接拒绝，让他手工改或让我补全重写。
+    if (@($recipes).Count -gt 0 -or $paramSeen) {
+        throw ('本池子含配方行/参数行（{0} 条配方）⇒ 拒绝执行 -RewriteMd：重写会把它们从 MD 里删掉、并让配方 id 重新编号。要重排格式请手工改 MD，或让我把重写逻辑补全。' -f @($recipes).Count)
+    }
     # 先备份带标注的原版（用户的标注是"决策记录"，不要只留在内存里）
     $bakDir = Join-Path $root 'RL\backups'
     New-Item -ItemType Directory -Force -Path $bakDir | Out-Null

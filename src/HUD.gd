@@ -16,6 +16,10 @@ var _netdown_overlay: CanvasLayer = null   # 联机对局断线提示层
 var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）——替补阶段复用为"选人面板"
 var _arena_panel: PanelContainer = null   # 竞技场选人面板（2选1）
 var _deck_pick_overlay: Control = null     # 普通模式"选择卡组"面板（进战斗后弹：卡组1/2/3 切换 + 随机英雄）
+# 【2026-09-23】常驻战斗 UI 的根（`_build()` 里那个 Control）：`结束回合/重开/返回选人/暂停` 都在它下面。
+# 临时遮罩挂到 HUD（CanvasLayer）会**盖住这些按钮** ⇒ 弹"选择卡组"时点不了重开/退出；
+# 插进 `_ui_root` 的第 0 个子节点就两全：棋盘照旧被拦（HUD 层在棋盘之上），按钮仍在遮罩之上。
+var _ui_root: Control = null
 var _deck_pick_decks: Array = []           # 面板持有的 3 个已存卡组（下标0=卡组1）
 var _deck_pick_slot := 1                   # 当前查看的卡组槽（1..3）
 var _deck_pick_tabs: Dictionary = {}       # slot -> Button（卡组1/2/3 切换钮）
@@ -32,8 +36,19 @@ var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重�
 var _deck_pick_panel_w := 0.0
 var _deck_pick_panel_h := 0.0
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
-var _player_deaths: Label
-var _enemy_deaths: Label
+# 【2026-09-23 改·用户要求"死亡时卡面破碎升天 → 引导到顶部阵亡标志 → 标志出现并摇晃"+ "空圈和骷髅一样大"】
+#   原来每侧是一个 Label 拼字符串（`"我方 ☠☠☠"`）⇒ ① `○` 与 `☠` 字形不一样大、整行会漂；
+#   ② 没法定位到"具体哪一个标记"去做飞行终点与单独摇晃。
+#   现在拆成：每侧 = 一个名字 Label + `LOSS_DEATH_COUNT` 个 `DeathMark` 槽（固定尺寸、自绘圆环/骷髅）。
+var _my_death_name: Label = null
+var _op_death_name: Label = null
+var _my_marks: Array = []      # 本端视角的"我方"那排（左）
+var _op_marks: Array = []      # 本端视角的"对方"那排（右）
+var _death_fx: DeathFx = null  # 阵亡演出层（全屏，只画特效；比状态栏晚加入 ⇒ 画在状态栏之上）
+# 延迟揭示：真实阵亡数（战斗逻辑）先涨，**标志等卡片落地才出现** ⇒ `_reveal_pending` = 已死亡但还没点亮的个数。
+# 槽位 `filled` 的个数记在 `_mark_filled` 里（= 界面上看到的），两者相加 = 真实阵亡数。
+var _reveal_pending := { "my": 0, "op": 0 }
+var _mark_filled := { "my": 0, "op": 0 }
 var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上角）
 var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
 var _last_pd := -1
@@ -137,6 +152,8 @@ func bind(b: Battle) -> void:
 	battle.arena_draft_done.connect(_close_arena_panel)
 	battle.deck_pick_requested.connect(_show_deck_pick_panel)
 	battle.deck_pick_done.connect(_close_deck_pick_panel)
+	# 【2026-09-23 新增】阵亡演出：死亡瞬间（比 match_result / 替补早 0.3s）播"破碎升天 → 飞向阵亡标志"
+	battle.unit_dying.connect(_on_unit_dying)
 	battle.team_updated.connect(_refresh_team_panel)
 	battle.deploy_refresh.connect(_show_deploy_panel)
 	battle.first_side_notice.connect(_show_first_side_notice)
@@ -995,11 +1012,28 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	_deck_pick_decks = decks
 	_deck_pick_slot = 1
 	# 全屏遮罩拦截棋盘输入（面板打开期间不允许操作棋盘）
+	# 【2026-09-23 修·用户报"弹这个框时没法重开或者退出"】遮罩插进 `_ui_root` 的**第 0 个子节点**
+	#   （常驻 UI 的最底层）—— 原来 `add_child` 到 HUD 这个 CanvasLayer 上，会连
+	#   `结束回合/重开/返回选人/暂停` 一起盖住（看得见、点不到）。插进 root 之后：
+	#   棋盘仍被拦住（HUD 层在棋盘之上），而常驻按钮在遮罩之上 ⇒ 照旧可点。
 	var overlay := Control.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	add_child(overlay)
+	if _ui_root != null and is_instance_valid(_ui_root):
+		_ui_root.add_child(overlay)
+		_ui_root.move_child(overlay, 0)
+	else:
+		add_child(overlay)
 	_deck_pick_overlay = overlay
+	# 【2026-09-23 用户要求】弹窗背后加一层暗色遮罩（"背景淡化"）：与结算浮层同一套做法
+	#   （全屏 ColorRect，**alpha 越接近 1 越黑**；0.7 = 棋盘还看得见轮廓但明显压暗）。
+	#   原来这里是纯透明 ⇒ 棋盘照旧亮着，弹窗像是"浮"在场上、读卡组信息时很跳。
+	#   ⚠️ 只负责变暗、不接输入（`MOUSE_FILTER_IGNORE`）：点棋盘仍由 overlay 拦，按钮照旧可点。
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.7)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(dim)
 	var panel := PanelContainer.new()
 	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）；
 	# ⚠️ 原来这块面板是半透明"透出棋盘"的，换成牌子后变成不透明（弹窗更聚焦）。
@@ -1275,6 +1309,7 @@ func _build() -> void:
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
+	_ui_root = root   # 【2026-09-23】给浮层用：临时遮罩要插在它**最底层**，别盖住常驻按钮（见 `_show_deck_pick_panel`）
 
 	# 顶部：回合与阵营
 	var top := PanelContainer.new()
@@ -1313,23 +1348,51 @@ func _build() -> void:
 	# 顶部阵亡计数：左我方 / 右敌方（骷髅图标，放大版）
 	# 联机对局这两行还要显示双方姓名（我方=本机名片姓名 / 敌方=对端姓名），
 	# 字号收一档（27→18）免得和中间的"第 N 回合 / 剩余时间"挤在一起。
+	# 【2026-09-23 改】每侧 = 名字 + 逐槽 DeathMark（不是拼字符串）⇒ 空圈与骷髅同尺寸、单槽可定位/摇晃。
 	var death_font := 18 if GameState.is_online else 27
-	_player_deaths = Label.new()
-	_player_deaths.add_theme_font_size_override("font_size", death_font)
-	_player_deaths.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
-	_player_deaths.text = "我方 ☠☠☠"
-	_player_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_player_deaths.position = Vector2(12, 11)
-	root.add_child(_player_deaths)
-	_enemy_deaths = Label.new()
-	_enemy_deaths.add_theme_font_size_override("font_size", death_font)
-	_enemy_deaths.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
-	_enemy_deaths.text = "☠☠☠ 敌方"
-	_enemy_deaths.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_enemy_deaths.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_enemy_deaths.size = Vector2(vsize.x - 12, 32)
-	_enemy_deaths.position = Vector2(0, 11)
-	root.add_child(_enemy_deaths)
+	var slot_n: int = battle.LOSS_DEATH_COUNT if battle != null else 3
+	_my_death_name = Label.new()
+	_my_death_name.add_theme_font_size_override("font_size", death_font)
+	_my_death_name.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
+	_my_death_name.text = "我方"
+	_my_death_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_my_death_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var my_row := HBoxContainer.new()
+	my_row.add_theme_constant_override("separation", 7)
+	my_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	my_row.position = Vector2(12, 11)
+	my_row.size = Vector2(vsize.x * 0.5, DeathMark.SLOT_D)   # 高度跟着槽走（BEGIN 对齐，从 x=12 起排）
+	root.add_child(my_row)
+	my_row.add_child(_my_death_name)
+	_my_marks.clear()
+	for i in slot_n:
+		var mk := DeathMark.new(Color(0.5, 0.85, 1.0))
+		my_row.add_child(mk)
+		_my_marks.append(mk)
+	_op_death_name = Label.new()
+	_op_death_name.add_theme_font_size_override("font_size", death_font)
+	_op_death_name.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
+	_op_death_name.text = "敌方"
+	_op_death_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_op_death_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	# 右侧整行贴右缘（图标在前、名字在后，与原来的 "☠☠☠ 敌方" 同一观感）
+	var op_row := HBoxContainer.new()
+	op_row.add_theme_constant_override("separation", 7)
+	op_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	op_row.alignment = BoxContainer.ALIGNMENT_END
+	op_row.size = Vector2(vsize.x - 12, DeathMark.SLOT_D)
+	op_row.position = Vector2(0, 11)
+	root.add_child(op_row)
+	_op_marks.clear()
+	for i in slot_n:
+		var mk2 := DeathMark.new(Color(1.0, 0.5, 0.5))
+		op_row.add_child(mk2)
+		_op_marks.append(mk2)
+	op_row.add_child(_op_death_name)
+	# 阵亡演出层：加在状态栏之后 ⇒ 同 z_index 下画在状态栏之上（弹窗类浮层是更晚 join 的，仍在其上）
+	_death_fx = DeathFx.new()
+	_death_fx.z_index = 0
+	add_child(_death_fx)
 	_refresh_deaths()
 
 	# 右上角暂停键（仅单机对局显示；联机不可暂停）：
@@ -1688,41 +1751,105 @@ func _on_round_changed(_r: int) -> void:
 	if GameState.match_running and not GameState.match_over:
 		_close_first_notice()
 
-# 阵亡计数图标（骷髅）= 已阵亡，空心 = 尚未阵亡
+# 阵亡计数图标（骷髅）= 已阵亡，空心圆 = 尚未阵亡
+# 【2026-09-23 改·用户要求】"标志出现"的时机 = **卡面飞行的卡片落地那一刻**，不是死亡瞬间：
+#   真实阵亡数（战斗逻辑，判负/替补都读它）先涨 ⇒ 这里把它记进 `_reveal_pending`，
+#   由 `_on_unit_dying` 播的 DeathFx 在落地回调里 `_reveal_mark()` 才点亮槽 + 摇晃。
+#   ⚠️ headless（跑批/无窗口）不发 `dying`、也不会有 pending ⇒ 本函数立刻就点亮，**与改动前逐位一致**。
+#   视角化与原来一致：联机客户端左右对调（用 `battle._my_dead()/_opp_dead()`，它们已经做过视角映射）。
 func _refresh_deaths() -> void:
 	if battle == null:
 		return
-	var total := battle.LOSS_DEATH_COUNT
-	var pd := battle.player_dead
-	var ed := battle.enemy_dead
-	# 联机对局：两侧文字直接换成玩家姓名（我方=本机名片姓名，敌方=对端姓名；对端没发姓名时写"对方"），
-	# 不再写"我方/敌方"字样；单机没有姓名，仍用"我方/敌方"做标识。
+	var my_dead: int = battle._my_dead()
+	var op_dead: int = battle._opp_dead()
+	# 重开/新局/被清零：槽位与 pending 一起归位（否则会残留上一局的骷髅）
+	# ⚠️ 判据只看**已点亮**的槽数（不看 pending）：死亡瞬间 `dying` 会把 pending +1，而真实计数要
+	#   0.3s 后才涨（`died`）⇒ 若把 pending 算进来，这 0.3s 里就会误判成"被清零"、把 pending 抹掉。
+	if my_dead < int(_mark_filled["my"]):
+		_reveal_pending["my"] = 0
+		_set_marks_filled("my", my_dead)
+	if op_dead < int(_mark_filled["op"]):
+		_reveal_pending["op"] = 0
+		_set_marks_filled("op", op_dead)
+	# 真实数 > 已点亮 + 待点亮 ⇒ 多出来的先挂 pending（等特效落地；特效不存在时下一行会立刻补上）
+	if my_dead > int(_mark_filled["my"]) + int(_reveal_pending["my"]):
+		_reveal_pending["my"] = my_dead - int(_mark_filled["my"])
+	if op_dead > int(_mark_filled["op"]) + int(_reveal_pending["op"]):
+		_reveal_pending["op"] = op_dead - int(_mark_filled["op"])
+	# 没有特效在飞的（headless / 特效被跳过 / 场景刚恢复）⇒ 立刻补齐，别让标志一直不出现
+	if _death_fx == null or not is_instance_valid(_death_fx) or _death_fx.get_child_count() == 0:
+		while int(_reveal_pending["my"]) > 0:
+			_reveal_mark("my", false)
+		while int(_reveal_pending["op"]) > 0:
+			_reveal_mark("op", false)
+	# 联机对局：两侧文字=双方姓名（我方=本机名片，敌方=对端；对端没发姓名时写"对方"）；单机写"我方/敌方"
 	var my_txt := "我方"
 	var op_txt := "敌方"
 	if GameState.is_online:
 		my_txt = Stats.display_name()
 		op_txt = GameState.net_peer_name if GameState.net_peer_name != "" else "对方"
-	if pd == _last_pd and ed == _last_ed and my_txt == _last_my_text and op_txt == _last_op_text:
+	if my_txt != _last_my_text and _my_death_name != null:
+		_my_death_name.text = my_txt
+		_last_my_text = my_txt
+	if op_txt != _last_op_text and _op_death_name != null:
+		_op_death_name.text = op_txt
+		_last_op_text = op_txt
+
+# 直接把某侧槽位按真实数归位（不播摇晃；重开/新局/读档恢复时用）
+func _set_marks_filled(side: String, n: int) -> void:
+	var marks: Array = _my_marks if side == "my" else _op_marks
+	for i in marks.size():
+		var mk: DeathMark = marks[i]
+		if mk != null and is_instance_valid(mk):
+			mk.set_filled(i < n)
+	_mark_filled[side] = clampi(n, 0, marks.size())
+
+# 点亮一个槽（`shake` = 播"标志出现 + 摇晃"；headless/补账时传 false 只置位）
+func _reveal_mark(side: String, shake := true) -> void:
+	var marks: Array = _my_marks if side == "my" else _op_marks
+	var idx := int(_mark_filled[side])
+	if idx < 0 or idx >= marks.size():
+		_reveal_pending[side] = 0
 		return
-	_last_pd = pd
-	_last_ed = ed
-	_last_my_text = my_txt
-	_last_op_text = op_txt
-	var ps := ""
-	var es := ""
-	for i in total:
-		ps += "☠" if i < pd else "○"
-		es += "☠" if i < ed else "○"
-	# 联机视角：本端操作方为"我方"。用 battle._my_dead/_opp_dead 取对应图标串。
-	var my_icons := ps
-	var op_icons := es
-	if battle != null and GameState.is_online and not GameState.is_host:
-		my_icons = es   # 客户端：我方=敌方(红)阵亡
-		op_icons = ps
-	if _player_deaths:
-		_player_deaths.text = "%s %s" % [my_txt, my_icons]
-	if _enemy_deaths:
-		_enemy_deaths.text = "%s %s" % [op_icons, op_txt]
+	var mk: DeathMark = marks[idx]
+	_mark_filled[side] = idx + 1
+	_reveal_pending[side] = maxi(int(_reveal_pending[side]) - 1, 0)
+	if mk == null or not is_instance_valid(mk):
+		return
+	mk.set_filled(true)
+	if shake:
+		mk.pop_and_shake()
+
+# 取该侧"下一个要出现的"标记槽（DeathFx 用它当飞行终点；槽还没出现也能拿到位置 ✓ 固定尺寸）
+func _next_mark(side: String) -> Control:
+	var marks: Array = _my_marks if side == "my" else _op_marks
+	var idx := int(_mark_filled[side]) + int(_reveal_pending[side])
+	if idx < 0 or idx >= marks.size():
+		idx = marks.size() - 1
+	if idx < 0:
+		return null
+	return marks[idx]
+
+# 【2026-09-23 新增·用户要求】死亡瞬间：播"卡面破碎升天 → 飞向顶部阵亡标志 → 标志出现并摇晃"。
+#   阵营 → 左/右那排标记：用 `battle._my_faction()`（联机客户端自动左右对调，与 `_refresh_deaths` 同口径）。
+#   召唤物（骷髅兵等）：`DataRegistry.summons.has()` ⇒ 只破碎升天、不占阵亡标志位（传 target=null）。
+func _on_unit_dying(u: Unit) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	if _death_fx == null or not is_instance_valid(_death_fx):
+		return
+	var side := "my" if u.faction == battle._my_faction() else "op"
+	var is_summon: bool = DataRegistry.summons.has(u.hero_id)
+	# 死亡位置 → 屏幕坐标（单位在世界画布上；HUD 这一层没有位移 ⇒ 可直接当本层坐标用）
+	var start: Vector2 = u.get_global_transform_with_canvas().origin
+	var col := Color(0.5, 0.85, 1.0) if side == "my" else Color(1.0, 0.5, 0.5)
+	var target: Control = null if is_summon else _next_mark(side)
+	# pending 先 +1：真实计数马上会涨（`_on_unit_died` 在 0.3s 后），这样 `_refresh_deaths` 不会提前点亮
+	if not is_summon:
+		_reveal_pending[side] = int(_reveal_pending[side]) + 1
+	var fx := DeathFx.new()
+	_death_fx.add_child(fx)
+	fx.play(start, target, col, func(): _reveal_mark(side, true))
 
 func _process(_dt: float) -> void:
 	_refresh_deaths()
@@ -2002,6 +2129,13 @@ func _on_restart(redraft := false) -> void:
 
 func show_result(win: bool) -> void:
 	_resume()   # 结算时确保不在暂停态（否则结算浮层按钮点不动）
+	# 【2026-09-23 新增·配套阵亡演出】判负/判胜的那一刻（第 3 名阵亡后 0.3s）结算浮层就会弹出来，
+	#   正好压在"卡面飞向阵亡标志"的演出上 ⇒ 若还有演出在飞，先等它落地再弹（只延迟面板，不改判定）。
+	#   headless（跑批/无窗口）没有演出 ⇒ 这段不生效、时序与改动前逐位一致。
+	if _death_fx != null and is_instance_valid(_death_fx) and _death_fx.get_child_count() > 0:
+		await get_tree().create_timer(0.75).timeout
+		if not is_inside_tree():
+			return
 	if _result_overlay != null:
 		_result_overlay.queue_free()
 	var vsize := get_viewport().get_visible_rect().size
@@ -2111,3 +2245,419 @@ class FlameIcon extends Control:
 			Vector2(c.x + w * 0.05 + sway, c.y + w * 0.18),
 		])
 		draw_colored_polygon(core, Color(1.0, 1.0, 0.85, 0.9))
+
+# 【2026-09-23 新增·用户要求】顶部阵亡标志的**单个槽**（原来是 `src/DeathMark.gd`，按用户要求
+#   改成 HUD 的嵌套类 —— 与 `FlameIcon` 同一写法：界面自己的小控件就写在这里，不另开文件）。
+#
+# 为什么不是一个拼字符串的 Label（原来是 `"我方 ☠☠☠"`）：
+#   ① 用户要求"死亡时卡面飞过去 → **标志出现** → 标志震动摇晃几下" ⇒ 需要能定位到**具体哪一个**
+#      要出现的标记（拿它的屏幕矩形当飞行终点）、并只晃它一个；
+#   ② 用户要求"**无死亡和有死亡要一样大**" ⇒ 字符串里的 `○`（U+25CB）与 `☠`（U+2620）字形尺寸不同，
+#      拼在一起会让整行宽度/圆心位置漂。现在每槽是**固定尺寸方框**、两种标记都**自绘/自算尺寸**
+#      （空圈 = `RING_D` 的圆环；骷髅按槽内径缩放）⇒ 整行永不漂。
+#      ⚠️ 尺寸口径后来按用户反馈改过两次：先"骷髅太小"（槽 26→34、占比 0.86→0.92），
+#      再"圆圈缩小点"（空圈直径单独给 `RING_D = 22`）⇒ **现在骷髅比空圈大**，不再是等大。
+#   ③ 用户口径"**有骷髅头死亡标志就不要那个红圈了**" ⇒ 满槽只画骷髅（连淡圆底都不画）。
+# `filled` 由 HUD 控制（延迟揭示：卡片落地后才置 true）。尺寸微调改下面 const。
+class DeathMark extends Control:
+	# 【2026-09-23 用户反馈三连】**①「骷髅头太小了」⇒ 槽 26 → 34、占比 0.86 → 0.92**（骷髅宽 18.9 → 27.6px）；
+	#   **②「圆圈缩小点」⇒ 空圈直径单独给 `RING_D`**（不再和骷髅共用一个内径）；
+	#   **③「单独把骷髅头放大点」⇒ 只抬 `SKULL_FILL` 0.92 → 1.06**（骷髅宽 27.6 → **31.8px**，空圈仍是 22px）。
+	#   ⇒ 三个旋钮各管一件事：**骷髅大小动 `SKULL_FILL`（本行）**，槽位方框动 `SLOT_D`，空圈动 `RING_D`。
+	#   `SKULL_FILL > 1` = 骷髅比槽内径还宽（还没到方框宽度 34 就放得下，不裁切）。
+	const SLOT_D := 34.0        ## 每槽边长（像素）：槽位方框（也决定骷髅能长多大）
+	const RING_D := 22.0        ## 空圈**直径**（独立于骷髅；22 = 放大之前那个圈的尺寸）
+	const RING_PAD := 2.0       ## 骷髅缩放用的基准留白（骷髅内径 = SLOT_D − 2×RING_PAD = 30）
+	const RING_W := 2.0         ## 空圈线宽
+	const SKULL_FILL := 1.06    ## 骷髅宽度 ÷ 骷髅内径（0.92 = 比内径小一圈；1.06 = 比内径还宽一点）
+	const SHAKE_PX := 3.0       ## 摇晃幅度（像素）
+	const SHAKE_TIMES := 4      ## 摇晃几下（左右各算一下）
+
+	var filled := false          ## false = 空心圆（尚未阵亡）；true = 骷髅（已阵亡）
+	var mark_color := Color(0.5, 0.85, 1.0)   ## 我方=蓝、敌方=红（由 HUD 按阵营给）
+
+	func _init(c: Color = Color(0.5, 0.85, 1.0)) -> void:
+		mark_color = c
+		custom_minimum_size = Vector2(SLOT_D, SLOT_D)
+		size = Vector2(SLOT_D, SLOT_D)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE   # 纯显示，不拦鼠标（不挡棋盘点击）
+		pivot_offset = Vector2(SLOT_D * 0.5, SLOT_D * 0.5)   # 缩放/摇晃绕中心
+
+	func set_filled(v: bool) -> void:
+		if filled == v:
+			return
+		filled = v
+		queue_redraw()
+
+	## HUD 在"卡片落地"那一刻调用：标志先出现（弹出）再摇晃几下。
+	func pop_and_shake() -> void:
+		if not is_inside_tree():
+			return
+		pivot_offset = size * 0.5
+		var base := position
+		scale = Vector2(0.35, 0.35)
+		rotation = 0.0
+		var t := create_tween()
+		t.set_parallel(false)
+		# ① 弹出：0.35 → 1.26 → 1.0（BACK 缓动，像"啪"地盖章）
+		t.tween_property(self, "scale", Vector2(1.26, 1.26), 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(self, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_SINE)
+		# ② 摇晃：左右各几下 + 轻微旋转（"震动摇晃几下"）
+		for i in SHAKE_TIMES:
+			var dx := SHAKE_PX if i % 2 == 0 else -SHAKE_PX
+			var rot := 0.16 if i % 2 == 0 else -0.16
+			t.tween_property(self, "position", base + Vector2(dx, 0.0), 0.045)
+			t.parallel().tween_property(self, "rotation", rot, 0.045)
+		# ③ 回中
+		t.tween_property(self, "position", base, 0.05)
+		t.parallel().tween_property(self, "rotation", 0.0, 0.05)
+
+	func _draw() -> void:
+		var c := size * 0.5
+		if not filled:
+			# 空心圆：**自绘**（不用 `○` 字形），直径 = `RING_D`（用户要求"圆圈缩小点" ⇒ 单独给定，
+			#   不再和骷髅共用一个内径：现在是"骷髅大、空圈小"）。
+			draw_arc(c, maxf(RING_D * 0.5, 2.0), 0.0, TAU, 48, mark_color, RING_W, true)
+			return
+		# 已阵亡：**只画骷髅，不再画那个圈**（用户口径「有骷髅头死亡标志就不要那个红圈了」）
+		#   —— 骷髅按"槽内径"缩放（比空圈大），这是用户"骷髅太小 → 调大、圆圈再缩小"两条口径的最终结果。
+		var r := maxf(minf(size.x, size.y) * 0.5 - RING_PAD, 2.0)
+		var font := get_theme_font("font")
+		if font == null:
+			return                                  # 无字体（headless 等）：什么都不画，不影响逻辑
+		var fs := int(maxf(size.y * 0.92, 8.0))
+		var gw := font.get_string_size("☠", HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+		var gh := font.get_height(fs)
+		if gw <= 0.0 or gh <= 0.0:
+			return
+		var k := (r * 2.0 * SKULL_FILL) / gw        # 横向缩放：骷髅宽度 = 骷髅内径 × SKULL_FILL（>1 就是比内径还宽）
+		draw_set_transform(c, 0.0, Vector2(k, k))
+		draw_string(font, Vector2(-gw * 0.5, gh * 0.34), "☠", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, mark_color)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# 【2026-09-23 新增·用户要求】英雄阵亡演出（一次性节点，演完自毁；同样按用户要求写成 HUD 的嵌套类）：
+#   ① **卡面破碎升天**：原地炸成一堆六边形碎片，碎片向上飘散、旋转、淡出；
+#   ② **一路引导到上方状态栏的阵亡标志位置**：一枚小卡片（六边形）先升空，再沿弧线飞向状态栏里
+#      "下一个要出现的"阵亡标记槽（终点由 HUD 传进来的 Control 决定）；
+#   ③ **落地回调**：卡片到达那一刻调用 `on_land` —— HUD 把那个槽置为"已阵亡"（标志出现）并播
+#      弹出 + 摇晃。⇒ "标志出现"的时机 = 卡片落地，而不是死亡瞬间。
+#
+# ⚠️ **headless（RL 跑批 / 无窗口自检）直接跳过整段演出、立刻回调** ⇒ 跑批零额外开销、
+#    行为与加这个特效之前**逐位一致**（HUD 那边也会立刻落格，不做延迟揭示）。
+# ⚠️ 召唤物（骷髅兵等）不占阵亡标志位：HUD 传 `target = null` ⇒ 只做破碎升天、不飞、不回调。
+# 视觉参数微调改下面 const。
+class DeathFx extends Control:
+	const SHARD_N := 12           ## 碎片个数
+	const SHARD_LIFE := 0.5       ## 碎片寿命（秒）
+	const SHARD_SPREAD := 46.0    ## 碎片横向散开距离
+	const RISE_H := 62.0          ## "升天"高度（像素）
+	const RISE_TIME := 0.34       ## 升空时间
+	const FLY_TIME := 0.55        ## 从升空顶点飞到标记槽的时间
+	const CARD_R := 13.0          ## 飞行卡片（六边形）半径
+	const CARD_END_SCALE := 0.5   ## 飞到终点时卡片缩到多小（像被标记"吸进去"）
+	const ARC_H := 46.0           ## 飞行弧线向上凸起的高度
+
+	func play(start: Vector2, target: Control, color: Color, on_land: Callable) -> void:
+		# 无窗口/跑批：不做演出，直接"落格"（HUD 的延迟揭示因此退化成立即显示 = 老行为）
+		if DisplayServer.get_name() == "headless":
+			if on_land.is_valid():
+				on_land.call()
+			queue_free()
+			return
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_make_shards(start, color)
+		var token := _make_card(start, color)
+		var apex := start + Vector2(0.0, -RISE_H)
+		var t := create_tween()
+		# ① 升空（碎片同时在飘）
+		t.tween_property(token, "position", apex, RISE_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		t.parallel().tween_property(token, "rotation", 0.55, RISE_TIME)
+		t.parallel().tween_property(token, "scale", Vector2.ONE, RISE_TIME).from(Vector2(0.6, 0.6))
+		if target == null or not is_instance_valid(target):
+			# 召唤物：只破碎升天，不飞、不占标志位
+			t.tween_interval(0.12)
+			t.tween_callback(queue_free)
+			return
+		# ② 弧线飞向标记槽
+		var dest: Vector2 = target.get_global_transform_with_canvas().origin + target.size * 0.5
+		var mid: Vector2 = apex.lerp(dest, 0.5) + Vector2(0.0, -ARC_H)
+		t.tween_callback(func(): _burst(dest, color))
+		t.tween_method(func(k: float): token.position = _bezier(apex, mid, dest, k), 0.0, 1.0, FLY_TIME) \
+			.set_trans(Tween.TRANS_SINE)
+		t.parallel().tween_property(token, "scale", Vector2(CARD_END_SCALE, CARD_END_SCALE), FLY_TIME)
+		t.parallel().tween_property(token, "rotation", 2.2, FLY_TIME)
+		# ③ 落地：标志出现 + 摇晃（交给 HUD），卡片与特效节点收尾
+		t.tween_callback(func():
+			if on_land.is_valid():
+				on_land.call())
+		t.tween_interval(0.05)
+		t.tween_callback(queue_free)
+
+	# ---- 碎片：把"卡面"炸成一堆小六边形，向上飘散 ----
+	func _make_shards(start: Vector2, color: Color) -> void:
+		for i in SHARD_N:
+			var sh := Polygon2D.new()
+			var r := randf_range(3.0, 6.5)
+			var pts := PackedVector2Array()
+			for k in 6:
+				var a := TAU * float(k) / 6.0 + randf() * 0.25
+				pts.append(Vector2(cos(a), sin(a)) * r)
+			sh.polygon = pts
+			var c := color
+			sh.color = Color(minf(c.r * randf_range(0.9, 1.35), 1.0), minf(c.g * randf_range(0.9, 1.35), 1.0),
+				minf(c.b * randf_range(0.9, 1.35), 1.0), 1.0)
+			sh.position = start + Vector2(randf_range(-8.0, 8.0), randf_range(-8.0, 8.0))
+			sh.rotation = randf() * TAU
+			add_child(sh)
+			# 方向：主要向上（-90° 附近散开），带一点横向
+			var ang := -PI * 0.5 + randf_range(-0.85, 0.85)
+			var dist := SHARD_SPREAD * randf_range(0.6, 1.25)
+			var to := sh.position + Vector2(cos(ang), sin(ang)) * dist + Vector2(0.0, -RISE_H * randf_range(0.4, 0.9))
+			var st := create_tween()
+			st.set_parallel(true)
+			st.tween_property(sh, "position", to, SHARD_LIFE).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+			st.tween_property(sh, "rotation", sh.rotation + randf_range(-2.4, 2.4), SHARD_LIFE)
+			st.tween_property(sh, "modulate:a", 0.0, SHARD_LIFE).set_delay(SHARD_LIFE * 0.35)
+			st.chain().tween_callback(sh.queue_free)
+
+	# ---- 飞行卡片：小六边形（外圈暗、内圈亮，像一枚徽记）----
+	func _make_card(start: Vector2, color: Color) -> Node2D:
+		var host := Node2D.new()
+		host.position = start
+		host.scale = Vector2(0.6, 0.6)
+		add_child(host)
+		var outer := Polygon2D.new()
+		outer.polygon = _hex_pts(CARD_R)
+		outer.color = Color(color.r * 0.55, color.g * 0.55, color.b * 0.55, 0.95)
+		host.add_child(outer)
+		var inner := Polygon2D.new()
+		inner.polygon = _hex_pts(CARD_R * 0.62)
+		inner.color = color
+		host.add_child(inner)
+		return host
+
+	func _hex_pts(r: float) -> PackedVector2Array:
+		var pts := PackedVector2Array()
+		for i in 6:
+			var a := TAU * float(i) / 6.0 - PI * 0.5   # 尖顶朝上（与棋盘六边形同朝向）
+			pts.append(Vector2(cos(a), sin(a)) * r)
+		return pts
+
+	# ---- 落地小爆点：6 颗火星向外一闪（让"标志出现"更有手感）----
+	func _burst(at: Vector2, color: Color) -> void:
+		for i in 6:
+			var sp := Polygon2D.new()
+			sp.polygon = PackedVector2Array([Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(1.6, 1.6), Vector2(-1.6, 1.6)])
+			sp.color = color
+			sp.position = at
+			add_child(sp)
+			var ang := TAU * float(i) / 6.0 + randf() * 0.3
+			var st := create_tween()
+			st.set_parallel(true)
+			st.tween_property(sp, "position", at + Vector2(cos(ang), sin(ang)) * 15.0, 0.22)
+			st.tween_property(sp, "modulate:a", 0.0, 0.22)
+			st.chain().tween_callback(sp.queue_free)
+
+	func _bezier(a: Vector2, b: Vector2, c: Vector2, k: float) -> Vector2:
+		var u := 1.0 - k
+		return u * u * a + 2.0 * u * k * b + k * k * c
+
+# 【2026-09-23 搬家·用户口径「这种小功能不要另起文件」】音量调节控件：原来是 `src/VolumeControl.gd`
+#   （带 `class_name VolumeControl`），现在收进 HUD 当嵌套类。**两处宿主**都在用：
+#     · 战斗界面：本文件 `_build()` 末尾 `var volume := VolumeControl.new()`（右下角，与左下角喊话按钮对称）
+#     · 主菜单：`src/Menu.gd` 里写 `HUD.VolumeControl.new()`（外层类名.嵌套类名 —— 跨文件访问嵌套类就这么写）
+#   功能一字未改：自绘喇叭图标（音量 0-3 道声波弧、静音画红斜杠），点击弹出音量滑条面板
+#   （独立 `CanvasLayer(70)` 保证盖过宿主 UI，点面板外收起）；音量由 `AudioManager` 统一读写并持久化
+#   （`user://audio.cfg`），本控件只是它的界面。
+class VolumeControl extends Control:
+	const BTN_W := 76.0
+	const BTN_H := 40.0
+	const PANEL_W := 250.0
+	const LAYER := 70
+
+	var _layer: CanvasLayer = null
+	var _panel: PanelContainer = null
+	var _slider: HSlider = null
+	var _val_label: Label = null
+	var _vol := 1.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		custom_minimum_size = Vector2(BTN_W, BTN_H)
+		size = Vector2(BTN_W, BTN_H)
+		_vol = AudioManager.get_volume()
+		queue_redraw()
+
+	# 放视口右上角（宿主为满屏 Control/CanvasLayer 时坐标即视口坐标）
+	func place_top_right(vsize: Vector2, margin_x := 8.0, margin_y := 7.0) -> void:
+		position = Vector2(vsize.x - margin_x - BTN_W, margin_y)
+		size = Vector2(BTN_W, BTN_H)
+
+	# 放视口右下角（如战斗界面，与左下角喊话按钮对称）
+	func place_bottom_right(vsize: Vector2, margin_x := 10.0, margin_b := 22.0) -> void:
+		position = Vector2(vsize.x - margin_x - BTN_W, vsize.y - margin_b - BTN_H)
+		size = Vector2(BTN_W, BTN_H)
+
+	# ---- 自绘喇叭图标 ----
+	func _draw() -> void:
+		var muted := _vol <= 0.001
+		var icon_c := Color(1.0, 0.9, 0.55, 0.95)
+		if muted:
+			icon_c = Color(1.0, 0.5, 0.45, 0.95)
+		var midy := size.y / 2.0
+		# 喇叭箱体 + 出声锥口
+		var body := PackedVector2Array([
+			Vector2(6, midy - 9), Vector2(17, midy - 9), Vector2(17, midy + 9), Vector2(6, midy + 9),
+		])
+		draw_colored_polygon(body, icon_c)
+		var mouth := PackedVector2Array([
+			Vector2(17, midy - 9), Vector2(26, midy - 14), Vector2(26, midy + 14), Vector2(17, midy + 9),
+		])
+		draw_colored_polygon(mouth, icon_c)
+		if muted:
+			# 静音：红色斜杠
+			draw_line(Vector2(29, midy - 11), Vector2(55, midy + 11), Color(1.0, 0.4, 0.35, 0.95), 3.0, true)
+			return
+		# 按音量画 0-3 道声波弧
+		var arcs := clampi(int(ceil(_vol * 3.0)), 0, 3)
+		var from := -0.62
+		var to := 0.62
+		for i in arcs:
+			var rad := 7.0 + float(i) * 5.0
+			var col := Color(icon_c.r, icon_c.g, icon_c.b, maxf(0.95 - float(i) * 0.22, 0.35))
+			draw_arc(Vector2(34.0, midy), rad, from, to, 14, col, 2.0, true)
+
+	func _gui_input(ev: InputEvent) -> void:
+		# 与全项目一致：触摸由 Godot 转成鼠标左键事件（安卓/iOS 默认开启），只处理鼠标事件避免双触发
+		var mb := ev as InputEventMouseButton
+		if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+			return
+		_toggle()
+		accept_event()
+
+	func _toggle() -> void:
+		if _layer != null and is_instance_valid(_layer):
+			_close_panel()
+		else:
+			_open_panel()
+
+	# ---- 弹层（独立 CanvasLayer，全屏遮罩点外面即收起）----
+	func _open_panel() -> void:
+		if _layer != null and is_instance_valid(_layer):
+			return
+		var layer := CanvasLayer.new()
+		layer.layer = LAYER
+		add_child(layer)
+		_layer = layer
+		var overlay := Control.new()
+		overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+		overlay.gui_input.connect(_on_overlay_input)
+		layer.add_child(overlay)
+		# 半透明压暗背景（只轻微压暗，聚焦滑条）
+		var dim := ColorRect.new()
+		dim.color = Color(0, 0, 0, 0.22)
+		dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+		dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		overlay.add_child(dim)
+		# 面板：右上角喇叭按钮下方
+		var panel := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.08, 0.1, 0.16, 0.95)
+		sb.corner_radius_top_left = 10
+		sb.corner_radius_top_right = 10
+		sb.corner_radius_bottom_left = 10
+		sb.corner_radius_bottom_right = 10
+		sb.set_border_width_all(1)
+		sb.border_color = Color(1.0, 0.85, 0.5, 0.8)
+		sb.content_margin_left = 14.0
+		sb.content_margin_right = 14.0
+		sb.content_margin_top = 12.0
+		sb.content_margin_bottom = 12.0
+		panel.add_theme_stylebox_override("panel", sb)
+		panel.mouse_filter = Control.MOUSE_FILTER_STOP
+		overlay.add_child(panel)
+		_panel = panel
+		var v := VBoxContainer.new()
+		v.add_theme_constant_override("separation", 10)
+		panel.add_child(v)
+		var title := Label.new()
+		title.text = "音效音量"
+		title.add_theme_font_size_override("font_size", 17)
+		title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(title)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		v.add_child(row)
+		var slider := HSlider.new()
+		slider.min_value = 0.0
+		slider.max_value = 100.0
+		slider.step = 1.0
+		slider.custom_minimum_size = Vector2(150, 40)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.value = clampf(roundf(_vol * 100.0), 0.0, 100.0)
+		slider.value_changed.connect(_on_volume_changed)
+		# 松手后播一声"选择"音效，让玩家听到调节效果
+		slider.drag_ended.connect(func(_changed: bool): AudioManager.play("select"))
+		row.add_child(slider)
+		_slider = slider
+		var val := Label.new()
+		val.text = _pct_text(int(slider.value))
+		val.add_theme_font_size_override("font_size", 18)
+		val.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		val.custom_minimum_size = Vector2(52, 40)
+		val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		row.add_child(val)
+		_val_label = val
+		var hint := Label.new()
+		hint.text = "0 为静音 · 点喇叭/面板外收起"
+		hint.add_theme_font_size_override("font_size", 12)
+		hint.add_theme_color_override("font_color", Color(0.7, 0.75, 0.85))
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(hint)
+		# 定位：与喇叭按钮同侧对齐；按钮贴近上/下边缘时弹层自动改向另一侧，避免出屏
+		panel.reset_size()
+		var pw: float = maxf(panel.get_combined_minimum_size().x, PANEL_W)
+		panel.custom_minimum_size = Vector2(pw, 0)
+		panel.size = Vector2(pw, panel.get_combined_minimum_size().y)
+		var gp := get_global_position()
+		var gv := get_viewport().get_visible_rect().size
+		var px := gp.x + BTN_W - pw
+		px = clampf(px, 6.0, maxf(6.0, gv.x - pw - 6.0))
+		var ph: float = panel.size.y
+		var py := gp.y + BTN_H + 6.0
+		if py + ph > gv.y - 6.0:
+			py = maxf(6.0, gp.y - ph - 6.0)   # 贴底时向上弹
+		panel.position = Vector2(px, py)
+
+	func _pct_text(p: int) -> String:
+		if p <= 0:
+			return "静音"
+		return "%d%%" % p
+
+	func _on_volume_changed(v: float) -> void:
+		var vol := clampf(v / 100.0, 0.0, 1.0)
+		AudioManager.set_volume(vol)
+		_vol = vol
+		if _val_label != null and is_instance_valid(_val_label):
+			_val_label.text = _pct_text(int(roundf(v)))
+		queue_redraw()
+
+	func _on_overlay_input(ev: InputEvent) -> void:
+		var mb := ev as InputEventMouseButton
+		if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+			return
+		_close_panel()
+		accept_event()
+
+	func _close_panel() -> void:
+		if _layer != null and is_instance_valid(_layer):
+			_layer.queue_free()
+		_layer = null
+		_panel = null
+		_slider = null
+		_val_label = null
+		queue_redraw()

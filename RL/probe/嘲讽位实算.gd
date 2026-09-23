@@ -9,7 +9,11 @@ extends Node
 ##   ⇒ 这些全取决于"敌方前两手挑了谁"，而前两手本身又是随机的 ⇒ 必须整链蒙卡，不能只看底分。
 ##
 ## 与线上口径的对应（逐条对齐 `src/Battle.gd`）：
-##   · 配方与三槽候选池：逐字抄 `RL/weights/队伍池_噩梦.json`（R04 / R05，`w` 都是 1 ⇒ 各 50%）
+##   · 配方与三槽候选池：逐字抄**当时**那份 `RL/weights/队伍池_噩梦.json`（R04 / R05，`w` 都是 1 ⇒ 各 50%）
+##     ⚠️ 那份池子已于 2026-09-23 移除（现躺在 `RL/backups/队伍池_噩梦_移除前_20260923.json`），
+##     噩梦/困难现在读 `队伍池.json` 的 strong 档：**R04/R05 权重 2、其余 1**、**`meta.pick_band = 6`**
+##     （= 本探针的 `BAND`，2026-09-23 用户拍板；原本是 3，写在 `队伍池.md` 的参数行里）
+##     ⇒ 这份读数就是线上现状；只有"抽类型的权重"我没复刻（本探针只跑 R04/R05 两条，各 50%）。
 ##   · 每槽打分：`_deploy_candidate_value(h, enemy_deployed) + randf() * jitter`（jitter = meta.pick_jitter = 2）
 ##   · 每槽挑法：3 槽 `pick` 全空 ⇒ 泛化槽"上位圈随机"：`分数 >= 最高分 − band` 里均匀随机（band = 6）
 ##   · 部署先后手：`_deploy_side = rng.randi() % 2` ⇒ 玩家先手 50%（此时嘲讽槽落地时玩家已上 3 人）
@@ -19,7 +23,7 @@ extends Node
 ## 不改任何生产代码。用法（**必须走隔离跑法**）：
 ##   & RL\train\跑Godot隔离.ps1 -Tag taunt -TimeoutSec 600 -Args @('--headless','--path',(Get-Location).Path,'--scene','res://RL/probe/嘲讽位实算.tscn')
 ## 输出（**全 ASCII**，避免控制台编码把中文糊掉）：
-##   TAUNT|cfg|trials=...|band=6.0|jitter=2.0|pool=队伍池_噩梦.json
+##   TAUNT|cfg|trials=...|band=6.0|jitter=2.0|pool=nightmare_R04R05
 ##   TAUNT|L=hero_03,hero_20,hero_17|CTR=62.4|AVG=+0.86|hero_44=21.3|hero_25=14.0|...
 ##   TAUNT|END
 ##   `CTR` = 挑出来的嘲讽英雄**明确克制我方至少一人**的比例（"针对率"）；`AVG` = 该槽净克制项均值。
@@ -28,7 +32,7 @@ const TRIALS := 20000
 const BAND := 6.0
 const JITTER := 2.0
 
-## 三槽候选池（= 队伍池_噩梦.json 里 R04/R05 的 slot 池，逐字照抄，顺序不影响结果）
+## 三槽候选池（= 那份临时噩梦池里 R04/R05 的 slot 池，逐字照抄，顺序不影响结果）
 const NEAR: Array[String] = ["hero_27", "hero_03", "hero_01", "hero_14", "hero_40", "hero_42", "hero_04", "hero_46", "hero_15", "hero_38", "hero_18", "hero_32", "hero_17"]
 const RANGED: Array[String] = ["hero_10", "hero_21", "hero_34", "hero_08", "hero_09", "hero_20", "hero_33", "hero_06", "hero_07", "hero_45"]
 const TAUNT: Array[String] = ["hero_13", "hero_44", "hero_23", "hero_49", "hero_12", "hero_22", "hero_11", "hero_26", "hero_25", "hero_48"]

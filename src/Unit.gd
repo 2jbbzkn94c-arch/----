@@ -3,6 +3,9 @@ extends Node2D
 ## 棋盘上的英雄单位。负责绘制自身外形、记录属性/所在格、承担伤害与死亡。
 
 signal died(unit: Unit)
+# 【2026-09-23 新增·用户要求】死亡**瞬间**发的信号（`died` 是 0.3s 后发的那一个，挂的是墓碑/替补/胜负）；
+#   HUD 接它播"卡面破碎升天 → 飞向顶部阵亡标志"的特效。headless 不发（跑批零开销）。
+signal dying(unit: Unit)
 signal hp_changed(unit: Unit)
 signal damaged(unit: Unit, amount: int)   # 实际受到伤害（含重伤加成）
 
@@ -653,8 +656,15 @@ func die() -> void:
 	if not alive:
 		return
 	alive = false
+	# 【2026-09-23 新增·用户要求"死亡时卡面破碎升天"】死亡瞬间先发 `dying`（HUD 接它播破碎/飞行特效），
+	#   本体**立刻隐藏**（原来的"淡出 0.3s"是唯一视觉，现在交给特效；不隐藏的话会与碎片重叠）。
+	#   ⚠️ **时序一字不动**：仍然 0.3s 之后才发 `died` —— 墓碑/替补/胜负判定/阵亡日志全挂在 `died` 上，
+	#   提前或延后都会改变游戏节奏（见 `Battle._on_unit_died` 与那行"die() 先淡出 0.3s 才发 died"的注释）。
+	if DisplayServer.get_name() != "headless":
+		dying.emit(self)
+		modulate.a = 0.0        # 本体立刻让位给碎片（特效由 HUD 的 DeathFx 画）
 	var t := create_tween()
-	t.tween_property(self, "modulate:a", 0.0, 0.3)   # 完全淡出，避免残留显示
+	t.tween_interval(0.3)
 	t.tween_callback(func():
 		if is_instance_valid(self):
 			died.emit(self))   # 单位已释放则不再 emit，避免访问已释放 self

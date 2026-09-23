@@ -8,7 +8,7 @@
                  "权重sha12":  "52996af68d7d",
                  "排名口径":  "人工标注（队伍池.md：C### 名单 + 8 条配方）",
                  "pick_jitter":  2,
-                 "pick_band":  3,
+                 "pick_band":  6,
                  "候选数":  82,
                  "配方数":  8,
                  "来源":  [
@@ -480,7 +480,7 @@
                                                       "hero_25",
                                                       "hero_48"
                                                   ],
-                                         "pick":  "counter"
+                                         "pick":  ""
                                      }
                                  ],
                        "bench":  [
@@ -490,7 +490,7 @@
 
                                        ],
                        "dynamic_bench":  true,
-                       "w":  1
+                       "w":  2
                    },
                    {
                        "id":  "R05",
@@ -545,7 +545,7 @@
                                                       "hero_25",
                                                       "hero_48"
                                                   ],
-                                         "pick":  "counter"
+                                         "pick":  ""
                                      }
                                  ],
                        "bench":  [
@@ -555,7 +555,7 @@
 
                                        ],
                        "dynamic_bench":  true,
-                       "w":  1
+                       "w":  2
                    },
                    {
                        "id":  "R07",

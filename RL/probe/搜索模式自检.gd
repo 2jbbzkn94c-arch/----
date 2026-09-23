@@ -41,8 +41,143 @@ func _run() -> void:
 	_case("D2_远程多", ["hero_24", "hero_09", "hero_20"], ["hero_13", "hero_12", "hero_18"])
 	_case("D4_堡垒古拉战锤", ["hero_48", "hero_14", "hero_25"], ["hero_13", "hero_09", "hero_11"])
 	_case("D5_宿魂塔盾德鲁伊", ["hero_46", "hero_11", "hero_08"], ["hero_13", "hero_12", "hero_18"])
+	_act_counts()
+	_threat_block_case()
+	_real_board_case()
 	print("PROBE|END")
 	get_tree().quit(0)
+
+## 【2026-09-23 深夜⑦】按用户截图（`PICTURE/QQ20260923-131016.png`，视觉模型读出）原样复现真实局面：
+##   敌方(AI)：小阴影(3,1) · 圣光(3,2)【嘲讽】 · 暗域(3,3)　我方(玩家)：白游侠(0,6) · 圣光(1,6) · 黄金矿工(2,6)
+##   障碍：(2,2)(2,3)(2,4)(2,5) 四个木桶（x=2 那列 y2~y5 连成一堵墙）。
+##   要回答两件事：① 矿工这一回合**实际能站到哪些格**（限步 BFS，单位/障碍都当墙）；
+##   ② 圣光 / 暗域 的"挨打合计"各是多少（并打印旧判据用的 `walk_dist` 作对照）。
+func _real_board_case() -> void:
+	var my_cells := [Vector2i(3, 1), Vector2i(3, 2), Vector2i(3, 3)]
+	var my_ids := ["hero_15", "hero_22", "hero_27"]
+	var my_names := ["小阴影", "圣光", "暗域"]
+	var foe_cells := [Vector2i(0, 6), Vector2i(1, 6), Vector2i(2, 6)]
+	var foe_ids := ["hero_10", "hero_22", "hero_42"]
+	var foe_names := ["白游侠", "圣光", "黄金矿工"]
+	var descs: Array = []
+	for i in 3:
+		descs.append(_desc(DataRegistry.Faction.ENEMY, String(my_ids[i]), my_cells[i], String(my_names[i])))
+	for i in 3:
+		descs.append(_desc(DataRegistry.Faction.PLAYER, String(foe_ids[i]), foe_cells[i], String(foe_names[i])))
+	var obs := { Vector2i(2, 2): true, Vector2i(2, 3): true, Vector2i(2, 4): true, Vector2i(2, 5): true }
+	var built := _build(descs, obs)
+	var ai = built["ai"]
+	var sim = built["sim"]
+	var miner = sim.units[5]                 # 黄金矿工（近战、攻2、疾行）
+	var holy = sim.units[1]                  # 敌方圣光（嘲讽）
+	var dark = sim.units[2]                  # 暗域
+	# ① 矿工这一回合能站的格（限步 BFS：障碍/墓碑/被占格都当墙）
+	var cells: Array = ai._sim_walk_cells(sim, miner.cell, maxi(miner.emove, 0))
+	var near_holy := 0
+	var near_dark := 0
+	var txt := ""
+	for c in cells:
+		if _grid.distance(c, holy.cell) == 1:
+			near_holy += 1
+		if _grid.distance(c, dark.cell) == 1:
+			near_dark += 1
+		txt += str(c) + " "
+	print("PROBE|REAL|矿工=%s emove=%d|能站%d格：%s" % [str(miner.cell), miner.emove, cells.size(), txt])
+	print("PROBE|REAL|其中贴着圣光的=%d 格 ｜ 贴着暗域的=%d 格" % [near_holy, near_dark])
+	print("PROBE|REAL|旧判据用到的路网距离（只看地形）：矿工→圣光格=%s ｜ 矿工→暗域格=%s（射程1+移动%d ⇒ 门槛%d）" % [
+		str(ai.walk_dist(sim, miner.cell, holy.cell)), str(ai.walk_dist(sim, miner.cell, dark.cell)),
+		miner.emove, 1 + miner.emove])
+	var ih: Dictionary = {}
+	var vh := float(ai._incoming_total_on(sim, holy, holy.cell, ih))
+	var idk: Dictionary = {}
+	var vd := float(ai._incoming_total_on(sim, dark, dark.cell, idk))
+	print("PROBE|REAL|挨打合计：圣光=%.1f%s ｜ 暗域=%.1f%s" % [vh, str(ih.get("parts", [])), vd, str(idk.get("parts", []))])
+	print("PROBE|REAL|圣光有嘲讽=%s（矿工从当前格能打到的目标=%d 个）" % [
+		str(holy.skills.has(DataRegistry.Skill.TAUNT)), ai._valid_targets(sim, miner, miner.cell).size()])
+	# 【2026-09-23 深夜⑦】嘲讽这一步单独说清：**只有在"够得到某个嘲讽者"时才被迫打它**（位置相关）。
+	var taunt_lock: bool = not bool(ai._taunt_allows(sim, miner, dark, miner.cell))
+	print("PROBE|REAL|嘲讽锁：矿工够得到嘲讽者(圣光)=%s ⇒ 被迫只能打圣光=%s（暗域因此被算成 %s）" % [
+		str(ai._threat_can_hit(sim, miner, holy.cell)), str(taunt_lock), ("0" if taunt_lock else "正常")])
+
+## 【2026-09-23 深夜⑤】复现用户那一例：「**能打到圣光的格子被暗域挡住了**，圣光却有伤害量」。
+##   构造：把"圣光"周围除一格外的所有相邻格都用障碍封死；那一格先放我们自己的"暗域"（堵住），
+##   再把它挪走（对照组）。敌人是**近战**矿工（射程 1、移动 3），放在离那一格两步的位置。
+##   期望：堵住时 `_incoming_total_on(圣光)` = **0**；挪走后 = **2**（矿工攻击 2）。
+func _threat_block_case() -> void:
+	var holy := Vector2i(1, 0)                 # 顶帽格，邻格少 ⇒ 好封
+	var nb := _grid.neighbors(holy)
+	if nb.size() < 2:
+		print("PROBE|THREAT|构造失败：顶帽格邻格不足")
+		return
+	var fire_cell: Vector2i = nb[0]            # 唯一留出的"能站过去打中"的格
+	var obs := {}
+	for i in range(1, nb.size()):
+		obs[nb[i]] = true                       # 其余相邻格封成障碍
+	# 敌人落点：离 fire_cell 恰好 2 格、不被占/不是障碍的第一个格
+	var enemy_cell := Vector2i(-1, -1)
+	for c in _grid.all_cells():
+		if c == holy or c == fire_cell or obs.has(c):
+			continue
+		if _grid.distance(c, fire_cell) == 2:
+			enemy_cell = c
+			break
+	if enemy_cell.x < 0:
+		print("PROBE|THREAT|构造失败：找不到敌人落点")
+		return
+	var descs: Array = []
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_22", holy, "圣光我"))
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_27", fire_cell, "暗域我"))
+	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_42", enemy_cell, "矿工敌"))
+	var built := _build(descs, obs)
+	var ai = built["ai"]
+	var sim = built["sim"]
+	var out_a: Dictionary = {}
+	var blocked := float(ai._incoming_total_on(sim, sim.units[0], holy, out_a))
+	# 对照组：把"暗域"挪到远处空格 ⇒ 那一格空出来，矿工就能站过去打中
+	var away := Vector2i(-1, -1)
+	for c in _grid.all_cells():
+		if c == holy or c == fire_cell or c == enemy_cell or obs.has(c) or sim.occ.has(c):
+			continue
+		if _grid.distance(c, fire_cell) >= 4:
+			away = c
+			break
+	ai._apply(sim, 1, { "move": away, "atk": -1 })
+	var out_b: Dictionary = {}
+	var free_hit := float(ai._incoming_total_on(sim, sim.units[0], holy, out_b))
+	print("PROBE|THREAT|圣光=%s|那一格=%s|矿工=%s|堵住时=%.1f(来源=%s) ｜ 挪开后=%.1f(来源=%s)" % [
+		str(holy), str(fire_cell), str(enemy_cell), blocked, str(out_a.get("parts", [])).replace("\n", ""),
+		free_hit, str(out_b.get("parts", [])).replace("\n", "")])
+
+## 【2026-09-23 深夜④】回答用户「一个近战走到谁都打不到的格子，下一步能搜到几个攻击动作」：
+##   打印"移动前 / 移动后"两种状态的候选表条数，并把其中**带攻击**（`atk >= 0`）与**敲障碍**分开数。
+func _act_counts() -> void:
+	var descs: Array = []
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_13", Vector2i(1, 1), "近战我"))
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_12", Vector2i(2, 1), "队友我"))
+	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_09", Vector2i(1, 5), "敌0"))
+	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_20", Vector2i(3, 5), "敌1"))
+	var obs := { Vector2i(3, 1): true }   # 落点 (4, 1) 旁边放一块障碍（测"敲障碍"那条）
+	var built := _build(descs, obs)
+	var ai = built["ai"]
+	var sim = built["sim"]
+	var before: Array = ai._actions_for(sim, 0)
+	var nb: int = before.size()
+	var na := 0
+	for a in before:
+		if int(a.get("atk", -1)) >= 0:
+			na += 1
+	# 把它挪到 (4,1)：离敌人 4 格 ⇒ 近战（射程 1）够不到任何人；此时它已经是"已移动"状态
+	ai._apply(sim, 0, { "move": Vector2i(4, 1), "atk": -1 })
+	var after: Array = ai._actions_for(sim, 0)
+	var n2: int = after.size()
+	var a2 := 0
+	var ob := 0
+	for a in after:
+		if int(a.get("atk", -1)) >= 0:
+			a2 += 1
+		if a.has("atk_obs"):
+			ob += 1
+	print("PROBE|ACTS|移动前:候选=%d|其中攻击=%d ｜ 已移动到(4,1)后:候选=%d|其中攻击=%d|敲障碍=%d" % [nb, na, n2, a2, ob])
 
 ## 一个局面：我方（ENEMY，探针指挥方）三人在 y=1，玩家三人在 y=5
 func _case(tag: String, my_ids: Array, foe_ids: Array) -> void:
@@ -96,7 +231,7 @@ func _arm(ai, root, mode: int) -> Dictionary:
 		"lay_full": lay_full, "plan": plan, "plan_txt": txt }
 
 # ---------------------------------------------------------------- 工具
-func _build(descs: Array) -> Dictionary:
+func _build(descs: Array, obs: Dictionary = {}) -> Dictionary:
 	var occ := {}
 	for i in descs.size():
 		occ[descs[i]["cell"]] = i
@@ -105,7 +240,7 @@ func _build(descs: Array) -> Dictionary:
 	ai.log_decisions = false
 	ai.time_budget_ms = SEARCH_CAP_MS
 	ai.set_weights(_nm)
-	var sim = ai.build_state(descs, occ, {}, {}, {}, {}, {})
+	var sim = ai.build_state(descs, occ, {}, {}, obs, {}, {})
 	return { "sim": sim, "ai": ai }
 
 func _desc(fn: int, hid: String, cell: Vector2i, nm: String) -> Dictionary:
