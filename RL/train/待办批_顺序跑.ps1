@@ -66,7 +66,22 @@ foreach ($m in $Modes) {
     # ⚠️ `-TimeoutSec 900` **必须显式给**：`难度体检` 默认 300，而组级硬预算是 `TimeoutSec*2+300` = 900s
     #   ⇒ 慢牌组（如 hero_03,hero_24,hero_09 实测每组要 ~1300s）会在半途被砍、`refusing to merge`，
     #   那一组**没有 measure.csv**（T25 第 2 组就是这么丢的）。900 ⇒ 组级 2100s，留足余量。
-    & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 900 *>&1 | Tee-Object -FilePath $log | Out-Null
+    # ⚠️ 无人值守 ⇒ 单个模式抛错（例如某组撞 `INCOMPLETE RUN` 硬闸门）**不能拖垮整条链**：
+    #   包 try/catch、记进日志、继续下一个模式；每个模式收尾再列一次"哪几组没有表"，方便事后补跑。
+    try {
+        & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 900 *>&1 | Tee-Object -FilePath $log | Out-Null
+    } catch {
+        $em = $_.Exception.Message
+        Write-Host ('[chain] !! -Mode ' + $m + ' 抛错，已跳过、继续下一个模式：' + $em)
+        Add-Content -LiteralPath $log -Value ('[chain] !! 本模式抛错（后续模式继续跑）：' + $em) -Encoding UTF8
+    }
+    $miss = @(Get-ChildItem $res -Directory -Filter ('ladder6_' + $tag + '_*') -ErrorAction SilentlyContinue |
+              Where-Object { -not (Test-Path (Join-Path $_.FullName 'measure.csv')) } | ForEach-Object { $_.Name })
+    if ($miss.Count -gt 0) {
+        Write-Host ('[chain] ⚠️ -Mode ' + $m + ' 有 ' + $miss.Count + ' 组没有 measure.csv：' + ($miss -join ' , ') + '（重跑同一条命令即可断点续跑补齐）')
+    } else {
+        Write-Host ('[chain] -Mode ' + $m + ' 全部组都有 measure.csv ✓')
+    }
     Write-Host ('[chain] ===== 结束 -Mode ' + $m + '  @ ' + (Get-Date).ToString('HH:mm:ss') + '（输出：' + $log + '）=====')
 }
 Write-Host ('[chain] 全部模式跑完 @ ' + (Get-Date).ToString('HH:mm:ss'))
