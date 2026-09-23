@@ -38,7 +38,7 @@ param(
     #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
     #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
     [int]$NmBeam = 0,
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -305,6 +305,14 @@ if ($Mode -eq 'p1beam') {
 #   · `p025t40`= 0.25 / 40（③ 上限 10；区分度最好、力度最小）
 # ⚠️ **默认牌组里只有 1/6 含毒蛇**（`hero_42,hero_03,hero_17`）⇒ 不指定 `-Decks` 的话 5/6 的牌组里
 #   ⑫ 恒为 0、纯属白跑。推荐配一组**全部含 hero_03** 的牌组，见 `1_通用策略.md` §五 T25。
+# ⚠️⚠️ **基线必须用 `噩梦_测毒.json`（不是 `噩梦.json`）** —— 2026-09-24 实测踩到的坑：
+#   `POISON_TICK_VALUE` / `POISON_APPLY_W` 走 `_wh(施加者.hero_id, key, 扁平兜底)` ⇒ **英雄段里的值赢**，
+#   而 `噩梦.json` 的 `hero_03` 段写着 2.5 / 3.0 ⇒ theta 注入的扁平价被**压住**：`p0` 不等于"关掉"、
+#   `p05*` 也不等于 0.5（**价格臂等于没改**，只有 `POISON_MAX_TICKS` 真的生效）⇒ 那一批整批作废。
+#   `噩梦_测毒.json` = `噩梦.json` 剥掉 `hero_03` 段 + 扁平补 `POISON_APPLY_W = 3.0`
+#   ⇒ **对手侧仍与线上逐位相同**（现役两条路都是 2.5 / 3.0），候选臂的扁平 theta 才真正生效。
+#   （凡是 `_wh()` 读的键都适用这条：POISON_* / SOLID_HOLD_W / SILENCE_VALUE_W / THORN_PIN_* /
+#     PARALYZE_ZERO_W / POSSESS_TARGET_W / GOLD_*。）
 $PO_ARMS = [ordered]@{
     'p0'      = @{ v = 0.0;  t = 4  }
     'p25t4'   = @{ v = 2.5;  t = 4  }
@@ -315,12 +323,83 @@ $PO_ARMS = [ordered]@{
 if ($Mode -eq 'poison') {
     $TIERS = [ordered]@{}
     foreach ($k in $PO_ARMS.Keys) {
-        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦_测毒.json'; beam = 200; theta = @{
             POISON_TICK_VALUE = [double]$PO_ARMS[$k].v
             POISON_MAX_TICKS  = [int]$PO_ARMS[$k].t
         } }
     }
-    $GROUPS = @(@{ slug = 'PO'; base = 'RL\weights\噩梦.json'; tiers = @($PO_ARMS.Keys) })
+    $GROUPS = @(@{ slug = 'PO'; base = 'RL\weights\噩梦_测毒.json'; tiers = @($PO_ARMS.Keys) })
+}
+# ---- 模式 M（`shield`）：㉔破盾 `SHIELD_BREAK_W` 剂量批（T20）----
+# 口径 = `SHIELD_BREAK_DMG_REF(1.0) / max(这一击伤害, 1.0)` ⇒ **伤害越低破盾越值**。值 4.0 是首版体感值。
+# 读法：配对 Δpts(臂 − 4.0) + 生产侧胜率；顺带看"poke 拆盾"出现率（日志里 ㉔破盾 那一项非零的次数）。
+$SH_ARMS = [ordered]@{ 's0' = 0.0; 's2' = 2.0; 's4' = 4.0; 's8' = 8.0 }   # s4 = 现役（对照）
+if ($Mode -eq 'shield') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $SH_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ SHIELD_BREAK_W = [double]$SH_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'SH'; base = 'RL\weights\噩梦.json'; tiers = @($SH_ARMS.Keys) })
+}
+
+# ---- 模式 N（`dedup`）：阶段 1「同末态去重」`TWO_PHASE_DEDUP` 的**棋力**批（T23）----
+# 为什么要跑：去重在机制上"只省算、不改漏斗 top-16"，但那条推理有两个理论边界（同分并列的取舍、
+#   T4 那个 `_evaluate` 共享缓存的顺序依赖）⇒ 要坐实"不降水平"必须跑整局。d1 = 现役（对照）。
+$DD_ARMS = [ordered]@{ 'd0' = 0; 'd1' = 1 }
+if ($Mode -eq 'dedup') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $DD_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_DEDUP = [int]$DD_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'DD'; base = 'RL\weights\噩梦.json'; tiers = @($DD_ARMS.Keys) })
+}
+
+# ---- 模式 O（`split`）：㉒隔断 `SPLIT_W` 剂量批（T16）----
+# 值 2.0 是首版体感值（探针只证明"机制会动"）。sp2 = 现役（对照）。
+$SP_ARMS = [ordered]@{ 'sp0' = 0.0; 'sp2' = 2.0; 'sp4' = 4.0 }
+if ($Mode -eq 'split') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $SP_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ SPLIT_W = [double]$SP_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'SP'; base = 'RL\weights\噩梦.json'; tiers = @($SP_ARMS.Keys) })
+}
+
+# ---- 模式 P（`spread`）：㉓离队距离 `FORM_SPREAD_CELL_W` 剂量批（T17）----
+# 值 3.0 是首版体感值（推导：位置拉力 2.4/格 ⇒ 梯度要 > 2.4）。f3 = 现役（对照）。
+# ⚠️ 这是**评分项** ⇒ 别只看胜率，同时看风格读数：队伍离散度 / 挨打量。
+$FS_ARMS = [ordered]@{ 'f0' = 0.0; 'f3' = 3.0; 'f6' = 6.0 }
+if ($Mode -eq 'spread') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $FS_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ FORM_SPREAD_CELL_W = [double]$FS_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'FS'; base = 'RL\weights\噩梦.json'; tiers = @($FS_ARMS.Keys) })
+}
+
+# ---- 模式 Q（`apply`）：⑯猛毒新挂 `POISON_APPLY_W` 剂量批（T26）----
+# 它是 T6 的体感值 3.0，从来没单独验证过（与 ⑫ 互补：⑫ 付状态钱、⑯ 付动作钱）。
+# ⚠️ **基线必须用 `噩梦_测毒.json`**：`POISON_APPLY_W` 也是 `_wh()` 按英雄段覆盖读的
+#   （`hero_03` 段写着 3.0）⇒ 拿 `噩梦.json` 跑 theta 会被段里的 3.0 压住、臂等于没改。a3 = 现役（对照）。
+$AP_ARMS = [ordered]@{ 'a0' = 0.0; 'a3' = 3.0; 'a6' = 6.0 }
+if ($Mode -eq 'apply') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $AP_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦_测毒.json'; beam = 200; theta = @{ POISON_APPLY_W = [double]$AP_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'AP'; base = 'RL\weights\噩梦_测毒.json'; tiers = @($AP_ARMS.Keys) })
+}
+
+# ---- 模式 R（`hpacc`）：血量账族 `HP_VALUE_W` 剂量批 ----
+# ③血量账 的单价（1 血 = 多少分）。默认 1.0（噩梦档没写它）。h10 = 现役（对照）。
+# 同族的 `FOCUS_FIRE_WEIGHT`(30) / `HEAL_CREDIT_W`(1.0) / `INCOMING_POOL_W`(1.0) 本轮固定不动，留待下一批。
+$HP_ARMS = [ordered]@{ 'h05' = 0.5; 'h10' = 1.0; 'h20' = 2.0 }
+if ($Mode -eq 'hpacc') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $HP_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ HP_VALUE_W = [double]$HP_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'HP'; base = 'RL\weights\噩梦.json'; tiers = @($HP_ARMS.Keys) })
 }
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；
@@ -422,15 +501,39 @@ if ($Mode -eq 'taunt') {
     Write-Host ("[基线 sha12] 噩梦.json = {0}（㉕ 的现役值就在这份文件里）" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
-if ($Mode -eq 'p1beam') {
 if ($Mode -eq 'poison') {
-    Write-Host '[档位·poison] p0 = 0/4（关掉 ⑫）／ p25t4 = 2.5+4（现役口径，**对照臂**）／ p05t20 = 0.5+20（①）／ p05t40 = 0.5+40（②"血越多越值"）／ p025t40 = 0.25+40（③）；五臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·poison] p0 = 0/4（关掉 ⑫）／ p25t4 = 2.5+4（现役口径，**对照臂**）／ p05t20 = 0.5+20（①）／ p05t40 = 0.5+40（②"血越多越值"）／ p025t40 = 0.25+40（③）；五臂同一份 `噩梦_测毒.json`（= 噩梦.json 剥掉 hero_03 段）+ θ 注入、对手恒为困难陪练副本'
     Write-Host '[档位·poison] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − p25t4)**（配对口径同其它模式）⇒ `p0 − p25t4` = ⑫ 这一项总共值多少分'
     Write-Host '[档位·poison] ⚠️ ⑫ **只在场上有毒蛇淑女（hero_03）时非零** ⇒ 牌组必须含它（见 §五 T25 的 `-Decks` 建议）'
     Write-Host '[档位·poison] 候选/对手宽度 beam = 200/200；⏱ 五臂 × 牌组数 × 4 种子'
-    Write-Host ("[基线 sha12] 噩梦.json = {0}（现役口径 2.5 + 4 就在这份文件里）" -f `
-        (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
-}    Write-Host '[档位·p1beam] b0 = 沿用 BEAM（走查台 beam=200，对照）／ b96 = 96（线上现役值）／ b192 = 192（噪音对照）；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host ("[基线 sha12] 测毒基线 噩梦_测毒.json = {0}" -f (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦_测毒.json') -Algorithm SHA256).Hash.Substring(0,12))
+}
+if ($Mode -eq 'shield') {
+    Write-Host '[档位·shield] s0 = 关 ／ s2 = 2.0 ／ s4 = 4.0（**现役，对照臂**）／ s8 = 8.0；四臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·shield] ⚠️ 下表 `Δpts_vs_困难` 读作 **Δpts(臂 − 4.0)**；另请看日志里 ㉔破盾 非零的出现率（"poke 拆盾"意图）'
+}
+if ($Mode -eq 'dedup') {
+    Write-Host '[档位·dedup] d0 = 关（阶段 1 不去重）／ d1 = 1（**现役，对照臂**）；两臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·dedup] 本批回答「去重到底降不降水平」：d0 − d1 为正 ⇒ 去重吃亏；≈0 ⇒ 白赚（阶段 1 省 5/6 评分）'
+}
+if ($Mode -eq 'split') {
+    Write-Host '[档位·split] sp0 = 关 ／ sp2 = 2.0（**现役，对照臂**）／ sp4 = 4.0；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·split] 本项是**风格旋钮**（㉒隔断）⇒ 别只看胜率，配合"卡口次数/回合数"读'
+}
+if ($Mode -eq 'spread') {
+    Write-Host '[档位·spread] f0 = 关 ／ f3 = 3.0（**现役，对照臂**）／ f6 = 6.0；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·spread] 本项是**评分项** ⇒ 主看风格读数（队伍离散度 / 挨打量），胜率只作副证'
+}
+if ($Mode -eq 'apply') {
+    Write-Host '[档位·apply] a0 = 关 ／ a3 = 3.0（**现役，对照臂**）／ a6 = 6.0；基线 = `噩梦_测毒.json`（剥掉 hero_03 段 ⇒ 扁平 theta 才生效）'
+    Write-Host '[档位·apply] 读作 **Δpts(臂 − 3.0)**；回答「⑯『我又毒了一个新人』这笔动作钱值不值」'
+}
+if ($Mode -eq 'hpacc') {
+    Write-Host '[档位·hpacc] h05 = 0.5 ／ h10 = 1.0（**现役，对照臂**）／ h20 = 2.0；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·hpacc] ③血量账 的单价（1 血 = 多少分）；读作 **Δpts(臂 − 1.0)**'
+}
+if ($Mode -eq 'p1beam') {
+    Write-Host '[档位·p1beam] b0 = 沿用 BEAM（走查台 beam=200，对照）／ b96 = 96（线上现役值）／ b192 = 192（噪音对照）；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
     Write-Host '[档位·p1beam] ⚠️ 下表 `Δpts_vs_困难` 这一列在本模式读作 **Δpts(臂 − b0)**；本批量的是**棋力有没有掉**，"省了多少秒"要回实机看 `[搜索分账]`（走查台不限时、量不到提速）'
     Write-Host ("[基线 sha12] 噩梦.json = {0}（TWO_PHASE_P1_BEAM 的现役值就在这份文件里）" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
@@ -450,6 +553,13 @@ if ($Mode -eq 'taunt') { $ctl = 't3' }
 if ($Mode -eq 'p1beam') { $ctl = 'b0' }
 # 【2026-09-23 深夜】`poison` 模式五臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役口径 `p25t4`**（Δpts 读作 `臂 − 2.5/4`）。
 if ($Mode -eq 'poison') { $ctl = 'p25t4' }
+# 【2026-09-24】下面六个模式的对照臂 = 各自的**现役值**（Δpts 读作 `臂 − 现役`）。
+if ($Mode -eq 'shield') { $ctl = 's4' }
+if ($Mode -eq 'dedup')  { $ctl = 'd1' }
+if ($Mode -eq 'split')  { $ctl = 'sp2' }
+if ($Mode -eq 'spread') { $ctl = 'f3' }
+if ($Mode -eq 'apply')  { $ctl = 'a3' }
+if ($Mode -eq 'hpacc')  { $ctl = 'h10' }
 $out = @()
 foreach ($k in $TIERS.Keys) {
     $a = @($rows | Where-Object { $_.arm -eq $k })

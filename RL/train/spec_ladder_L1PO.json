@@ -1,5 +1,5 @@
 {
-    "base_weights":  "RL\\weights\\噩梦.json",
+    "base_weights":  "RL\\weights\\噩梦_测毒.json",
     "opponent":  "base",
     "beam":  {
                  "candidate":  200,

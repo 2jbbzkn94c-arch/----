@@ -50,8 +50,53 @@ const KEY_VAR := {
 	#   噩梦档 `hero_46` 段是空的 ⇒ 兜底值就是实际生效值 ✓（要测"打开有没有用"正是这一条）。
 	"HEAL_CREDIT_W": "w_heal_credit",
 	"POSSESS_TARGET_W": "w_possess_target",
+	# ============ 【2026-09-24 补齐】2026-09-21 之后新增 / 历史上漏收的键 ============
+	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 45 个）；`INT_KEYS` 恒等于其中
+	#   `int(v)` 转型的那 14 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`
+	#   **静默测不到那个键** —— 看起来像"这个键没用"，其实是探针根本没动它。
+	# ⚠️ **英雄段覆盖（`_wh()`）**：下面这些都**按英雄段覆盖**读 ——
+	#   `POISON_TICK_VALUE` / `POISON_APPLY_W` / `SOLID_HOLD_W` / `SILENCE_VALUE_W` /
+	#   `THORN_PIN_SUP_W` / `THORN_PIN_RANGED_W` / `PARALYZE_ZERO_W` / `POSSESS_TARGET_W`（连同上方的
+	#   `POSSESS_TARGET_W`）。`_wh(hero_id, key, 扁平兜底)` 的语义是**段里有值就用段里的**
+	#   ⇒ 本表注入的只是**扁平兜底值**：只有当"那个英雄没写这个键 / 查不到施加者"时才生效。
+	#   例：`噩梦.json` 的 `hero_03` 段写着 `POISON_TICK_VALUE 2.5` ⇒ 在这里把 `w_poison_tick` 设 0
+	#   **不会**让毒蛇铺的毒变 0 分（2026-09-24 跑 T25 批时正是在这里栽的跟头、整批作废重跑）。
+	#   要给这类键做剂量，得用"剥掉英雄段的测试基线"（见 `RL/weights/噩梦_测毒.json`）。
+	"POISON_TICK_VALUE": "w_poison_tick",
+	"POISON_MAX_TICKS": "w_poison_max_ticks",     # 不按英雄段覆盖 ⇒ 注入即生效
+	"POISON_APPLY_W": "w_poison_apply",
+	"SOLID_HOLD_W": "w_solid_hold",
+	"SILENCE_VALUE_W": "w_silence",
+	"THORN_PIN_SUP_W": "w_pin_sup",
+	"THORN_PIN_RANGED_W": "w_pin_ranged",
+	"PARALYZE_ZERO_W": "w_paralyze",
+	"SPLIT_W": "w_split",
+	"FORM_MERGE_MODE": "w_form_merge",
+	"SHIELD_BREAK_W": "w_shield_break",
+	"TAUNT_SOAK_W": "w_taunt_soak",
+	"IDLE_HIT_PENALTY": "w_idle_hit_penalty",
+	"STAY_OPTION": "w_stay_option",
+	"MOVE_ACCEPT_DAMAGE": "w_move_accept_damage",
+	"SUB_JOIN_RULE": "w_sub_join_rule",
+	"SUB_FINISH_W": "w_sub_finish_w",
+	"NO_LOSS_FILTER": "w_no_loss_filter",
+	"GOLD_OPPORTUNITY_W": "w_gold_oc",
+	"ENGAGE_PULL_PER_CELL": "w_engage_pull",
+	"WEAK_MODE": "w_weak_mode",
+	"WEAK_P": "w_weak_p",
+	"WEAK_SEED": "w_weak_seed",
+	# ⚠️ 注入 **0 = 不限时** ⇒ 会撞上 `search()` 那个已知收敛隐患（空动作表死循环，见 §1.3）⇒ 别设 0。
+	"TIME_BUDGET_MS": "time_budget_ms",
+	# ⚠️ 搜索结构三键只在 `SEARCH_MODE >= 1` 的路径上有意义（模式 0 根本不经过两阶段搜索）。
+	"SEARCH_MODE": "w_search_mode",
+	"TWO_PHASE_P1_BEAM": "w_tp_p1_beam",
+	"TWO_PHASE_DEDUP": "w_tp_dedup",
 }
-const INT_KEYS := ["BEAM", "TIEBREAK_MODE"]
+
+# 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 14 个**键（数量不对 = 有键漏了或类型变了）。
+const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
+	"NO_LOSS_FILTER", "TIEBREAK_MODE", "POISON_MAX_TICKS", "STAY_OPTION", "FORM_MERGE_MODE", "SEARCH_MODE",
+	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP"]
 const FACTORS := [0.5, 2.0]
 ## 宽程阶梯（含 0 = 归零消融）：用来区分"局部不敏感"的两种原因——
 ##   · **不重要的项**：整条曲线都平（任何值都不改出招）
