@@ -66,10 +66,13 @@ func _run() -> void:
 	_case("E2_一列障碍", ["hero_03", "hero_13", "hero_42"], ["hero_24", "hero_09", "hero_48"],
 		{ Vector2i(2, 3): true, Vector2i(2, 4): true })
 
-	print("PROBE|SUM|n=%d|same_plan=%d/%d|same_end=%d/%d|dscore[min=%+.2f,max=%+.2f,sum_abs=%.2f]|evals[no_dedup=%d,dedup=%d,dups_dropped=%d,cut=%.0f%%]|ms[no_dedup=%d,dedup=%d]" % [
+	print("PROBE|SUM|n=%d|same_plan=%d/%d|same_end=%d/%d|dscore[min=%+.2f,max=%+.2f,sum_abs=%.2f]|evals[no_dedup=%d,dedup=%d,dups_dropped=%d,dup_share=%.0f%%,eval_cut=%.0f%%]|ms[no_dedup=%d,dedup=%d]" % [
 		_n, _same_plan, _n, _same_end, _n, _d_min, _d_max, _sum_abs_d,
 		_evals0, _evals1, _dups1,
-		(100.0 * float(_dups1) / float(maxi(_evals0, 1))), _ms0, _ms1])
+		# `dup_share` = **同一层内**被丢掉的候选占比（分子 = 丢掉的、分母 = 这一层一共生成了多少候选）
+		(100.0 * float(_dups1) / float(maxi(_dups1 + _evals1, 1))),
+		# `eval_cut` = 两臂的**总评估次数**之比（两棵树形状不同 ⇒ 这是"实际省了多少"，不是理论冗余率）
+		(100.0 * (1.0 - float(_evals1) / float(maxi(_evals0, 1)))), _ms0, _ms1])
 	print("PROBE|VERDICT|%s" % _verdict())
 	print("PROBE|END")
 	get_tree().quit(0)
