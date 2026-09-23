@@ -260,7 +260,7 @@ func _ai_side(side: int, a_side: int) -> void:
 			await _act_and_wait(func() -> void: _b._do_move(u, a["move"], fn == DataRegistry.Faction.ENEMY))
 			_resolve_pending_bomb()
 		if a.has("atk_obs"):
-			await _act_and_wait(func() -> void: _b._do_attack_obstacle(u, a["atk_obs"]))
+			await _act_and_wait(func() -> void: _b._do_attack_obstacle(u, a["atk_obs"], fn == DataRegistry.Faction.ENEMY))
 		if a.has("atk") and int(a["atk"]) >= 0:
 			var ti := int(a["atk"])
 			if ti >= 0 and ti < refs.size() and is_instance_valid(refs[ti]):

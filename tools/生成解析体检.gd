@@ -58,11 +58,11 @@ func _run() -> void:
 		lines.append("\n未解析的英雄数：%d" % total_unresolved)
 	lines.append("\n统计：非空列总数 %d，其中白名单豁免 %d。" % [checked, ignored])
 
-	var f := FileAccess.open("res://英雄相关/解析体检.txt", FileAccess.WRITE)
+	var f := FileAccess.open("res://Data/Hero/解析体检.txt", FileAccess.WRITE)
 	if f:
 		f.store_string("\n".join(lines))
 		f.close()
-		print("written res://英雄相关/解析体检.txt checked=%d unresolved=%d ignored=%d" % [checked, total_unresolved, ignored])
+		print("written res://Data/Hero/解析体检.txt checked=%d unresolved=%d ignored=%d" % [checked, total_unresolved, ignored])
 	quit(0)
 
 func _is_ignorable(txt: String) -> bool:

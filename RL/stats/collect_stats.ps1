@@ -45,7 +45,7 @@
     * Only processes this script started are ever killed, and only after -TimeoutSec.
     * This file is deliberately pure ASCII (cmd/PowerShell read scripts as ANSI);
       Chinese path segments are built from code points, same trick as
-      RL\verify_heroes.ps1.
+      Data\Hero\Source\verify_heroes.ps1.
 #>
 
 [CmdletBinding()]

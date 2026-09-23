@@ -115,6 +115,12 @@ var _auto_loop := false           # 循环开关（按钮切换；循环协程�
 var _auto_loop_n := 0             # 本次循环已打完并换局的局数（只用于显示与日志）
 var _auto_btn: Button = null      # 面板里的「自动循环」按钮
 var _beam_override := 0           # `--beam N`：命令行覆盖搜索宽度（0 = 用面板 SpinBox / 默认 800）
+# 【2026-09-23 新增】`--weights <res://…json>`：命令行指定权重文件。
+# 为什么必须有：本场景的默认权重是 `res://RL/weights/base.json`（= src/BattleAI.gd 的 const 抄录，
+# 困难档 12 项），而**无头自检不建面板** ⇒ 没有这个开关时，`verify_heroes.ps1` 的 L3 永远跑困难档基线，
+# `噩梦.json` 的那 21 个通用键 + 7 个英雄段（尤其是只从权重读的 `SEARCH_MODE`）压根不生效。
+# 空串 = 不覆盖，行为与以前逐位一致。
+var _weights_cli := ""
 var _auto_cli := false            # `--autoloop`：无头验证入口（启动即开循环，与按钮同一回调）
 var _auto_rounds := 0             # `--autoloop-rounds N`：跑完 N 局就停并退出（0 = 一直跑）
 const AUTO_LOOP_BEAM := 50        # 自动循环（= 扫 DIFF，不训练）默认的搜索宽度
@@ -225,7 +231,7 @@ func _open_runtime_log(ua: Array) -> void:
 	# （多开会互相覆盖）。关掉它之后，多个验证实例各自的证据都只落在自己的时间戳日志里 → 可并行。
 	# 默认（不设该变量）行为与以前**完全一致**：用户手动 F6 仍能看到固定名镜像，方便找日志。
 	# ★★ 但**显式 `--rtlog <路径>` 不受这个开关影响**（本轮修正的回归）：
-	#   调用方（`RL/verify_heroes.ps1` 的 sweep 层，每个英雄一个独立文件名）点名要的那份文件是
+	#   调用方（`Data/Hero/Source/verify_heroes.ps1` 的 sweep 层，每个英雄一个独立文件名）点名要的那份文件是
 	#   它随后要解析的**唯一**机读证据源；把它当成"共享写点"一起关掉，解析端就只能读到
 	#   不存在的文件 → `simChecks=0`（实测：ZB_NO_MIRROR=1 时 `--rtlog` 那份**根本没被创建**）。
 	#   显式路径本来就由调用方自己保证不撞车（并行实例给不同文件名），所以照写。
@@ -352,6 +358,13 @@ func _ready() -> void:
 	if _auto_cli and _beam_override <= 0:
 		_beam_override = AUTO_LOOP_BEAM
 	_audit_probe = _arg_str_after(ua, "--audit-probe", "")     # 取证：给 sim 字段自检塞一个假字段名
+	# `--weights <res://…json>`（2026-09-23 新增）：命令行指定权重文件；空 = 用面板默认（base.json）。
+	# 只影响"AI 选哪一招"，不影响对拍判定口径（判定仍是"选中那招的预测 vs 真实"），
+	# 但它决定**新键（SEARCH_MODE / SPLIT_W / FORM_* / hero_XX 段）到底有没有生效**。
+	_weights_cli = _arg_str_after(ua, "--weights", "")
+	if _weights_cli != "":
+		_log("[取证] --weights 指定权重文件：%s（存在=%s）" % [
+			_weights_cli, str(FileAccess.file_exists(_weights_cli))])
 	_play_wall = _arg_after(ua, "--play-wall", 600)    # 取证：驱动到结束的时限（秒）
 	# 取证（--picks "我方1,我方2,..." "敌方1,敌方2,..."）：指定双方卡组，
 	# 配合 --test-picks / --test-play 做"英雄轮换扫描"（没有它就只能扫固定那 6 个英雄）。
@@ -3985,7 +3998,7 @@ func _call_action(a: Dictionary, for_enemy: bool = true) -> Dictionary:
 			if _truth(out["moved"]):
 				await _sleep(STEP_GAP)
 			var r2: String = await _await_action(func() -> void:
-				_battle._do_attack_obstacle(u, oc))
+				_battle._do_attack_obstacle(u, oc, for_enemy))   # for_enemy 必须传：与移动/攻击同款，敌方回放靠它收 action_finished（2026-09-23 补）
 			if r2 != "done":
 				out["status"] = r2
 				return out
@@ -4496,6 +4509,9 @@ func _jitter_val() -> float:
 
 
 func _weight_path() -> String:
+	# `--weights` 优先（无头自检唯一能指定权重文件的路子）；没给才退回面板输入框 / 默认 base.json。
+	if _weights_cli != "":
+		return _weights_cli
 	return _w_path_edit.text.strip_edges() if _w_path_edit != null else "res://RL/weights/base.json"
 
 

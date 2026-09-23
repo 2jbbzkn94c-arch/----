@@ -37,24 +37,31 @@ extends Node
 ##                      "换过去到底亏不亏"（探针自己给的判决依据，不靠肉眼）
 ##
 ## 运行：
-##   godot --headless --path <项目> --scene res://RL/probe/暗域威胁.tscn -- [beam] [rollout]
-##   缺省 beam=200（= 生产困难/噩梦宽度）· rollout=0（关掉推演层，只量评分层、且可复现）
+##   godot --headless --path <项目> --scene res://RL/probe/暗域威胁.tscn -- [beam]
+##   缺省 beam=200（= 生产困难/噩梦宽度）
 ##   `time_budget_ms = 0` ⇒ 不靠墙钟兜底 ⇒ 同一输入必然同一输出。
 ##
 ## 输出：`DY|…` 每行一条；末尾 `DY|SUM|…` 汇总；同时落盘 `RL/reports/暗域威胁_原始输出.txt`。
+##
+## ⚠️ **2026-09-22 晚·已失效**：终选层"真推演"（`ROLLOUT_TOPK` / `ROLLOUT_MODE`）已按用户拍板
+##   **整段删除**（引擎里连键都不在了）⇒ 本文件的 `ro32` / `mad1` 两个臂**现在与 `base` 等价**
+##   （`set_weights` 会静默忽略不存在的键）—— 保留下面的代码只为存历史；要看当年级别的读数请查
+##   `RL/reports/暗域威胁_原始输出.txt` 与 `RL/progress_tracking/1_通用策略.md` §四登记表。
+## 运行：
+##   godot --headless --path <项目> --scene res://RL/probe/暗域威胁.tscn -- [beam]
+##   缺省 beam=200（= 生产困难/噩梦宽度）
+##   `time_budget_ms = 0` ⇒ 不靠墙钟兜底 ⇒ 同一输入必然同一输出。
 
 const FORK := preload("res://RL/ai/AI_Battle.gd")
 const NM_PATH := "res://RL/weights/噩梦.json"
 
-## 配置：唯一变量是"末端推演层 / 生产口径"（键见 `RL/weights/噩梦.json`）。
-##   `base`   = 只用评分层（关掉推演层与规则 B）—— 探针主口径，直接量"评分层认不认得暗域"
-##   `ro32`   = 连噩梦的推演层一起开（ROLLOUT_TOPK=32 / MODE=1）—— 看它能不能补救
-##   `mad1`   = **生产噩梦口径**（推演层 + `MOVE_ACCEPT_DAMAGE=1`）：规则 B 会把"危险落点"往外挤
-##              ⇒ 用来确认"AI 不躲暗域"在真实档位下也成立（而不是被探针的关阈值放大了）
+## 配置：唯一变量是"生产口径"（键见 `RL/weights/噩梦.json`）。
+##   `base`  = 只用评分层（`MOVE_ACCEPT_DAMAGE` 关）—— 探针主口径，直接量"评分层认不认得暗域"
+##   `mad1`  = 把规则 B 的阈值调到 1（危险落点会被往外挤）⇒ 确认"AI 不躲暗域"在真实档位下也成立
+## ⚠️ 原来的 `ro32` 臂（连"真推演层"一起开）**2026-09-22 晚随该层整段删除** ⇒ 已移除。
 const CONFIGS := [
-	{ "name": "base", "rollout": 0, "mad": 0.0 },
-	{ "name": "ro32", "rollout": 32, "mad": 0.0 },
-	{ "name": "mad1", "rollout": 32, "mad": 1.0 },
+	{ "name": "base", "mad": 0.0 },
+	{ "name": "mad1", "mad": 1.0 },
 ]
 
 var _grid: HexGrid
@@ -71,13 +78,11 @@ func _ready() -> void:
 func _run() -> void:
 	var ua := OS.get_cmdline_user_args()
 	var beam := int(ua[0]) if ua.size() > 0 else 200
-	var roll_arg := int(ua[1]) if ua.size() > 1 else 0
 	_nm = _load_json(NM_PATH)
 	var scen: Array = _scenarios()
-	_line("DY|CFG|scenarios=%d|configs=%d|beam=%d|rollout_arg=%d|fork_sha=%s|nm_keys=%d|nm_roll=%s|nm_mad=%s|nm_term=%s" % [
-		scen.size(), CONFIGS.size(), beam, roll_arg, _sha("res://RL/ai/AI_Battle.gd"),
-		_nm.size(), str(_nm.get("ROLLOUT_TOPK", "(缺)")), str(_nm.get("MOVE_ACCEPT_DAMAGE", "(缺)")),
-		str(_nm.get("TERMINAL_W", "(缺)"))])
+	_line("DY|CFG|scenarios=%d|configs=%d|beam=%d|fork_sha=%s|nm_keys=%d|nm_mad=%s|nm_term=%s" % [
+		scen.size(), CONFIGS.size(), beam, _sha("res://RL/ai/AI_Battle.gd"),
+		_nm.size(), str(_nm.get("MOVE_ACCEPT_DAMAGE", "(缺)")), str(_nm.get("TERMINAL_W", "(缺)"))])
 	var n_reach := 0
 	var n_adj := {}
 	var plans := {}
@@ -92,7 +97,7 @@ func _run() -> void:
 			str(s["land_cells"]), str(s["esc_cells"])])
 		for cfg in CONFIGS:
 			var cn := String(cfg["name"])
-			var r := _one(s, cfg, beam, roll_arg)
+			var r := _one(s, cfg, beam)
 			var tag := "DY|ROW|%s|%s" % [String(s["name"]), cn]
 			_line("%s|steps=%d|chose_adj_dark=%s|end_adj_dark=%s|end=%s|chose_adj_plain=%s|inc_land=%.2f|inc_swap=%.2f|d_inc=%+.2f|esc_inc_swapcell=%.2f|score=%.2f|margin=%.2f" % [
 				tag, int(r["steps"]), str(r["adj_dark"]), str(r["adj_end"]), str(r["end_cell"]),
@@ -133,9 +138,9 @@ func _run() -> void:
 # ---------------------------------------------------------------- 权重 / 单次决策
 
 ## 组装一次注入用的权重：噩梦基线（噩梦.json）+ BEAM。
-## ⚠️ `MOVE_ACCEPT_DAMAGE`（规则 B 落点阈值）在 `base`/`ro32` 里**置 0 = 关**：那一项会把"危险落点"
+## ⚠️ `MOVE_ACCEPT_DAMAGE`（规则 B 落点阈值）在 `base` 里**置 0 = 关**：那一项会把"危险落点"
 ##    直接挤出候选表前 16 名，掩盖"评分层认不认得暗域"这件事。`mad1` 保留噩梦原值（= 生产口径）。
-func _build_weights(cfg: Dictionary, beam: int, roll_arg: int) -> Dictionary:
+func _build_weights(cfg: Dictionary, beam: int) -> Dictionary:
 	var w := { "BEAM": beam }
 	for k in _nm.keys():
 		if String(k).begins_with("_"):
@@ -143,22 +148,15 @@ func _build_weights(cfg: Dictionary, beam: int, roll_arg: int) -> Dictionary:
 		w[k] = _nm[k]
 	var mad := float(cfg.get("mad", -1.0))
 	w["MOVE_ACCEPT_DAMAGE"] = float(_nm.get("MOVE_ACCEPT_DAMAGE", 1.0)) if mad < 0.0 else mad
-	var ro := int(cfg.get("rollout", 0))
-	if ro <= 0:
-		w["ROLLOUT_TOPK"] = 0
-		w["ROLLOUT_MODE"] = 0
-	else:
-		w["ROLLOUT_TOPK"] = roll_arg if roll_arg > 0 else ro
-		w["ROLLOUT_MODE"] = int(_nm.get("ROLLOUT_MODE", 1))
 	return w
 
 ## 跑一个（场景 × 配置）：出计划 + 逐步评分 + 实际挨打
-func _one(s: Dictionary, cfg: Dictionary, beam: int, roll_arg: int) -> Dictionary:
+func _one(s: Dictionary, cfg: Dictionary, beam: int) -> Dictionary:
 	var ai = FORK.new(_grid)
 	ai.difficulty = 2
 	ai.log_decisions = false
 	ai.time_budget_ms = 0                 # 可复现：不用墙钟兜底
-	ai.set_weights(_build_weights(cfg, beam, roll_arg))
+	ai.set_weights(_build_weights(cfg, beam))
 	var sim = ai.build_state(s["descs"], s["occ"])
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	var x0 = sim.units[int(s["atk_idx"])]
@@ -330,7 +328,7 @@ func _selfdiag(beam: int) -> void:
 	ai.difficulty = 2
 	ai.log_decisions = false
 	ai.time_budget_ms = 0
-	ai.set_weights(_build_weights({ "rollout": 0 }, beam, 0))
+	ai.set_weights(_build_weights({}, beam))
 	var sim = ai.build_state(s["descs"], s["occ"])
 	var di := int(s["dark_idx"])
 	var xi := int(s["atk_idx"])

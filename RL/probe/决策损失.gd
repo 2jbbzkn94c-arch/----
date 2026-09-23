@@ -13,8 +13,8 @@ extends Node
 ##   再按「**我方有哪个英雄**」和「**对面有哪个英雄**」两个维度聚合 ⇒ 两张排行榜。
 ##
 ## 运行：
-##   godot --headless --path <项目> --scene res://RL/probe/决策损失.tscn -- [N] [prodBeam] [refBeam] [refRollout]
-##   缺省 N=12 prodBeam=200 refBeam=600 refRollout=64
+##   godot --headless --path <项目> --scene res://RL/probe/决策损失.tscn -- [N] [prodBeam] [refBeam]
+##   缺省 N=12 prodBeam=200 refBeam=600（⚠️ 2026-09-22 晚：原来的第 4 个参数 refRollout 已随"真推演层"整段删除）
 ##
 ## 输出：LOSS|CFG / LOSS|POS / LOSS|OWN / LOSS|FOE / LOSS|END
 
@@ -38,16 +38,15 @@ func _run() -> void:
 	var n := int(ua[0]) if ua.size() > 0 else 12
 	var prod_beam := int(ua[1]) if ua.size() > 1 else 200
 	var ref_beam := int(ua[2]) if ua.size() > 2 else 600
-	var ref_roll := int(ua[3]) if ua.size() > 3 else 64
 	var nm := _load_json("res://RL/weights/噩梦.json")
 	var positions := _rand_positions(n, nm)
-	print("LOSS|CFG|n=%d|prod_beam=%d|ref_beam=%d|ref_roll=%d|nm_keys=%d|fork=%s" % [
-		positions.size(), prod_beam, ref_beam, ref_roll, nm.size(), _sha("res://RL/ai/AI_Battle.gd")])
+	print("LOSS|CFG|n=%d|prod_beam=%d|ref_beam=%d|nm_keys=%d|fork=%s" % [
+		positions.size(), prod_beam, ref_beam, nm.size(), _sha("res://RL/ai/AI_Battle.gd")])
 	var own := {}
 	var foe := {}
 	var losses: Array = []
 	for pos in positions:
-		var r := _one(pos, nm, prod_beam, ref_beam, ref_roll)
+		var r := _one(pos, nm, prod_beam, ref_beam)
 		losses.append(float(r["loss"]))
 		print("LOSS|POS|%s|loss=%.2f|prod=%.2f|ref=%.2f|steps_prod=%d|steps_ref=%d|same=%s" % [
 			String(pos["name"]), float(r["loss"]), float(r["prod_score"]), float(r["ref_score"]),
@@ -84,9 +83,9 @@ func _dump(tag: String, d: Dictionary) -> void:
 		print("LOSS|%s|%s|n=%d|mean=%.3f" % [tag, String(r["h"]), int(r["n"]), float(r["mean"])])
 
 ## 一个局面：生产计划 vs 参照计划的终态分差
-func _one(pos: Dictionary, nm: Dictionary, prod_beam: int, ref_beam: int, ref_roll: int) -> Dictionary:
-	var prod := _plan(pos, nm, prod_beam, 0)
-	var ref := _plan(pos, nm, ref_beam, ref_roll)
+func _one(pos: Dictionary, nm: Dictionary, prod_beam: int, ref_beam: int) -> Dictionary:
+	var prod := _plan(pos, nm, prod_beam)
+	var ref := _plan(pos, nm, ref_beam)   # 【2026-09-22 晚】ref_roll（真推演层）已随该层删除
 	var ps := String(prod["fp"])
 	var rs := String(ref["fp"])
 	return { "loss": float(ref["score"]) - float(prod["score"]),
@@ -95,7 +94,7 @@ func _one(pos: Dictionary, nm: Dictionary, prod_beam: int, ref_beam: int, ref_ro
 		"same": (ps == rs) }
 
 ## 用一组设置跑 search，并把"计划执行完的终态分"作为该计划的价值（AI 视角）
-func _plan(pos: Dictionary, nm: Dictionary, beam: int, rollout: int) -> Dictionary:
+func _plan(pos: Dictionary, nm: Dictionary, beam: int) -> Dictionary:
 	var ai = FORK.new(_grid)
 	ai.difficulty = 2
 	ai.log_decisions = false
@@ -103,9 +102,7 @@ func _plan(pos: Dictionary, nm: Dictionary, beam: int, rollout: int) -> Dictiona
 	var w := { "BEAM": beam }
 	for k in nm.keys():
 		w[k] = nm[k]
-	if rollout > 0:
-		w["ROLLOUT_TOPK"] = rollout
-		w["ROLLOUT_MODE"] = 1
+	# ⚠️ 2026-09-22 晚：原来这里按入参开「真推演层」（ROLLOUT_TOPK/MODE）—— 该层已整段删除。
 	ai.set_weights(w)
 	var sim = ai.build_state(pos["descs"], pos["occ"], pos["gold"], pos["graves"], pos["obs"], pos["bombs"], pos["buff"])
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)

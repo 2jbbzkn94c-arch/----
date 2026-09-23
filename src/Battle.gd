@@ -655,6 +655,11 @@ const PICK_TARGET_W := { 0: 0.0, 1: 0.5, 2: 1.0, 3: 1.0 }   # 按难度：简单
 #   全 ASCII 的键能彻底避开"PowerShell 写中文 → 编码事故"这一类坑（本项目已踩过 7 次引号/编码问题）。
 const PICK_POOL_TIER := { 0: "weak", 1: "mid", 2: "strong", 3: "strong" }
 const PICK_POOL_PATH := "res://RL/weights/队伍池.json"
+# 【临时·2026-09-23 用户要求】「普通模式（单机→普通模式）→ 难度=噩梦」专用小池：只放
+#   «近战/远程/嘲讽»(R04) 与 «近战/近战/嘲讽»(R05) 两条配方（放在 strong 档，噩梦读的就是 strong）。
+#   只改"噩梦档读哪个文件" —— **文件不存在就自动退回上面那份通用池子**（回退 = 删掉那个 json，不用改代码）。
+#   简单/普通/困难 与 RL 跑批（difficulty=2 的困难口径）一律不受影响。
+const PICK_POOL_PATH_NIGHTMARE := "res://RL/weights/队伍池_噩梦.json"
 const PICK_POOL_TOPK := 8      # 在线分排序后取前 k 支随机抽（1 = 永远挑最优、∞ = 退化成纯随机）
 const PICK_RECENT_MAX := 3     # 最近 N 局用过的队不再出（避免连着遇到同一支）
 # 【2026-09-22 配方档】候选挑人的"抖动"默认值（池子文件 `meta.pick_jitter` 可覆盖）：
@@ -685,9 +690,13 @@ func _load_pick_pool() -> void:
 	if _pick_pool_tried:
 		return
 	_pick_pool_tried = true
-	if not FileAccess.file_exists(PICK_POOL_PATH):
+	# 噩梦档（难度 3·非竞技场）：存在专用小池就用它（临时限制，见 PICK_POOL_PATH_NIGHTMARE 的注释）
+	var pool_path := PICK_POOL_PATH
+	if GameState.ai_difficulty == 3 and not GameState.arena_mode and FileAccess.file_exists(PICK_POOL_PATH_NIGHTMARE):
+		pool_path = PICK_POOL_PATH_NIGHTMARE
+	if not FileAccess.file_exists(pool_path):
 		return
-	var f := FileAccess.open(PICK_POOL_PATH, FileAccess.READ)
+	var f := FileAccess.open(pool_path, FileAccess.READ)
 	if f == null:
 		return
 	var parsed = JSON.parse_string(f.get_as_text())
@@ -1820,7 +1829,8 @@ func _deploy_is_hard(id: String) -> bool:
 ## 打分 = 既有 `_deploy_candidate_value()`（含对玩家已首发的净克制 + 职能配比）+ `randf() * jitter`；
 ## 两种挑法（2026-09-22 用户提问"近战/远程有抖动吗"之后定稿）：
 ##   · 槽位带 `pick == "counter"`（"根据对方首发/要求决定"那类）⇒ **取最高分**（并列随机）—— 保留克制意图；
-##   · 其它槽（近战/远程/随机1人 这类**泛化槽**）⇒ **"上位圈随机"**：分数在 `最高分 − band` 以内的所有人里
+##   · 槽位带 `pick == "random"`（用户明确写了"随机N人"）⇒ **整池均匀随机**（不看分数）；
+##   · 其它槽（近战/远程 这类**泛化槽**）⇒ **"上位圈随机"**：分数在 `最高分 − band` 以内的所有人里
 ##     均匀随机（band 见 `const PICK_BAND_DEFAULT`）—— 治"泛化槽还是被最高分垄断"。
 ## `<替补>` 标签英雄不主动首发（既有口径）。
 func _recipe_deploy_pick() -> bool:
@@ -1833,6 +1843,7 @@ func _recipe_deploy_pick() -> bool:
 	var slot: Dictionary = slots[si] as Dictionary
 	var pool: Array = (slot.get("pool", []) as Array)
 	var is_counter := String(slot.get("pick", "")) == "counter"
+	var is_random := String(slot.get("pick", "")) == "random"
 	var jitter := float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))
 	var band := float(GameState.enemy_recipe.get("pick_band", PICK_BAND_DEFAULT))
 	var cands: Array = []
@@ -1855,10 +1866,12 @@ func _recipe_deploy_pick() -> bool:
 		best = maxf(best, float(s))
 	var pool_idx: Array = []
 	for i in cands.size():
-		# 条件槽：只要并列最高的；泛化槽：要"最高分 − band"以内的所有人
+		# 条件槽：只要并列最高的；纯随机槽：全池；泛化槽：要"最高分 − band"以内的所有人
 		if is_counter:
 			if float(scores[i]) >= best - 0.000001:
 				pool_idx.append(i)
+		elif is_random:
+			pool_idx.append(i)
 		elif float(scores[i]) >= best - band:
 			pool_idx.append(i)
 	if pool_idx.is_empty():
@@ -2197,7 +2210,7 @@ func area_around(cell: Vector2i) -> Array:
 func sweep_obstacles_around(cell: Vector2i) -> int:
 	return sweep_obstacles(area_around(cell))
 
-# 圣诞老人：在空地随机放置 n 个增益道具（"heal"/"atk"/"move"/"shield"
+# 圣诞老人：在空地随机放置 n 个增益道具（"heal"/"atk"/"shield" —— 见下面 `types` 的说明）
 func _place_buff_items(u: Unit, n: int) -> void:
 	var spots: Array = []
 	for cell in grid.all_cells():
@@ -2205,7 +2218,12 @@ func _place_buff_items(u: Unit, n: int) -> void:
 				and not buff_items.has(cell) and not graves.has(cell):   # 墓碑格不放道具
 			spots.append(cell)
 	_rng_shuffle(spots)
-	var types: Array = ["heal", "atk", "move", "shield"]   # 圣诞老人的四种礼
+	# 【2026-09-22 用户拍板】圣诞老人的礼物**去掉「移动+1」那一种** ⇒ 只剩三种礼：
+	#   回血3（可溢出上限）/ 攻击+1（下一次攻击）/ 圣盾。
+	#   ⚠️ 只是**不再生成** move 道具：机制本身照旧保留（`Unit.move_use_buff`、`_pickup_buff_at_cell`
+	#   的 move 分支、`BoardView` 的移速图标都还在）—— RL 的 `对拍/技能对拍.gd` 仍然靠
+	#   直接往盘面塞一个 "move" 道具来钉"移动中捡道具→emove 立刻 +1"那条链路，删机制会把它打断。
+	var types: Array = ["heal", "atk", "shield"]
 	var placed := 0
 	var placed_cells: Array = []
 	while placed < n and spots.size() > 0:
@@ -3466,16 +3484,19 @@ func apply_command(cmd: Dictionary) -> void:
 				_apply_bomb_cmd(u, bc)
 
 # 攻击障碍物的完整副作用（两端重演一致）：扣行动 + 伤害 + AOE/穿透技+ 收尾
-func _do_attack_obstacle(u: Unit, cell: Vector2i) -> void:
+func _do_attack_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
 	if not obstacles.has(cell):
+		_obstacle_noop(for_enemy)
 		return
 	# 血锁：攻击障碍同样只能6 方向直线（权威执行处也校验，防绕UI 高亮
 	if u.branch_override and not _is_straight_line_cells(u.cell, cell):
+		_obstacle_noop(for_enemy)   # 非法目标：真实规则整招不执行（AI 侧本该不生成这种候选，见文档）
 		return   # 非法目标直接忽略，不消耗行动（UI 高亮已过滤，此处为兜底）
 	# 与攻击单位一致：中间有单位/障碍挡视线时打不到（权威兜底，防绕过高亮；坠炮手未沉默才无视）
 	if not u.mortar_active() and _attack_path_blocked(u.cell, cell):
+		_obstacle_noop(for_enemy)
 		return
 	state = State.ANIMATING   # 演出期间锁定输入
 	u.attacked_this_turn = true
@@ -3483,12 +3504,12 @@ func _do_attack_obstacle(u: Unit, cell: Vector2i) -> void:
 	# 演出：远1)投掷物飞向障碍命中；近战()攻击者向障碍轻挥一击。命中后统一结算
 	var dist := grid.distance(u.cell, cell)
 	if dist > 1:
-		_launch_obstacle_projectile(u, cell)
+		_launch_obstacle_projectile(u, cell, for_enemy)
 	else:
-		_melee_obstacle_hit(u, cell)
+		_melee_obstacle_hit(u, cell, for_enemy)
 
 # 远程攻击障碍物：投掷物飞向障碍格，命中后结算
-func _launch_obstacle_projectile(u: Unit, cell: Vector2i) -> void:
+func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var from := board_view.cell_world_center(u.cell)
 	var to := board_view.cell_world_center(cell)
 	var proj := Projectile.new()
@@ -3500,10 +3521,10 @@ func _launch_obstacle_projectile(u: Unit, cell: Vector2i) -> void:
 	t.tween_property(proj, "position", to, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	t.tween_callback(func():
 		proj.queue_free()
-		_impact_obstacle(u, cell))
+		_impact_obstacle(u, cell, for_enemy))
 
 # 近战攻击障碍物：攻击者向障碍轻挥（小前冲+回位），命中后结算
-func _melee_obstacle_hit(u: Unit, cell: Vector2i) -> void:
+func _melee_obstacle_hit(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var apos := board_view.cell_world_center(u.cell)
 	var swing_to := apos.lerp(board_view.cell_world_center(cell), 0.3)
 	var t := create_tween()
@@ -3515,21 +3536,44 @@ func _melee_obstacle_hit(u: Unit, cell: Vector2i) -> void:
 		back.tween_property(u, "position", apos, 0.08)
 		back.tween_callback(func():
 			if u != null and is_instance_valid(u):
-				_impact_obstacle(u, cell)))
+				_impact_obstacle(u, cell, for_enemy)))
 
 # 障碍受击命中：命中火花演出 + 结算伤害（仅直接攻击的伤害，伐木工额外99）
 # 规则①：主动攻击障碍物不触发任何英雄特技。
 # （另一条互补：技能"对敌人生效时波及到障碍"会扣耐久 —— 见 sweep_obstacles / _pierce_line）
-func _impact_obstacle(u: Unit, cell: Vector2i) -> void:
+func _impact_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
 	if not obstacles.has(cell):
-		_after_player_action()
+		_finish_obstacle_hit(for_enemy)
 		return
 	_obstacle_hit_fx(cell)
 	var dmg := _hero(u).obstacle_damage()
 	_damage_obstacle(cell, dmg)
 	log_message.emit("%s 攻击障碍物。" % u.display_name)
+	_finish_obstacle_hit(for_enemy)
+
+
+# 障碍攻击"空动作"的收尾（2026-09-23 新增）：目标是非法/打不到时真实引擎整招不执行，
+# 但敌方回放/跑批仍在等 `action_finished`（只能吃满超时兜底 ⇒ 每次白停 3 秒）。
+# 这里只给 for_enemy 补一个"这招结束了"的信号；**玩家路径逐位不变**（不碰 state/输入）。
+func _obstacle_noop(for_enemy: bool) -> void:
+	if for_enemy and not GameState.is_online:
+		action_finished.emit()
+
+# 障碍受击的收尾（2026-09-23 新增）：口径与 `_finish_attack` 完全一致 —— 敌方回放/跑批靠
+# `action_finished` 判断"这一招演完了"，而打障碍这条路径原来**从不发**这个信号，于是三方
+# （生产 `EnemyReplay._wait_action_done` 3s / 抽查器 `ACT_WALL_MS` 3s / 跑批 400ms~1s）
+# 每次都只能吃满超时兜底：游戏里每次敌方打障碍白停 3 秒，抽查器还会在兜底窗口里抓拍出
+# 假的「障碍耐久 预测1/实际2」DIFF。敲障碍不会结束对局，所以这里不需要 `_check_win()`。
+func _finish_obstacle_hit(for_enemy: bool) -> void:
+	if for_enemy:
+		# 单机：通知敌方 AI 回放/跑批继续；联机对端真人行动后回到等待状态（同 _finish_attack）
+		if GameState.is_online:
+			state = State.ENEMY_TURN
+		else:
+			action_finished.emit()
+		return
 	_after_player_action()
 
 # 障碍受击火花：障碍格闪现一圈白色冲击波后消散
@@ -5390,120 +5434,126 @@ func _place_enemy_sub() -> void:
 	if _pending_enemy_sub == 0:
 		_clear_side_graves(DataRegistry.Faction.ENEMY)
 
-# 此刻最合的敌方替补：按当前战局需求给候选打分，取代按卡组顺序硬顶
-# 需求依据：缺前嘲讽)优先补坦克；多人负伤时优先支光环；输出偏少时优先远程
-# 远程/嘲讽兼顾正面战力；替补标签英雄登场本就能触发技能，小加分
+# 替补选人（**预设替补**那条路：配方/队伍写了 bench 时，只在这几名里挑）。
+# 【2026-09-22 用户拍板·两段式】用户原话：「先评估需要什么，再给英雄池里你需要的英雄评分排名，然后选一个」
+#   ⇒ 打分不再自己算一遍，而是**一律走 `DataRegistry.sub_hero_score()`**（需求优先 + 身价 + 需求专属项），
+#     这里的职责只剩"在预设名单里按分数取最高"。
+# ⚠️ 旧实现里这一段把「身价 + 缺前排+11 + 补坦克位+3 + 支援伤员 + 登场技」混成一个数 ⇒ 不缺坦克时坦克
+#   照样能排第一（用户实测：场上已有一个坦克，排名第一还是坦克）。那些加分现在归 `DataRegistry` 的
+#   需求判定管（判据 = 存活嘲讽数等，见 `sub_need()`）。
+# ⚠️ **动态替补不再借这个函数打分**（旧实现把 39 个动态候选临时塞进 `enemy_roster` 再调它，于是它顺手
+#   打出的 `→ 上 X` 与实际选的人**不是同一个人** —— 用户就是被这行日志骗的："说波盾、上战锤"）。
 func _best_enemy_sub_idx() -> int:
+	if enemy_roster.is_empty():
+		return 0
+	var ctx := _sub_ctx()
+	var need := String(ctx.get("need", ""))
 	var best_i := 0
 	var best_s := -1e18
-	var cand_rows: Array = []   # 候选价值明细（★2026-09-22：**始终**收集，动态替补要用它做"分数+抖动"）
-	var has_taunt := false
+	var rows: Array = []
+	for i in enemy_roster.size():
+		var hid: String = String(enemy_roster[i])
+		var sc := DataRegistry.sub_hero_score(hid, need, ctx)
+		var s := float(sc.get("s", -1e18))
+		rows.append({ "i": i, "hid": hid, "s": s, "why": sc.get("why", []) })
+		if s > best_s:
+			best_s = s
+			best_i = i
+	if _CONSOLE_AI_LOG and rows.size() > 0:
+		rows.sort_custom(func(x, y): return float(x["s"]) > float(y["s"]))
+		print("\n[AI替补上人] 预设替补 %d 人 · 需求 = %s" % [
+			enemy_roster.size(), DataRegistry.sub_need_label(need)])
+		for r in rows.slice(0, mini(3, rows.size())):
+			var why_txt := "、".join(r["why"]) if (r["why"] as Array).size() > 0 else "常规"
+			print("  - %s 价值%.1f（%s）" % [_hero_name(String(r["hid"])), float(r["s"]), why_txt])
+		print("[AI替补上人] → 上 %s（预设名单里最高分）" % _hero_name(String(enemy_roster[best_i])))
+	return best_i
+
+## 替补选人的「需求上下文」（**真实侧**）：只统计**存活单位**，然后问 `DataRegistry.sub_need()`。
+## ⚠️ 英雄属性一律用**英雄表**（`def.skills / attack_type / atk`），不用实时数值 ⇒ 与模拟镜像必然一致
+##   （实时值两侧来源不同：真实读 `effective_*()`、模拟读被状态改过的 `eatk`）。
+## 字段：taunt/healers/dps/ranged/wounded（我方存活计数）· core（对面存活里身价最高者）· countered（我方
+##   是否已有人克制它）· ally_heroes/foe_heroes（身价与克制用）· player_near（对面贴着我方，后勤贬价用）。
+func _sub_ctx() -> Dictionary:
+	var ally: Array = []
+	var foe: Array = []
+	var taunt := 0
+	var healers := 0
+	var dps := 0
+	var ranged := 0
 	var wounded := 0
-	var live_melee := 0   # 存活且能上前线的敌方单位数（近战或嘲讽）
+	var heals: Array = DataRegistry.MECH_TAGS["治疗"]
 	for u in units:
 		if u == null or not is_instance_valid(u) or not u.alive:
 			continue
-		if u.faction != DataRegistry.Faction.ENEMY:
-			continue
-		if u.skills.has(DataRegistry.Skill.TAUNT):
-			has_taunt = true
-			live_melee += 1
-		elif u.attack_type == DataRegistry.AttackType.MELEE:
-			live_melee += 1
-		if u.hp < u.max_hp:
-			wounded += 1
+		var hid := String(u.hero_id)
+		if u.faction == DataRegistry.Faction.ENEMY:
+			ally.append(hid)
+			var def := DataRegistry.get_hero(hid)
+			if def != null:
+				if def.skills.has(DataRegistry.Skill.TAUNT):
+					taunt += 1
+				if heals.has(hid) or DataRegistry.SUB_HEAL_EXTRA.has(hid):
+					healers += 1
+				if int(def.atk) >= DataRegistry.SUB_DPS_ATK:
+					dps += 1
+				if def.attack_type == DataRegistry.AttackType.RANGED:
+					ranged += 1
+			if u.hp < u.max_hp:
+				wounded += 1
+		else:
+			foe.append(hid)
+	# 对面"核心" = 对面存活里身价最高的人（身价按**对面自己**的队友/对手算）
+	var core := ""
+	var core_s := -1e18
+	for hid in foe:
+		var s := DataRegistry.battle_unit_value(String(hid), foe, ally)
+		if s > core_s:
+			core_s = s
+			core = String(hid)
+	var countered := false
+	if core != "":
+		for hid in ally:
+			if DataRegistry.counter_bonus(String(hid), core) > 0.0:
+				countered = true
+				break
+	# 对面是否贴着我方（后勤在贴身交战中不值钱 —— 沿用旧口径）
 	var player_near := false
 	for u in units:
-		if u == null or not is_instance_valid(u) or not u.alive:
-			continue
-		if u.faction == DataRegistry.Faction.ENEMY:
+		if u == null or not is_instance_valid(u) or not u.alive or u.faction == DataRegistry.Faction.ENEMY:
 			continue
 		for n in grid.neighbors(u.cell):
 			if occupancy.has(n) and occupancy[n].faction == DataRegistry.Faction.ENEMY:
 				player_near = true
 				break
-	# 【身价统一 · 用户 2026-09-15】替补"值不值得上"改用**唯一身价实现**
-	# （角色列表"总评分" + 与我方队友的配合分 + 克制分，见 DataRegistry.battle_unit_value()）。
-	# 以前这里是遗留的 `攻击×1.6 + 血上限×0.9`（外加 远程+2.5）：那是**按静态数值另算一份身价**，
-	# 与"总评分"里的 属性评分/特性评分 重复计价，口径也和噩梦档不同。
-	# 队友 = 场上存活的本方(此处为敌方阵营 AI)单位（替补补进这一队），对手 = 场上存活的玩家单位。
-	# 注意：替补选人是**规则级**决策（不是 AI 的偏好项）→ 用 DataRegistry 的默认系数、不接受权重注入；
-	# 必须与 `RL/ai/AI_Battle.gd::_sim_best_sub_idx` 逐条一致（那函数是本规则的模拟镜像）。
-	var sub_ally: Array = []
-	var sub_foe: Array = []
-	for au in units:
-		if au == null or not is_instance_valid(au) or not au.alive:
-			continue
-		if au.faction == DataRegistry.Faction.ENEMY:
-			sub_ally.append(au.hero_id)
-		else:
-			sub_foe.append(au.hero_id)
-	for i in enemy_roster.size():
-		var hid: String = enemy_roster[i]
-		var def := DataRegistry.get_hero(hid)
-		if def == null:
-			continue
-		var s: float = DataRegistry.battle_unit_value(hid, sub_ally, sub_foe)
-		var why: Array[String] = []
-		if not has_taunt and def.skills.has(DataRegistry.Skill.TAUNT):
-			s += 11.0   # 缺前排：嘲讽坦克优先补位
-			why.append("缺前排坦克")
-		elif def.skills.has(DataRegistry.Skill.TAUNT) and live_melee < 2:
-			s += 3.0
-			why.append("补坦克位")
-		if def.skills.has(DataRegistry.Skill.LOGISTICS):
-			# 后勤/支援：队伍伤员多或交战胶着时价值上升；平时不优先（不能主动输出
-			if wounded > 0:
-				s += float(wounded) * 1.2
-				why.append("支援伤员")
-			elif player_near:
-				s -= 4.0
-			else:
-				s -= 1.5
-		if def.skills.has(DataRegistry.Skill.BENCH):
-			s += 0.5   # 替补标签：登场触发技能，小加
-			why.append("替补技")
-		match hid:
-			"hero_16":   # 波盾：登场让己方全体获得圣盾
-				s += 5.0 + (3.0 if wounded > 0 else 0.0)
-				why.append("登场全队圣盾")
-			"hero_36":   # 梅林：治疗最低血量队友并与其换位
-				s += 5.0 if wounded > 0 else 1.0
-				why.append("登场治疗换位")
-			"hero_29":   # 太阳斩：登场攻击3（短时爆发）
-				s += 3.0
-				why.append("登场爆发")
-			"hero_39":   # 猎颅者：登场锁定目标
-				s += 2.0
-				why.append("登场锁定")
-		# ★2026-09-22：**始终**收集候选明细（不再只在开日志时收集）—— 动态替补要拿这份分数
-		#   做"分数 + 抖动"（否则就得把这段 200 行的局面打分再抄一份，迟早漂移）。
-		cand_rows.append({ "hid": hid, "n": def.display_name, "s": s, "why": why })
-		if s > best_s:
-			best_s = s
-			best_i = i
-	_last_sub_rows = cand_rows
-	if _CONSOLE_AI_LOG and cand_rows.size() > 0:
-		cand_rows.sort_custom(func(x, y): return x["s"] > y["s"])
-		print("\n[AI替补上人] 敌方需要补位（现有 %d 人待选）" % cand_rows.size())
-		for r in cand_rows.slice(0, mini(3, cand_rows.size())):
-			var why_txt := "、".join(r["why"]) if (r["why"] as Array).size() > 0 else "常规"
-			print("  - %s 价值%.1f（%s）" % [r["n"], float(r["s"]), why_txt])
-		print("[AI替补上人] → 上 %s" % cand_rows[0]["n"])
-	return best_i
+		if player_near:
+			break
+	var ctx := {
+		"taunt": taunt, "healers": healers, "dps": dps, "ranged": ranged, "wounded": wounded,
+		"core": core, "countered": countered, "ally_heroes": ally, "foe_heroes": foe,
+		"player_near": player_near,
+	}
+	ctx["need"] = DataRegistry.sub_need(ctx)
+	return ctx
+
+func _hero_name(hid: String) -> String:
+	var def := DataRegistry.get_hero(hid)
+	return def.display_name if def != null else hid
 
 # ---- 替补选择与落位（本端"我方"；联主机玩家/客户端敌方，单机=玩家----
 var _pending_sub := ""   # 已选中的替hero_id（等待落位）
-# 【2026-09-22 配方档】`_best_enemy_sub_idx()` 每次都会把"候选 + 分值"写进这里（动态替补复用同一份打分）
-var _last_sub_rows: Array = []
 
 # ---------- 【2026-09-22 新增·队伍池配方档】动态替补（用户口径，逐条对应）----------
-# 【2026-09-22·用户拍板"要"】③④"缺口/兜底"档改成 **分数前 SUB_PICK_TOPK 名里随机**：
-#   为什么：这一档复用的是既有 `_best_enemy_sub_idx()` 的打分，而波盾(hero_16) 在那套分里有
-#   **与局面无关的固定加成**（`<替补>`+0.5、登场全队圣盾 +5，有人受伤再 +3）⇒ 常规局面它几乎必然第一
-#   （探针实测 13 局里 12 局都是它）。用户口径是"要有一定随机性" ⇒ 改成 top-K 随机。
-#   ①②"能斩杀/救人"这两个**明确战术机会**仍然取最高分（并列随机），不吃这个 top-K。
-const SUB_PICK_TOPK := 3
+# 【2026-09-22 晚·用户拍板改成两段式】原实现是"③④档 = 分数前 `SUB_PICK_TOPK` 名里随机"，
+#   两个毛病（用户实测）：
+#     ① **先加抖动、再取前 K** ⇒ 原始分第 4、5 名也能被抬进圈（名单上写着 波盾/梅林/独脚龟，
+#        实际上了分更低的战锤 —— 而场上已经有一个坦克）；
+#     ② 更根本：打分把「身价 + 缺前排+11 / 补坦克位+3 …」混成一个数 ⇒ **不缺坦克时坦克照样排第一**。
+#   ⇒ 用户口径：「先评估需要什么，再给英雄池里你需要的英雄评分排名，然后选其中一个」：
+#     **① `_sub_ctx()` 判需求 → ② 在该需求的候选人里排名 → ③ 取 `最高分 − SUB_PICK_BAND` 的圈 → 圈内均匀随机**。
+#   `SUB_PICK_BAND = 3.0` 与部署阶段那个 `pick_band` 同一套口径（差距大就不随机、只在小圈里随机）。
+#   ①②"能斩杀/救人"这两个**明确战术机会**仍然取最高分，不吃随机。
+const SUB_PICK_BAND := 3.0
 # 用户原话：「没有预设替补的不要在开场就决定好替补队伍，在需要替补的时候再从英雄池里选合适的，
 #   合适的替补不能单纯按照评分来，比如可以斩杀的时候，一个够伤害的高攻比其他替补都要合适，
 #   再比如我方有个英雄下回合必死，我准备要输了，那梅林也是个很好的选择」
@@ -5600,43 +5650,63 @@ func _save_candidates(cands: Array) -> Array:
 			out.append(h)
 	return out
 
-## ③+④ 借既有"缺口打分"（临时把候选表当替补席用，零重复实现）拿分。
-## `topk_random=true` ⇒ **分数前 `SUB_PICK_TOPK` 名里随机**（默认，用于③④缺口/兜底档）；
-## `false` ⇒ 取最高分（并列随机），用于②"救人"这种明确战术机会。
-func _sub_pick_with_need_score(list: Array, jitter: float, topk_random: bool = true) -> String:
+## ③④档的选人（**两段式**，用户 2026-09-22 口径）：需求筛候选 → 在该需求下排名 → 圈（`最高−SUB_PICK_BAND`）内均匀随机。
+## ⚠️ 顺序**必须先定圈再随机**：旧实现"先给所有人加抖动、再取前 K"会让原始分第 4、5 名挤进圈
+##   （用户实测：名单前三 = 波盾/梅林/独脚龟，实际上了原始分更低的战锤，而场上已经有一个坦克）。
+## ⚠️ 需求筛不出人（比如"缺前排"但全池没嘲讽了）⇒ **退回全池**，不让这次补位落空。
+func _sub_pick_need_band(list: Array, ctx: Dictionary, need: String) -> String:
 	if list.is_empty():
 		return ""
-	var saved := enemy_roster
-	enemy_roster = list.duplicate()
-	_last_sub_rows = []
-	var idx := _best_enemy_sub_idx()
-	var rows: Array = _last_sub_rows.duplicate()
-	enemy_roster = saved
-	if rows.is_empty():
-		return String(list[idx]) if idx >= 0 and idx < list.size() else String(list[0])
-	var best := -1e18
-	var scored: Array = []
+	var elig: Array = []
+	for hid in list:
+		if DataRegistry.sub_hero_eligible(String(hid), need, ctx):
+			elig.append(String(hid))
+	var fell_back := false
+	if elig.is_empty():
+		elig = list.duplicate()
+		fell_back = true
+	var rows: Array = []
+	for hid in elig:
+		var sc := DataRegistry.sub_hero_score(String(hid), need, ctx)
+		rows.append({ "hid": String(hid), "s": float(sc.get("s", -1e18)), "why": sc.get("why", []) })
+	rows.sort_custom(func(x, y): return float(x["s"]) > float(y["s"]))
+	var best := float(rows[0]["s"])
+	var circle: Array = []
 	for r in rows:
-		var s := float(r["s"]) + randf() * jitter
-		scored.append({ "hid": String(r["hid"]), "s": s })
-		best = maxf(best, s)
-	if topk_random:
-		scored.sort_custom(func(a, b): return float(a["s"]) > float(b["s"]))
-		var slice: Array = scored.slice(0, mini(SUB_PICK_TOPK, scored.size()))
-		return String((slice[randi() % slice.size()])["hid"])
-	var tied: Array = []
-	for r in scored:
-		if float(r["s"]) >= best - 0.000001:
-			tied.append(r)
-	return String((tied[randi() % tied.size()])["hid"])
+		if float(r["s"]) >= best - SUB_PICK_BAND:
+			circle.append(r)
+	if circle.is_empty():
+		circle.append(rows[0])
+	var pick: Dictionary = circle[randi() % circle.size()]
+	if _CONSOLE_AI_LOG:
+		var cnames: Array[String] = []
+		for r in circle:
+			cnames.append("%s %.1f" % [_hero_name(String(r["hid"])), float(r["s"])])
+		print("[替补·需求] 需求 = %s%s · 候选 %d/%d 人 → 圈内 %d 人{%s} → 上 %s（原始第一 %s %.1f）" % [
+			DataRegistry.sub_need_label(need), "（筛不出人→退回全池）" if fell_back else "",
+			elig.size(), list.size(), circle.size(), "、".join(cnames),
+			_hero_name(String(pick["hid"])), _hero_name(String(rows[0]["hid"])), best])
+	return String(pick["hid"])
+
+## 明确战术机会（②救人）用：在该需求下取最高分（平局取先出现的）。
+func _sub_pick_argmax(list: Array, ctx: Dictionary, need: String) -> String:
+	var best_hid := ""
+	var best_s := -1e18
+	for hid in list:
+		var sc := DataRegistry.sub_hero_score(String(hid), need, ctx)
+		if float(sc.get("s", -1e18)) > best_s:
+			best_s = float(sc.get("s", -1e18))
+			best_hid = String(hid)
+	return best_hid
 
 ## 动态替补总入口：按 ①②③④ 挑一个，返回 { "id": hero_id, "cell": Vector2i }（cell 为 (-99,-99) ⇒ 用原落点规则）
 func _dynamic_sub_pick() -> Dictionary:
 	var cands := _dynamic_sub_candidates()
 	if cands.is_empty():
 		return {}
-	var jitter := float(GameState.enemy_recipe.get("jitter", PICK_JITTER_DEFAULT))
 	var cells: Array = _sub_legal_cells_for_ai()
+	var ctx := _sub_ctx()
+	var need := String(ctx.get("need", ""))
 	# ---- ① 能斩杀（只算这一手）----
 	if not cells.is_empty():
 		var kill_rows: Array = []
@@ -5653,9 +5723,9 @@ func _dynamic_sub_pick() -> Dictionary:
 				if float(r["dmg"]) >= top - 0.0001:
 					tied.append(r)
 			var pick: Dictionary = tied[randi() % tied.size()]
-			if _CONSOLE_SUB_LOG:
+			if _CONSOLE_AI_LOG:   # 【2026-09-22】改挂总开关：原来挂 `_CONSOLE_SUB_LOG`(=false) ⇒ 这行永远看不见
 				print("[替补·动态] 判据①能斩杀 → 上 %s（这一手 %.0f 伤害，落点 %s，候选 %d 人可杀）" % [
-					String(pick["id"]), float(pick["dmg"]), str(pick["cell"]), kill_rows.size()])
+					_hero_name(String(pick["id"])), float(pick["dmg"]), str(pick["cell"]), kill_rows.size()])
 			return { "id": String(pick["id"]), "cell": pick["cell"] }
 	# ---- ② 救人：只在"再死一个就判负"时（用户口径：只考虑 AI 已阵亡 2 人）----
 	if enemy_dead >= LOSS_DEATH_COUNT - 1:
@@ -5663,19 +5733,17 @@ func _dynamic_sub_pick() -> Dictionary:
 		if doomed != null:
 			var savers := _save_candidates(cands)
 			if not savers.is_empty():
-				# ② "救人"是明确战术机会 ⇒ 取最高分（并列随机），**不**走 top-K 随机
-				var hid2 := _sub_pick_with_need_score(savers, jitter, false)
+				# ② "救人"是明确战术机会 ⇒ 取最高分（**不吃**圈内随机）
+				var hid2 := _sub_pick_argmax(savers, ctx, need)
 				if hid2 != "":
-					if _CONSOLE_SUB_LOG:
+					if _CONSOLE_AI_LOG:
 						print("[替补·动态] 判据②救人（我方 %s 下回合必死 · 已阵亡 %d 人）→ 上 %s" % [
-							String(doomed.hero_id), enemy_dead, hid2])
+							_hero_name(String(doomed.hero_id)), enemy_dead, _hero_name(hid2)])
 					return { "id": hid2, "cell": Vector2i(-99, -99) }
-	# ---- ③ 结构性缺口 + ④ 兜底（同一份打分 + 抖动）----
-	var hid3 := _sub_pick_with_need_score(cands, jitter)
+	# ---- ③ 需求判定 + ④ 兜底（用户 2026-09-22 口径：先判需要什么 → 在该需求的人里排名 → 圈内随机）----
+	var hid3 := _sub_pick_need_band(cands, ctx, need)
 	if hid3 == "":
 		return {}
-	if _CONSOLE_SUB_LOG:
-		print("[替补·动态] 判据③/④缺口+兜底 → 上 %s（候选池 %d 人）" % [hid3, cands.size()])
 	return { "id": hid3, "cell": Vector2i(-99, -99) }
 
 # 尝试开始下一个替补名额（同时阵亡多人时逐个替补）。仅在空闲且有名有替补时消费 1 个
@@ -6346,7 +6414,9 @@ func _spawn_benchbackup(hero_id: String, side: int, grave: Vector2i) -> void:
 	# 共鸣者不在此触发：回合开始由英雄脚本的 on_side_turn_start 统一结算，回合中间替补不触发
 
 # ---- 噩梦难度：建敌方 AI（难度 0/1/2 完全照旧走生产 BattleAI，一个字不改） ----
-# 候选的 w_beam / w_jitter 也在权重文件里注入：默认 800/0.0 = 生产困难档同值。
+# 候选的 `BEAM` 也在权重文件里注入：**引擎默认 200**（= 困难档同值；`BattleAI.var w_beam := 200`）。
+#   ⚠️ 2026-09-22 晚：噩梦档已在 `噩梦.json` 里写 `BEAM = 400`（用户点名）⇒ 本档宽度 = 400。
+#   ⚠️ 跑批不会走这条：`RL/harness/对局.gd` 用 spec 的 `beam` 字段**显式覆盖** `ai.w_beam`。
 # 本函数只在**主线程、建实例时**调用一次（文件 IO 不进后台线程）；线程里只 build_state/search。
 # 任何异常（文件缺失/非字典/load 失败/候选构造失败）都安全降级：用生产 AI 或候选默认权重。
 func _make_battle_ai() -> Variant:

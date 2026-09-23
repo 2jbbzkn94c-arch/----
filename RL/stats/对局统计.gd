@@ -465,7 +465,7 @@ func _ai_side(side: int) -> void:
 		if not _alive_unit(u):
 			continue
 		if a.has("atk_obs"):
-			await _act_and_wait(u, null, func() -> void: _b._do_attack_obstacle(u, a["atk_obs"]))
+			await _act_and_wait(u, null, func() -> void: _b._do_attack_obstacle(u, a["atk_obs"], fn == DataRegistry.Faction.ENEMY))
 			_bump(u, "attacks")
 		if a.has("atk") and int(a["atk"]) >= 0:
 			var ti := int(a["atk"])

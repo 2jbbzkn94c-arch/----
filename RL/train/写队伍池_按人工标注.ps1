@@ -36,7 +36,7 @@ function Resolve-UnderRoot([string]$p) {
 }
 
 # ---------- 英雄名/特性表（模板行要用）----------
-$heroRows = Get-Content (Join-Path $root '英雄相关\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$heroRows = Get-Content (Join-Path $root 'Data\Hero\Source\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 $name2id = @{}; $id2name = @{}; $traits = @{}; $allIds = @()
 for ($i = 1; $i -lt $heroRows.Count; $i++) {
     $num = 0
@@ -197,10 +197,14 @@ function Convert-SpecToRecipe([string]$text, [int]$lineNo) {
         $poolNames = @()
         foreach ($x in (Resolve-SlotPool $st)) { $poolNames += $x }
         if ($poolNames.Count -eq 0) { throw ('槽位解析为空：' + $st) }
-        # `pick`：槽位文字里带「根据…决定 / 根据…要求」⇒ 这个槽要**按克制挑**（"对面有毒蛇就上战锤"那类）；
-        #   其它槽（近战/远程/"随机1人"）⇒ 泛化槽，游戏端走"上位圈随机"（`meta.pick_band`）。
+        # `pick` 三种（游戏端 `Battle._recipe_deploy_pick()` 读它）：
+        #   · 槽位文字里有「随机N人」   ⇒ `random`  = **整池均匀随机**（用户明确写了"随机1人"，
+        #     就不能被分数垄断 —— 实测 `(暗域/血锁/傀儡师)` 里暗域高 4.5，band=3 圈里只剩它）
+        #   · 有「根据…决定 / 根据…要求」⇒ `counter` = **按克制取最高分**（"对面有毒蛇就上战锤"那类）
+        #   · 其它（近战/远程 这种泛化） ⇒ 空 = 游戏端走"上位圈随机"（`meta.pick_band`）
         $pickMode = ''
-        if ($st -match '根据') { $pickMode = 'counter' }
+        if ($st -match '随机') { $pickMode = 'random' }
+        elseif ($st -match '根据') { $pickMode = 'counter' }
         if ($poolNames.Count -eq 1) { $slots += [ordered]@{ fixed = $name2id[$poolNames[0]] } }
         else { $slots += [ordered]@{ pool = @($poolNames | ForEach-Object { $name2id[$_] }); pick = $pickMode } }
     }
@@ -399,7 +403,7 @@ Write-Host ('[人工池] 已写 ' + $outPath)
 # ---------- 自检 ----------
 $chk = Get-Content $outPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $known = @{}
-$rows = Get-Content (Join-Path $root '英雄相关\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$rows = Get-Content (Join-Path $root 'Data\Hero\Source\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 for ($i = 1; $i -lt $rows.Count; $i++) {
     $num = 0
     if ([int]::TryParse([string]$rows[$i][0], [ref]$num)) { $known['hero_{0:D2}' -f $num] = $true }

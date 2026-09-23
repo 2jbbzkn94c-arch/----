@@ -1,0 +1,144 @@
+{
+    "_说明":  "【临时·2026-09-23 用户要求】「普通模式（单机 → 普通模式）→ 难度=噩梦」专用小队池：只放两条配方 —— «近战/远程/嘲讽»（R04）与 «近战/近战/嘲讽»（R05）。",
+    "_用途":  "只有 GameState.ai_difficulty == 3（噩梦）且 not GameState.arena_mode（普通模式）时会读它（src/Battle.gd 的 PICK_POOL_PATH_NIGHTMARE，且**文件存在才生效**）。",
+    "_不影响":  "简单/普通/困难 三档一律照旧读 队伍池.json（weak / mid / strong）；RL 跑批走的是 difficulty=2（困难口径）⇒ 也不受影响。",
+    "_回退":  "删掉本文件（或改名 .bak）⇒ 噩梦立刻退回 队伍池.json 的 strong 档（8 条配方），不用改代码。",
+    "_来源":  "两条配方从 队伍池.json 的 strong[0]/strong[1] 逐字复制（id / note / slots / bench / bench_multi / dynamic_bench / w 全同）。",
+    "meta":  {
+                 "生成时间":  "2026-09-23 07:30",
+                 "来源":  "队伍池.json（strong 档的 R04/R05）",
+                 "pick_jitter":  2,
+                 "pick_band":  6,
+                 "档位口径":  "只有 strong 档有内容 ⇒ 噩梦档按\"每场随机抽 1 条配方\"处理",
+                 "配方数":  2
+             },
+    "strong":  [
+                   {
+                       "id":  "R04",
+                       "note":  "1.近战（排除替补/嘲讽/圣诞老人/末日/嬉皮死神/血锁/共鸣者/锤头鲨/古灵精怪）+ 远程（排除风语者/烈焰祭司/炸弹人/傀儡师）+ 嘲讽（排除替补和大骑士；2026-09-23 起 pick 清空 = 按 band 随机，不再按克制取最高）",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ],
+                                         "pick":  ""
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_10",
+                                                      "hero_21",
+                                                      "hero_34",
+                                                      "hero_08",
+                                                      "hero_09",
+                                                      "hero_20",
+                                                      "hero_33",
+                                                      "hero_06",
+                                                      "hero_07",
+                                                      "hero_45"
+                                                  ],
+                                         "pick":  ""
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_13",
+                                                      "hero_44",
+                                                      "hero_23",
+                                                      "hero_49",
+                                                      "hero_12",
+                                                      "hero_22",
+                                                      "hero_11",
+                                                      "hero_26",
+                                                      "hero_25",
+                                                      "hero_48"
+                                                  ],
+                                         "pick":  ""
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   },
+                   {
+                       "id":  "R05",
+                       "note":  "2.近战（排除替补/嘲讽/圣诞老人/末日/嬉皮死神/血锁/共鸣者/锤头鲨/古灵精怪）+ 近战（同上）+ 嘲讽（排除替补和大骑士；2026-09-23 起 pick 清空 = 按 band 随机，不再按克制取最高）",
+                       "slots":  [
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ],
+                                         "pick":  ""
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_27",
+                                                      "hero_03",
+                                                      "hero_01",
+                                                      "hero_14",
+                                                      "hero_40",
+                                                      "hero_42",
+                                                      "hero_04",
+                                                      "hero_46",
+                                                      "hero_15",
+                                                      "hero_38",
+                                                      "hero_18",
+                                                      "hero_32",
+                                                      "hero_17"
+                                                  ],
+                                         "pick":  ""
+                                     },
+                                     {
+                                         "pool":  [
+                                                      "hero_13",
+                                                      "hero_44",
+                                                      "hero_23",
+                                                      "hero_49",
+                                                      "hero_12",
+                                                      "hero_22",
+                                                      "hero_11",
+                                                      "hero_26",
+                                                      "hero_25",
+                                                      "hero_48"
+                                                  ],
+                                         "pick":  ""
+                                     }
+                                 ],
+                       "bench":  [
+
+                                 ],
+                       "bench_multi":  [
+
+                                       ],
+                       "dynamic_bench":  true,
+                       "w":  1
+                   }
+               ]
+}

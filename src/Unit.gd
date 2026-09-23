@@ -560,17 +560,28 @@ func heal_fx() -> void:
 func float_tag_text(text: String, color: Color) -> void:
 	_float_text(text, color, -32, -88)
 
+# 数值"带增益"的判定口径（棋子上的数字 / 战斗内属性卡用黄色都看这两个函数）
+# 攻击力：回合增益（攻击道具/烈焰祭司/锤头鲨/负墟）+ 一次性道具增益（下一次攻击+1）+ 共鸣/太阳斩/冲锋
+func atk_is_buffed() -> bool:
+	return atk_buff > 0 or atk_use_buff > 0 or echo_set >= 0 or sun_bonus > 0 or ramble_bonus > 0
+
+# 血量：回血道具可突破上限，高于 max_hp 的那部分就是增益（受伤先扣这部分）
+func hp_is_buffed() -> bool:
+	return hp > max_hp
+
 func _update_hp_label() -> void:
 	if _hp_label:
 		_hp_label.text = str(hp)
+		# 血量带增益（溢出上限）时数字用黄色突出
+		_hp_label.add_theme_color_override("font_color",
+				Color(1.0, 0.9, 0.25) if hp_is_buffed() else Color(1.0, 1.0, 1.0))
 
 func _update_atk_label() -> void:
 	if _atk_label:
 		_atk_label.text = str(effective_atk())
-		# 增益状态(攻击加成/共鸣/太阳斩/冲锋加成等临时增益)下数字用黄色突出
-		var boosted := atk_buff > 0 or echo_set >= 0 or sun_bonus > 0 or ramble_bonus > 0
+		# 增益状态(道具/攻击加成/共鸣/太阳斩/冲锋加成等临时增益)下数字用黄色突出
 		_atk_label.add_theme_color_override("font_color",
-				Color(1.0, 0.9, 0.25) if boosted else Color(1.0, 1.0, 1.0))
+				Color(1.0, 0.9, 0.25) if atk_is_buffed() else Color(1.0, 1.0, 1.0))
 
 func _flash() -> void:
 	var t := create_tween()

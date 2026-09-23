@@ -29,9 +29,16 @@ param(
     [int]$Seeds = 4,
     [int]$SeedStart = 80,
     [int]$Workers = 6,
+    [int]$TimeoutSec = 300,   # 【2026-09-22 新增】每格（= 2 局）的墙钟上限，透传给 Train.ps1。
+                              #   原来 Train.ps1 默认 3600 ⇒ 撞上那 0.6%~1% 的"卡死格"会把整批拖住 1 小时。
+                              #   正常一格 ≈ 60~80 s（实测）⇒ 300 s 足够宽，又能及时把卡死格切掉。
     [string]$Tag = 'r1',
     [string]$Base = 'RL\weights\空白基线.json',
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；thr = 位移威胁剂量
+    # 【2026-09-23 用户点名】「噩梦打困难，噩梦模式2，beam 调到 800，其他不变」⇒ 只给**噩梦那一臂**换宽度
+    #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
+    #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
+    [int]$NmBeam = 0,
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -155,7 +162,32 @@ if ($Mode -eq 'pull') {
     $GROUPS = @(@{ slug = 'PL'; base = $Base; tiers = @($PULL_ARMS.Keys) })
 }
 
-# ---- 模式 J：「概率性弱化」的 p 剂量（用户 2026-09-20 定的低档配方：简单 = 好操作 30% / 普通 = 60%）----
+# 【2026-09-22 晚·整块删除】原来这里有个 `-Mode rtk`（「终选层真推演」`ROLLOUT_TOPK` 剂量 0/16/32）。
+#   删因：剂量批 16/32 都与关打平（−1.72 / −1.74，CI 跨 0），实机又验出它把「对面会来打我们」判成 0
+#   （模型里的玩家按我们自己的评分贪心 ⇒ 遇上 `<嘲讽>`＋反击×2 就不出手）⇒ 用户拍板「推演的不到位」
+#   ⇒ 引擎整段删除、键退役 ⇒ 本模式与那两个臂一起删。依据见 `RL/progress_tracking/1_通用策略.md` §四。
+
+# ---- 模式 FM：「队形一把尺」合并 A/B（`FORM_MERGE_MODE`，2026-09-22 晚用户点名「试一下这个合并的效果」）----
+# 口径：三个臂**同一份权重**（噩梦.json）、同一个对手（困难陪练）、同一批队伍/种子，**唯一变量 = 队形怎么记**
+#   · `mg0`（对照）= 现役：⑳抱团(5.0/孤立) + ㉑退路被夹(2.0) + ㉓离队梯度(3.0/格) 三项独立
+#   · `mg1`       = 合并：⑳ 并进 ㉓ 当台阶（比例 5/3 ⇒ 与 ⑳+㉓ **逐点等价**，见 `RL/probe/队形合并自检.gd` 5/5 等价）
+#                  + **㉑ 退役** ⇒ 与对照的唯一行为差 = 丢掉 ㉑
+#   · `mg1w2`     = 合并 + 整条尺调轻 1/3（`FORM_SPREAD_CELL_W` 3.0 → 2.0）⇒ 看"合并后该取多少"
+$FM_ARMS = [ordered]@{
+    'mg0'   = @{ merge = 0; spread = -1.0 }    # 对照（现役三项）
+    'mg1'   = @{ merge = 1; spread = -1.0 }    # 合并（㉓ 3.0/格 + 台阶）· ㉑ 退役
+    'mg1w2' = @{ merge = 1; spread = 2.0 }     # 合并 + 调轻到 2.0/格
+}
+if ($Mode -eq 'merge') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $FM_ARMS.Keys) {
+        $th = @{ FORM_MERGE_MODE = [int]$FM_ARMS[$k].merge }
+        if ([double]$FM_ARMS[$k].spread -gt 0) { $th['FORM_SPREAD_CELL_W'] = [double]$FM_ARMS[$k].spread }
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = $th }
+    }
+    $GROUPS = @(@{ slug = 'FM'; base = 'RL\weights\噩梦.json'; tiers = @($FM_ARMS.Keys) })
+}
+
 # ⚠️ 口径：用户说的 p = **打出好操作的概率** = 1 − `WEAK_P` ⇒ `gfire70` = 弱化 70%（简单档）、`gfire40` = 弱化 40%（普通档）。
 # 两臂都配 `WEAK_MODE=5`（贪心 + 关集火 = 两档现在的弱法）。已有参照点（同口径）：gfire25 = −2.28（测不出）· gfire50 = −10.96 · gfire85 = −15.44。
 $WP2_ARMS = [ordered]@{
@@ -174,6 +206,44 @@ if ($Mode -eq 'weakp2') {
     }
     $GROUPS = @(@{ slug = 'P2'; base = $Base; tiers = @($WP2_ARMS.Keys) })
 }
+# ---- 模式 L：「血量池折算」剂量（`INCOMING_POOL_W`，2026-09-22 用户点名「跑一下 INCOMING_POOL_W，看看多少最好」）----
+# 这一项管的是"**我方掉血按血量池折算**"：倍率 = `1 + W × (20 ÷ 该单位**回合起始血** − 1)`（夹 0.5~3.0），
+#   只乘我方那一侧（打出去那侧由 ④集火 frac² 计价）。W=0 ⇒ 纯线性 1 分/血点（= 加这个键之前的行为）。
+# ⚠️ 分母已在同一天从"当前血"改成"**回合起始血 `hp0`**"（用户拍板 A）⇒ 本批量的读数对应**新口径**：
+#   同一笔伤害不再按"最惨时刻"计价、也不再受结账顺序影响。对照臂 `ip10` = 现役值。
+# 读三样：配对 Δpts（相对现役）/ 我方挨打量 / 打出量与回合数（怕它变成"缩"或"送"）。
+$IP_ARMS = [ordered]@{
+    'ip0'  = @{ v = 0.0 }   # 关（纯线性）= 加键之前的口径
+    'ip05' = @{ v = 0.5 }
+    'ip10' = @{ v = 1.0 }   # 对照（= 现役 `噩梦.json`）
+    'ip20' = @{ v = 2.0 }   # 更狠的池子惩罚（看曲线有没有拐点）
+}
+if ($Mode -eq 'ipool') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $IP_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ INCOMING_POOL_W = [double]$IP_ARMS[$k].v } }
+    }
+    $GROUPS = @(@{ slug = 'IP'; base = 'RL\weights\噩梦.json'; tiers = @($IP_ARMS.Keys) })
+}
+
+# ---- 模式 S（`smode`）：「搜索模式」剂量（`SEARCH_MODE`）—— 2026-09-23 用户点名「跑一下噩梦模式2对模式0的胜率」----
+# 两臂都跑在 **`噩梦.json`** 上（同一份文件、同一批键/英雄段），唯一变量 = `SEARCH_MODE`：
+#   · `sm0` = 0（旧口径：每个单位的"移动+攻击"绑成一个组合、一步做完就出局）= **对照臂**
+#   · `sm2` = 2（现役：两阶段联合搜索 —— 先联合走位、再联合分配出手；允许"A 挪位 → B 挪位 → C 挪位打 → B 打 → A 打"）
+# 对手恒为**困难档陪练副本**（`opp=base`，beam_opp 200）⇒ 读数的字面意义 =「两种搜索模式各自打困难的胜率」，
+#   而**配对 Δpts(sm2 − sm0)** 才是"模式 2 比模式 0 强多少"的直接读数（同 队伍×种子×先后手 配对）。
+# ⚠️ 两点口径：① 跑批走查台把 `ai.time_budget_ms` 固定设 **0**（不限时求可复现）⇒ 本批**与生产里的
+#   `TIME_BUDGET_MS` 无关**（那个键只在实机生效）；② `SEARCH_MODE` 是**规则键**（在 `Get-RuleScoreKeys`
+#   里）⇒ 可以从 theta 注入，两臂的 `cand_*.json` 各自只差这一行。
+$SM_ARMS = [ordered]@{ 'sm0' = 0; 'sm2' = 2 }
+if ($Mode -eq 'smode') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $SM_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ SEARCH_MODE = [int]$SM_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'SM'; base = 'RL\weights\噩梦.json'; tiers = @($SM_ARMS.Keys) })
+}
+
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；
 #   用户要的是**现在线上跑的那一档**（噩梦 = `噩梦.json`，**通用键 + hero_XX 英雄段在同一份文件里**）。
@@ -192,7 +262,11 @@ if ($Mode -eq 'tiers2') {
     $g = @(); $gi = 0
     foreach ($k in $TIER2_ARMS.Keys) {
         $gi++
-        $TIERS[$k] = @{ base = $TIER2_ARMS[$k]; beam = 200; theta = @{} }
+        # 【2026-09-23 用户点名】`-NmBeam` 只改**噩梦那一臂**的搜索宽度（对照臂 `hard` 恒 200、对手恒
+        #   `opp=base`）⇒ 与默认批（200）**逐格可比**：同一批队伍/种子/对手，唯一变化 = 噩梦自己的宽度。
+        $bm = 200
+        if ($k -eq 'nmare' -and $NmBeam -gt 0) { $bm = $NmBeam }
+        $TIERS[$k] = @{ base = $TIER2_ARMS[$k]; beam = $bm; theta = @{} }
         $g += @{ slug = ('T{0}' -f $gi); base = $TIER2_ARMS[$k]; tiers = @($k) }
     }
     $GROUPS = $g
@@ -233,7 +307,7 @@ foreach ($deck in $Decks) {
         $slug = ('L{0}{1}' -f $deckIdx, $grp.slug)
         $spec = New-LadderSpec $deck $slug $grp.base $grp.tiers
         $run = ('ladder6_{0}_{1}' -f $Tag, $slug)
-        & $train -Task run -Spec $spec -Run $run -SeedSet train -SeedStart $SeedStart -SeedBlock $Seeds -FixedDecks -Workers $Workers | Out-Null
+        & $train -Task run -Spec $spec -Run $run -SeedSet train -SeedStart $SeedStart -SeedBlock $Seeds -FixedDecks -Workers $Workers -TimeoutSec $TimeoutSec | Out-Null
         $csv = Join-Path (Join-Path $results $run) 'measure.csv'
         if (-not (Test-Path $csv)) { Write-Warning ("没有产出 measure.csv：run=$run"); continue }
         $rr = @(Import-Csv $csv | Where-Object { [string]$_.a_side -eq '1' })
@@ -254,14 +328,25 @@ foreach ($deck in $Decks) {
 # ---------------- 汇总：各档 vs 困难 ----------------
 Write-Host ''
 Write-Host '[档位] easy = beam50 ／ normal = beam100 ／ hard = beam200（对照）／ nmare = 困难 + 噩梦.json（通用键 + hero 段）'   # 【2026-09-20】JITTER 键已删 ⇒ 低档差异只剩 beam（真正的难度由 WEAK_* 承担）
+if ($Mode -eq 'smode') {
+    Write-Host '[档位·smode] sm0 = SEARCH_MODE 0（旧口径，对照）／ sm2 = SEARCH_MODE 2（现役两阶段联合搜索）；两臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·smode] ⚠️ 下表那一列 `Δpts_vs_困难` 在本模式读作 **Δpts(sm2 − sm0)**（对照臂 = sm0，配对口径同其它模式）'
+}
 if ($Mode -eq 'tiers2') {
     Write-Host '[档位·tiers2] hard = 零键基线（= 困难口径，对照）／ nmare = 噩梦.json（通用键 + hero_XX 英雄段，同一份文件）；对手恒为困难陪练副本'
+    Write-Host ('[档位·tiers2] 候选宽度：hard = 200 ／ nmare = {0}（`-NmBeam`，0 = 默认 200；对手 beam 恒 200）' -f $(if ($NmBeam -gt 0) { $NmBeam } else { 200 }))
     Write-Host ("[基线 sha12] nmare = {0}" -f `
         (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
 $key = @{}
 foreach ($r in $rows) { $key["$($r.arm)|$($r.deck)|$($r.seed)|$($r.first)"] = $r }
 $ctl = 'hard'
+# 【2026-09-22】`ipool` 模式没有 `hard` 臂（全部臂都跑在 `噩梦.json` 上）⇒ 对照 = **现役值 `ip10`**。
+if ($Mode -eq 'ipool') { $ctl = 'ip10' }
+if ($Mode -eq 'merge') { $ctl = 'mg0' }
+# 【2026-09-23】`smode` 模式两臂都跑在 `噩梦.json` 上 ⇒ 对照 = **旧搜索模式 `sm0`**（那一列读作
+#   `Δpts(sm2 − sm0)`，即"模式 2 比模式 0 强多少"）。
+if ($Mode -eq 'smode') { $ctl = 'sm0' }
 $out = @()
 foreach ($k in $TIERS.Keys) {
     $a = @($rows | Where-Object { $_.arm -eq $k })

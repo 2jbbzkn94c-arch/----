@@ -80,7 +80,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			await _gap(STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
 			if not _unit_ok(u):
 				continue
-			battle._do_attack_obstacle(u, a["atk_obs"])
+			battle._do_attack_obstacle(u, a["atk_obs"], true)
 			acted = true
 			await _wait_action_done()
 		if a.has("atk") and int(a["atk"]) >= 0:
@@ -112,7 +112,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 					await _wait_action_done()
 				if alt.has("atk_obs") and _unit_ok(u):
 					await _gap(STEP_GAP)
-					battle._do_attack_obstacle(u, alt["atk_obs"])
+					battle._do_attack_obstacle(u, alt["atk_obs"], true)
 					await _wait_action_done()
 				var alt_atk := int(alt.get("atk", -1))
 				if alt_atk >= 0 and alt_atk < refs.size() and _unit_ok(refs[alt_atk]) and _unit_ok(u):

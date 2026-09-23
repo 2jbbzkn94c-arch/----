@@ -908,6 +908,10 @@ func _build_tooltip() -> void:
 	layer.add_child(_tooltip)
 	_tooltip_box = VBoxContainer.new()
 	_tooltip_box.add_theme_constant_override("separation", 8)
+	# ⚠️ 弹框内层也必须"不接鼠标"：`_tooltip` 自己是 IGNORE，但**子控件照样参与命中**
+	#   （VBoxContainer/HSeparator 默认 STOP）⇒ 弹框一旦压住鼠标，下面那张卡就收到 mouse_exited
+	#   ⇒ `_hide_tooltip()` ⇒ 弹框消失、鼠标又落回卡上 ⇒ 再弹出……**高频闪烁**。
+	_tooltip_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tooltip.add_child(_tooltip_box)
 
 # 属性表按“显示区”分行：名字/基础属性/技能描述/词条解释，区之间插一条居中短线。
@@ -926,6 +930,7 @@ func _set_tooltip_zones(zones: Array) -> void:
 			lnsb.color = Color(1.0, 0.85, 0.5, 0.3)
 			lnsb.thickness = 1
 			sep.add_theme_stylebox_override("separator", lnsb)
+			sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			_tooltip_box.add_child(sep)
 		var lb := Label.new()
 		lb.text = zones[i]
@@ -934,15 +939,27 @@ func _set_tooltip_zones(zones: Array) -> void:
 		lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		lb.custom_minimum_size = Vector2(380, 0)
 		lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_tooltip_box.add_child(lb)
 
 func _process(_delta: float) -> void:
-	if _tooltip != null and _tooltip.visible:
-		var vs := get_viewport().get_visible_rect().size
-		var pos := get_viewport().get_mouse_position() + Vector2(14, 14)
-		pos.x = min(pos.x, vs.x - _tooltip.size.x - 8)
-		pos.y = min(pos.y, vs.y - _tooltip.size.y - 8)
-		_tooltip.position = pos
+	if _tooltip == null or not _tooltip.visible:
+		return
+	# 弹框跟随鼠标：**优先放鼠标右下**，越界就整块翻到另一侧（左侧/上方）。
+	# ⚠️ 别退回"只夹到屏幕内"：卡组小卡在屏幕底部，弹框被下边界夹回去时会**压住鼠标**
+	#   —— 即便内层不接鼠标（见 `_build_tooltip`），弹框盖住正在看的那张卡本身也难看。
+	var vs := get_viewport().get_visible_rect().size
+	var m := get_viewport().get_mouse_position()
+	var sz := _tooltip.size
+	var x := m.x + 14.0
+	if x + sz.x > vs.x - 8.0:
+		x = m.x - sz.x - 14.0
+	var y := m.y + 14.0
+	if y + sz.y > vs.y - 8.0:
+		y = m.y - sz.y - 14.0
+	_tooltip.position = Vector2(
+			clampf(x, 8.0, maxf(vs.x - sz.x - 8.0, 8.0)),
+			clampf(y, 8.0, maxf(vs.y - sz.y - 8.0, 8.0)))
 
 func _hide_tooltip() -> void:
 	if _tooltip:
@@ -966,6 +983,19 @@ func _on_card_toggled(id: String) -> void:
 			return
 		_selected.append(id)
 	_update_ui()
+
+# 点"自备卡组"里的小卡 = 把该英雄从当前卡组去掉（等价于回英雄池再点它一次取消选择）。
+# ⚠️ 不要直接复用 `_on_hex_clicked`：它末尾要写 `_card_buttons[id]`，而英雄池**被筛选时**
+#   该 id 可能根本不在池子里（没有对应卡）⇒ 会抛 Invalid index/key。
+func _on_deck_card_clicked(id: String) -> void:
+	if not _selected.has(id):
+		return
+	_selected.erase(id)
+	var pool_card: Variant = _card_buttons.get(id)
+	if pool_card != null and is_instance_valid(pool_card):
+		pool_card.set_selected(false)   # 池子里那张同步取消高亮（被筛掉时就没有它，跳过）
+	_hide_tooltip()      # 这张小卡马上要被重建掉、不会再发 mouse_exited ⇒ 属性框先收起，反馈更干净
+	_update_ui()         # 计数 + 自动保存 + 重建卡组预览（这一张随之消失）
 
 func _show_detail(id: String) -> void:
 	var def: DataRegistry.HeroDef = DataRegistry.heroes[id]
@@ -1153,6 +1183,7 @@ func _build_deck_preview(ids: Array) -> void:
 		var card := HexCard.new(def, hid, r)
 		card.position = Vector2(cx - r, cy - row_step / 2.0)
 		card.hovered.connect(_on_hex_hovered)
+		card.clicked.connect(_on_deck_card_clicked)   # 点小卡 = 从卡组里去掉这个英雄
 		_deck_host.add_child(card)
 
 func _go_test_deploy() -> void:

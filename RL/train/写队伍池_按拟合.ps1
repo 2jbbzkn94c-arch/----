@@ -131,7 +131,7 @@ foreach ($t in @('weak', 'mid', 'strong')) {
 }
 $known = @{}
 # 角色列表列口径与 队伍车轮战.ps1 一致：第 0 列是**编号**（纯数字），hero_id = `hero_{编号:D2}`。
-$rows = Get-Content (Join-Path $root '英雄相关\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$rows = Get-Content (Join-Path $root 'Data\Hero\Source\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($r in $rows) {
     $no = "$($r[0])"
     if ($no -notmatch '^\d+$') { continue }

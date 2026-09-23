@@ -1042,9 +1042,9 @@ func _run_real_action(act: Dictionary) -> void:
 			if is_instance_valid(t) and t.alive:
 				await _act(func() -> void: _b._do_attack(u_by, t, true))
 	if act.get("atk_obs", null) != null:
-		# 攻击障碍：_do_attack_obstacle 走 _after_player_action 收尾、**不 emit action_finished**，
-		# 所以不能等信号（等下去会白等 MAX_WAIT 帧），直接排帧让演出结算完。
-		_b._do_attack_obstacle(u_by, act["atk_obs"])
+		# 攻击障碍：2026-09-23 起 _do_attack_obstacle(u, cell, true) 也会 emit action_finished
+		# （以前不发，只能靠超时兜底）。这里仍用排帧 _drain() 等演出结算 —— 与它的 _do_attack(..., true) 同款口径。
+		_b._do_attack_obstacle(u_by, act["atk_obs"], true)
 	await _drain()
 
 ## 比对两份 dump，返回差异列表（最多 12 条）

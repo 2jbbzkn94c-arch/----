@@ -25,6 +25,12 @@ var _deck_pick_start_btn: Button = null     # 用当前卡组出战
 # 【2026-09-21 用户定】选卡组限时大字（读 `battle.deck_pick_time_left`，15 秒，超时随机选一个）
 var _deck_pick_timer_label: Label = null
 var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重算尺寸定位）
+# 【2026-09-23 修·用户报"点击卡组切换后弹窗会左右移动"】面板尺寸**只在首次量一次**：
+#   量的是"三个卡组里人最多的那支"（卡行最宽）+ 最宽形态的限时大字（两位数秒）。
+#   原来每次点 卡组1/2/3 都按**当前**内容重算宽度并重新居中 ⇒ 卡行人头数 / 秒数位数一变，
+#   弹窗就整体左右跳（而且 `reset_size()` 清不掉 `custom_minimum_size` ⇒ 宽度只增不减）。
+var _deck_pick_panel_w := 0.0
+var _deck_pick_panel_h := 0.0
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
 var _player_deaths: Label
 var _enemy_deaths: Label
@@ -249,7 +255,19 @@ func show_unit_card(u: Unit) -> void:
 	v.add_child(title)
 	# 显示区②：实战属性（HP 现值/上限 + 有效数值 + 状态）
 	v.add_child(_make_zone_sep())
-	var stats := Label.new()
+	# 数值带增益时用黄色（与棋子上那两个数字同一口径，见 Unit.atk_is_buffed / Unit.hp_is_buffed）：
+	# 用 RichTextLabel + BBCode 才能只给"攻击 4"/"HP 27/24"上色，其余文字保持原色。
+	var stats := RichTextLabel.new()
+	stats.bbcode_enabled = true
+	stats.fit_content = true          # 高度随内容（面板无容器重排，避免留白）
+	stats.scroll_active = false
+	stats.custom_minimum_size = Vector2(270, 0)   # 限制换行宽度，避免撑满全屏
+	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stats.add_theme_font_size_override("normal_font_size", 17)
+	stats.add_theme_color_override("default_color", Color(0.9, 0.93, 1.0))
+	# 与全局 Label 一致的黑描边（主题对 Label 设了 outline，RichTextLabel 要自己补）
+	stats.add_theme_constant_override("outline_size", 3)
+	stats.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.72))
 	# 大骑士移动=直线冲锋任意距离、坠炮手射程=全场：按 ∞ 展示（由英雄脚本声明是否生效，
 	# 被沉默失效时自动退回普通数值），不显示误导性的数值
 	var move_txt := "%d" % u.effective_move()
@@ -266,13 +284,14 @@ func show_unit_card(u: Unit) -> void:
 	var range_txt: String = "%d" % shown_range
 	if battle != null and is_instance_valid(battle) and battle._hero(u).shows_infinite_range():
 		range_txt = "∞"   # 坠炮手"全场射程"特例仍然优先（不受上面退化值影响）
-	stats.text = "HP %d/%d   攻击 %d   移动 %s   射程 %s" % [u.hp, u.max_hp, u.effective_atk(), move_txt, range_txt]
-	stats.add_theme_font_size_override("font_size", 17)
-	stats.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
-	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	stats.custom_minimum_size = Vector2(270, 0)   # 限制换行宽度，避免撑满全屏
-	stats.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# 带增益的数值用黄色（棋子上的同款口径）：HP 溢出上限 / 攻击力带 buff
+	var hp_txt := "HP %d/%d" % [u.hp, u.max_hp]
+	if u.hp_is_buffed():
+		hp_txt = "[color=#ffe640]%s[/color]" % hp_txt
+	var atk_txt := "攻击 %d" % u.effective_atk()
+	if u.atk_is_buffed():
+		atk_txt = "[color=#ffe640]%s[/color]" % atk_txt
+	stats.text = "[center]%s   %s   移动 %s   射程 %s[/center]" % [hp_txt, atk_txt, move_txt, range_txt]
 	v.add_child(stats)
 	var def := DataRegistry.get_hero(u.hero_id)
 	if def != null:
@@ -1003,7 +1022,9 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	_deck_pick_timer_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	_deck_pick_timer_label.add_theme_constant_override("outline_size", 5)
 	_deck_pick_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_deck_pick_timer_label.text = ""
+	# ⚠️ 先填"最宽形态"（两位数秒）再量面板：原来这里是空串 ⇒ 第一帧文字进来后内容变宽、
+	#   面板向右长；下一次点卡组切换又按带文字的宽度重新居中 ⇒ 整体左移（"弹窗左右移动"的半个病灶）。
+	_deck_pick_timer_label.text = "%d 秒（超时随机选一个卡组）" % int(Battle.DECK_PICK_TIME_LIMIT)
 	wrapbox.add_child(_deck_pick_timer_label)
 	# 卡组1/2/3 切换行（同编辑页 deck_bar 布局：tabs 占满整行，右侧放按钮）
 	var bar := HBoxContainer.new()
@@ -1047,6 +1068,15 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	_deck_pick_start_btn.custom_minimum_size = Vector2(0, 42)
 	_deck_pick_start_btn.pressed.connect(_on_deck_pick_confirm)
 	wrapbox.add_child(_deck_pick_start_btn)
+	# 【2026-09-23 修】先按"人最多的那支卡组"量一次面板尺寸（尺寸只在这次定下来，见 `_layout_deck_pick_panel`）
+	#   ⇒ 之后点 卡组1/2/3 只换内容、不再重算尺寸，弹窗不会左右移动。
+	var widest := 1
+	for i in _deck_pick_decks.size():
+		if (_deck_pick_decks[i] as Array).size() > (_deck_pick_decks[widest - 1] as Array).size():
+			widest = i + 1
+	_deck_pick_slot = widest
+	_refresh_deck_pick_preview()
+	_layout_deck_pick_panel()
 	_on_deck_pick_tab(1)
 
 # 点卡组1/2/3：切换到该槽并刷新队伍预览
@@ -1094,15 +1124,26 @@ func _make_deck_preview_cards(ids: Array) -> Control:
 		pass
 	return _make_hex_pool(ids, hover_cb, click_cb, false, "", true, 30.0)
 
-# 面板尺寸/位置（切换卡组后队伍人数不同，需重算并居中）
+# 面板尺寸/位置。
+# 【2026-09-23 修·用户报"点击卡组切换后弹窗会左右移动"】宽度/高度**只在第一次调用时量一次**
+#   （那次的内容 = 人最多的卡组 + 最宽形态的限时大字，见 `_show_deck_pick_panel`）⇒ 之后切卡组
+#   只换预览内容、尺寸与位置都不动。原来每次都按当前内容重算并重新居中 ⇒ 卡行人头数不同 /
+#   秒数从两位数变一位数 ⇒ 宽度一变，居中的弹窗就整体左移或右移。
+#   ⚠️ 量之前必须把 `custom_minimum_size` 清成 0：`reset_size()` 只重置 size，
+#   `get_combined_minimum_size()` 仍会被上一轮写进去的 custom_minimum_size 垫高 ⇒ 宽度只增不减。
 func _layout_deck_pick_panel() -> void:
 	if _deck_pick_panel == null or not is_instance_valid(_deck_pick_panel):
 		return
 	var vsize := get_viewport().get_visible_rect().size
-	_deck_pick_panel.reset_size()
-	var min_sz := _deck_pick_panel.get_combined_minimum_size()
-	var pw: float = clampf(maxf(min_sz.x, 400.0), 400.0, maxf(vsize.x - 24.0, 400.0))
-	var ph: float = minf(min_sz.y, vsize.y - 16.0)
+	var max_w: float = maxf(vsize.x - 24.0, 400.0)
+	if _deck_pick_panel_w <= 0.0:
+		_deck_pick_panel.custom_minimum_size = Vector2.ZERO
+		_deck_pick_panel.reset_size()
+		var min_sz := _deck_pick_panel.get_combined_minimum_size()
+		_deck_pick_panel_w = clampf(maxf(min_sz.x, 400.0), 400.0, max_w)
+		_deck_pick_panel_h = minf(min_sz.y, vsize.y - 16.0)
+	var pw: float = clampf(_deck_pick_panel_w, 400.0, max_w)
+	var ph: float = minf(_deck_pick_panel_h, vsize.y - 16.0)
 	_deck_pick_panel.custom_minimum_size = Vector2(pw, ph)
 	_deck_pick_panel.size = Vector2(pw, ph)
 	_deck_pick_panel.position = Vector2((vsize.x - pw) / 2.0, maxf((vsize.y - ph) / 2.0, 8.0))
@@ -1140,6 +1181,8 @@ func _close_deck_pick_panel() -> void:
 		_deck_pick_overlay.queue_free()
 		_deck_pick_overlay = null
 	_deck_pick_panel = null
+	_deck_pick_panel_w = 0.0   # 【2026-09-23】尺寸缓存随面板一起清（下次开面板重新量一次）
+	_deck_pick_panel_h = 0.0
 	_deck_pick_preview = null
 	_deck_pick_info = null
 	_deck_pick_start_btn = null

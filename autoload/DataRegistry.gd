@@ -1,6 +1,8 @@
 extends Node
 ## 卡牌/英雄数据注册表（全局自动加载）。
-## 从 res://角色列表.json 解析全部角色(该 json 由 角色列表.xlsx 经 tools\角色列表转Json.ps1 生成)，生成数值、品级、类型与关键词标签。
+## 从 res://Data/Hero/Source/角色列表.json 解析全部角色（该 json 由 Data/Hero/角色列表.xlsx 经
+## Data/Hero/Source/角色列表转Json.ps1 生成 —— 刷新走 Data/Hero/Bat/一键刷新AI解析.bat），
+## 生成数值、品级、类型与关键词标签。
 ## 复杂/角色专属技能全文存入 desc（暂未实现），引擎已支持：近战/远程、嘲讽、疾行、渗透。
 
 # 攻击类型
@@ -133,6 +135,131 @@ func battle_unit_value(hero_id: String, ally_ids: Array, enemy_ids: Array, coef:
 	return float(p["solo"]) * float(coef.get("solo", VALUE_SOLO_W_DEFAULT)) \
 			+ float(p["synergy"]) * float(coef.get("synergy", VALUE_SYNERGY_W_DEFAULT)) \
 			+ float(p["counter"]) * float(coef.get("counter", VALUE_COUNTER_W_DEFAULT))
+
+# ============ 【2026-09-22 用户拍板】替补选人：**先判"需要什么"，再在"满足需求的人"里排名** ============
+# 用户原话：「在替补不需要补位和斩杀的时候，按评分来选这个方案我觉得不算合理。因为评分排名并没有按照
+#   你的需求排的，有可能你不需要坦克，但排名第一是坦克，所以就上了坦克，这个不是调阈值可以解决的。
+#   我觉得你在需要替补的时候，先评估需要什么，再给英雄池里你需要的英雄评分排名，然后选其中一个」。
+# ⇒ 旧口径把「身价 + 缺前排+11 / 补坦克位+3 / 支援伤员…」**混成一个数** ⇒ 不缺坦克时坦克照样能排第一。
+#   现在拆成两段：① `sub_need(ctx)` 按优先级判出**唯一一个需求**；② `sub_hero_eligible()` 决定"谁算满足"，
+#      `sub_hero_score()` 在该需求下排名（身价 + 「满足需求」优先价 + 需求专属项）。
+# ⚠️ **唯一实现放在这里**：`src/Battle.gd`（真实选人）与 `src/BattleAI.gd::_sim_best_sub_idx()`（AI 的模拟
+#   镜像）**都调本段函数** —— 这两处一直要求"逐条一致"，各抄一份迟早漂（项目被这类漂移坑过好几次）。
+# 需求清单与优先级（命中即停；都不命中 ⇒ `""` 兜底）：
+#   1 **缺前排**：我方**存活嘲讽 = 0**          → 候选 = 有 `<嘲讽>`
+#   2 **缺治疗**：存活治疗族 = 0 且 伤员 ≥ 2      → 候选 = `MECH_TAGS["治疗"]` ∪ `SUB_HEAL_EXTRA`（波盾圣盾）
+#   3 **需克制**：对面存活里身价最高的人 X，而我方**无人**克制 X → 候选 = `counter_bonus(h, X) > 0`
+#   4 **缺输出**：存活里**表格攻 ≥ 3** 的人 = 0   → 候选 = 表格攻 ≥ 3
+#   5 **缺射程**：存活远程 = 0                   → 候选 = `<远程>`
+# ⚠️ 判据一律用**英雄表**（`def.skills/attack_type/atk`）而不是实时数值 ⇒ 真实与模拟必然一致
+#   （实时值在两侧来源不同：真实读 `effective_*()`、模拟读快照/被状态改过的 `eatk`）。
+# ⚠️ `ctx` 由调用方按**存活单位**填（字段名统一，见 `sub_need()` 注释）。
+const SUB_NEED_PRIORITY_BONUS := 20.0    # "满足需求"的优先价：远大于身价极差(≈12) ⇒ 在**预设替补**那条路上
+                                         # "不缺的职能"永远排不到"缺的职能"前面（动态路已先按需求筛过候选）
+const SUB_HEAL_EXTRA: Array[String] = ["hero_16"]   # 波盾：登场全队圣盾 —— 与"治疗"同属"队伍被打疼了"的解
+const SUB_DPS_ATK := 3                   # "算输出"的**表格**基础攻击门槛
+
+## ① 需求判定。ctx 字段（都由调用方从**我方/对方存活单位**统计）：
+##   `taunt` 存活嘲讽数 · `healers` 存活治疗族数 · `dps` 存活且表格攻≥3 的数 · `ranged` 存活远程数 ·
+##   `wounded` 存活且 hp < max_hp 的数 · `core` 对面存活里身价最高的 hero_id（""=没有）·
+##   `countered` 我方是否已有人克制 core · `ally_heroes`/`foe_heroes` 双方存活 hero_id（给身价/克制用）·
+##   `player_near` 对面有单位贴着我方（后勤在贴身时贬价，沿用旧口径）。
+func sub_need(ctx: Dictionary) -> String:
+	if int(ctx.get("taunt", 0)) <= 0:
+		return "缺前排"
+	if int(ctx.get("healers", 0)) <= 0 and int(ctx.get("wounded", 0)) >= 2:
+		return "缺治疗"
+	if String(ctx.get("core", "")) != "" and not bool(ctx.get("countered", false)):
+		return "需克制"
+	if int(ctx.get("dps", 0)) <= 0:
+		return "缺输出"
+	if int(ctx.get("ranged", 0)) <= 0:
+		return "缺射程"
+	return ""
+
+func sub_need_label(need: String) -> String:
+	return "兜底（无缺口）" if need == "" else need
+
+## ② 谁算"满足这个需求"（兜底 ⇒ 全算）。
+func sub_hero_eligible(hid: String, need: String, ctx: Dictionary) -> bool:
+	if need == "":
+		return true
+	var def: HeroDef = heroes.get(hid, null)
+	if def == null:
+		return false
+	match need:
+		"缺前排":
+			return def.skills.has(Skill.TAUNT)
+		"缺治疗":
+			return (MECH_TAGS["治疗"] as Array).has(hid) or SUB_HEAL_EXTRA.has(hid)
+		"需克制":
+			return counter_bonus(hid, String(ctx.get("core", ""))) > 0.0
+		"缺输出":
+			return int(def.atk) >= SUB_DPS_ATK
+		"缺射程":
+			return def.attack_type == AttackType.RANGED
+	return true
+
+## ③ 该需求下的分数 = 身价（总评分+配合+克制）+「满足需求」优先价 + 需求专属项。
+## 返回 { "s": float, "why": Array[String] }（`why` 只给日志用）。
+func sub_hero_score(hid: String, need: String, ctx: Dictionary) -> Dictionary:
+	var def: HeroDef = heroes.get(hid, null)
+	if def == null:
+		return { "s": -1e18, "why": [] }
+	var ally: Array = ctx.get("ally_heroes", [])
+	var foe: Array = ctx.get("foe_heroes", [])
+	var wounded := int(ctx.get("wounded", 0))
+	var s := battle_unit_value(hid, ally, foe)
+	var why: Array[String] = []
+	if sub_hero_eligible(hid, need, ctx):
+		s += SUB_NEED_PRIORITY_BONUS
+	match need:
+		"缺前排":
+			s += 0.3 * float(def.max_hp)                     # 厚血优先
+			why.append("补前排(血%d)" % def.max_hp)
+		"缺治疗":
+			s += 1.0 * (def.ai_skill_score + def.ai_boost) + 0.5 * float(wounded)
+			why.append("补续航")
+		"需克制":
+			var core := String(ctx.get("core", ""))
+			var cb := counter_bonus(hid, core)
+			s += 2.0 * cb
+			var cd: HeroDef = heroes.get(core, null)
+			why.append("克制%s(+%.1f)" % [cd.display_name if cd != null else core, cb])
+		"缺输出":
+			s += 1.5 * float(def.atk)
+			why.append("补输出(攻%d)" % def.atk)
+		"缺射程":
+			s += 0.5 * float(def.atk)
+			why.append("补射程")
+	if def.skills.has(Skill.BENCH):
+		s += 0.5
+		why.append("替补技")
+	if def.skills.has(Skill.LOGISTICS):
+		# 后勤/支援：伤员多时值钱；贴身交战中不值钱（不能主动输出）—— 沿用旧口径
+		if wounded > 0:
+			s += float(wounded) * 1.2
+			why.append("支援伤员")
+		elif bool(ctx.get("player_near", false)):
+			s -= 4.0
+		else:
+			s -= 1.5
+	if need == "":
+		# 兜底档才给的"登场技"价（旧口径里这几条一直在 ⇒ 会把波盾顶到第一；作为"没有缺口时"的偏好保留）
+		match hid:
+			"hero_16":   # 波盾：登场让己方全体获得圣盾
+				s += 5.0 + (3.0 if wounded > 0 else 0.0)
+				why.append("登场全队圣盾")
+			"hero_36":   # 梅林：治疗最低血量队友并与其换位
+				s += 5.0 if wounded > 0 else 1.0
+				why.append("登场治疗换位")
+			"hero_29":   # 太阳斩：登场攻击3（短时爆发）
+				s += 3.0
+				why.append("登场爆发")
+			"hero_39":   # 猎颅者：登场锁定目标
+				s += 2.0
+				why.append("登场锁定")
+	return { "s": s, "why": why }
 
 # 职能分类（给 AI 组队配比用）：替补标签>嘲讽坦克>后勤功能>其余输出
 func hero_role_name(id: String) -> String:
@@ -472,9 +599,9 @@ func _load_heroes() -> void:
 	heroes.clear()
 	summons.clear()
 	_trait_tag_ids.clear()   # 特性标签表随英雄表一起重建（见 TRAIT_TAGS 说明）
-	var rows := _read_json_rows("res://英雄相关/角色列表.json")
+	var rows := _read_json_rows("res://Data/Hero/Source/角色列表.json")
 	if rows.is_empty():
-		push_error("无法读取 res://英雄相关/角色列表.json")
+		push_error("无法读取 res://Data/Hero/Source/角色列表.json")
 		return
 
 	# 表头列名 -> 下标（表格列可增改，按列名取值，避免列位置写死错位）
@@ -630,12 +757,12 @@ func _load_heroes() -> void:
 		hd.explicit_pairs = _without_self(_extract_ids(hd.pairs_note), hd.id)   # "协同英雄"列：直接点名的搭档
 
 
-# 从 res://英雄相关/角色列表.json 读取全部行（由本机 PowerShell 脚本从 角色列表.xlsx 转换生成；
-# 本引擎构建未包含 ZipReader/Compression,无法直接解 xlsx,故改为读 JSON 副产物）
+# 从 res://Data/Hero/Source/角色列表.json 读取全部行（由本机 PowerShell 脚本从 Data/Hero/角色列表.xlsx
+# 转换生成；本引擎构建未包含 ZipReader/Compression,无法直接解 xlsx,故改为读 JSON 副产物）
 func _read_json_rows(path: String) -> Array:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		push_error("无法读取 res://英雄相关/角色列表.json")
+		push_error("无法读取 %s" % path)
 		return []
 	var txt: String = f.get_as_text()
 	f.close()

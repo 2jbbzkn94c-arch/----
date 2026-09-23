@@ -53,7 +53,7 @@ if ($PoolOut) {
 }
 
 # ---------- 读角色列表（PS 侧实现一份最小版"静态评分"，与 DataRegistry.hero_strength 同口径优先取"总评分"）----------
-$jsonPath = Join-Path $root '英雄相关\角色列表.json'
+$jsonPath = Join-Path $root 'Data\Hero\Source\角色列表.json'
 $rows = Get-Content $jsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $heroes = @()      # 每项: id / name / atk / hp / score / role / slow
 foreach ($r in $rows) {

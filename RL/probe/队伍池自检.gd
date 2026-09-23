@@ -14,6 +14,7 @@ extends Node
 const MATCHES := 16          # 局数（8 个类型 ⇒ 16 局基本都能覆盖到）
 
 var _b: Battle = null
+var _dumped := {}            # 每种类型的"槽位评分表"只打一次（免得 16 局刷屏）
 
 func _ready() -> void:
 	_run.call_deferred()
@@ -93,19 +94,30 @@ func _one_match(k: int) -> Dictionary:
 		k, tid, slots.size(), "|".join(slot_desc), bench.size(), bmulti.size(), ",".join(gdesc),
 		str(bool(rec.get("dynamic_bench", true))), float(rec.get("jitter", 0.0))])
 	print("POOL|%d|init_deck=%d[%s]" % [k, GameState.enemy_deck.size(), ",".join(PackedStringArray(GameState.enemy_deck))])
-	# 槽位候选的**评分分布**（前 5 名）：用来看"抖动 2.0 够不够撬动最高分"
+	# 槽位候选的**完整评分表**（每种类型只打一次）：`*` = 落在"上位圈"（分数 ≥ 最高分 − pick_band）内，
+	# 也就是 band=3 时**真的会被随机抽到**的人。
 	for si2 in slots.size():
 		var pool2: Array = ((slots[si2] as Dictionary).get("pool", []) as Array)
-		if pool2.size() < 3:
+		if pool2.size() < 2:
+			continue
+		if _dumped.has(tid):
 			continue
 		var rows: Array = []
 		for hid2 in pool2:
 			rows.append({ "h": String(hid2), "s": _b._deploy_candidate_value(String(hid2), _b.enemy_deployed) })
 		rows.sort_custom(func(a, b): return float(a["s"]) > float(b["s"]))
+		var band := float(rec.get("pick_band", 3.0))
+		var best2 := float(rows[0]["s"])
 		var txt := ""
-		for r in rows.slice(0, 5):
-			txt += "%s=%.1f " % [String(r["h"]), float(r["s"])]
-		print("POOL|%d|slot%d_top5|n=%d|%s" % [k, si2 + 1, pool2.size(), txt])
+		var n_in := 0
+		for r in rows:
+			var inside: bool = float(r["s"]) >= best2 - band
+			if inside:
+				n_in += 1
+			txt += "%s=%.1f%s " % [String(r["h"]), float(r["s"]), "*" if inside else ""]
+		print("POOL|type=%s|slot%d|pick=%s|band=%.1f|in=%d/%d|%s" % [
+			tid, si2 + 1, String((slots[si2] as Dictionary).get("pick", "")), band, n_in, pool2.size(), txt])
+	_dumped[tid] = true
 	# ---- 驱动部署（双方轮流；玩家侧我们替他点）----
 	var guard := 0
 	while (_b.state == Battle.State.DEPLOY or _b.state == Battle.State.PLACE_DEPLOY) and guard < 6000:

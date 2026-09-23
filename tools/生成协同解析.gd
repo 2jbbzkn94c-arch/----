@@ -1,14 +1,14 @@
 extends SceneTree
-## 生成 英雄相关/角色协同解析.txt：把 DataRegistry 解析出的协同/克制结果导出为可读文本。
+## 生成 Data/Hero/角色协同解析.txt：把 DataRegistry 解析出的协同/克制结果导出为可读文本。
 ##
 ## 文件**开头**会先列出"本次相对上次运行的变化"：
 ##   配合/协同英雄/克制/被克制 这几列的**文本改动**、
 ##   sy_partners / explicit_pairs / beats / counters 这几个**解析结果列表的增删**、
 ##   以及**协同分**的新增/消失/升降。
-## 供下次对比的快照写在 英雄相关/协同解析快照.json（每次运行都会刷新；删掉它下次就只显示"首次运行"）。
+## 供下次对比的快照写在 Data/Hero/Source/协同解析快照.json（每次运行都会刷新；删掉它下次就只显示"首次运行"）。
 
-const SNAPSHOT_PATH := "res://英雄相关/协同解析快照.json"
-const OUT_PATH := "res://英雄相关/角色协同解析.txt"
+const SNAPSHOT_PATH := "res://Data/Hero/Source/协同解析快照.json"
+const OUT_PATH := "res://Data/Hero/角色协同解析.txt"
 const PAIR_LINE_CAP := 20   # 协同分变化每类最多列几条，其余折叠成"还有 N 条"
 
 const TEXT_FIELDS := ["synergy_note", "pairs_note", "effective_behavior", "countered_by_note"]

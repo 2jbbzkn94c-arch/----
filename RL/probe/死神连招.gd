@@ -37,7 +37,7 @@ const NM_PATH := "res://RL/weights/噩梦.json"
 ##       `prod` = 生产噩梦口径（推演层 32 + `MOVE_ACCEPT_DAMAGE=1`）。
 const CONFIGS := [
 	{ "name": "base", "rollout": 0, "mad": 0.0 },
-	{ "name": "prod", "rollout": 32, "mad": 1.0 },
+	{ "name": "prod", "mad": 1.0 },   # 【2026-09-22 晚】原 `"rollout": 32` 已随该层整段删除
 ]
 
 var _grid: HexGrid
@@ -331,13 +331,7 @@ func _build_weights(team: String, cfg: Dictionary, beam: int) -> Dictionary:
 		w[k] = _nm[k]
 	var mad := float(cfg.get("mad", -1.0))
 	w["MOVE_ACCEPT_DAMAGE"] = float(_nm.get("MOVE_ACCEPT_DAMAGE", 1.0)) if mad < 0.0 else mad
-	var ro := int(cfg.get("rollout", 0))
-	if ro <= 0:
-		w["ROLLOUT_TOPK"] = 0
-		w["ROLLOUT_MODE"] = 0
-	else:
-		w["ROLLOUT_TOPK"] = ro
-		w["ROLLOUT_MODE"] = int(_nm.get("ROLLOUT_MODE", 1))
+	# 【2026-09-22 晚】原来这里还会按臂开「真推演层」（ROLLOUT_TOPK/MODE）—— 该层已整段删除。
 	if team == "plain":
 		w["DISPLACE_THREAT_W"] = 0.0               # 本探针只问"进攻配合"，位移威胁那条（防守）不掺进来
 	return w
