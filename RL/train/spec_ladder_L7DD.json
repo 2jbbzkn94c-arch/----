@@ -6,8 +6,8 @@
                  "opponent":  200
              },
     "decks":  {
-                  "player":  "hero_24,hero_09,hero_20",
-                  "enemy":  "hero_24,hero_09,hero_20"
+                  "player":  "hero_33,hero_03,hero_18",
+                  "enemy":  "hero_33,hero_03,hero_18"
               },
     "seeds":  {
                   "train":  [

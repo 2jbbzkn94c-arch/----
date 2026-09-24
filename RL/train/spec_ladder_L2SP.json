@@ -6,8 +6,8 @@
                  "opponent":  200
              },
     "decks":  {
-                  "player":  "hero_24,hero_09,hero_20",
-                  "enemy":  "hero_24,hero_09,hero_20"
+                  "player":  "hero_13,hero_12,hero_18",
+                  "enemy":  "hero_13,hero_12,hero_18"
               },
     "seeds":  {
                   "train":  [
@@ -255,19 +255,28 @@
     "configs":  [
                     {
                         "beam_opp":  200,
-                        "name":  "d0",
-                        "note":  "难度档 d0",
+                        "name":  "sp0",
+                        "note":  "难度档 sp0",
                         "theta":  {
-                                      "TWO_PHASE_DEDUP":  0
+                                      "SPLIT_W":  0
                                   },
                         "beam":  200
                     },
                     {
                         "beam_opp":  200,
-                        "name":  "d1",
-                        "note":  "难度档 d1",
+                        "name":  "sp2",
+                        "note":  "难度档 sp2",
                         "theta":  {
-                                      "TWO_PHASE_DEDUP":  1
+                                      "SPLIT_W":  2
+                                  },
+                        "beam":  200
+                    },
+                    {
+                        "beam_opp":  200,
+                        "name":  "sp4",
+                        "note":  "难度档 sp4",
+                        "theta":  {
+                                      "SPLIT_W":  4
                                   },
                         "beam":  200
                     }

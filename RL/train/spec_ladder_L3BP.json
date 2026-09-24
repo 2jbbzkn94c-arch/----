@@ -255,19 +255,19 @@
     "configs":  [
                     {
                         "beam_opp":  200,
-                        "name":  "d0",
-                        "note":  "难度档 d0",
+                        "name":  "bp0",
+                        "note":  "难度档 bp0",
                         "theta":  {
-                                      "TWO_PHASE_DEDUP":  0
+                                      "MOVE_ACCEPT_POOL":  0
                                   },
                         "beam":  200
                     },
                     {
                         "beam_opp":  200,
-                        "name":  "d1",
-                        "note":  "难度档 d1",
+                        "name":  "bp1",
+                        "note":  "难度档 bp1",
                         "theta":  {
-                                      "TWO_PHASE_DEDUP":  1
+                                      "MOVE_ACCEPT_POOL":  1
                                   },
                         "beam":  200
                     }
