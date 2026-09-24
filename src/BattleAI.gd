@@ -354,6 +354,14 @@ var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个
 #   两笔都**与开关无关地统计**（关着也数）⇒ 用户在自己实机里就能看到 n! 水分有多大，不用另跑批。
 var last_tp_p1_evals := 0         # 阶段 1 评分次数
 var last_tp_p1_dups := 0          # 阶段 1 被"同末态去重"丢掉的条数
+# 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」】**阶段 1 按单位类型分账**：
+#   召唤物（骷髅兵：攻 1 / 血 1 / **回合结束即消散**）在搜索里被当成英雄一样枚举全部落点，
+#   而它的价值只有两项（本回合打出的伤害 + 替英雄吃下的反击）⇒ "不能借此攻击的移动"价值恒 0。
+#   这四笔账**只统计、不改行为**（与 `evals/dups` 同一口径），用来看"召唤队那 655s 到底花在哪一层"。
+var last_tp_p1_hero_kids := 0     #   英雄落点生成的子条目数
+var last_tp_p1_summon_kids := 0   #   召唤物落点生成的子条目数
+var last_tp_p1_hero_evals := 0    #   英雄条目里真正评分的（过完去重）
+var last_tp_p1_summon_evals := 0  #   召唤物条目里真正评分的
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -957,6 +965,7 @@ var w_search_mode := SEARCH_MODE
 var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 # 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开），见 `const TWO_PHASE_DEDUP` 处说明。
 var w_tp_dedup := TWO_PHASE_DEDUP
+var w_summon_slot_only := SUMMON_SLOT_ONLY   # 【2026-09-24】召唤物阶段 1 只走"能打到人的格"（见 const 处说明）
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
 var w_sub_finish_w := SUB_FINISH_W
@@ -1193,6 +1202,8 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开；见 const TWO_PHASE_DEDUP 处说明）
 			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
+			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
+			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
@@ -1501,6 +1512,19 @@ const TWO_PHASE_P1_BEAM := 0
 #   ⚠️ 副作用：并列（同分）时保留哪一条由"生成顺序"决定（今天是 `sort_custom` 不稳定排序任选一条）
 #     ⇒ 末态相同，只有 `path` 里步骤的先后（纯演出顺序）可能不同。
 const TWO_PHASE_DEDUP := 0
+# 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」→「改」】**召唤物的阶段 1 候选集**。
+#   事实基础（三处代码铁证）：`heroes/summon_骷髅兵.gd::on_turn_end()` = 「己方回合结束：干净淡出离场」
+#   （且 `runs_turn_end_while_silenced() = true`，被沉默也照散）；`Battle._end_side()` 是**本方**回合
+#   结束的结算点 ⇒ 骷髅在**召唤它的那一回合结束时**就没了；面板 = **攻 1 / 血 1 / 无特性**。
+#   ⇒ 它**永远挡不住敌人**（消失早于敌方回合）、**永远不会被敌人主动攻击**（只有它打人时才吃反击）、
+#     **前压/卡口/队形/保命价值恒 0**。它这一辈子只有两件事值钱：**本回合打出的伤害** + **替英雄吃下的反击**。
+#   ⇒ 因此"**不能借此攻击的落点**"价值恒等于 0，只枚举「能打到某个敌人的落点」+「原地」即可（**精确剪枝、不是近似**）。
+#   ⚠️ 但它**仍然留在阶段 1 的联合枚举里**（只是候选变少）—— 这是用户点出来的关键：
+#     若把召唤物整个踢出阶段 1，英雄的落点规划就看不见"骷髅要站哪格"，会盲抢唯一的攻击位
+#     ⇒ 「骷髅先上去吃反击、英雄随后再打」那条线就死了。
+#   ⚠️ 判定用**安全超集**（只看"路网距离 ≤ 射程"，不查视线/嘲讽门/贴身）⇒ 只会多留、绝不误删真攻击位。
+#   0 = 关（**逐位不变**；分账照旧统计，见 `last_tp_p1_summon_*`）· 1 = 开。
+const SUMMON_SLOT_ONLY := 0
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
 func search(sim: Sim, enemy_faction: int) -> Array:
@@ -1520,6 +1544,10 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_tp_leaves = 0
 	last_tp_p1_evals = 0
 	last_tp_p1_dups = 0
+	last_tp_p1_hero_kids = 0
+	last_tp_p1_summon_kids = 0
+	last_tp_p1_hero_evals = 0
+	last_tp_p1_summon_evals = 0
 	var enemy_idxs: Array = []
 	for i in sim.units.size():
 		if sim.units[i].fn == enemy_faction and sim.units[i].alive:
@@ -1847,7 +1875,21 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				continue
 			pending = true
 			for idx in remaining:
-				for a in _tp_move_actions(st["sim"], idx):
+				# 【2026-09-24·用户拍板「改」】**召唤物的阶段 1 候选收窄**（键 `SUMMON_SLOT_ONLY`，默认 0 = 现役）：
+				#   骷髅兵攻 1 / 血 1 / **本方回合结束即消散** ⇒ 它的价值只有"本回合打出的伤害 + 替英雄吃下的反击"，
+				#   因此**不能借此攻击的落点价值恒 0**（它永远挡不住敌人、也永远不会被敌人主动打）。
+				#   ⚠️ 但它**仍然留在阶段 1 的联合枚举里**（只是候选变少）——这一点是用户点出来的关键：
+				#   若把召唤物整个踢出阶段 1，英雄的落点规划就看不见"骷髅要站哪格"，会盲抢掉唯一的攻击位
+				#   ⇒ "骷髅先上去吃反击、英雄随后再打"那条线就死了。
+				var is_sm: bool = _is_summon_idx(st["sim"], idx)
+				var moves: Array = _tp_move_actions(st["sim"], idx)
+				if is_sm and w_summon_slot_only > 0:
+					moves = _tp_summon_slot_moves(st["sim"], idx, moves)
+				for a in moves:
+					if is_sm:
+						last_tp_p1_summon_kids += 1
+					else:
+						last_tp_p1_hero_kids += 1
 					var s2: Sim = (st["sim"] as Sim).clone()
 					_apply(s2, idx, a)
 					var done2: Dictionary = (st["done"] as Dictionary).duplicate()
@@ -1868,6 +1910,10 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 							continue
 						seen_digest[dg] = true
 					last_tp_p1_evals += 1
+					if is_sm:
+						last_tp_p1_summon_evals += 1
+					else:
+						last_tp_p1_hero_evals += 1
 					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full)))
 				if abort_requested:
 					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
@@ -2079,6 +2125,47 @@ func _tp_move_actions(sim: Sim, idx: int) -> Array:
 			if not kill_ok:
 				continue
 		out.append({ "move": c, "atk": -1 })
+	return out
+
+## 【2026-09-24 新增】这个下标是不是**召唤物**（骷髅兵一类）。用于阶段 1 的候选收窄与分账。
+func _is_summon_idx(sim: Sim, idx: int) -> bool:
+	if idx < 0 or idx >= sim.units.size():
+		return false
+	var u: SimUnit = sim.units[idx]
+	return u != null and DataRegistry.summons.has(u.hero_id)
+
+## 【2026-09-24 新增·用户拍板「改」】把召唤物的阶段 1 候选**收窄到"能打到人的落点"+原地**。
+##   为什么这是**精确剪枝**而不是近似（三处铁证见 `const SUMMON_SLOT_ONLY` 那段）：
+##     `heroes/summon_骷髅兵.gd::on_turn_end()` = 本方回合结束即消散 ⇒ 骷髅永远挡不住敌人、
+##     也永远不会被敌人主动打 ⇒ 它的价值只有「本回合打出的伤害 + 替英雄吃下的反击」两项
+##     ⇒ "不能借此攻击的落点"价值恒等于 0。
+##   ⚠️ **判据取安全超集**：只看"从这一格出发、路网距离 ≤ 射程"（不查视线/嘲讽门/贴身/后勤不能攻击），
+##     ⇒ 只会**多留**几格，绝不会误删真正的攻击位（宁可多算，不可丢线）。
+##   ⚠️ 「原地」永远保留（它是合法选项，且骷髅不动也可能够得到人）。
+func _tp_summon_slot_moves(sim: Sim, idx: int, moves: Array) -> Array:
+	if idx < 0 or idx >= sim.units.size():
+		return moves
+	var u: SimUnit = sim.units[idx]
+	if u == null or not u.alive:
+		return moves
+	var reach := maxi(u.atk_range, 1)
+	var out: Array = []
+	for a in moves:
+		var mv: Variant = a.get("move")
+		if mv == null:
+			out.append(a)          # 原地
+			continue
+		var c: Vector2i = mv
+		var can_hit := false
+		for j in sim.units.size():
+			var e: SimUnit = sim.units[j]
+			if e == null or not e.alive or e.fn == u.fn:
+				continue
+			if walk_dist(sim, c, e.cell) <= reach:
+				can_hit = true
+				break
+		if can_hit:
+			out.append(a)
 	return out
 
 ## 阶段 2 候选：**只出手、不再移动**（位置已在阶段 1 定好）：打人 / 敲够得着的障碍 / 不打（不生成步骤）。
@@ -2494,6 +2581,15 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				float(last_tp_p1_dups) * 100.0 / float(maxi(last_tp_p1_evals + last_tp_p1_dups, 1))]
 		elif w_tp_dedup <= 0:
 			txt += "（去重未开）"
+		# 【2026-09-24·用户「单位多的局能不能优化路径」】再把阶段 1 的账**按单位类型拆开**：
+		#   英雄 vs 召唤物（骷髅兵）各生成多少条、各真正评分多少次 —— 用来回答"死灵法师那队
+		#   单格 655s 到底花在哪一层"，也用来量 `SUMMON_SLOT_ONLY` 到底省了多少。
+		#   ⚠️ 纯统计：`kids` 是"生成出来的子条目"，`evals` 是"过完同末态去重、真正跑 `_evaluate` 的"。
+		txt += " · 阶段1分账：英雄 %d 条/评分 %d · 召唤物 %d 条/评分 %d" % [
+			last_tp_p1_hero_kids, last_tp_p1_hero_evals,
+			last_tp_p1_summon_kids, last_tp_p1_summon_evals]
+		if w_summon_slot_only > 0:
+			txt += "（召唤物只走攻击位：开）"
 	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
 	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
 	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。

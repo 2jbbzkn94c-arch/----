@@ -91,12 +91,15 @@ const KEY_VAR := {
 	"SEARCH_MODE": "w_search_mode",
 	"TWO_PHASE_P1_BEAM": "w_tp_p1_beam",
 	"TWO_PHASE_DEDUP": "w_tp_dedup",
+	# 【2026-09-24·用户拍板「改」】召唤物的阶段 1 候选集（1 = 只走"能打到人的格"；见 `src/BattleAI.gd` 的
+	#   `const SUMMON_SLOT_ONLY` 处三处铁证：骷髅兵本方回合结束即消散 ⇒ 不能借此攻击的落点价值恒 0）。
+	"SUMMON_SLOT_ONLY": "w_summon_slot_only",
 }
 
 # 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 14 个**键（数量不对 = 有键漏了或类型变了）。
 const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
 	"NO_LOSS_FILTER", "TIEBREAK_MODE", "POISON_MAX_TICKS", "STAY_OPTION", "FORM_MERGE_MODE", "SEARCH_MODE",
-	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP"]
+	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "SUMMON_SLOT_ONLY"]
 const FACTORS := [0.5, 2.0]
 ## 宽程阶梯（含 0 = 归零消融）：用来区分"局部不敏感"的两种原因——
 ##   · **不重要的项**：整条曲线都平（任何值都不改出招）
