@@ -68,7 +68,7 @@ param(
     #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
     #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
     [string]$Baseline = 'RL\weights\噩梦_基线.json',
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -412,6 +412,25 @@ if ($Mode -eq 'bpool') {
         $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ MOVE_ACCEPT_POOL = [int]$BP_ARMS[$k] } }
     }
     $GROUPS = @(@{ slug = 'BP'; base = 'RL\weights\噩梦.json'; tiers = @($BP_ARMS.Keys) })
+}
+
+# ---- 模式 Q（`funnel`）：**阶段 2 漏斗宽度** `TWO_PHASE_LAYOUTS` 剂量批（2026-09-24·用户「你把漏斗调到其他数值，跑一下」）----
+# 背景：阶段 1 枚举 `BEAM` 套阵型（跑批里 beam=200），排序后**只把前 N 套送进阶段 2**（N = 本键，原写死 16）。
+#   T24 已经用"改常量 + 重建副本 + 同一个局面"试过 16 → 32 ⇒ 出招**逐字相同**、阶段 2 完整计划 1520 → 3104、
+#   思考 12.5s → 27.0s（"漏斗不是瓶颈"）。但那是**单局面**读数，而且只有"往上"一个方向。
+# 本批量两件事：① 往下（8）—— 若不变 ⇒ 阶段 2 的一半预算可以省掉（**算力收益**）；
+#   ② 往上（32）—— 用配对批（4 组 × 4 种子 × 双先后手）坐实 T24 的单局面结论。
+# ⚠️ **没跑 64**：阶段 2 成本 ≈ 线性 ⇒ 64 比 16 贵约 4 倍（预计每格墙钟 ×3~4），而 T24 已证"往上"无出招变化
+#   ⇒ 先看 32；若 32 出招也不变，就没有理由再往上加。
+# 对照 = `fn16` = 现役值（引擎默认也是 16 ⇒ 这一臂应当与"不注入"逐位相同）。
+# ⚠️ 读法：配对 Δpts(臂 − fn16) + 挨打/打出/回合 + 单格墙钟（`throughput.csv`）；32 那臂会更慢。
+$FN_ARMS = [ordered]@{ 'fn8' = 8; 'fn16' = 16; 'fn32' = 32 }
+if ($Mode -eq 'funnel') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $FN_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_LAYOUTS = [int]$FN_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'FN'; base = 'RL\weights\噩梦.json'; tiers = @($FN_ARMS.Keys) })
 }
 
 # ---- 模式 O（`split`）：㉒隔断 `SPLIT_W` 剂量批（T16）----

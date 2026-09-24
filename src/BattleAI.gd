@@ -633,12 +633,14 @@ const SPLIT_CAP := 4          # 每一对玩家单位的封顶（≥4 步就算"
 # 威胁评估：对方"需要先移动才能打到"的那一份伤害按此折算（移动要花掉一次走位机会）。
 # 只看静态射程会把"离近战 2 格"误判成完全安全，只看可达又会让 AI 过度畏首畏尾。
 const THREAT_MOVE_DISCOUNT := 0.7
-# 【2026-09-15 用户决定】"会被打掉"的身价折减系数：来袭合计 ≥ 当前血 → 按 **身价 × 此值** 再罚一次。
-# 原来这里是写死的 `0.5`（§14#12 里三个写死数之一），用户说"应该加个键，不写死 0.5" → 变成可调键
-# `THREAT_DEAD_FOLD`（键数 18 → 19）。量级参考：身价 20 的核心 × 0.5 = **−10 分**
-# （对比：1 点血 = 1 分、击杀 +38）——它是"下回合会被秒"这件事的**唯一罚分**，
-# 也是那三个写死数里唯一真正改变取舍的一个（另两个 `骗反击 +0.5` / `德鲁伊光环 +0.6` 同日删除）。
-const THREAT_DEAD_FOLD := 0.5
+# 【已删 2026-09-24·用户拍板】原 `const THREAT_DEAD_FOLD := 0.5`（⑮必死折："挨打合计 ≥ 当前血"⇒
+#   按 身价 × 此值 再罚一次）。删除依据：① 噩梦档 2026-09-22 晚已按用户拍板把它归零（该档早就不生效）；
+#   ② 本项目"防守侧罚分"的历史读数全在噪声带内（±5 分、CI 跨 0）⇒ 判死。
+#   删除范围：const + `var w_threat_dead_fold` + `set_weights` 分支 + `search()`/`_layout_score()` 里
+#   那几处"临时清零再还原" + `_evaluate`/`_eval_breakdown` 入账 + `_dead_fold()` + 日志术语表 +
+#   训练器可训键（6 → 5）。⚠️ **副作用**：简单/普通/困难的权重档没写这个键 ⇒ 吃默认 0.5
+#   （且 `RISK_W` 默认 0）⇒ 删掉后这三档失去**唯一**的"下回合会被打死"罚分（噩梦不受影响）。
+#   登记见 `Data/Progress_tracking/1_通用策略.md` 的「已删 / 已判死登记表」。
 # 【2026-09-19 删除·用户批准】这里原有 `const KILL_BONUS := 38.0`（击杀即时重奖）。
 # 删的理由（用户 2026-09-18 指出）：击杀的价值已由三笔覆盖 —— ① 对面身价项**整项消失**（`continue`）
 # ≈ +22~26、② 血量账（打光它全部血）、③ 集火 `frac²` 打空 +30 ⇒ 38 是第四笔纯冗余；
@@ -984,6 +986,8 @@ var w_search_mode := SEARCH_MODE
 var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 # 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开），见 `const TWO_PHASE_DEDUP` 处说明。
 var w_tp_dedup := TWO_PHASE_DEDUP
+# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（见 `const TWO_PHASE_LAYOUTS` 处说明）。
+var w_tp_layouts := TWO_PHASE_LAYOUTS
 var w_summon_slot_only := SUMMON_SLOT_ONLY   # 【2026-09-24】召唤物阶段 1 只走"能打到人的格"（见 const 处说明）
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
@@ -1088,7 +1092,7 @@ const PLAYER_VALUE_MULT := 1.25
 #      决策级探针敏感度 **0.00**（专属场景 ×0~×15 全程零翻盘）。
 #   ⚠️ 注意：**不能连带删 `FOCUS_FIRE_WEIGHT`** —— 那是"往同一目标叠伤害"的承重项
 #      （降低它三轮合并 **−5.85 [−10.9, −0.8] 显著变差**）。
-var w_threat_dead_fold := THREAT_DEAD_FOLD   # "会被打掉"时按身价折减多少（原写死 0.5，2026-09-15 用户要求变成键）
+# 【已删 2026-09-24】原 var w_threat_dead_fold（⑮必死折，见文件头 const 处的删除说明）。
 # 【2026-09-15 删除·用户决定】这里原有 `w_siege_base`(3.0) / `w_siege_over`(0.8) 与 `_siege_bonus()`：
 #   "增援激励"——打起来之后，给"离最近玩家在射程内"的敌方单位 +3、超出射程每格 −0.8。
 #   用户指出它与 `ENGAGE_PULL_PER_CELL`（够不到就每格 −1.2）**重复**：同一把路网距离
@@ -1153,7 +1157,7 @@ func set_weights(t: Dictionary) -> void:
 			# -------- ④ 其余写死项的键化（节奏/集火补刀/安全/位置/经济）--------
 			# 【已删 2026-09-19（用户同意）】`FOCUS_TIMES_WEIGHT` —— 键与评分项整项删除；
 			#   权重文件里再写它会被下面的 `_:` 分支忽略（同 `MAX_MOVE_OPTIONS` 那批）。
-			"THREAT_DEAD_FOLD": w_threat_dead_fold = float(v)
+			# 【已删 2026-09-24】原 THREAT_DEAD_FOLD 分支（⑮必死折）。
 			# -------- 规则 A / B / C（默认关闭；见文件头的常量块）--------
 			"MOVE_ACCEPT_DAMAGE": w_move_accept_damage = int(v)
 			# 【2026-09-24·用户拍板方案 A】⑥ 的罚按血量池折算（见 const MOVE_ACCEPT_POOL 处说明）
@@ -1223,6 +1227,8 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开；见 const TWO_PHASE_DEDUP 处说明）
 			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
+			# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（算力分配键，见 const 处说明）
+			"TWO_PHASE_LAYOUTS": w_tp_layouts = maxi(int(v), 1)
 			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
 			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
@@ -1506,6 +1512,9 @@ const SEARCH_MODE := 0
 # ⚠️ 【2026-09-23 深夜⑱·用户拍板 B】8 → **16**（阶段 2 工作量 ×2）。与 ② 那次的区别：② 是"换尺子 + 放宽
 #   到 32"一起改（尺子那笔抵消了收益）；这次只放宽余量，并且**同时**加了"全员原地保送"（见
 #   `_search_two_phase()` 阶段 2 开头）⇒ 两者叠加后**必须实测**才知道有没有用（`难度体检 -Mode smode`）。
+# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】**提升成可注入键**（`TWO_PHASE_LAYOUTS`，默认 16 ⇒
+#   不注入时**逐位不变**）。过去它是写死的常量，T24 只能靠"改常量 + 重建两份副本 + 跑同一个局面"比 16/32；
+#   提升成键之后才能像别的旋钮一样跑**配对剂量批**（`难度体检 -Mode funnel`，臂 `fn8 / fn16(对照) / fn32 / fn64`）。
 const TWO_PHASE_LAYOUTS := 16
 # 【2026-09-23 深夜·用户「查一下 25 秒都花在哪儿」+ 两局实测分账】**阶段 1 的每层保留宽度**独立成一个键。
 #   病灶（实机两局读数）：`[搜索分账] 阶段1 10.6~11.6s：阵型 400 套 → 送阶段2 16 套 · 阶段2 13.7~14.5s`
@@ -1586,10 +1595,9 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	var wk_greedy := wk_on and (w_weak_mode == 1 or w_weak_mode == 3 or w_weak_mode == 5)
 	var wk_nothreat := wk_on and (w_weak_mode == 2 or w_weak_mode == 3)
 	var wk_nofocus := wk_on and (w_weak_mode == 4 or w_weak_mode == 5)
-	var kd_save := w_threat_dead_fold
 	var kf_save := w_focus_fire
-	if wk_nothreat:
-		w_threat_dead_fold = 0.0
+	# 【已删 2026-09-24】wk_nothreat 原来只做「把 ⑮必死折清零」这一件事；⑮ 删掉后它只剩
+	#   下面那道「不许走两阶段搜索」的闸（WEAK_MODE = 2/3，生产档不用）。
 	if wk_nofocus:
 		w_focus_fire = 0.0
 	if wk_greedy:
@@ -1597,7 +1605,6 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 		# 代价：跨单位的配合（先贴脸再收割、替队友开盾）全没了 ⇒ **结构性的能力差**，不是调价格。
 		var gw: Array = _greedy_finish([{ "sim": sim, "path": [], "score": _evaluate(sim), "done": {},
 				"tb": (_tiebreak_tuple(sim) if w_tiebreak_mode > 0 else []) }], enemy_idxs)
-		w_threat_dead_fold = kd_save
 		w_focus_fire = kf_save
 		if gw.size() > 0:
 			return gw[0]["path"]
@@ -1610,7 +1617,6 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	#     ② 吃矿机会成本（`GOLD_OPPORTUNITY_W`）—— 它是"动作层跨阶段"记账，本模式没复刻。
 	if w_search_mode >= 1 and not wk_greedy and not wk_nothreat and not wk_nofocus and w_gold_oc == 0.0:
 		var plan_two := _search_two_phase(sim, enemy_idxs)
-		w_threat_dead_fold = kd_save
 		w_focus_fire = kf_save
 		return plan_two
 
@@ -1728,14 +1734,12 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 		wipe_fallback.sort_custom(_cmp_state)
 		states = wipe_fallback.slice(0, _beam())
 	if states.size() == 0:
-		w_threat_dead_fold = kd_save
 		w_focus_fire = kf_save
 		return []
 	if log_decisions:
 		last_search_ms = Time.get_ticks_msec() - t0   # 【取证】本次搜索实际耗时（抬头行会写明）
 		_print_decision(sim, states[0])
 	# 【2026-09-19】弱化引擎的临时权重还原（`wk_*` 全 false 时这三行是恒等操作）
-	w_threat_dead_fold = kd_save
 	w_focus_fire = kf_save
 	return states[0]["path"]
 
@@ -1853,7 +1857,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var beam := _beam()
 	# 【2026-09-23 深夜·默认关】阶段 1 的每层宽度（`TWO_PHASE_P1_BEAM`）：0 = 沿用 `BEAM`（逐位不变）；
 	#   >0 = 只留这么多条线（至少 `TWO_PHASE_LAYOUTS`，否则漏斗没东西可送）。见 const 处那两局实测分账。
-	var p1_beam: int = beam if w_tp_p1_beam <= 0 else maxi(int(w_tp_p1_beam), maxi(TWO_PHASE_LAYOUTS, 1))
+	var p1_beam: int = beam if w_tp_p1_beam <= 0 else maxi(int(w_tp_p1_beam), maxi(w_tp_layouts, 1))
 	# ⚠️ 内层宽度必须是整数：这里用 **8.0** 走浮点除再 `int()` 取整，避免编辑器那条
 	#   `INTEGER_DIVISION`（"Integer division. Decimal part will be discarded."）警告 ——
 	#   `beam` 恒为正 ⇒ 截断与整数除完全等价，行为逐位不变（2026-09-23 用户报的那条警告）。
@@ -1963,7 +1967,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		#   "原地出手 / 敲相邻障碍 / 不打"（它自己就按 `u.moved` 卡住移动）⇒ 规则照样守住，
 		#   而且挪过位的单位**该打的这一下不会白丢**。
 		var gw_in: Array = []
-		for st0 in layouts.slice(0, mini(layouts.size(), maxi(TWO_PHASE_LAYOUTS, 1))):
+		for st0 in layouts.slice(0, mini(layouts.size(), maxi(w_tp_layouts, 1))):
 			gw_in.append(_tp_state(st0["sim"], st0["path"], {}, float(st0["score"])))
 		var gw1: Array = _greedy_finish(gw_in, enemy_idxs)
 		last_tp_layouts_used = gw_in.size()                                   # 【取证】送进收尾的阵型数
@@ -1978,7 +1982,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var t_p2 := Time.get_ticks_msec()                      # 【取证】阶段 2 计时起点
 	var best: Dictionary = {}
 	var best_wiped: Dictionary = {}
-	var layout_n := mini(maxi(TWO_PHASE_LAYOUTS, 1), layouts.size())
+	var layout_n := mini(maxi(w_tp_layouts, 1), layouts.size())
 	# 【2026-09-23 深夜⑱·用户拍板 A】**保送"全员原地"那套阵型进阶段 2**。
 	#   为什么必须保送：模式 2 的阶段 2 是**唯一**还会发"移动+攻击"整套组合的地方（`_tp_attack_actions()`
 	#   开头 `if w_search_mode >= 2: return _actions_for(sim, idx)`），而它对**已经在阶段 1 挪过位**的单位
@@ -2243,15 +2247,12 @@ func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = tr
 	#   排序依赖"谁先被决定"（用户实测：圣光先挪就被记成暴露，其实暗域随后会挡在它前面）。
 	#   手段与低档弱化那套一致（`WEAK_MODE` 的关威胁分支）：**临时把权重清零**再还原 ⇒ 不动 `_evaluate`。
 	var r_save := w_risk
-	var d_save := w_threat_dead_fold
 	var a_save := w_move_accept_damage
 	if not complete:
 		w_risk = 0.0
-		w_threat_dead_fold = 0.0
 		w_move_accept_damage = 0
 	var sc := _evaluate(sim, complete)
 	w_risk = r_save
-	w_threat_dead_fold = d_save
 	w_move_accept_damage = a_save
 	# 【2026-09-23 深夜④·用户拍板「做」】**让阶段 1 看得见伤害**：把"这套阵型如果立刻全员出手能拿多少"
 	#   作为一笔潜力加进来，用**带目标记账的贪心**算（`_tp_attack_gain_accounted()`）。
@@ -2589,7 +2590,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 	if w_search_mode >= 1:
 		txt += "\n     [搜索分账] 阶段1（走位）%.1fs：阵型 %d 套 → 送阶段2 %d 套（上限 %d）" % [
 			float(last_tp_phase1_ms) / 1000.0, last_tp_layouts_built, last_tp_layouts_used,
-			maxi(TWO_PHASE_LAYOUTS, 1)]
+			maxi(w_tp_layouts, 1)]
 		txt += " · 阶段2（出手）%.1fs：完整计划 %d 个" % [
 			float(last_tp_phase2_ms) / 1000.0, last_tp_leaves]
 		# 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】把阶段 1 的**去重账**打出来：
@@ -2957,7 +2958,6 @@ func _term_phrase(k: String, d: float, is_taunt: bool = false) -> String:
 		"⑫猛毒计价": return "对面身上的毒更值钱" if better else "对面的毒没了"
 		"⑬附体(宿魂)": return "附体对面" if better else "附体目标没了"
 		"⑭坚固(堡垒)": return "没移动 ⇒ 拿到[坚固]" if better else "移动了 ⇒ 丢掉[坚固]"
-		"⑮必死折": return "这一格下回合不会被打死" if better else "这一格下回合会被打死"
 		"⑯猛毒新挂": return "给对面新挂上毒" if better else "没挂上毒"
 		"⑰沉默计价": return "封住对面的技能" if better else "对面技能恢复"
 		"⑱荆棘封锁": return "把对面钉住（不能移动）" if better else "封锁没做成"
@@ -3275,7 +3275,6 @@ func _term_defs() -> Array:
 		["⑧道具", "buff_taken × BUFF_TAKE_WEIGHT(%.1f)；已按阵营定符号（我方拾取 + / 对面拾取 −）；类型价 = atk 1.0 / move 0.7 / shield 1.2（已有盾 0）/ **heal 1.2，但 `HEAL_CREDIT_W`>0 时归 0**（回血改由 ③ 按实际回复量计价，避免一件事算两遍）" % w_buff_take],
 		["⑨搏命激励", "Σ 我方「必死且本回合已攻击」 + 6.0 + 1.5×吃攻"],
 		["⑩终局项", "TERMINAL_W(%.2f) × 存活数凸曲线（我方 3/2/1/0 → 0/−10/−100/−1000；对面 → 0/+10/+100/+1000）" % w_terminal],
-		["⑮必死折", "−Σ_我方[「**挨打合计**」≥ 当前血 ⇒ 身价 × THREAT_DEAD_FOLD(%.2f)]（与 ⑦ 共用同一份 `_incoming_incs()`）（「下回合会被打掉」的唯一罚分；判据与 ⑥规则B / 撤退过滤**同一把尺子**：`_incoming_total_on()` = 按目标求和的真实单击 + 移动后技能 + 毒 + 盾修正）。⚠️ 2026-09-20 用户拍板：原来的**分摊总量**（`THREAT_ALLOC_W` × Σ分到的伤害 × 核心系数）与 ⑦核心风险（`RISK_W`/`RISK_CORE_POW`）**整族删除** —— 那本账要手工建模「对手能打到几个人（走位）+ 各技能」，永远算不全（实测它在棋力层中性，§14#174）；而「下回合会不会挨打」现在由**必死折 + ⑥规则B + 终选层的 T13 真推演**覆盖" % [w_threat_dead_fold]],
 		["⑫猛毒计价", "毒蛇(hero_03)：敌方每只带[猛毒]的单位 +POISON_TICK_VALUE(%.2f) × min(其血, POISON_MAX_TICKS=%d)（=『毒还剩几跳』值多少分）。**值按施加者英雄覆盖读**（`_wh(施加者.hero_id, ...)`；查不到施加者 ⇒ 用这个扁平兜底值）" % [w_poison_tick, w_poison_max_ticks]],
 		["⑬附体(宿魂)", "宿魂(hero_46)：敌方被[附体]的单位 +POSSESS_TARGET_W(%.2f) × 身价/20。**值按施加者（宿魂）英雄覆盖读**（`_wh`）" % w_possess_target],
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且**真被够得着** ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取。⚠️ 2026-09-23：够得着 = 与 ⑥⑦ 同一把尺 —— 射程＋视线＋**单位身体**＋嘲讽门，**躲在队友后面、玩家其实打不到它 ⇒ 不给这 5 分**）" % w_solid_hold],
@@ -3350,14 +3349,12 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	d["⑨搏命激励"] = doom
 	if w_terminal != 0.0:
 		d["⑩终局项"] = w_terminal * _terminal_value(sim)
-	# 【2026-09-21 用户拍板 A·恢复】⑦核心风险 + ⑮必死折：与 `_evaluate()` **逐行同口径**
-	#   （同一条 if、同一个 `_incoming_incs()`、同一个公式）—— 否则自校验 `Σ=… vs 本步 Δ…` 会漂。
-	if w_risk != 0.0 or w_threat_dead_fold != 0.0:
+	# 【2026-09-21 用户拍板 A·恢复】⑦核心风险（与 `_evaluate()` **逐行同口径**：同一条 if、
+	#   同一个 `_incoming_incs()`、同一个公式 —— 否则自校验 `Σ=… vs 本步 Δ…` 会漂）。
+	#   ⚠️ 2026-09-24：⑮必死折已删（见文件头 const 处），这里只剩 ⑦。
+	if w_risk != 0.0:
 		var incs_bd := _incoming_incs(sim)
-		if w_risk != 0.0:
-			d["⑦核心风险"] = _exposure_risk(sim, incs_bd)
-		if w_threat_dead_fold != 0.0:
-			d["⑮必死折"] = _dead_fold(sim, incs_bd)
+		d["⑦核心风险"] = _exposure_risk(sim, incs_bd)
 	if w_poison_apply != 0.0 or _any_hero_key(["POISON_APPLY_W"]):
 		d["⑯猛毒新挂"] = sim.poison_apply_val
 	# 【2026-09-21 新增·默认关】⑳抱团 / ㉑退路被夹（与 `_evaluate()` 末尾那两行同口径 ⇒ Σ 自校验才对得上）
@@ -6146,10 +6143,9 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   而一次普通攻击 ≈ +3.8（1 血点 + 集火 frac²）、集火/击杀那一击 +10~16 ⇒ **不会避战**；
 	#   只有"为了 3 点伤害走进 3~4 人火力网"才被否掉（那正确）。详见 `_exposure_risk()` 上方说明。
 	score += _rule_b_score(sim)
-	if w_risk != 0.0 or w_threat_dead_fold != 0.0:
+	if w_risk != 0.0:
 		var incs_ev := _incoming_incs(sim)
 		score += _exposure_risk(sim, incs_ev)
-		score += _dead_fold(sim, incs_ev)
 	# 【2026-09-20 新增·默认关·T6】**"这一击新挂上毒"的动作收益**（见 `const POISON_APPLY_W` 处说明）：
 	#   `sim.poison_apply_val` 由 `_apply` 在"毒蛇命中且目标原本没毒"时累加，金额**已按施加者英雄覆盖读好**
 	#   （`_wh(u.hero_id, "POISON_APPLY_W", w_poison_apply)`，与金矿/坚固同口径）⇒ 这里直接加。
@@ -6583,19 +6579,7 @@ func _core_ref(sim: Sim) -> float:
 ##   它不需要分摊那套估算 —— 直接复用量尺统一的那把尺子（与 ⑥规则B / 撤退过滤 / `_was_doomed()` 同一把）。
 ## 这一支**没有必死豁免**：它可以通过"这回合先把火力点解决掉"消除 ⇒ 是决策相关的，不是常数。
 ## `incs` = `_incoming_incs(sim)` 的结果（与 ⑦核心风险共用一次遍历）。
-func _dead_fold(sim: Sim, incs: Array) -> float:
-	if w_threat_dead_fold == 0.0:
-		return 0.0
-	var s := 0.0
-	for i in sim.units.size():
-		var u: SimUnit = sim.units[i]
-		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY or u.hp <= 0:
-			continue
-		var inc: float = float(incs[i]) if i < incs.size() else 0.0
-		if inc >= float(u.hp):
-			s -= float(_unit_value(sim, u)) * w_threat_dead_fold
-	return s
-
+# 【已删 2026-09-24】原 _dead_fold()（⑮必死折）—— 见文件头 const 处的删除说明。
 ## 【2026-09-23 新增·默认关】㉕嘲讽吸火（`TAUNT_SOAK_W`，口径见文件上方 const 处的长说明）：
 ##   对每个**存活的我方非嘲讽单位** X：`关掉嘲讽门时的挨打合计(X) − 实际挨打合计(X)`（> 0 = 嘲讽门替它挡下了这些伤害），
 ##   再乘 `_incoming_pool_mult(X)`（与 ③血量账 同一套血量池折算 ⇒「坦克拿 2 点换脆皮 4 点」自动变成赚）。

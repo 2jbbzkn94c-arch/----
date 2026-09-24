@@ -314,7 +314,7 @@ function Get-OrderedScoreKeys {
     return @('FOCUS_FIRE_WEIGHT',
              'HP_VALUE_W',
              'THREAT_MOVE_DISCOUNT',
-             'THREAT_DEAD_FOLD',
+             # 【2026-09-24 已删·用户拍板】原 'THREAT_DEAD_FOLD'（⑮必死折）—— 引擎侧整条已删
              'BUFF_TAKE_WEIGHT',
              # 2026-09-20 解 const 移回（"进圈拉力"每格分；默认 1.2）
              'ENGAGE_PULL_PER_CELL')
@@ -1410,6 +1410,13 @@ function Get-RuleScoreKeys {
              #   与 `TWO_PHASE_P1_BEAM` 同类：**不是评分权重、不进自动搜索**，是"算力分配"键。
              #   ⇒ 规则键 35 → 36。
              'TWO_PHASE_DEDUP',
+             # 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】**阶段 2 的漏斗宽度**（`TWO_PHASE_LAYOUTS`）。
+             #   原来写死在引擎里（常量 16）⇒ T24 只能"改常量 + 重建副本 + 跑一个局面"比 16/32；
+             #   提升成键后可以跑配对剂量批（`难度体检 -Mode funnel`：fn8 / fn16(对照) / fn32 / fn64）。
+             #   语义：阶段 1 排前 N 套阵型进阶段 2（N 越大越不会漏掉好阵型、但阶段 2 越贵）。
+             #   与 `TWO_PHASE_P1_BEAM`/`TWO_PHASE_DEDUP` 同类：**算力分配键、不进自动搜索**。
+             #   ⇒ 规则键 39 → 40、可注入 47 → 48。
+             'TWO_PHASE_LAYOUTS',
              # 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」→「改」】**召唤物的阶段 1 候选集**。
              #   事实：`heroes/summon_骷髅兵.gd::on_turn_end()` = 本方回合结束即消散（攻 1 / 血 1 / 无特性）
              #   ⇒ 骷髅永远挡不住敌人、也永远不会被敌人主动打 ⇒ 它的价值只有「本回合打出的伤害 + 替英雄吃下的反击」

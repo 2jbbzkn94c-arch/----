@@ -51,8 +51,8 @@ const KEY_VAR := {
 	"HEAL_CREDIT_W": "w_heal_credit",
 	"POSSESS_TARGET_W": "w_possess_target",
 	# ============ 【2026-09-24 补齐】2026-09-21 之后新增 / 历史上漏收的键 ============
-	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 45 个）；`INT_KEYS` 恒等于其中
-	#   `int(v)` 转型的那 14 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`
+	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 48 个）；`INT_KEYS` 恒等于其中
+	#   `int(v)` 转型的那 17 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`
 	#   **静默测不到那个键** —— 看起来像"这个键没用"，其实是探针根本没动它。
 	# ⚠️ **英雄段覆盖（`_wh()`）**：下面这些都**按英雄段覆盖**读 ——
 	#   `POISON_TICK_VALUE` / `POISON_APPLY_W` / `SOLID_HOLD_W` / `SILENCE_VALUE_W` /
@@ -93,6 +93,9 @@ const KEY_VAR := {
 	"SEARCH_MODE": "w_search_mode",
 	"TWO_PHASE_P1_BEAM": "w_tp_p1_beam",
 	"TWO_PHASE_DEDUP": "w_tp_dedup",
+	# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（见 `src/BattleAI.gd` 的
+	#   `const TWO_PHASE_LAYOUTS` 处说明）：原来写死 16，现在可注入 ⇒ 与上面两键同类。
+	"TWO_PHASE_LAYOUTS": "w_tp_layouts",
 	# 【2026-09-24·用户拍板「改」】召唤物的阶段 1 候选集（1 = 只走"能打到人的格"；见 `src/BattleAI.gd` 的
 	#   `const SUMMON_SLOT_ONLY` 处三处铁证：骷髅兵本方回合结束即消散 ⇒ 不能借此攻击的落点价值恒 0）。
 	"SUMMON_SLOT_ONLY": "w_summon_slot_only",
@@ -101,7 +104,7 @@ const KEY_VAR := {
 # 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 14 个**键（数量不对 = 有键漏了或类型变了）。
 const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "MOVE_ACCEPT_POOL", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
 	"NO_LOSS_FILTER", "TIEBREAK_MODE", "POISON_MAX_TICKS", "STAY_OPTION", "FORM_MERGE_MODE", "SEARCH_MODE",
-	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "SUMMON_SLOT_ONLY"]
+	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "TWO_PHASE_LAYOUTS", "SUMMON_SLOT_ONLY"]
 const FACTORS := [0.5, 2.0]
 ## 宽程阶梯（含 0 = 归零消融）：用来区分"局部不敏感"的两种原因——
 ##   · **不重要的项**：整条曲线都平（任何值都不改出招）
