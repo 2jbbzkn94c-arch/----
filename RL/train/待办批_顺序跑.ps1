@@ -17,8 +17,14 @@ param(
     [string]$WaitFor = 'ladder6_pois2_L6PO',   # 等这个 run 的 measure.csv 出现（= 前一批最后一组跑完）
     [string]$WatchPrefix = 'ladder6_pois2_',   # 盯这个前缀的目录，看还有没有新写入
     [int]$StallMin = 25,                       # 连续这么多分钟没有任何写入 ⇒ 才判定"前一批已停"
-    [int]$WaitMaxMin = 240
+    [int]$WaitMaxMin = 240,
+    # ---- 【2026-09-24 新增·透传给 `难度体检`】 ----
+    [switch]$OppNm,                            # 走**镜像噩梦协议**（两侧同码同底座、唯一差别 = 被比较的项）
+    [string[]]$Decks = @()                     # 指定牌组；空 = 用 `难度体检` 自己的默认（4 个快组）
 )
+$chainExtra = @{}
+if ($OppNm) { $chainExtra['OppNm'] = $true }
+if ($Decks.Count -gt 0) { $chainExtra['Decks'] = $Decks }
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $res = Join-Path $root 'RL\train\results'
@@ -70,7 +76,7 @@ foreach ($m in $Modes) {
     # ⚠️ 无人值守 ⇒ 单个模式抛错（例如某组撞 `INCOMPLETE RUN` 硬闸门）**不能拖垮整条链**：
     #   包 try/catch、记进日志、继续下一个模式；每个模式收尾再列一次"哪几组没有表"，方便事后补跑。
     try {
-        & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 1500 *>&1 | Tee-Object -FilePath $log | Out-Null
+        & (Join-Path $PSScriptRoot '难度体检.ps1') -Mode $m -Tag $tag -TimeoutSec 1500 @chainExtra *>&1 | Tee-Object -FilePath $log | Out-Null
     } catch {
         $em = $_.Exception.Message
         Write-Host ('[chain] !! -Mode ' + $m + ' 抛错，已跳过、继续下一个模式：' + $em)

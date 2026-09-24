@@ -49,11 +49,44 @@ param(
     #   （对照臂 `hard` 恒 200、对手恒 `opp=base`）⇒ 与上一批（`-NmBeam` 默认 200）逐格可比：
     #   同一批队伍/种子/对手，唯一变化 = 噩梦自己的搜索宽度。0 = 不改（用各臂表里的默认值）。
     [int]$NmBeam = 0,
+    # ===================== 【2026-09-24 用户拍板·镜像噩梦协议】 =====================
+    # 用户口径原话：「训练的时候一般是同队伍打同队伍…对手得是一模一样的队伍，噩梦难度，用改之前的设置。
+    #   也就是说唯一的区别是需要比较的项。同时把思考比较慢的毙了。而且你选择的队伍需要基本把所有类型的英雄覆盖」。
+    # 打开 `-OppNm` 后本器具的 spec 变成：
+    #   · `opponent = 'cand'` ⇒ 对手也用 fork（`RL/ai/AI_Battle.gd`，与候选**同一份代码**）
+    #   · `league = { self_play_fraction: 1.0; checkpoint: <$Baseline> }` ⇒ **每一格**对手都读那份底座权重
+    #     （RlTrain 会把 checkpoint 的 sha12 写进审计串与格键 ⇒ 换底座自动作废旧读数）
+    #   · `base_weights = $Baseline`（**强制的**，忽略各模式自带的 base）——
+    #     这一条是"唯一区别 = 被比较的项"的关键：两侧必须同一份底座，否则差的不止 θ。
+    #   · beam 仍是 200/200（对手不被削弱），牌组仍是镜像（`decks.enemy == decks.player`）。
+    # ⚠️ 与旧口径的关系：不开 `-OppNm` 时一切照旧（`opp=base` = 困难档陪练副本、空权重），
+    #   **游戏内的陪练对手不受影响**；但两种协议的读数**不能直接比绝对值**（对手不是同一个东西）。
+    # ⚠️ 代价：对手从"空权重的模式 0"变成"噩梦档的模式 2 + 去重" ⇒ 单格明显变慢，
+    #   所以配套要求"把思考慢的牌组毙掉"（实测 >90 s/格 的不要）。
+    [switch]$OppNm,
+    # 镜像噩梦协议下两侧共用的**底座**（仓库相对路径）。默认那份是"现役生产值的冻结快照"：
+    #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
+    #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
+    [string]$Baseline = 'RL\weights\噩梦_基线.json',
     [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
 $results = Join-Path $PSScriptRoot 'results'
+
+# 【2026-09-24 镜像噩梦协议】开跑前校验底座并打横幅 —— 这批读数怎么解释全靠它
+if ($OppNm) {
+    $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $blAbs = Join-Path $repoRoot $Baseline
+    if (-not (Test-Path -LiteralPath $blAbs)) {
+        throw ('-OppNm：底座权重文件不存在：' + $Baseline +
+               '（镜像噩梦协议要求两侧共用同一份底座。先冻结一份快照，例：' +
+               'Copy-Item RL\weights\噩梦.json RL\weights\噩梦_基线.json）')
+    }
+    $blSha = (Get-FileHash -LiteralPath $blAbs -Algorithm SHA256).Hash.Substring(0,12).ToUpper()
+    Write-Host ('[镜像噩梦] 同码（两侧都用 fork）· 同底座 ' + $Baseline + '（sha12 ' + $blSha + '）· opp=cand · beam 200/200 · 牌组镜像 · 不限时')
+    Write-Host '[镜像噩梦] ⚠️ 对手也走噩梦档（模式 2 + 同末态去重）⇒ 单格比"困难对手"慢，慢牌组必须按实测毙掉'
+}
 
 # 四档：名字 → (基线文件, 自己 beam, theta)。beam_opp 恒 200（困难陪练）。
 # ⚠️ 噩梦档为什么单独一组基线：`KILL_BONUS` / `SELF_DEATH_W` / `VALUE_STUN_FOLD` / `VALUE_SILENCE_FOLD`
@@ -441,9 +474,20 @@ if ($Mode -eq 'tiers2') {
 }
 
 function New-LadderSpec([string]$deck, [string]$deckSlug, [string]$groupBase, [string[]]$groupTiers) {
+    # 【2026-09-24】镜像噩梦协议：两侧同码、同底座、同牌组、同宽度 ⇒ 唯一差别 = config 里的 θ。
+    #   `$OppNm` 打开时**强制**用 `$Baseline` 当 base（并且与 league.checkpoint 同一份）——
+    #   若某个模式自带的 base 与它不同（例如 poison/apply 用的 `噩梦_测毒.json`），这里打印一行警告，
+    #   因为"两侧不同底座"就不再是"唯一区别 = 被比较的项"了。
+    $baseForSpec = $groupBase
+    if ($OppNm) {
+        $baseForSpec = $Baseline
+        if ($groupBase -ne $Baseline) {
+            Write-Host ('[镜像噩梦] ⚠️ 本模式的 base（' + $groupBase + '）与底线（' + $Baseline + '）不同 ⇒ 已强制换成底线（否则两侧不止差 θ）')
+        }
+    }
     $o = [ordered]@{
-        base_weights = $groupBase
-        opponent     = 'base'          # 对手 = 困难档陪练副本（各臂同一个对手）
+        base_weights = $baseForSpec
+        opponent     = $(if ($OppNm) { 'cand' } else { 'base' })   # cand = 对手也用 fork（镜像噩梦）
         beam         = @{ candidate = 200; opponent = $OPP_BEAM }
         decks        = @{ enemy = $deck; player = $deck }
         seeds        = @{ train = @(); holdout = @() }
@@ -451,6 +495,9 @@ function New-LadderSpec([string]$deck, [string]$deckSlug, [string]$groupBase, [s
         lineups      = @{ version = 'v2'; pool_size = 49; slots = 12 }
         params       = @{}
         configs      = @()
+    }
+    if ($OppNm) {
+        $o['league'] = @{ self_play_fraction = 1.0; checkpoint = $Baseline; base_opp_beam = $OPP_BEAM }
     }
     $base = Get-Content (Join-Path $PSScriptRoot 'spec_nmchk.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $o.seeds.train = @($base.seeds.train)
