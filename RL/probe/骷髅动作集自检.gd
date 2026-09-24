@@ -66,9 +66,9 @@ func _run() -> void:
 func _case1_counter_soak() -> void:
 	# AI = 骷髅(攻1血1) + 火枪手(攻4血20)；玩家 = 红帽 hero_40（攻5 · 血 13）但把它压到 2 血
 	var descs: Array = []
-	descs.append(_desc_summon(Vector2i(1, 1), "骷髅"))
-	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_09", Vector2i(3, 1), "火枪手"))
-	var a := _desc(DataRegistry.Faction.PLAYER, "hero_40", Vector2i(2, 2), "红帽A")
+	descs.append(_desc_summon(Vector2i(1, 1), "skel"))
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_09", Vector2i(3, 1), "gunner"))
+	var a := _desc(DataRegistry.Faction.PLAYER, "hero_40", Vector2i(2, 2), "A")
 	a["hp"] = 2                       # 血 2：骷髅 1 伤 + 火枪手 4 伤 ⇒ 谁先谁后决定"吃不吃反击"
 	descs.append(a)
 	for w in ARMS:
@@ -109,12 +109,15 @@ func _case1_counter_soak() -> void:
 # ---------------------------------------------------------------- S2：唯一攻击位（英雄不能盲抢）
 func _case2_only_slot() -> void:
 	# A 在 (2,2)，把它的 6 个邻格里除 (1,2) 之外**全部用障碍堵死** ⇒ 只有 (1,2) 能打到它。
-	# 骷髅与火枪手都能走到 (1,2) ⇒ "谁占那格"由搜索自己决定（正解 = 骷髅，因为它吃反击不心疼）。
+	# ⚠️ 英雄**必须是近战**（第一版用火枪手 hero_09 = 远程 ⇒ 它站远处就能打，压根不跟骷髅抢那一格，
+	#   结果 S2 什么都没测到）⇒ 改用**长剑 hero_18**（近战/疾行，emove 3）⇒ 它想打 A 就**必须**占那一格。
 	var descs: Array = []
-	descs.append(_desc_summon(Vector2i(1, 4), "骷髅"))
-	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_09", Vector2i(3, 4), "火枪手"))
-	var a := _desc(DataRegistry.Faction.PLAYER, "hero_40", Vector2i(2, 2), "红帽A")
-	a["hp"] = 2
+	descs.append(_desc_summon(Vector2i(1, 4), "skel"))
+	descs.append(_desc(DataRegistry.Faction.ENEMY, "hero_18", Vector2i(3, 4), "sword"))
+	var a := _desc(DataRegistry.Faction.PLAYER, "hero_40", Vector2i(2, 2), "A")
+	# ⚠️ 血 4：第一版写 2 ⇒ 长剑(攻3)**一击直接打死**它、A 根本没机会反击 ⇒ S2 量不到"谁吃反击"。
+	#   现在长剑打不死它 ⇒ **谁占那一格去打，谁就吃下 A 的 5 点反击**（骷髅吃 = 白吃，英雄吃 = 真掉 5 血）。
+	a["hp"] = 4
 	descs.append(a)
 	var obs := {}
 	for n in _grid.neighbors(Vector2i(2, 2)):
@@ -145,17 +148,19 @@ func _case2_only_slot() -> void:
 
 # ---------------------------------------------------------------- 工具（与其它探针同款）
 func _plan_txt(root, plan: Array) -> String:
+	# ⚠️ 用 `hero_id`（ASCII）而不是中文名：这条输出要穿过 `跑Godot隔离` 的控制台管道，
+	#   中文会被按 GBK 解读成乱码（实测 `火枪手` → `鐏鎵?`），读数时很碍事。
 	var txt := ""
 	for st in plan:
 		var idx := int(st["idx"])
 		var act: Dictionary = st["action"]
 		var mv: Variant = act.get("move")
 		var atk := int(act.get("atk", -1))
-		var who := "不打"
+		var who := "-"
 		if atk >= 0 and atk < root.units.size():
-			who = String(root.units[atk].name)
-		txt += "%s[->%s,atk=%s] " % [String(root.units[idx].name),
-			("原地" if mv == null else str(mv)), who]
+			who = String(root.units[atk].hero_id)
+		txt += "%s[->%s,atk=%s] " % [String(root.units[idx].hero_id),
+			("stay" if mv == null else str(mv)), who]
 	return txt
 
 func _build(descs: Array, slot_only: int, obs: Dictionary = {}) -> Dictionary:

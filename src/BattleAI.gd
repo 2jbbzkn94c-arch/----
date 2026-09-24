@@ -15,6 +15,11 @@ extends RefCounted
 ## 采用"按单位逐次扩展 + 波束保留最优"的搜索，评估函数综合考虑单位强度/击杀/走位。
 
 # ---- 轻量模拟状态 ----
+## 【2026-09-24 用户拍板「3」】伤害倍率 + "敌方回合开始加攻"的**唯一权威**（与生产 `heroes/*.gd` 共用）。
+## 用 `preload` 而不是 `class_name`：新加的全局类名要先让 Godot 重扫类缓存才认，而**跑批每格都现场
+## 加载本文件/副本** ⇒ 用 preload 就没有"重扫完成前那几格解析失败"的窗口。
+const DmgModel := preload("res://src/DamageModel.gd")
+
 class SimUnit:
 	var sim_index := -1      # 在 sim.units 里的下标（宿魂镜像等用）
 	var fn := 0
@@ -5617,30 +5622,54 @@ func _sim_maybe_guard(sim: Sim, wounded: SimUnit) -> void:
 		sim.pending_guard.append({ "dst": wounded, "giver": g })
 		return
 
-# 特技伤害倍率（小阴影/赏金猎人/嬉皮死神；沉默时失效）
+# 特技伤害倍率（小阴影/赏金猎人/嬉皮死神）——【2026-09-24 用户拍板「3」】规则本体已搬进 `DmgModel`：
+#   这里只把**模拟盘**的判据标量化后转发（生产侧 `Battle._bonus_damage()` 走同一份规则 ⇒ 不会再各写一份漂移）。
+#   ⚠️ 本轮顺带对齐一处老漂移：门槛原来是"只看 `silenced`"，而真实 `skill_allowed()` 是
+#   **未被[沉默]且未被[眩晕]** ⇒ 眩晕时倍率技同样该失效。
+#   ⚠️ 保留那条实测修正：远程被贴身 ⇒ 倍率技整条失效（真实 `_bonus_damage` 第二行；
+#   实测 hero_20·出招（贴脸打带嘲讽的独脚龟）：真实 40→39（1 伤），模拟曾算成 2 伤）。
+#   ⚠️ 复仇者(hero_23)的 ×2 只作用于**反击**，不在本函数里（见 `DmgModel.counter_mult()` 与
+#   `_sim_counter_check` 的 `2 if t.hero_id == "hero_23"`）。
 func _sim_mult(sim: Sim, u: SimUnit, t: SimUnit) -> int:
-	if u.silenced:
-		return 1
-	# 【RL 修正】远程被贴身时不触发伤害倍率技（真实 src/Battle.gd `_bonus_damage`：
-	# `if RANGED and _has_enemy_adjacent(attacker): return 1`）。原来漏了这条，于是
-	# "贴上去打工 ×2"（赏金猎人打嘲讽目标等）会被算成双倍。
-	# 实测 hero_20·出招（贴脸打带嘲讽的独脚龟）：真实 40→39（1 伤），模拟 40→38（2 伤）。
-	if u.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, u, u.cell):
-		return 1
-	var mult := 1
-	if u.hero_id == "hero_15" and _sim_lowest_hp(sim, t):
-		mult = 2
-	if u.hero_id == "hero_20" and u.atk_type == DataRegistry.AttackType.RANGED and t.skills.has(DataRegistry.Skill.TAUNT):
-		mult = 2
-	if u.hero_id == "hero_30" and _sim_isolated(sim, t, u):
-		mult = 2
-	# 【RL 修正】复仇者(hero_23)的 ×2 **只作用于它作为被攻击方时的反击伤害**，
-	# 不能乘在它的主动攻击上。真实规则见 heroes/hero_23_复仇者.gd 的 `counter_mult() -> 2`
-	# （counter_mult 只在 src/Battle.gd `_play_counter` 里用：`counterer.effective_atk() * _counter_bonus(...)`），
-	# 主动攻击走的是 damage_mult（复仇者未实现 = 1 倍）。
-	# 实测 hero_23·出招：真实 hero_13 掉 2 血（=复仇者 eatk 2），模拟掉 4 血（误乘 2）。
-	# 反击侧的 ×2 见 _sim_counter_check 的 `2 if t.hero_id == "hero_23"`。
-	return mult
+	var ranged: bool = u.atk_type == DataRegistry.AttackType.RANGED
+	var pinned: bool = ranged and _sim_enemy_adjacent(sim, u, u.cell)
+	return DmgModel.attack_mult(u.hero_id, not u.silenced and not u.stunned, ranged, pinned,
+		t != null and t.alive,
+		t != null and t.skills.has(DataRegistry.Skill.TAUNT),
+		t != null and _sim_lowest_hp(sim, t),
+		t != null and _sim_isolated(sim, t, u))
+
+# 【2026-09-24 新增】与 `_sim_mult()` 同义，只把"目标站在哪"换成**假设格** ——
+#   "挨打合计"问的是"我落到那一格会挨多少"，而嬉皮死神的 ×2 判据（目标孤立）与位置有关。
+func _sim_mult_at(sim: Sim, u: SimUnit, t: SimUnit, cell: Vector2i) -> int:
+	var ranged: bool = u.atk_type == DataRegistry.AttackType.RANGED
+	var pinned: bool = ranged and _sim_enemy_adjacent(sim, u, u.cell)
+	return DmgModel.attack_mult(u.hero_id, not u.silenced and not u.stunned, ranged, pinned,
+		t != null and t.alive,
+		t != null and t.skills.has(DataRegistry.Skill.TAUNT),
+		t != null and _sim_lowest_hp(sim, t),
+		t != null and _sim_isolated_at(sim, t, cell, u))
+
+# 孤立判据的"假设格"版本（与 `_sim_isolated()` 同义，只把 `target.cell` 换成 `cell`）。
+func _sim_isolated_at(sim: Sim, target: SimUnit, cell: Vector2i, attacker: SimUnit) -> bool:
+	for u in sim.units:
+		if u.alive and u != target and u != attacker and u.fn == target.fn and grid.distance(cell, u.cell) == 1:
+			return false
+	return true
+
+# 【2026-09-24 新增·下一回合语义】烈焰祭司 hero_19 `on_turn_start()` 给**所有其他队友** `atk_buff += 1`
+#   （`atk_buff` 进 `Unit.effective_atk()` ⇒ 普攻与"移动后技能"都吃得到；**多个祭司叠加**）。
+#   ⚠️ 与 `_echo_atk_now()` 同一个时序坑：AI 的搜索跑在**我方**回合，而那道 +1 要等**敌方回合开始**才发生
+#   ⇒ 快照里没有它，而挨打合计估的是下一个敌方回合 ⇒ 必须在这里补。规则本体见 `DmgModel.turn_start_atk_bonus()`。
+#   ⚠️ 用户实机证据（2026-09-24）：荆棘树人那一格日志写 6（= 赏金猎人3＋烈焰祭司1＋战锤2），
+#     真实 12（= (3+1)×2 ＋ 1 ＋ (2+1)）—— 差的两笔正是"打嘲讽的倍率"与"祭司光环"，本函数 + `_sim_mult_at()` 一起补。
+func _sim_turn_start_atk_bonus(sim: Sim, a: SimUnit) -> int:
+	var n := 0
+	for i in sim.units.size():
+		var v: SimUnit = sim.units[i]
+		if v != null and v.alive and v.fn == a.fn and v.hero_id == "hero_19" and not v.silenced and not v.stunned:
+			n += 1
+	return DmgModel.turn_start_atk_bonus(a.hero_id, n)
 
 func _sim_lowest_hp(sim: Sim, t: SimUnit) -> bool:
 	for u in sim.units:
@@ -7069,7 +7098,15 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		var gate_t: SimUnit = null if ignore_taunt else t
 		if not _threat_can_hit(sim, a, cell, gate_t):
 			continue
-		var one := _hit_after_target_mods(sim, t, cell, _threat_hit_value(sim, a, d, false))
+		# 【2026-09-24 修·用户实机抓到的 bug】这一下还要 ① 补上**敌方回合开始**才发生的团队加攻
+		#   （烈焰祭司 hero_19：所有其他队友 +1），② 乘**攻击者自己的伤害倍率**（赏金猎人远程打
+		#   <嘲讽> ×2 / 小阴影打最低血 ×2 / 嬉皮死神打孤立 ×2）。原来两样都没有 ⇒ 用户那一局
+		#   荆棘树人(嘲讽)的"下回合挨打"被算成 3+1+2=6，真实是 (3+1)×2 + 1 + (2+1)=12
+		#   （⑥规则B 因此只罚 2 分而不是 8 分）；另一局战锤那一格 7 vs 真实 13。
+		#   顺序与生产一致：先加攻（进 `effective_atk`）再乘倍率，最后才由 `_hit_after_target_mods` 算受击侧。
+		var raw := _threat_hit_value(sim, a, d, false) + float(_sim_turn_start_atk_bonus(sim, a))
+		raw *= float(_sim_mult_at(sim, a, t, cell))
+		var one := _hit_after_target_mods(sim, t, cell, raw)
 		if one > 0.0:
 			pos_inst.append(one)
 			pos_names.append(a.name)
@@ -7103,6 +7140,9 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			continue
 		var sk := _on_move_hit_on(sim, b, t, cell)
 		if sk > 0.0:
+			# 【2026-09-24】这三个技能（烛火/末日/涌电技师）的伤害都**按有效攻击力算**
+			#   （`_on_move_hit_on()` 返回 `a.eatk`，涌电技师是 `eatk + 1`）⇒ 同样吃敌方回合开始那道 +1。
+			sk += float(_sim_turn_start_atk_bonus(sim, b))
 			var sk2 := _hit_after_target_mods(sim, t, cell, sk)
 			if sk2 > 0.0:
 				inst.append(sk2)

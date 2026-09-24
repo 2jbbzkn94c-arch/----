@@ -2,6 +2,9 @@ extends HeroBase
 ## 嬉皮死神：攻击时，如果目标没有与其他敌人相邻，则造成2倍伤害。
 class_name HeroJollyreaper
 
+## 【2026-09-24 用户拍板「3」】伤害倍率的**唯一权威**（生产与 AI 共用同一份 ⇒ 不会再各写一份漂移）。
+const DmgModel := preload("res://src/DamageModel.gd")
+
 const _FX_COLOR := Color(0.85, 0.35, 1.0)   # 双倍重击：紫粉色色光粒子
 
 # ---- 专属镰刀演出（本英雄特效写在自己的脚本里）----
@@ -44,9 +47,12 @@ class ScytheBlade:
 		return Geometry2D.triangulate_polygon(poly).size() > 0
 
 func damage_mult(target: Unit) -> int:
-	if target and target.alive and battle._is_isolated(target, unit):
-		return 2
-	return 1
+	# 【2026-09-24 用户拍板「3」】规则本体搬进 `DmgModel`（与 AI 的估计共用同一份，别再各写一份）。
+	return DmgModel.hero_damage_mult("hero_30",
+		unit.attack_type == DataRegistry.AttackType.RANGED,
+		false,
+		false,
+		target != null and target.alive and battle._is_isolated(target, unit))
 
 # 出招特效钩子（Battle 在结算伤害前调用）：播专属镰刀横扫。
 # 被[沉默]/[眩晕]时技能失效（语义见 Unit.skill_allowed()），**不再播技能专属演出**：

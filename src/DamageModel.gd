@@ -1,6 +1,11 @@
-class_name DamageModel
 extends RefCounted
 ## 【2026-09-24 新增·用户拍板「3」】"**某英雄打某目标的那一下到底几倍**"的**唯一权威**。
+##
+## ⚠️ **故意不写 `class_name`**：本模块用 `preload("res://src/DamageModel.gd")` 引用
+##   （调用方各自 `const DmgModel := preload(...)`）。原因：新加的 `class_name` 要先让 Godot
+##   重扫一次 `.godot/global_script_class_cache.cfg` 才认，而**跑批每格都现场加载 `heroes/*.gd`
+##   与 `RL/ai/` 副本** ⇒ 在跑批期间落地会在"重扫完成前"启动的格子上报
+##   `Parse Error: Identifier "DamageModel" not declared` 整格报废。用 preload 就没有这个窗口。
 ##
 ## 为什么要抽出来（用户当天实机抓到的 bug）：这条规则原来有**两份实现** ——
 ##   生产：`Battle._bonus_damage()`（沉默/远程贴身两道门槛）＋ `heroes/*.gd::damage_mult()`（逐英雄规则）；

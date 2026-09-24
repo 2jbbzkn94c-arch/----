@@ -17,6 +17,11 @@ extends RefCounted
 ## 采用"按单位逐次扩展 + 波束保留最优"的搜索，评估函数综合考虑单位强度/击杀/走位。
 
 # ---- 轻量模拟状态 ----
+## 【2026-09-24 用户拍板「3」】伤害倍率 + "敌方回合开始加攻"的**唯一权威**（与生产 `heroes/*.gd` 共用）。
+## 用 `preload` 而不是 `class_name`：新加的全局类名要先让 Godot 重扫类缓存才认，而**跑批每格都现场
+## 加载本文件/副本** ⇒ 用 preload 就没有"重扫完成前那几格解析失败"的窗口。
+const DmgModel := preload("res://src/DamageModel.gd")
+
 class SimUnit:
 	var sim_index := -1      # 在 sim.units 里的下标（宿魂镜像等用）
 	var fn := 0
@@ -356,6 +361,14 @@ var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个
 #   两笔都**与开关无关地统计**（关着也数）⇒ 用户在自己实机里就能看到 n! 水分有多大，不用另跑批。
 var last_tp_p1_evals := 0         # 阶段 1 评分次数
 var last_tp_p1_dups := 0          # 阶段 1 被"同末态去重"丢掉的条数
+# 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」】**阶段 1 按单位类型分账**：
+#   召唤物（骷髅兵：攻 1 / 血 1 / **回合结束即消散**）在搜索里被当成英雄一样枚举全部落点，
+#   而它的价值只有两项（本回合打出的伤害 + 替英雄吃下的反击）⇒ "不能借此攻击的移动"价值恒 0。
+#   这四笔账**只统计、不改行为**（与 `evals/dups` 同一口径），用来看"召唤队那 655s 到底花在哪一层"。
+var last_tp_p1_hero_kids := 0     #   英雄落点生成的子条目数
+var last_tp_p1_summon_kids := 0   #   召唤物落点生成的子条目数
+var last_tp_p1_hero_evals := 0    #   英雄条目里真正评分的（过完去重）
+var last_tp_p1_summon_evals := 0  #   召唤物条目里真正评分的
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -959,6 +972,7 @@ var w_search_mode := SEARCH_MODE
 var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 # 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开），见 `const TWO_PHASE_DEDUP` 处说明。
 var w_tp_dedup := TWO_PHASE_DEDUP
+var w_summon_slot_only := SUMMON_SLOT_ONLY   # 【2026-09-24】召唤物阶段 1 只走"能打到人的格"（见 const 处说明）
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
 var w_sub_finish_w := SUB_FINISH_W
@@ -1195,6 +1209,8 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开；见 const TWO_PHASE_DEDUP 处说明）
 			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
+			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
+			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
@@ -1503,6 +1519,19 @@ const TWO_PHASE_P1_BEAM := 0
 #   ⚠️ 副作用：并列（同分）时保留哪一条由"生成顺序"决定（今天是 `sort_custom` 不稳定排序任选一条）
 #     ⇒ 末态相同，只有 `path` 里步骤的先后（纯演出顺序）可能不同。
 const TWO_PHASE_DEDUP := 0
+# 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」→「改」】**召唤物的阶段 1 候选集**。
+#   事实基础（三处代码铁证）：`heroes/summon_骷髅兵.gd::on_turn_end()` = 「己方回合结束：干净淡出离场」
+#   （且 `runs_turn_end_while_silenced() = true`，被沉默也照散）；`Battle._end_side()` 是**本方**回合
+#   结束的结算点 ⇒ 骷髅在**召唤它的那一回合结束时**就没了；面板 = **攻 1 / 血 1 / 无特性**。
+#   ⇒ 它**永远挡不住敌人**（消失早于敌方回合）、**永远不会被敌人主动攻击**（只有它打人时才吃反击）、
+#     **前压/卡口/队形/保命价值恒 0**。它这一辈子只有两件事值钱：**本回合打出的伤害** + **替英雄吃下的反击**。
+#   ⇒ 因此"**不能借此攻击的落点**"价值恒等于 0，只枚举「能打到某个敌人的落点」+「原地」即可（**精确剪枝、不是近似**）。
+#   ⚠️ 但它**仍然留在阶段 1 的联合枚举里**（只是候选变少）—— 这是用户点出来的关键：
+#     若把召唤物整个踢出阶段 1，英雄的落点规划就看不见"骷髅要站哪格"，会盲抢唯一的攻击位
+#     ⇒ 「骷髅先上去吃反击、英雄随后再打」那条线就死了。
+#   ⚠️ 判定用**安全超集**（只看"路网距离 ≤ 射程"，不查视线/嘲讽门/贴身）⇒ 只会多留、绝不误删真攻击位。
+#   0 = 关（**逐位不变**；分账照旧统计，见 `last_tp_p1_summon_*`）· 1 = 开。
+const SUMMON_SLOT_ONLY := 0
 
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
 func search(sim: Sim, enemy_faction: int) -> Array:
@@ -1522,6 +1551,10 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_tp_leaves = 0
 	last_tp_p1_evals = 0
 	last_tp_p1_dups = 0
+	last_tp_p1_hero_kids = 0
+	last_tp_p1_summon_kids = 0
+	last_tp_p1_hero_evals = 0
+	last_tp_p1_summon_evals = 0
 	var enemy_idxs: Array = []
 	for i in sim.units.size():
 		if sim.units[i].fn == enemy_faction and sim.units[i].alive:
@@ -1849,7 +1882,21 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				continue
 			pending = true
 			for idx in remaining:
-				for a in _tp_move_actions(st["sim"], idx):
+				# 【2026-09-24·用户拍板「改」】**召唤物的阶段 1 候选收窄**（键 `SUMMON_SLOT_ONLY`，默认 0 = 现役）：
+				#   骷髅兵攻 1 / 血 1 / **本方回合结束即消散** ⇒ 它的价值只有"本回合打出的伤害 + 替英雄吃下的反击"，
+				#   因此**不能借此攻击的落点价值恒 0**（它永远挡不住敌人、也永远不会被敌人主动打）。
+				#   ⚠️ 但它**仍然留在阶段 1 的联合枚举里**（只是候选变少）——这一点是用户点出来的关键：
+				#   若把召唤物整个踢出阶段 1，英雄的落点规划就看不见"骷髅要站哪格"，会盲抢掉唯一的攻击位
+				#   ⇒ "骷髅先上去吃反击、英雄随后再打"那条线就死了。
+				var is_sm: bool = _is_summon_idx(st["sim"], idx)
+				var moves: Array = _tp_move_actions(st["sim"], idx)
+				if is_sm and w_summon_slot_only > 0:
+					moves = _tp_summon_slot_moves(st["sim"], idx, moves)
+				for a in moves:
+					if is_sm:
+						last_tp_p1_summon_kids += 1
+					else:
+						last_tp_p1_hero_kids += 1
 					var s2: Sim = (st["sim"] as Sim).clone()
 					_apply(s2, idx, a)
 					var done2: Dictionary = (st["done"] as Dictionary).duplicate()
@@ -1870,6 +1917,10 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 							continue
 						seen_digest[dg] = true
 					last_tp_p1_evals += 1
+					if is_sm:
+						last_tp_p1_summon_evals += 1
+					else:
+						last_tp_p1_hero_evals += 1
 					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full)))
 				if abort_requested:
 					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
@@ -2081,6 +2132,47 @@ func _tp_move_actions(sim: Sim, idx: int) -> Array:
 			if not kill_ok:
 				continue
 		out.append({ "move": c, "atk": -1 })
+	return out
+
+## 【2026-09-24 新增】这个下标是不是**召唤物**（骷髅兵一类）。用于阶段 1 的候选收窄与分账。
+func _is_summon_idx(sim: Sim, idx: int) -> bool:
+	if idx < 0 or idx >= sim.units.size():
+		return false
+	var u: SimUnit = sim.units[idx]
+	return u != null and DataRegistry.summons.has(u.hero_id)
+
+## 【2026-09-24 新增·用户拍板「改」】把召唤物的阶段 1 候选**收窄到"能打到人的落点"+原地**。
+##   为什么这是**精确剪枝**而不是近似（三处铁证见 `const SUMMON_SLOT_ONLY` 那段）：
+##     `heroes/summon_骷髅兵.gd::on_turn_end()` = 本方回合结束即消散 ⇒ 骷髅永远挡不住敌人、
+##     也永远不会被敌人主动打 ⇒ 它的价值只有「本回合打出的伤害 + 替英雄吃下的反击」两项
+##     ⇒ "不能借此攻击的落点"价值恒等于 0。
+##   ⚠️ **判据取安全超集**：只看"从这一格出发、路网距离 ≤ 射程"（不查视线/嘲讽门/贴身/后勤不能攻击），
+##     ⇒ 只会**多留**几格，绝不会误删真正的攻击位（宁可多算，不可丢线）。
+##   ⚠️ 「原地」永远保留（它是合法选项，且骷髅不动也可能够得到人）。
+func _tp_summon_slot_moves(sim: Sim, idx: int, moves: Array) -> Array:
+	if idx < 0 or idx >= sim.units.size():
+		return moves
+	var u: SimUnit = sim.units[idx]
+	if u == null or not u.alive:
+		return moves
+	var reach := maxi(u.atk_range, 1)
+	var out: Array = []
+	for a in moves:
+		var mv: Variant = a.get("move")
+		if mv == null:
+			out.append(a)          # 原地
+			continue
+		var c: Vector2i = mv
+		var can_hit := false
+		for j in sim.units.size():
+			var e: SimUnit = sim.units[j]
+			if e == null or not e.alive or e.fn == u.fn:
+				continue
+			if walk_dist(sim, c, e.cell) <= reach:
+				can_hit = true
+				break
+		if can_hit:
+			out.append(a)
 	return out
 
 ## 阶段 2 候选：**只出手、不再移动**（位置已在阶段 1 定好）：打人 / 敲够得着的障碍 / 不打（不生成步骤）。
@@ -2496,6 +2588,15 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				float(last_tp_p1_dups) * 100.0 / float(maxi(last_tp_p1_evals + last_tp_p1_dups, 1))]
 		elif w_tp_dedup <= 0:
 			txt += "（去重未开）"
+		# 【2026-09-24·用户「单位多的局能不能优化路径」】再把阶段 1 的账**按单位类型拆开**：
+		#   英雄 vs 召唤物（骷髅兵）各生成多少条、各真正评分多少次 —— 用来回答"死灵法师那队
+		#   单格 655s 到底花在哪一层"，也用来量 `SUMMON_SLOT_ONLY` 到底省了多少。
+		#   ⚠️ 纯统计：`kids` 是"生成出来的子条目"，`evals` 是"过完同末态去重、真正跑 `_evaluate` 的"。
+		txt += " · 阶段1分账：英雄 %d 条/评分 %d · 召唤物 %d 条/评分 %d" % [
+			last_tp_p1_hero_kids, last_tp_p1_hero_evals,
+			last_tp_p1_summon_kids, last_tp_p1_summon_evals]
+		if w_summon_slot_only > 0:
+			txt += "（召唤物只走攻击位：开）"
 	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
 	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
 	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。
@@ -5546,30 +5647,54 @@ func _sim_maybe_guard(sim: Sim, wounded: SimUnit) -> void:
 		sim.pending_guard.append({ "dst": wounded, "giver": g })
 		return
 
-# 特技伤害倍率（小阴影/赏金猎人/嬉皮死神；沉默时失效）
+# 特技伤害倍率（小阴影/赏金猎人/嬉皮死神）——【2026-09-24 用户拍板「3」】规则本体已搬进 `DmgModel`：
+#   这里只把**模拟盘**的判据标量化后转发（生产侧 `Battle._bonus_damage()` 走同一份规则 ⇒ 不会再各写一份漂移）。
+#   ⚠️ 本轮顺带对齐一处老漂移：门槛原来是"只看 `silenced`"，而真实 `skill_allowed()` 是
+#   **未被[沉默]且未被[眩晕]** ⇒ 眩晕时倍率技同样该失效。
+#   ⚠️ 保留那条实测修正：远程被贴身 ⇒ 倍率技整条失效（真实 `_bonus_damage` 第二行；
+#   实测 hero_20·出招（贴脸打带嘲讽的独脚龟）：真实 40→39（1 伤），模拟曾算成 2 伤）。
+#   ⚠️ 复仇者(hero_23)的 ×2 只作用于**反击**，不在本函数里（见 `DmgModel.counter_mult()` 与
+#   `_sim_counter_check` 的 `2 if t.hero_id == "hero_23"`）。
 func _sim_mult(sim: Sim, u: SimUnit, t: SimUnit) -> int:
-	if u.silenced:
-		return 1
-	# 【RL 修正】远程被贴身时不触发伤害倍率技（真实 src/Battle.gd `_bonus_damage`：
-	# `if RANGED and _has_enemy_adjacent(attacker): return 1`）。原来漏了这条，于是
-	# "贴上去打工 ×2"（赏金猎人打嘲讽目标等）会被算成双倍。
-	# 实测 hero_20·出招（贴脸打带嘲讽的独脚龟）：真实 40→39（1 伤），模拟 40→38（2 伤）。
-	if u.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, u, u.cell):
-		return 1
-	var mult := 1
-	if u.hero_id == "hero_15" and _sim_lowest_hp(sim, t):
-		mult = 2
-	if u.hero_id == "hero_20" and u.atk_type == DataRegistry.AttackType.RANGED and t.skills.has(DataRegistry.Skill.TAUNT):
-		mult = 2
-	if u.hero_id == "hero_30" and _sim_isolated(sim, t, u):
-		mult = 2
-	# 【RL 修正】复仇者(hero_23)的 ×2 **只作用于它作为被攻击方时的反击伤害**，
-	# 不能乘在它的主动攻击上。真实规则见 heroes/hero_23_复仇者.gd 的 `counter_mult() -> 2`
-	# （counter_mult 只在 src/Battle.gd `_play_counter` 里用：`counterer.effective_atk() * _counter_bonus(...)`），
-	# 主动攻击走的是 damage_mult（复仇者未实现 = 1 倍）。
-	# 实测 hero_23·出招：真实 hero_13 掉 2 血（=复仇者 eatk 2），模拟掉 4 血（误乘 2）。
-	# 反击侧的 ×2 见 _sim_counter_check 的 `2 if t.hero_id == "hero_23"`。
-	return mult
+	var ranged: bool = u.atk_type == DataRegistry.AttackType.RANGED
+	var pinned: bool = ranged and _sim_enemy_adjacent(sim, u, u.cell)
+	return DmgModel.attack_mult(u.hero_id, not u.silenced and not u.stunned, ranged, pinned,
+		t != null and t.alive,
+		t != null and t.skills.has(DataRegistry.Skill.TAUNT),
+		t != null and _sim_lowest_hp(sim, t),
+		t != null and _sim_isolated(sim, t, u))
+
+# 【2026-09-24 新增】与 `_sim_mult()` 同义，只把"目标站在哪"换成**假设格** ——
+#   "挨打合计"问的是"我落到那一格会挨多少"，而嬉皮死神的 ×2 判据（目标孤立）与位置有关。
+func _sim_mult_at(sim: Sim, u: SimUnit, t: SimUnit, cell: Vector2i) -> int:
+	var ranged: bool = u.atk_type == DataRegistry.AttackType.RANGED
+	var pinned: bool = ranged and _sim_enemy_adjacent(sim, u, u.cell)
+	return DmgModel.attack_mult(u.hero_id, not u.silenced and not u.stunned, ranged, pinned,
+		t != null and t.alive,
+		t != null and t.skills.has(DataRegistry.Skill.TAUNT),
+		t != null and _sim_lowest_hp(sim, t),
+		t != null and _sim_isolated_at(sim, t, cell, u))
+
+# 孤立判据的"假设格"版本（与 `_sim_isolated()` 同义，只把 `target.cell` 换成 `cell`）。
+func _sim_isolated_at(sim: Sim, target: SimUnit, cell: Vector2i, attacker: SimUnit) -> bool:
+	for u in sim.units:
+		if u.alive and u != target and u != attacker and u.fn == target.fn and grid.distance(cell, u.cell) == 1:
+			return false
+	return true
+
+# 【2026-09-24 新增·下一回合语义】烈焰祭司 hero_19 `on_turn_start()` 给**所有其他队友** `atk_buff += 1`
+#   （`atk_buff` 进 `Unit.effective_atk()` ⇒ 普攻与"移动后技能"都吃得到；**多个祭司叠加**）。
+#   ⚠️ 与 `_echo_atk_now()` 同一个时序坑：AI 的搜索跑在**我方**回合，而那道 +1 要等**敌方回合开始**才发生
+#   ⇒ 快照里没有它，而挨打合计估的是下一个敌方回合 ⇒ 必须在这里补。规则本体见 `DmgModel.turn_start_atk_bonus()`。
+#   ⚠️ 用户实机证据（2026-09-24）：荆棘树人那一格日志写 6（= 赏金猎人3＋烈焰祭司1＋战锤2），
+#     真实 12（= (3+1)×2 ＋ 1 ＋ (2+1)）—— 差的两笔正是"打嘲讽的倍率"与"祭司光环"，本函数 + `_sim_mult_at()` 一起补。
+func _sim_turn_start_atk_bonus(sim: Sim, a: SimUnit) -> int:
+	var n := 0
+	for i in sim.units.size():
+		var v: SimUnit = sim.units[i]
+		if v != null and v.alive and v.fn == a.fn and v.hero_id == "hero_19" and not v.silenced and not v.stunned:
+			n += 1
+	return DmgModel.turn_start_atk_bonus(a.hero_id, n)
 
 func _sim_lowest_hp(sim: Sim, t: SimUnit) -> bool:
 	for u in sim.units:
@@ -6998,7 +7123,15 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		var gate_t: SimUnit = null if ignore_taunt else t
 		if not _threat_can_hit(sim, a, cell, gate_t):
 			continue
-		var one := _hit_after_target_mods(sim, t, cell, _threat_hit_value(sim, a, d, false))
+		# 【2026-09-24 修·用户实机抓到的 bug】这一下还要 ① 补上**敌方回合开始**才发生的团队加攻
+		#   （烈焰祭司 hero_19：所有其他队友 +1），② 乘**攻击者自己的伤害倍率**（赏金猎人远程打
+		#   <嘲讽> ×2 / 小阴影打最低血 ×2 / 嬉皮死神打孤立 ×2）。原来两样都没有 ⇒ 用户那一局
+		#   荆棘树人(嘲讽)的"下回合挨打"被算成 3+1+2=6，真实是 (3+1)×2 + 1 + (2+1)=12
+		#   （⑥规则B 因此只罚 2 分而不是 8 分）；另一局战锤那一格 7 vs 真实 13。
+		#   顺序与生产一致：先加攻（进 `effective_atk`）再乘倍率，最后才由 `_hit_after_target_mods` 算受击侧。
+		var raw := _threat_hit_value(sim, a, d, false) + float(_sim_turn_start_atk_bonus(sim, a))
+		raw *= float(_sim_mult_at(sim, a, t, cell))
+		var one := _hit_after_target_mods(sim, t, cell, raw)
 		if one > 0.0:
 			pos_inst.append(one)
 			pos_names.append(a.name)
@@ -7032,6 +7165,9 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			continue
 		var sk := _on_move_hit_on(sim, b, t, cell)
 		if sk > 0.0:
+			# 【2026-09-24】这三个技能（烛火/末日/涌电技师）的伤害都**按有效攻击力算**
+			#   （`_on_move_hit_on()` 返回 `a.eatk`，涌电技师是 `eatk + 1`）⇒ 同样吃敌方回合开始那道 +1。
+			sk += float(_sim_turn_start_atk_bonus(sim, b))
 			var sk2 := _hit_after_target_mods(sim, t, cell, sk)
 			if sk2 > 0.0:
 				inst.append(sk2)
