@@ -68,7 +68,7 @@ param(
     #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
     #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
     [string]$Baseline = 'RL\weights\噩梦_基线.json',
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel', 'p2dd')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -431,6 +431,28 @@ if ($Mode -eq 'funnel') {
         $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_LAYOUTS = [int]$FN_ARMS[$k] } }
     }
     $GROUPS = @(@{ slug = 'FN'; base = 'RL\weights\噩梦.json'; tiers = @($FN_ARMS.Keys) })
+}
+
+# ---- 模式 R（`p2dd`）：**阶段 2 的"同末态去重"** `TWO_PHASE_P2_DEDUP`（2026-09-24·用户「做L1」）----
+# 背景（`RL/probe/路径分账自检.gd` 的路径账）：阶段 2 的完整计划数 `leaves` **恒 = 漏斗 × max(4, beam/8)**，
+#   且阶段 2 占整局 **44~89%**（召唤队 97%）⇒ 阶段 2 就是"漏斗宽度"的乘法器；而它的枚举结构与阶段 1
+#   **去重之前**完全同构（逐层决定"谁先出手"），阶段 2 连位置都不变 ⇒ 只是出手顺序不同的条目末态逐位相同。
+# 三臂（都把漏斗写清楚，免得读的人对不上）：
+#   `p0` = **现役**（漏斗 16 · 去重 0）= 对照
+#   `p1` = 漏斗 16 · 去重 **1**      ⇒ 量"**不降水平 + 省多少墙钟**"（预期 Δ≈0、阶段 2 掉 30~50%）
+#   `q1` = 漏斗 **32** · 去重 **1**  ⇒ 量"**用省下来的预算换 T30 那 +3.11**"（预期 Δ>0、墙钟 ≈ p0）
+# ⚠️ 读法：配对 Δpts(臂 − p0) + 挨打/打出/回合 + 单格墙钟；**墙钟是本批的主角**（棋力那一半已知）。
+$PD_ARMS = [ordered]@{
+    'p0' = @{ TWO_PHASE_LAYOUTS = 16; TWO_PHASE_P2_DEDUP = 0 }
+    'p1' = @{ TWO_PHASE_LAYOUTS = 16; TWO_PHASE_P2_DEDUP = 1 }
+    'q1' = @{ TWO_PHASE_LAYOUTS = 32; TWO_PHASE_P2_DEDUP = 1 }
+}
+if ($Mode -eq 'p2dd') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $PD_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = $PD_ARMS[$k] }
+    }
+    $GROUPS = @(@{ slug = 'PD'; base = 'RL\weights\噩梦.json'; tiers = @($PD_ARMS.Keys) })
 }
 
 # ---- 模式 O（`split`）：㉒隔断 `SPLIT_W` 剂量批（T16）----

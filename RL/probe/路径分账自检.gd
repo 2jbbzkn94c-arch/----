@@ -44,7 +44,22 @@ func _run() -> void:
 		# 组合臂：漏斗 32 + 阶段 1 宽度 96 + 召唤物候选收窄（`SUMMON_SLOT_ONLY`；⚠️ 基线里**没有**这个键
 		#   ⇒ 前面几臂都是"召唤物剪枝关着"的重活口径）
 		{ "name": "f32p96sm1", "beam": 200, "theta": { "TWO_PHASE_LAYOUTS": 32, "TWO_PHASE_P1_BEAM": 96, "SUMMON_SLOT_ONLY": 1 } },
+		# L1 判决臂：**阶段 2 同末态去重**（`TWO_PHASE_P2_DEDUP`）—— 与 `f16` / `f32` 逐字对比
+		#   （预期：计划指纹**逐字相同**、`p2_ms` 与阶段 2 评分次数下降）
+		{ "name": "f16p2d1", "beam": 200, "theta": { "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_P2_DEDUP": 1 } },
+		{ "name": "f32p2d1", "beam": 200, "theta": { "TWO_PHASE_LAYOUTS": 32, "TWO_PHASE_P2_DEDUP": 1 } },
 	]
+	# `--` 后面可以只跑指定臂（逗号分隔），例如 `-- f16,f16p2d1` ⇒ 省时间
+	var only: Array = []
+	var ua := OS.get_cmdline_user_args()
+	if ua.size() > 0 and String(ua[0]) != "":
+		only = String(ua[0]).split(",", false)
+		var kept: Array = []
+		for arm in arms:
+			if only.has(String(arm["name"])):
+				kept.append(arm)
+		if kept.size() > 0:
+			arms = kept
 	for pos in _positions():
 		var nm := String(pos["name"])
 		for arm in arms:
@@ -65,12 +80,19 @@ func _run() -> void:
 			for st in plan:
 				var a: Dictionary = st.get("action", {})
 				fp.append("%d:%s:%d" % [int(st.get("idx", -1)), str(a.get("move", null)), int(a.get("atk", -99))])
-			print("PATH|%s|%s|ms=%d|p1_ms=%d|p2_ms=%d|evals=%d|dups=%d|hero_kids=%d|sm_kids=%d|built=%d|used=%d|leaves=%d|steps=%d|fp=%s" % [
+			# 【2026-09-24·L1 判决】把计划落成终局局面再评一次分：**棋力看这一列，不看指纹**
+			#   （去重会改变 `inner=25` 名额里活下来的那批状态 ⇒ 计划可能不同 ⇒ 必须比分数）
+			var end = sim.clone()
+			for st in plan:
+				ai._apply(end, int(st["idx"]), st["action"])
+			var end_score := float(ai._evaluate(end, true))
+			print("PATH|%s|%s|ms=%d|p1_ms=%d|p2_ms=%d|evals=%d|dups=%d|p2_evals=%d|p2_dups=%d|hero_kids=%d|sm_kids=%d|built=%d|used=%d|leaves=%d|steps=%d|score=%.2f|fp=%s" % [
 				nm, String(arm["name"]), wall, int(ai.last_tp_phase1_ms), int(ai.last_tp_phase2_ms),
 				int(ai.last_tp_p1_evals), int(ai.last_tp_p1_dups),
+				int(ai.last_tp_p2_evals), int(ai.last_tp_p2_dups),
 				int(ai.last_tp_p1_hero_kids), int(ai.last_tp_p1_summon_kids),
 				int(ai.last_tp_layouts_built), int(ai.last_tp_layouts_used), int(ai.last_tp_leaves),
-				plan.size(), ">".join(fp)])
+				plan.size(), end_score, ">".join(fp)])
 	print("PATH|READ|p1_ms vs p2_ms 决定「该砍哪一半」；dups/evals = 同末态重份比例；leaves 随 used 线性涨 ⇒ 漏斗就是阶段 2 的乘法器")
 	print("PATH|END")
 	get_tree().quit(0)

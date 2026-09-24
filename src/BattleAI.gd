@@ -359,6 +359,10 @@ var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个
 #   两笔都**与开关无关地统计**（关着也数）⇒ 用户在自己实机里就能看到 n! 水分有多大，不用另跑批。
 var last_tp_p1_evals := 0         # 阶段 1 评分次数
 var last_tp_p1_dups := 0          # 阶段 1 被"同末态去重"丢掉的条数
+# 【2026-09-24·用户「做L1」】**阶段 2 的两笔对应的账**（口径与阶段 1 那两笔完全一样，`TWO_PHASE_P2_DEDUP`）：
+#   `evals` = 阶段 2 真正跑了多少次完整 `_evaluate`；`dups` = 其中"同末态（只是出手顺序不同）"被丢掉的条数。
+var last_tp_p2_evals := 0         # 阶段 2 评分次数
+var last_tp_p2_dups := 0          # 阶段 2 被"同末态去重"丢掉的条数
 # 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」】**阶段 1 按单位类型分账**：
 #   召唤物（骷髅兵：攻 1 / 血 1 / **回合结束即消散**）在搜索里被当成英雄一样枚举全部落点，
 #   而它的价值只有两项（本回合打出的伤害 + 替英雄吃下的反击）⇒ "不能借此攻击的移动"价值恒 0。
@@ -988,6 +992,8 @@ var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 var w_tp_dedup := TWO_PHASE_DEDUP
 # 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（见 `const TWO_PHASE_LAYOUTS` 处说明）。
 var w_tp_layouts := TWO_PHASE_LAYOUTS
+# 【2026-09-24·用户「做L1」】阶段 2 的"同末态去重"（见 `const TWO_PHASE_P2_DEDUP` 处说明）。默认 0 ⇒ 逐位不变。
+var w_tp_p2_dedup := TWO_PHASE_P2_DEDUP
 var w_summon_slot_only := SUMMON_SLOT_ONLY   # 【2026-09-24】召唤物阶段 1 只走"能打到人的格"（见 const 处说明）
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
 # 【2026-09-19·默认关】替补「收尾优先」，见 `const SUB_FINISH_W` 处说明。默认 0 ⇒ 逐位不变。
@@ -1229,6 +1235,8 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
 			# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（算力分配键，见 const 处说明）
 			"TWO_PHASE_LAYOUTS": w_tp_layouts = maxi(int(v), 1)
+			# 【2026-09-24·用户「做L1」】阶段 2"同末态去重"（1 = 开；见 const TWO_PHASE_P2_DEDUP 处说明）
+			"TWO_PHASE_P2_DEDUP": w_tp_p2_dedup = int(v)
 			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
 			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
@@ -1542,6 +1550,22 @@ const TWO_PHASE_P1_BEAM := 0
 #   ⚠️ 副作用：并列（同分）时保留哪一条由"生成顺序"决定（今天是 `sort_custom` 不稳定排序任选一条）
 #     ⇒ 末态相同，只有 `path` 里步骤的先后（纯演出顺序）可能不同。
 const TWO_PHASE_DEDUP := 0
+# 【2026-09-24·用户「你仔细思考一下如何减少路径」→「做L1」】**阶段 2 的"同末态去重"**（键 `TWO_PHASE_P2_DEDUP`）。
+#   病灶：阶段 2 的枚举结构与阶段 1 **去重之前完全同构** —— 它也是逐层决定"**谁先出手**"，
+#   同一套"谁打谁"的目标组合会被 n! 条"出手顺序"复制成 n! 个条目，而**阶段 2 连位置都不变**
+#   （只有攻击/反击/技能改血量）⇒ 无交互的那些顺序**末态逐位相同** ⇒ 同分。
+#   实测（`RL/probe/路径分账自检.gd`）：阶段 2 的完整计划数 `last_tp_leaves` **恒等于
+#   `漏斗 N × max(4, beam/8)`**（8×25 / 16×25 / 32×25；beam 400 时 16×50），且阶段 2 占整局
+#   **44%~89%**（召唤队 97%）⇒ 阶段 2 就是"漏斗宽度"的乘法器；阶段 1 开去重后实测仍有 40~48% 是重份 ⇒
+#   阶段 2 同理会有一大批"换个出手顺序、末态一模一样"的条目在互相挤 `inner` 名额。
+#     0 = 关（**逐位不变**）· 1 = 开（同一层内按 `_sim_digest()` 去重、保留先出现的那条）。
+#   ⚠️ 为什么原则上**不掉水平**：与阶段 1 同一条论证 —— 被丢的那条与留下的那条**末态完全相同**
+#     ⇒ `_evaluate` 的分数必然相同（它是 `s 的纯函数`）；丢的只是"决定顺序"，而顺序在**无交互**时
+#     不影响任何末态（有交互时指纹不同 ⇒ 两条都留着：先手杀死目标 / 吃反击 / 触发技能都会改血量或位置）。
+#   ⚠️ **只在同一层内去重**（与阶段 1 同一口径）：不同层的 `done` 集合不同，父状态还要继续展开，
+#     跨层合并会丢分支。
+#   ⚠️ 指纹口径：与阶段 1 共用 `_sim_digest()`（必须覆盖 `_evaluate` 读到的每一个会变的量）。
+const TWO_PHASE_P2_DEDUP := 0
 # 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」→「改」】**召唤物的阶段 1 候选集**。
 #   事实基础（三处代码铁证）：`heroes/summon_骷髅兵.gd::on_turn_end()` = 「己方回合结束：干净淡出离场」
 #   （且 `runs_turn_end_while_silenced() = true`，被沉默也照散）；`Battle._end_side()` 是**本方**回合
@@ -1574,6 +1598,8 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_tp_leaves = 0
 	last_tp_p1_evals = 0
 	last_tp_p1_dups = 0
+	last_tp_p2_evals = 0
+	last_tp_p2_dups = 0
 	last_tp_p1_hero_kids = 0
 	last_tp_p1_summon_kids = 0
 	last_tp_p1_hero_evals = 0
@@ -2018,6 +2044,10 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		while true:
 			var pending2 := false
 			var merged2: Array = []
+			# 【2026-09-24·用户「做L1」】本层的"同末态去重"表（**每层重置**，与阶段 1 同一口径：
+			#   不同层的 `done` 集合不同、父状态还要继续展开 ⇒ 只有同层内合并才安全）。
+			#   命中 = "同一套谁打谁，只是出手顺序不同"⇒ 末态逐位相同 ⇒ 分数必然相同。
+			var seen2: Dictionary = {}
 			for st in layer:
 				var remaining2: Array = []
 				for i in enemy_idxs:
@@ -2049,6 +2079,16 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 							_apply(s3, idx, a)
 							path3.append({ "idx": idx, "action": a })
 						var eot := done3.size() >= enemy_idxs.size()
+						# 【2026-09-24·用户「做L1」】阶段 2 的"同末态去重"（键 `TWO_PHASE_P2_DEDUP`，默认 0 = 逐位不变）：
+						#   两个条目只是**出手顺序**不同、末态逐位相同 ⇒ `_evaluate` 必然同分 ⇒ 只算一次。
+						#   ⚠️ 有交互的顺序（先手击杀 / 吃反击 / 触发技能）会改血量或位置 ⇒ 指纹不同 ⇒ 两条都留。
+						if w_tp_p2_dedup > 0:
+							var dg2 := _sim_digest(s3)
+							if seen2.has(dg2):
+								last_tp_p2_dups += 1
+								continue
+							seen2[dg2] = true
+						last_tp_p2_evals += 1
 						merged2.append(_tp_state(s3, path3, done3,
 								_evaluate(s3, eot) - (idle_hit if not hit else 0.0)))
 				if abort_requested:
@@ -2150,6 +2190,24 @@ func _tp_move_actions(sim: Sim, idx: int) -> Array:
 			if not kill_ok:
 				continue
 		out.append({ "move": c, "atk": -1 })
+	# 【2026-09-24 修·用户实机「炸弹人为什么不往后退打 3 伤、而是原地打 1 伤」】**"原地"也要过同一道闸门**：
+	#   病灶：远程此刻**已贴身**（`eatk` 被压成 1），而上面那个循环只过滤"移动落点"、`move == null`
+	#   的"原地"被无条件保留 ⇒ 阶段 1 把落点定在**原点** ⇒ 阶段 2 里它已经 `moved`、`_actions_for()`
+	#   不再产出任何移动候选 ⇒ 退开那一手在阶段 2 根本不存在 ⇒ `alt_best` 恒 0
+	#   ⇒ `_ranged_pinned_shot_ok()` 整道闸门失效 ⇒ 只剩"原地打 1 伤"（炸弹人 攻3/远程 贴着雪拳、
+	#   身后有空位可退开打 3，却只打了 1 —— 用户那局的原始症状）。
+	#   判据与 `_ranged_pinned_shot_ok()` **完全同式**（含"这一击能击杀就保留"的例外）。
+	#   ⚠️ **只在"还有别的落点可选"时才丢**（`out.size() > 1`）：否则该单位会一条候选都没有，
+	#   而阶段 1 靠"每个单位都能被决定"收敛（空动作表 ⇒ `pending` 恒真 ⇒ 死循环，见 `search()` 的收敛性说明）。
+	if ranged and alt_best > pinned_atk and out.size() > 1 and _sim_enemy_adjacent(sim, u, u.cell):
+		var kill_stay := false
+		for ti2 in _valid_targets(sim, u, u.cell):
+			var tt2: SimUnit = sim.units[int(ti2)]
+			if tt2 != null and tt2.alive and tt2.hp <= pinned_atk:
+				kill_stay = true
+				break
+		if not kill_stay:
+			out.remove_at(0)   # out[0] 恒为"原地"（`seen` 一开始就种了 u.cell，不会重复追加）
 	return out
 
 ## 【2026-09-24 新增】这个下标是不是**召唤物**（骷髅兵一类）。用于阶段 1 的候选收窄与分账。
@@ -2602,6 +2660,15 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			txt += "（同末态去重丢 %d 条 = %.0f%%）" % [last_tp_p1_dups,
 				float(last_tp_p1_dups) * 100.0 / float(maxi(last_tp_p1_evals + last_tp_p1_dups, 1))]
 		elif w_tp_dedup <= 0:
+			txt += "（去重未开）"
+		# 【2026-09-24·用户「做L1」】阶段 2 的同末态账（口径与阶段 1 那行完全一样）：
+		#   `评分 N 次` = 阶段 2 真正跑的 `_evaluate` 次数；`丢 M 条 = X%` = 只是"出手顺序不同"的重份。
+		#   ⚠️ 关着时 M 恒为 0（不算指纹就数不出来）⇒ 想看这个数得把 `TWO_PHASE_P2_DEDUP` 开起来。
+		txt += " · 阶段2 评分 %d 次" % last_tp_p2_evals
+		if last_tp_p2_dups > 0:
+			txt += "（同末态去重丢 %d 条 = %.0f%%）" % [last_tp_p2_dups,
+				float(last_tp_p2_dups) * 100.0 / float(maxi(last_tp_p2_evals + last_tp_p2_dups, 1))]
+		elif w_tp_p2_dedup <= 0:
 			txt += "（去重未开）"
 		# 【2026-09-24·用户「单位多的局能不能优化路径」】再把阶段 1 的账**按单位类型拆开**：
 		#   英雄 vs 召唤物（骷髅兵）各生成多少条、各真正评分多少次 —— 用来回答"死灵法师那队
