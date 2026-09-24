@@ -669,6 +669,19 @@ const THREAT_DEAD_FOLD := 0.5
 #    已按用户实机反馈**整段删除**，并且**没有**恢复更早那版的"候选排序剪枝"（`dkey += threat − 阈值`）——
 #    两者都会让"带 buff 的格子"彻底进不了候选表，正是用户这次抱怨的机制。
 const MOVE_ACCEPT_DAMAGE := 0
+# 【2026-09-24·用户实机「开局未交战伤害阈值比较我感觉还是有点不合理」→ 拍板方案 A】**⑥ 的罚也按血量池折算**。
+#   病灶（逐行读代码 + 用户那局日志确认）：⑥ 现在的罚 = `Σ_我方 max(挨打合计 − 阈值, 0) × HP_VALUE_W`，
+#   阈值对**所有人都是 4**、斜率对**所有人都是 1.0/点** ⇒ **坦克与脆皮同罚**：
+#   荆棘树人（22 血）吃 11 伤罚 7 分，风语者（14 血）吃同样 11 伤**也罚 7 分**。
+#   而引擎里**别处全都按血量池折算了**（③血量账、㉕嘲讽吸火都乘 `_incoming_pool_mult(u)`）——
+#   ⑥ 是**唯一没用那把尺子**的地方 ⇒ 结果就是"坦克的本职（嘲讽/坚固/替后排吃）在开局被自己人罚"，
+#   表现出来就是**坦克往角落缩、能打却不打**（用户同一局：荆棘树人被推去 (1,2)，而它本可从 (1,1)
+#   走到 (3,2) 打赏金猎人、多赚 3.7 分）。
+#   1 = 开：`罚 = max(挨打合计 − 阈值, 0) × HP_VALUE_W × _incoming_pool_mult(该单位)` ⇒
+#     22 血那一档吃 11 伤罚 **6.4**、14 血那一档吃 11 伤罚 **10.0**（池强度仍由 `INCOMING_POOL_W` 决定，
+#     噩梦档 = 1.0）⇒ **同一顿打按"谁挨"定价**，与 ③㉕ 口径统一。
+#   0 = 关（**逐位不变**）。⚠️ 池折算的分母是**回合起始血**（`hp0`，与 ③ 同口径；本回合新召唤的退回当前血）。
+const MOVE_ACCEPT_POOL := 0
 # 规则 B · 路网躲避：每个"对方路网距离 > 它移动力 + 射程"（真够不着我）的敌人，给该落点加多少分
 # 规则 B · 我方下回合威胁：对称地算"我移动后下回合能威胁谁"（>0 才生效）
 # 规则 C · 替补落点能直接参战：1 = 在合法落点里按"能否本回合打到人 / 打到谁最疼 / 离战场多近 / 下回合更安全"选
@@ -961,6 +974,7 @@ var w_obstacle_detour := OBSTACLE_DETOUR_WEIGHT
 var w_engage_pull := ENGAGE_PULL_PER_CELL
 # ---- 规则 A / B / C 的开关与参数（默认 = 常量里的"关闭"值 ⇒ 不注入时行为逐位不变）----
 var w_move_accept_damage := MOVE_ACCEPT_DAMAGE
+var w_move_accept_pool := MOVE_ACCEPT_POOL   # 【2026-09-24】⑥ 的罚是否也按血量池折算（见 const 处说明）
 var w_sub_join_rule := SUB_JOIN_RULE
 # 【2026-09-19·默认关】难度档「概率性弱化」，见 `const WEAK_MODE` 处说明。默认 0 ⇒ 逐位不变。
 var w_weak_mode := WEAK_MODE
@@ -1144,6 +1158,8 @@ func set_weights(t: Dictionary) -> void:
 			"THREAT_DEAD_FOLD": w_threat_dead_fold = float(v)
 			# -------- 规则 A / B / C（默认关闭；见文件头的常量块）--------
 			"MOVE_ACCEPT_DAMAGE": w_move_accept_damage = int(v)
+			# 【2026-09-24·用户拍板方案 A】⑥ 的罚按血量池折算（见 const MOVE_ACCEPT_POOL 处说明）
+			"MOVE_ACCEPT_POOL": w_move_accept_pool = int(v)
 			"SUB_JOIN_RULE": w_sub_join_rule = int(v)
 			# 【2026-09-19·默认关】难度档「概率性弱化」（见 const WEAK_MODE 处说明）
 			"WEAK_MODE": w_weak_mode = int(v)
@@ -6515,7 +6531,14 @@ func _rule_b_score(sim: Sim) -> float:
 			continue
 		var inc := _incoming_total_on(sim, u, u.cell)
 		if inc > thr:
-			s -= float(inc - thr) * w_hp_value
+			# 【2026-09-24·方案 A】罚也按血量池折算（键 `MOVE_ACCEPT_POOL`，默认 0 = 逐位不变）：
+			#   同一顿打，22 血坦克与 14 血脆皮**不同价** —— 与 ③血量账 / ㉕嘲讽吸火 同一把尺子。
+			#   为什么必须这样：⑥ 是开局唯一那道闸门，而它对所有人同罚 ⇒ 坦克的本职（嘲讽/坚固/
+			#   替后排吃）被自己人罚，表现出来就是"坦克往角落缩、能打却不打"（用户 2026-09-24 实机）。
+			var pen := float(inc - thr) * w_hp_value
+			if w_move_accept_pool > 0:
+				pen *= _incoming_pool_mult(u)
+			s -= pen
 	return s
 
 ## 【2026-09-21 用户拍板 A】**一次算好"每个我方单位下回合会挨多少"**（=「挨打合计」，

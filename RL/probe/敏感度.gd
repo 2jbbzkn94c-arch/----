@@ -76,6 +76,8 @@ const KEY_VAR := {
 	"TAUNT_SOAK_W": "w_taunt_soak",
 	"IDLE_HIT_PENALTY": "w_idle_hit_penalty",
 	"STAY_OPTION": "w_stay_option",
+	# 【2026-09-24·用户拍板「A」】⑥ 的罚也按血量池折算（1 = 开；见 `src/BattleAI.gd` 的 `const MOVE_ACCEPT_POOL`）。
+	"MOVE_ACCEPT_POOL": "w_move_accept_pool",
 	"MOVE_ACCEPT_DAMAGE": "w_move_accept_damage",
 	"SUB_JOIN_RULE": "w_sub_join_rule",
 	"SUB_FINISH_W": "w_sub_finish_w",
@@ -97,7 +99,7 @@ const KEY_VAR := {
 }
 
 # 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 14 个**键（数量不对 = 有键漏了或类型变了）。
-const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
+const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "MOVE_ACCEPT_POOL", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
 	"NO_LOSS_FILTER", "TIEBREAK_MODE", "POISON_MAX_TICKS", "STAY_OPTION", "FORM_MERGE_MODE", "SEARCH_MODE",
 	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "SUMMON_SLOT_ONLY"]
 const FACTORS := [0.5, 2.0]

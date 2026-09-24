@@ -68,7 +68,7 @@ param(
     #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
     #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
     [string]$Baseline = 'RL\weights\噩梦_基线.json',
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -396,6 +396,22 @@ if ($Mode -eq 'dedup') {
         $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_DEDUP = [int]$DD_ARMS[$k] } }
     }
     $GROUPS = @(@{ slug = 'DD'; base = 'RL\weights\噩梦.json'; tiers = @($DD_ARMS.Keys) })
+}
+
+# ---- 模式 P（`bpool`）：⑥ 的罚"按血量池折算"`MOVE_ACCEPT_POOL`（2026-09-24·用户拍板方案 A）----
+# 病灶（用户实机 + 逐行读码）：⑥ 的阈值(4)与斜率(1.0/点)对**所有人一样** ⇒ 坦克与脆皮同罚
+#   （荆棘树人 22 血吃 11 伤罚 7 分、风语者 14 血吃 11 伤**也**罚 7 分），而 ③血量账 / ㉕嘲讽吸火
+#   都乘 `_incoming_pool_mult(u)` ⇒ ⑥ 是**唯一没用那把尺子**的地方 ⇒ 坦克的本职（嘲讽/坚固/替后排吃）
+#   在开局被自己人罚，表现出来就是"坦克往角落缩、能打却不打"。
+# 1 = 开：`罚 × 池倍率`（22 血吃 11 伤 ⇒ 6.4；14 血吃 11 伤 ⇒ 10.0；池强度仍由 `INCOMING_POOL_W` 决定）。
+# bp0 = 现役（对照）。读法：配对 Δpts(臂 − bp0) + 挨打/打出/回合 + 生产侧胜率。
+$BP_ARMS = [ordered]@{ 'bp0' = 0; 'bp1' = 1 }
+if ($Mode -eq 'bpool') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $BP_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ MOVE_ACCEPT_POOL = [int]$BP_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'BP'; base = 'RL\weights\噩梦.json'; tiers = @($BP_ARMS.Keys) })
 }
 
 # ---- 模式 O（`split`）：㉒隔断 `SPLIT_W` 剂量批（T16）----
