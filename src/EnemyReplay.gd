@@ -40,6 +40,16 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			# 节点被移出场景树后调 get_tree()，引擎会报 Parameter "data.tree" is null）
 		await _wait_sub_done()   # 若在替补流程则暂停，等玩家选好并落位
 		await wait_unpaused()    # 暂停中：不推进敌方下一步（恢复后继续）
+		# 【2026-09-25 修·用户实机「敌方回合，敌方死了三人后，敌方执行的动画还在动」】
+		#   阵亡的**计数与判负**挂在 `Unit.died` 上，比 `alive = false` 晚 0.3s（淡出）⇒ 上一步里玩家反击
+		#   把第 3 个敌人反杀时，`Battle._finish_attack()` 那次 `_check_win()` 看到的还是"才死 2 个"、于是
+		#   放行 ⇒ 下一名敌人照样亮描边/走位/出手（用户看到的就是这一整步）。
+		#   这里先把死亡结算排空（≤0.3s，与回合末 `Battle._drain_pending_deaths()` 同一把尺）再判一次
+		#   ⇒ 绝不在"已经判负（或判胜）"之后再走一步。**纯节奏守卫**：不改伤害、不改判定、不改死亡时序。
+		if is_instance_valid(battle) and battle.is_inside_tree():
+			await battle._drain_pending_deaths()
+		if GameState.match_over or my_session != battle._session_id:
+			break
 		var idx: int = step["idx"]
 		if idx < 0 or idx >= refs.size():
 			continue

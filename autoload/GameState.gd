@@ -76,6 +76,13 @@ func note_net_room(joined: bool, addr: String = "", port: int = 18861, was_host:
 
 # 竞技场模式：进入对战后随机2选1构建双方卡组（各4名，共8英雄），无需预选队伍
 var arena_mode := false
+# 【2026-09-24 用户要求·天梯模式】本局是否属于天梯挑战（"" = 不是；"normal"/"arena" = 天梯普通/天梯竞技场）。
+#   天梯的玩法与普通/竞技场完全一样，差别只在：难度锁死噩梦、每回合开始落盘存档、失败即结束本轮连胜。
+var ladder_mode := ""
+# 【2026-09-25 用户要求·天梯结算面板】本次天梯**失败那一刻的当前连胜**（= 这一轮打到第几连胜）。
+#   为什么要单独存：`Battle._ladder_on_match_result()` 在**发 `match_result` 信号之前**就把当前连胜清零了
+#   （`Stats.reset_streak()` + `LadderStore.finish_run()`），所以结算面板读不到原值 ⇒ 在这里留一份。
+var ladder_final_streak := 0
 # 普通模式新流程：进入战斗后再弹"选择卡组"面板（三选一已存卡组/随机英雄），入场前不再锁定队伍
 var pick_deck_in_battle := false
 # 自由部署(测试)双控：true 时敌方回合也由本端玩家操控(不再跑 AI)

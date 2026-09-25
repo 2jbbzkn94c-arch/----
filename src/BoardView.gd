@@ -32,6 +32,22 @@ var enemy_zone_cells: Array = []
 const GOLD_TEX := preload("res://assets/美术资源/金矿.png")
 # 障碍物素材（2026-09-14 用户提供酒桶图；已去白底、去右下角水印、裁到桶身边界）
 const OBSTACLE_TEX := preload("res://assets/美术资源/障碍.png")
+# 墓碑素材（2026-09-25 用户提供 R.I.P. 石碣图；处理见 tools/处理墓碑贴图.ps1：
+#   去白底透明化、裁到碑身边界、**右下角水印被裁框排除**）
+const GRAVE_TEX := preload("res://assets/美术资源/墓碑.png")
+# 墓碑尺寸：碑高 = 格高 × 这个系数（与酒桶 OBSTACLE_H 同口径：正好落在六边形格子里、不压相邻格）。
+# 想更大/更小就改这一个数（宽度按原图比例自动算，不会拉伸变形）。
+# ⚠️ 2026-09-25 换成"带花与土"的版本后从 0.60 调到 **0.66**：新图比旧图矮胖
+#   （含花与土 283×298，碑身只占上面 ~85%）⇒ 0.66 让碑身看起来和上一版差不多大。
+const GRAVE_H := 0.66
+# 「增益道具 / 金矿」图标的方框边长 = 六边形外接半径 × 这个系数（贴图按原比例放进方框、居中）。
+const ITEM_ICON_BOX := 0.75
+# 【2026-09-25 用户要求「将金矿大小变大」】金矿单独用更大的方框：0.75 → **1.05**
+#   ⇒ r=60 的格子上边长 45px → **63px**（金矿图 137×129 ≈ 方形 ⇒ 约 63×59px）。
+#   上限参考：flat-top 六边形 r=60 时，中心能完整放下 ~73px 的方图（角点在内切圆内）⇒ 63px 还留了余量。
+#   ⚠️ 金矿右下角那串"剩余回合数"用的是 `_digit_anchor()`（中心 +0.3r,+0.7r）⇒ 图标变大后数字仍画在
+#     图标下缘外侧；若你觉得挤，改 `_digit_anchor()` 的第二个分量即可。
+const GOLD_ICON_BOX := 1.05
 # 道具素材：圣盾=用户提供的盾牌图；攻击/回血/移动用已有图案或用户提供的图
 # （都去了白底、裁到图案边界；见 tools/处理地块贴图.gd）
 const SHIELD_TEX := preload("res://assets/美术资源/圣盾.png")
@@ -131,7 +147,10 @@ func _draw() -> void:
 			"gold":
 				tex = GOLD_TEX          # 金矿：已有的金矿素材
 		if tex != null:
-			_draw_cell_icon(tex, center, grid.hex_size * 0.75)
+			# 【2026-09-25 用户要求「将金矿大小变大」】金矿单独放大（其余道具维持原尺寸）。
+			#   方框边长 = 六边形外接半径 × 系数（`GOLD_ICON_BOX` / `ITEM_ICON_BOX`），贴图按原比例放进方框。
+			_draw_cell_icon(tex, center,
+				grid.hex_size * (GOLD_ICON_BOX if st == "gold" else ITEM_ICON_BOX))
 		else:
 			# 防御：将来新增道具类型没配贴图时，画个黄点提示，别整格空着
 			draw_circle(center, grid.hex_size * 0.26, Color(0.25, 0.2, 0.08, 0.9))
@@ -149,22 +168,15 @@ func _draw() -> void:
 		# 金矿：右下角显示剩余回合数（3→2→1，到0消失），与障碍耐久同一套画法
 		if st == "gold" and gold_left.has(cell):
 			_draw_cell_digit(center, str(int(gold_left[cell])))
-	# 墓碑（灰色十字石碣）：替补可选择在其上方/周围落位，落位后消失
+	# 墓碑（R.I.P. 石碣素材，2026-09-25 用户提供）：替补可选择在其上方/周围落位，落位后消失
+	#   ⚠️ 2026-09-25 用户要求「将墓碑替换成这个」⇒ 由**代码画**（底座 + 圆顶 + 十字，灰色）改成贴图。
+	#   尺寸口径与酒桶一致：碑高 = 格高 × `GRAVE_H`、宽按原图比例 ⇒ 不会拉伸变形。
 	for cell in graves.keys():
 		var center := board_origin + grid.cell_to_world(cell)
-		var s := grid.hex_size
-		# 底座
-		draw_rect(Rect2(center + Vector2(-s * 0.24, s * 0.05), Vector2(s * 0.48, s * 0.14)),
-			Color(0.28, 0.27, 0.30, 1.0))
-		# 碑身（圆顶石碣）
-		var stone := Color(0.42, 0.40, 0.44, 1.0)
-		draw_rect(Rect2(center + Vector2(-s * 0.17, -s * 0.38), Vector2(s * 0.34, s * 0.43)), stone)
-		draw_circle(center + Vector2(0, -s * 0.38), s * 0.17, stone)
-		# 十字
-		draw_rect(Rect2(center + Vector2(-s * 0.045, -s * 0.3), Vector2(s * 0.09, s * 0.26)),
-			Color(0.15, 0.14, 0.16, 1.0))
-		draw_rect(Rect2(center + Vector2(-s * 0.14, -s * 0.22), Vector2(s * 0.28, s * 0.09)),
-			Color(0.15, 0.14, 0.16, 1.0))
+		var cell_h := grid.hex_size * sqrt(3.0) * CELL_R
+		var gh := cell_h * GRAVE_H
+		var gw := gh * float(GRAVE_TEX.get_width()) / float(GRAVE_TEX.get_height())
+		draw_texture_rect(GRAVE_TEX, Rect2(center - Vector2(gw, gh) * 0.5, Vector2(gw, gh)), false)
 
 func _draw_hex(center: Vector2, radius: float, fill: Color, line: Color) -> void:
 	var pts := _hex_points(center, radius)

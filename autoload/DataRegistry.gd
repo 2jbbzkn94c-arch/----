@@ -12,60 +12,49 @@ enum AttackType { MELEE, RANGED }
 enum Skill { NONE, TAUNT, SWIFT, RANGED, BENCH, LOGISTICS, INFILTRATE }
 
 # ---- 机制协同知识库（选人/战斗 AI 共用）----
-const SYNERGY := {
-	"hero_30": {"hero_41": 2.0, "hero_05": 2.0, "hero_21": 2.0, "hero_32": 2.0},
-	"hero_41": {"hero_18": 2.0, "hero_30": 2.0},
-	"hero_10": {"hero_37": 2.0, "hero_22": 1.5, "hero_15": 1.5, "hero_31": 1.0},
-	"hero_17": {"hero_37": 2.0},
-	"hero_18": {"hero_37": 2.0, "hero_41": 2.0},
-	"hero_31": {"hero_37": 2.0, "hero_10": 1.0},
-	"hero_37": {"hero_10": 2.0, "hero_17": 2.0, "hero_18": 2.0, "hero_31": 2.0},
-	"hero_19": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5, "hero_20": 1.5},
-	"hero_11": {"hero_23": 2.0, "hero_13": 1.5, "hero_22": 1.5},
-	"hero_23": {"hero_11": 2.0, "hero_13": 1.5},
-	"hero_22": {"hero_10": 1.5, "hero_11": 1.5, "hero_17": 1.5},
-	"hero_34": {"hero_04": 1.0, "hero_09": 1.0, "hero_07": 1.0},
-	"hero_26": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5},
-	"hero_25": {"hero_04": 1.5, "hero_09": 1.5, "hero_07": 1.5},
-	"hero_43": {"hero_04": 1.5, "hero_07": 1.5, "hero_09": 1.5, "hero_18": 1.5},
-	"hero_06": {"hero_11": 1.5, "hero_23": 1.5, "hero_13": 1.5},
-	"hero_08": {"hero_11": 1.5, "hero_23": 1.5},
-	"hero_05": {"hero_30": 2.0, "hero_33": 1.0},
-	"hero_33": {"hero_05": 1.0, "hero_11": 1.0},
-	"hero_15": {"hero_10": 1.5, "hero_17": 1.5, "hero_18": 1.5},
-	"hero_20": {"hero_11": 1.0, "hero_12": 1.0, "hero_13": 1.0},
-	"hero_39": {"hero_30": 1.0, "hero_15": 1.0},
-}
+# 【2026-09-25 已删除】原来的手写表 `const SYNERGY := {…}` 整表删掉（用户 2026-09-24 拍板"直接删、不管丢分"，
+#   因当时撞上正在跑的批而暂缓；2026-09-25 用户再次确认「手写表删掉」⇒ 本次落地）。
+#   ⇒ 现在协同分的**唯一来源**是英雄表的列：`「协同英雄」`列（点名档 +2.0，`explicit_pairs`）＋
+#     `「语义伙伴」`列（语义档，默认 +1.0、可写 `名字×N`，`sy_partners`/`sy_weight`）。
+#   删除当天算出的影响（`RL/probe/配合对自检.gd` 口径）：配合对 **126 → 87**；**独脚龟/雪拳/猎颅者归零**
+#   （它们在手写表里是唯一来源）；小阴影少了 白游侠 1.5 / 烛火 1.5 / 长剑 1.5。
+#   ⚠️ `autoload/` **不在跑批指纹里**（`RL/harness/对局.gd` 只哈希两份 AI 副本）⇒ 本改动会**静默**改变
+#      跑批里的 AI 行为，闸门看不出来；**改完起的进程才是新口径**。
+#   要回退：从 git 恢复本段（`git show <旧提交>:autoload/DataRegistry.gd`）并把下面 `d1`/`d2` 两段加回去。
 
 func synergy_bonus(a: String, b: String) -> float:
 	var s := 0.0
-	var d1: Dictionary = SYNERGY.get(a, {})
-	if d1.has(b):
-		s += d1[b]
-	var d2: Dictionary = SYNERGY.get(b, {})
-	if d2.has(a):
-		s += d2[a]
+	# 【2026-09-25】这里原来还有手写表 `SYNERGY` 的两段（`d1`/`d2`）—— 已随整表删除（见上方说明）。
 	# "协同英雄"列直接点名的搭配（md 自动读取），任意一方点名对方即算搭配分
 	var ad: HeroDef = heroes.get(a, null)
 	var bd: HeroDef = heroes.get(b, null)
 	if (ad != null and ad.explicit_pairs.has(b)) or (bd != null and bd.explicit_pairs.has(a)):
 		s += 2.0
 	# "配合"列语义展开的候选伙伴：任一方的展开结果包含对方,记低一档协同(语义较宽,宽松加分)
-	if (ad != null and ad.sy_partners.has(b)) or (bd != null and bd.sy_partners.has(a)):
-		s += 1.0
+	# 【2026-09-24 用户拍板①】这一档支持**加权写法**（「语义伙伴」列里写 `名字×N`，不写 = 1.0）。
+	#   双方都写时取**较大值**、不叠加 ⇒ 一边写就够，两边都写不会翻倍；不写 ×N 时与旧口径逐位相同。
+	var w_sem := 0.0
+	if ad != null and ad.sy_partners.has(b):
+		w_sem = maxf(w_sem, float(ad.sy_weight.get(b, 1.0)))
+	if bd != null and bd.sy_partners.has(a):
+		w_sem = maxf(w_sem, float(bd.sy_weight.get(a, 1.0)))
+	s += w_sem
 	return s
 
 # 克制分：a 是否克制 b（依据角色列表「克制」与「被克制」两列的明确关系）。
 # 单向判定：b 的"被克制"列点名 a (b.counters 含 a)，或 a 的"克制"列点名 b (a.beats 含 b)。
-# 两列可能重复指向同一关系（如战锤克毒蛇两列都有），此处只记一次+2，避免重复加分。
+# 两列可能重复指向同一关系（如战锤克毒蛇两列都有），此处只记一次，避免重复加分。
+# 【2026-09-24 用户要求】两列改成可加权名单（`名字×N`，不写 = **2.0**）⇒ 双方都写取**较大值**、不叠加；
+# 旧原文（"远程"/"嘲讽"这类词）解析出来的权重全是 2.0 ⇒ 与旧口径逐对相同。
 func counter_bonus(a: String, b: String) -> float:
 	var ad: HeroDef = heroes.get(a, null)
 	var bd: HeroDef = heroes.get(b, null)
+	var w := 0.0
 	if bd != null and bd.counters.has(a):
-		return 2.0   # b 被克制列点名 a → a 克制 b
+		w = maxf(w, float(bd.counters_weight.get(a, 2.0)))   # b 被克制列点名 a → a 克制 b
 	if ad != null and ad.beats.has(b):
-		return 2.0   # a 克制列点名 b → a 克制 b
-	return 0.0
+		w = maxf(w, float(ad.beats_weight.get(b, 2.0)))      # a 克制列点名 b → a 克制 b
+	return w
 
 # 英雄单体评分（唯一实现）：竞技场选人/普通敌方组队/首发部署共用。
 # 权重：重攻击、轻血量——避免高血坦克把输出全挤出高分池（导致敌方全肉盾）。
@@ -94,7 +83,7 @@ func hero_strength(id: String) -> float:
 
 # ---- 身价评分（战斗 AI 唯一实现）：一个单位"值不值得打 / 值不值得保"由三项加权合成 ----
 #   solo    : 单人评分 hero_strength(id)（角色列表"总评分"优先，否则数值/词条加权）
-#   synergy : 与我方**其他单位**的协同分之和（引用 SYNERGY 表 + 角色列表"配合"/"协同英雄"列）
+#   synergy : 与我方**其他单位**的协同分之和（走 `synergy_bonus()`：角色列表"协同英雄"列 + "语义伙伴"/"配合"列）
 #   counter : 我克制对面之和 − 对面克制我之和（引用角色列表"克制"/"被克制"两列）
 # 权重可被外部（RL 训练器 / 权重文件）用 coef 覆盖；不给就用下面这套官方默认比例。
 # 注意：这里只算"原始身价"，**眩晕/沉默的折减不在这里做** —— 那是"受控折减"，
@@ -149,7 +138,7 @@ func battle_unit_value(hero_id: String, ally_ids: Array, enemy_ids: Array, coef:
 #   1 **缺前排**：我方**存活嘲讽 = 0**          → 候选 = 有 `<嘲讽>`
 #   2 **缺治疗**：存活治疗族 = 0 且 伤员 ≥ 2      → 候选 = `MECH_TAGS["治疗"]` ∪ `SUB_HEAL_EXTRA`（波盾圣盾）
 #   3 **需克制**：对面存活里身价最高的人 X，而我方**无人**克制 X → 候选 = `counter_bonus(h, X) > 0`
-#   4 **缺输出**：存活里**表格攻 ≥ 3** 的人 = 0   → 候选 = 表格攻 ≥ 3
+#   4 **缺输出**：存活单位**表格攻之和 ≤ `SUB_DPS_ATK_SUM`** → 候选 = 表格攻 ≥ 3
 #   5 **缺射程**：存活远程 = 0                   → 候选 = `<远程>`
 # ⚠️ 判据一律用**英雄表**（`def.skills/attack_type/atk`）而不是实时数值 ⇒ 真实与模拟必然一致
 #   （实时值在两侧来源不同：真实读 `effective_*()`、模拟读快照/被状态改过的 `eatk`）。
@@ -157,24 +146,57 @@ func battle_unit_value(hero_id: String, ally_ids: Array, enemy_ids: Array, coef:
 const SUB_NEED_PRIORITY_BONUS := 20.0    # "满足需求"的优先价：远大于身价极差(≈12) ⇒ 在**预设替补**那条路上
                                          # "不缺的职能"永远排不到"缺的职能"前面（动态路已先按需求筛过候选）
 const SUB_HEAL_EXTRA: Array[String] = ["hero_16"]   # 波盾：登场全队圣盾 —— 与"治疗"同属"队伍被打疼了"的解
-const SUB_DPS_ATK := 3                   # "算输出"的**表格**基础攻击门槛
+const SUB_DPS_ATK := 3                   # "算输出"的**表格**基础攻击门槛（= 谁够格补输出）
+# 【2026-09-25 用户拍板 C】"缺输出"的**触发线**从"人头数"改成"总量"，用户定 N = 5：
+#   旧口径 = `dps`（存活里表格攻 ≥ 3 的人数）≤ 0 ⇒ **一个能打的都不剩**才算缺输出，太靠边：
+#   只剩一个 3 攻脆皮（还被贴住/被沉默）、或全队攻 2+2+2 时它照样判"不缺输出" ⇒ 替补按身价挑，
+#   很可能又补个坦克/辅助上来，越补越打不动。
+#   新口径 = 存活单位**表格攻之和** ≤ 5（≈ **凑不出两个能打的**：3+2 算缺、3+3 不算）。
+#   定这个数用的实测分布（51 人：攻 0×3 · 1×7 · 2×18 · 3×17 · 4×4 · 5×2，均值 2.35）⇒
+#   死一个后场上 2 人时 Σ 均值 ≈ 4.7（满编 3 人 ≈ 7.1）。
+#   ⚠️ `dps` 字段**保留**（老 ctx 与实机日志还在印它），只是不再当"缺输出"的判据。
+#   ⚠️ 调用方**必须**填 `atk_sum`：漏填会被 `ctx.get("atk_sum", 0)` 读成 0 ⇒ **恒判"缺输出"**。
+#      目前只有两处构 ctx —— `src/Battle.gd::_sub_ctx()` 与 `src/BattleAI.gd::_sim_sub_ctx()`，两处都已填。
+const SUB_DPS_ATK_SUM := 5
 
 ## ① 需求判定。ctx 字段（都由调用方从**我方/对方存活单位**统计）：
-##   `taunt` 存活嘲讽数 · `healers` 存活治疗族数 · `dps` 存活且表格攻≥3 的数 · `ranged` 存活远程数 ·
+##   `taunt` 存活嘲讽数 · `healers` 存活治疗族数 · `dps` 存活且表格攻≥3 的数 · `atk_sum` 存活单位
+##   表格攻**之和**（"缺输出"的判据，见 `SUB_DPS_ATK_SUM`）· `ranged` 存活远程数 ·
 ##   `wounded` 存活且 hp < max_hp 的数 · `core` 对面存活里身价最高的 hero_id（""=没有）·
 ##   `countered` 我方是否已有人克制 core · `ally_heroes`/`foe_heroes` 双方存活 hero_id（给身价/克制用）·
 ##   `player_near` 对面有单位贴着我方（后勤在贴身时贬价，沿用旧口径）。
+## 需求优先级（顺序 = 判定顺序；`sub_need()` 与 `sub_need_for()` 共用这一份）。
+const SUB_NEED_ORDER := ["缺前排", "缺治疗", "需克制", "缺输出", "缺射程"]
+
+## 某个需求"条件本身成不成立"（**独立判定、互不短路** ⇒ 供 `sub_need_for()` 逐个试）。
+func sub_need_ok(need: String, ctx: Dictionary) -> bool:
+	match need:
+		"缺前排": return int(ctx.get("taunt", 0)) <= 0
+		"缺治疗": return int(ctx.get("healers", 0)) <= 0 and int(ctx.get("wounded", 0)) >= 2
+		"需克制": return String(ctx.get("core", "")) != "" and not bool(ctx.get("countered", false))
+		"缺输出": return int(ctx.get("atk_sum", 0)) <= SUB_DPS_ATK_SUM
+		"缺射程": return int(ctx.get("ranged", 0)) <= 0
+	return false
+
 func sub_need(ctx: Dictionary) -> String:
-	if int(ctx.get("taunt", 0)) <= 0:
-		return "缺前排"
-	if int(ctx.get("healers", 0)) <= 0 and int(ctx.get("wounded", 0)) >= 2:
-		return "缺治疗"
-	if String(ctx.get("core", "")) != "" and not bool(ctx.get("countered", false)):
-		return "需克制"
-	if int(ctx.get("dps", 0)) <= 0:
-		return "缺输出"
-	if int(ctx.get("ranged", 0)) <= 0:
-		return "缺射程"
+	for n in SUB_NEED_ORDER:
+		if sub_need_ok(String(n), ctx):
+			return String(n)
+	return ""
+
+## 【2026-09-24 用户拍板 A】**带候选名单的需求判定**（预设替补那条路专用）：
+##   按优先级逐个需求试，第一个"条件成立 ＋ 名单里至少一人够格（`sub_hero_eligible()`）"的才算本次需求；
+##   全都不满足 ⇒ 返回 ""（= 兜底，按身价挑）。
+##   病灶（用户实机）：只剩 赏金猎人＋负墟、伤员 2 ⇒ 旧口径判"缺治疗"，而 5 人预设名单里
+##   **一个治疗族都没有**（治疗族只有 医护兵/德鲁伊/风语者/梅林/圣诞老人）⇒ 战锤/古灵精怪/复仇者
+##   三名非治疗英雄照样印"补续航"、还白拿"缺治疗"那笔加分，最后上了战锤。
+func sub_need_for(hids: Array, ctx: Dictionary) -> String:
+	for n in SUB_NEED_ORDER:
+		if not sub_need_ok(String(n), ctx):
+			continue
+		for hid in hids:
+			if sub_hero_eligible(String(hid), String(n), ctx):
+				return String(n)
 	return ""
 
 func sub_need_label(need: String) -> String:
@@ -210,31 +232,48 @@ func sub_hero_score(hid: String, need: String, ctx: Dictionary) -> Dictionary:
 	var foe: Array = ctx.get("foe_heroes", [])
 	var wounded := int(ctx.get("wounded", 0))
 	var s := battle_unit_value(hid, ally, foe)
+	var base_v := s          # 身价（分项，给日志用）
+	var prio_v := 0.0        # 需求优先价（+20，够格才给）
+	var bonus_v := 0.0       # 需求专属加分
 	var why: Array[String] = []
-	if sub_hero_eligible(hid, need, ctx):
+	var ok: bool = sub_hero_eligible(hid, need, ctx)
+	# 【2026-09-24 用户拍板 B】这 20 分是"优先价"，只在**真有需求且这人够格**时给；兜底档（need == ""）不给
+	#   （原来 `need == ""` ⇒ eligible 恒真 ⇒ 全池白加 20：名次不变但数字虚高、语义错）。
+	if ok and need != "":
 		s += SUB_NEED_PRIORITY_BONUS
-	match need:
-		"缺前排":
-			s += 0.3 * float(def.max_hp)                     # 厚血优先
-			why.append("补前排(血%d)" % def.max_hp)
-		"缺治疗":
-			s += 1.0 * (def.ai_skill_score + def.ai_boost) + 0.5 * float(wounded)
-			why.append("补续航")
-		"需克制":
-			var core := String(ctx.get("core", ""))
-			var cb := counter_bonus(hid, core)
-			s += 2.0 * cb
-			var cd: HeroDef = heroes.get(core, null)
-			why.append("克制%s(+%.1f)" % [cd.display_name if cd != null else core, cb])
-		"缺输出":
-			s += 1.5 * float(def.atk)
-			why.append("补输出(攻%d)" % def.atk)
-		"缺射程":
-			s += 0.5 * float(def.atk)
-			why.append("补射程")
+		prio_v = SUB_NEED_PRIORITY_BONUS
+	elif need != "":
+		# 【2026-09-24 用户拍板 B】够不上这个需求的人，日志要写明"他做不到"，别再印成"补X"（实机误导）。
+		why.append("需求=%s·这人做不到" % sub_need_label(need))
+	if ok:
+		match need:
+			"缺前排":
+				s += 0.3 * float(def.max_hp)                     # 厚血优先
+				why.append("补前排(血%d)" % def.max_hp)
+			"缺治疗":
+				s += 1.0 * (def.ai_skill_score + def.ai_boost) + 0.5 * float(wounded)
+				why.append("补续航")
+			"需克制":
+				var core := String(ctx.get("core", ""))
+				var cb := counter_bonus(hid, core)
+				s += 2.0 * cb
+				var cd: HeroDef = heroes.get(core, null)
+				why.append("克制%s(+%.1f)" % [cd.display_name if cd != null else core, cb])
+			"缺输出":
+				s += 1.5 * float(def.atk)
+				why.append("补输出(攻%d)" % def.atk)
+			"缺射程":
+				s += 0.5 * float(def.atk)
+				why.append("补射程")
+	bonus_v = s - base_v - prio_v
 	if def.skills.has(Skill.BENCH):
-		s += 0.5
-		why.append("替补技")
+		# 【2026-09-24 用户拍板 A】替补技（登场技）按**强度**计价 —— 原来写死 `+0.5`，等于在"判出需求"的档里白送：
+		#   实机例（用户）：需求=缺前排 ⇒ 太阳斩(技能强) 输给 小阴影(血厚) 1.0 分，而登场技只值那 0.5。
+		#   口径与「缺治疗」档一致 = `1.0 × (技能评分 + 补强)`；**保留 0.5 作下限**（技能评分很低但有〈替补〉的
+		#   英雄不会比改动前更差）。⚠️ 与 `need == ""` 兜底档的那张英雄写死表（波盾/梅林…）不冲突：那张只在没缺口时才走。
+		var bench_val: float = maxf(0.5, 1.0 * (float(def.ai_skill_score) + float(def.ai_boost)))
+		s += bench_val
+		why.append("替补技(+%.1f)" % bench_val)
 	if def.skills.has(Skill.LOGISTICS):
 		# 后勤/支援：伤员多时值钱；贴身交战中不值钱（不能主动输出）—— 沿用旧口径
 		if wounded > 0:
@@ -259,7 +298,7 @@ func sub_hero_score(hid: String, need: String, ctx: Dictionary) -> Dictionary:
 			"hero_39":   # 猎颅者：登场锁定目标
 				s += 2.0
 				why.append("登场锁定")
-	return { "s": s, "why": why }
+	return { "s": s, "why": why, "base": base_v, "prio": prio_v, "bonus": bonus_v }
 
 # 职能分类（给 AI 组队配比用）：替补标签>嘲讽坦克>后勤功能>其余输出
 func hero_role_name(id: String) -> String:
@@ -327,6 +366,48 @@ func _extract_ids(text: String) -> Array:
 	for nm in _full_name_map.keys():
 		if nm != "" and text.contains(nm) and not out.has(_full_name_map[nm]):
 			out.append(_full_name_map[nm])
+	return out
+
+# 【2026-09-24 用户拍板①】名单列分词：与体检工具同一套分隔符（、，,；;|／/ 与空白/换行）。
+func _split_pair_tokens(text: String) -> Array:
+	var out: Array = []
+	var cur := ""
+	for i in text.length():
+		var ch: String = text[i]
+		if ch == "、" or ch == "，" or ch == "," or ch == "；" or ch == ";" or ch == "|" or ch == "／" or ch == "/" or ch == "\n" or ch == "\r" or ch == "\t" or ch == " " or ch == "　":
+			if cur.strip_edges() != "":
+				out.append(cur.strip_edges())
+			cur = ""
+		else:
+			cur += ch
+	if cur.strip_edges() != "":
+		out.append(cur.strip_edges())
+	return out
+
+# 【2026-09-24 用户拍板①】「语义伙伴」列的**加权写法**解析：`名字×N`（`×` `x` `X` `*` 都认，不写 = `default_w`）。
+# 同一个名字出现多次取**最大权重**；万一某一段不是英雄名（写成"远程/坦克"这类词）则退回语义/数值展开，权重照给。
+# `default_w`：语义伙伴列 = 1.0；「克制」/「被克制」两列 = 2.0（= 旧口径那条硬编码的 +2.0）。
+func _parse_weighted_pairs(text: String, default_w: float = 1.0) -> Dictionary:
+	var out: Dictionary = {}
+	for tok in _split_pair_tokens(text):
+		var w := default_w
+		var name_part: String = tok
+		var re := RegEx.new()
+		re.compile("[×xX*]\\s*([0-9]+(?:\\.[0-9]+)?)$")
+		var m := re.search(tok)
+		if m != null:
+			w = m.get_string(1).to_float()
+			name_part = tok.substr(0, m.get_start(0)).strip_edges()
+		if name_part == "":
+			continue
+		var ids: Array = _extract_ids(name_part)
+		if ids.is_empty():
+			ids = _semantic_heroes(name_part) + _numeric_filter_heroes(name_part)
+		for hid in ids:
+			var key := String(hid)
+			if key == "":
+				continue
+			out[key] = maxf(float(out.get(key, 0.0)), w)
 	return out
 
 # 从文本的"语义关键词"(如 坦克/位移/攻击力收益)展开出对应机制标签下的英雄 id——
@@ -438,9 +519,13 @@ class HeroDef:
 	var effective_behavior: String = "" # 有效行为（文本备注）
 	var countered_by_note: String = ""  # 被克制（文本备注）
 	var pairs_note: String = ""         # 协同英雄列原文备注
-	var sy_partners: Array = []         # 配合列里抽出的协同英雄 id
+	var sem_note: String = ""           # 【2026-09-24】"语义伙伴"列原文（手工维护；非空 ⇒ 以它为准，不再自动展开"配合"列）
+	var sy_partners: Array = []         # 语义伙伴 id 列表（"语义伙伴"列手工填的名字，或自动展开结果）
+	var sy_weight: Dictionary = {}      # 【2026-09-24 用户拍板①】配对权重 id->float（`名字×N`；自动展开/未写 ×N 时为 1.0）
 	var counters: Array = []            # "被克制"列抽出：**克制我的**英雄(我的天敌)
 	var beats: Array = []               # "克制/有效行为"列抽出：**我能克制**的英雄
+	var counters_weight: Dictionary = {} # 【2026-09-24】被克制的权重 id->float（`名字×N`，不写 = 2.0）
+	var beats_weight: Dictionary = {}   # 【2026-09-24】克制的权重 id->float（同上）
 	var explicit_pairs: Array = []      # "协同英雄"列直接点名的搭配英雄 id（AI 协同用）
 	# 影响 AI 行为的手动评分列（角色列表 属性评分/特性评分/技能量化/技能评分/补强/总评分）
 	var ai_attr_score := 0.0
@@ -495,7 +580,14 @@ const MECH_TAGS := {
 
 # 文本语义关键词 -> 相关机制标签（用于把三列的宽泛描述翻译成标签偏好）
 const SEMANTIC := {
-	"坦克": ["坦克"],
+	# 【已删 2026-09-24·用户拍板】原 `"坦克": ["坦克"]` —— 用户口径：「**不用特意写坦克吧，队伍配比会上坦克的**，
+	#   如果加上，那再有坦克的情况下会加大医护兵的选择」。核对属实：坦克由 `role_balance_bonus()` 统一管
+	#   （"己方卡组还没有坦克时坦克候选 **+2.0**"，见 `:307`），再在"配合"列的语义展开里算一遍就是**重复计价**
+	#   ⇒ 摘掉这条关键词。影响面：**只在"配合"列写过坦克的 4 个英雄**（医护兵 hero_06 / 影丸 hero_07 /
+	#   古拉博士 hero_14 / 沉默术士 hero_34）——它们不再把 9 个坦克当"语义伙伴"；
+	#   医护兵/古拉 仍保留另一条真配合（"能提供攻击力加成的角色" ⇒ 烈焰祭司/圣诞老人）。
+	#   `MECH_TAGS["坦克"]` 保留（文档/以后可能复用），只是不再被语义关键词自动展开。
+	#   ⚠️ 核对过：`克制` / `被克制` 两列**没有任何一格**写"坦克" ⇒ 摘掉它不影响克制解析。
 	"需要敌人位移": ["位移受益"],
 	"能使敌人位移": ["位移提供"],
 	"使敌人位移": ["位移提供"],   # 兼容"可以使敌人位移英雄"这类写法（不含"需要"→只按"提供位移"解）
@@ -667,6 +759,10 @@ func _load_heroes() -> void:
 	var col_eff: int = col.get("克制", col.get("有效行为", 8))   # 表头曾用"克制"，旧称"有效行为"
 	var col_counter: int = col.get("被克制", 9)
 	var col_pairs: int = col.get("协同英雄", 10)
+	# 【2026-09-24 用户要求】「语义伙伴」列：**手工维护的语义协同名单**（用户口径：「改代码太累了，
+	#   把解析出来的英雄列在后面，我直接改 Excel」）。**填了这一列 ⇒ 以它为准**（不再按"配合"列
+	#   自动展开）；留空 ⇒ 仍走原来的自动展开（`_semantic_heroes` + `_numeric_filter_heroes`）⇒ 逐位不变。
+	var col_sem: int = col.get("语义伙伴", -1)
 	var col_attr_score: int = col.get("属性评分", -1)
 	var col_trait_score: int = col.get("特性评分", -1)
 	var col_skill_quant: int = col.get("技能量化", -1)
@@ -737,9 +833,12 @@ func _load_heroes() -> void:
 		h.effective_behavior = cell_at.call(col_eff)
 		h.countered_by_note = cell_at.call(col_counter)
 		h.pairs_note = cell_at.call(col_pairs)
+		h.sem_note = cell_at.call(col_sem) if col_sem >= 0 else ""
 		h.sy_partners = []
 		h.counters = []
 		h.beats = []
+		h.counters_weight = {}
+		h.beats_weight = {}
 		h.explicit_pairs = []
 		h.pairs_note = cell_at.call(col_pairs)
 
@@ -786,9 +885,25 @@ func _load_heroes() -> void:
 	# 数值筛选/语义解析遍历全量，不再受"处理靠前英雄时排在后面的还没加载"的顺序影响。
 	for hid in heroes.keys():
 		var hd: HeroDef = heroes[hid]
-		hd.sy_partners = _without_self((_extract_ids(hd.synergy_note) + _semantic_heroes(hd.synergy_note) + _numeric_filter_heroes(hd.synergy_note)), hd.id)
-		hd.counters = _without_self((_extract_ids(hd.countered_by_note) + _semantic_heroes(hd.countered_by_note) + _numeric_filter_heroes(hd.countered_by_note)), hd.id)   # 被克制列->克制我的英雄
-		hd.beats = _without_self((_extract_ids(hd.effective_behavior) + _semantic_heroes(hd.effective_behavior) + _numeric_filter_heroes(hd.effective_behavior)), hd.id)    # 克制/有效行为列->我能克制的英雄
+		if hd.sem_note.strip_edges() != "":
+			# 【2026-09-24 用户要求】手工"语义伙伴"列优先：填了就完全以它为准（用户可直接在 Excel 里增删伙伴）
+			# 【2026-09-24 用户拍板①】支持加权写法 `名字×N`（不写 = 1.0）⇒ 原「协同英雄」点名档（+2.0）退役：
+			#   需要强绑定就写 ×3（= 旧口径 1.0 语义 + 2.0 点名）。
+			hd.sy_weight = _parse_weighted_pairs(hd.sem_note)
+			hd.sy_partners = _without_self(hd.sy_weight.keys(), hd.id)
+			hd.sy_weight.erase(hd.id)
+		else:
+			hd.sy_weight = {}
+			hd.sy_partners = _without_self((_extract_ids(hd.synergy_note) + _semantic_heroes(hd.synergy_note) + _numeric_filter_heroes(hd.synergy_note)), hd.id)
+		# 【2026-09-24 用户要求·与「语义伙伴」同一套】"克制"/"被克制"两列也改成**可加权的人工名单**：
+		#   写法 `名字×N`（不写 = **2.0**，等于旧口径那条硬编码的 +2.0）；非英雄名的词（"远程"/"嘲讽"/
+		#   "技能评分+补强>3的非替补角色"这类）照旧退回语义/数值展开，权重同样生效 ⇒ 旧原文一格不改也不变。
+		hd.counters_weight = _parse_weighted_pairs(hd.countered_by_note, 2.0)   # 被克制列->克制我的英雄
+		hd.counters = _without_self(hd.counters_weight.keys(), hd.id)
+		hd.counters_weight.erase(hd.id)
+		hd.beats_weight = _parse_weighted_pairs(hd.effective_behavior, 2.0)    # 克制/有效行为列->我能克制的英雄
+		hd.beats = _without_self(hd.beats_weight.keys(), hd.id)
+		hd.beats_weight.erase(hd.id)
 		hd.explicit_pairs = _without_self(_extract_ids(hd.pairs_note), hd.id)   # "协同英雄"列：直接点名的搭档
 
 

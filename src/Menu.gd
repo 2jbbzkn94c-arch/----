@@ -135,11 +135,18 @@ func _build() -> void:
 
 	# 1) 标题
 	var title := Label.new()
-	title.text = "编辑卡组（联机）" if GameState.net_edit_mode else "普通模式"
+	if GameState.ladder_mode != "":
+		title.text = "天梯模式"
+	elif GameState.net_edit_mode:
+		title.text = "编辑卡组（联机）"
+	else:
+		title.text = "普通模式"
 	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
+	# 【2026-09-24 用户要求】原来标题下面有一行"难度固定「噩梦」· 当前连胜 N 场 · 最高连胜 M 场 · 输了本轮结束…"
+	#   ⇒ 已删（难度看下面的"AI 难度：噩梦（天梯固定）"那一行就够，连胜看「对战统计」）。
 
 	# 2) 英雄池：固定 7 列放大卡面，放入滚动容器（桌面滚轮 / 安卓触摸滑动），占弹性空间
 	#    池上方一行 = 筛选按钮 + 结果计数（筛选只影响显示，不影响已选卡组）
@@ -153,6 +160,7 @@ func _build() -> void:
 	_filter_btn.add_theme_font_size_override("font_size", 16)
 	_filter_btn.pressed.connect(_open_filter)
 	filter_row.add_child(_filter_btn)
+	UiDice.detach(_filter_btn)   # 【2026-09-25 用户要求】筛选按钮不要悬浮骰子
 	_filter_info = Label.new()
 	_filter_info.add_theme_font_size_override("font_size", 14)
 	_filter_info.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
@@ -232,7 +240,7 @@ func _build() -> void:
 	_deck_host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_deck_host)
 
-	# 4) AI 难度 与 随机派遣 并列一排
+	# 4) AI 难度（下拉框；【2026-09-25 用户要求】骰子在下拉框上一律不挂，见 `autoload/UiDice.gd`）
 	var option_row := HBoxContainer.new()
 	option_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	option_row.add_theme_constant_override("separation", 12)
@@ -242,30 +250,26 @@ func _build() -> void:
 	diff_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	diff_box.add_theme_constant_override("separation", 0)
 	option_row.add_child(diff_box)
-	var diff_label := Label.new()
-	diff_label.text = "AI 难度"
-	diff_label.add_theme_font_size_override("font_size", 13)
-	diff_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	diff_box.add_child(diff_label)
-	var diff := OptionButton.new()
-	diff.add_item("简单")
-	diff.add_item("普通")
-	diff.add_item("困难")
-	diff.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练权重（**英雄特化段也在同一份权重文件里**，见 src/Battle.gd）
-	diff.select(GameState.ai_difficulty)
-	diff.custom_minimum_size = Vector2(0, 36)
-	diff.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	diff.item_selected.connect(func(i: int): GameState.ai_difficulty = i)
-	diff_box.add_child(diff)
-
-	# 随机派遣
-	var rand_btn := Button.new()
-	rand_btn.text = "随机派遣"
-	rand_btn.add_theme_font_size_override("font_size", 15)
-	rand_btn.custom_minimum_size = Vector2(150, 36)
-	rand_btn.pressed.connect(_on_random)
-	rand_btn.size_flags_vertical = Control.SIZE_SHRINK_END
-	option_row.add_child(rand_btn)
+	# 【天梯】难度锁死噩梦：**下拉框照样建**，但天梯时隐藏它、只留一行"AI 难度：噩梦（天梯固定）"。
+	#   ⚠️ 不能在 `_build()` 里按当前模式决定建不建 —— 选人页整页只建一次（`_build()` 在 _ready），
+	#   先玩过普通模式再进天梯就会一直带着下拉框（用户实测报的就是这个）。
+	#   口径统一由 `_refresh_team_diff_row()` 每次进页刷新。
+	_diff_label = Label.new()
+	_diff_label.text = "AI 难度"
+	_diff_label.add_theme_font_size_override("font_size", 13)
+	_diff_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+	diff_box.add_child(_diff_label)
+	_diff_opt = OptionButton.new()
+	_diff_opt.add_item("简单")
+	_diff_opt.add_item("普通")
+	_diff_opt.add_item("困难")
+	_diff_opt.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练权重（**英雄特化段也在同一份权重文件里**，见 src/Battle.gd）
+	_diff_opt.select(GameState.ai_difficulty)
+	_diff_opt.custom_minimum_size = Vector2(0, 36)
+	_diff_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_diff_opt.item_selected.connect(func(i: int): GameState.ai_difficulty = i)
+	diff_box.add_child(_diff_opt)
+	_refresh_team_diff_row()
 
 	# 5) 开始对战（联机大厅编辑模式 = "完成编辑"）
 	_start_btn = Button.new()
@@ -353,7 +357,6 @@ func _build_main_menu() -> void:
 		b.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		b.pressed.connect(cb)
 		vbox.add_child(b)
-		_attach_hover_dice(b)
 	add_mode_btn.call("单机模式", _ask_single_mode)
 	add_mode_btn.call("联机模式", _go_net)
 	add_mode_btn.call("自由部署（测试）", _go_test_deploy)
@@ -362,12 +365,11 @@ func _build_main_menu() -> void:
 	add_mode_btn.call("复制诊断信息", _copy_diagnostics)
 	var quit_btn := Button.new()
 	quit_btn.text = "退出游戏"
-	quit_btn.add_theme_font_size_override("font_size", 18)
+	quit_btn.add_theme_font_size_override("font_size", 22)
 	quit_btn.custom_minimum_size = Vector2(MENU_BTN_W, 46)
 	quit_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	quit_btn.pressed.connect(func(): get_tree().quit())
 	vbox.add_child(quit_btn)
-	_attach_hover_dice(quit_btn)
 	_main_msg = Label.new()
 	_main_msg.add_theme_font_size_override("font_size", 14)
 	_main_msg.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
@@ -393,40 +395,6 @@ func _build_main_menu() -> void:
 	qq.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_main_view.add_child(qq)
 
-# 悬浮骰子：鼠标移到按钮上时，在按钮**前部（左侧）**淡入一颗六点骰子（纯装饰，不接收鼠标）
-const HOVER_DICE_PATH := "res://theme/dice_6.png"
-const DICE_INSET_X := 14.0   # 骰子距按钮左边缘的像素（= 牌子边框那一圈，不会压到中间的字）
-var _dice_tex: Texture2D = null
-
-func _attach_hover_dice(btn: Button) -> void:
-	if _dice_tex == null and ResourceLoader.exists(HOVER_DICE_PATH):
-		_dice_tex = load(HOVER_DICE_PATH) as Texture2D
-	if _dice_tex == null:
-		return   # 缺图：整段效果跳过，按钮本身不受影响
-	var dice := TextureRect.new()
-	dice.texture = _dice_tex
-	dice.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	dice.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	dice.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不能吃掉按钮的悬浮/点击
-	dice.modulate.a = 0.0
-	dice.visible = false
-	btn.add_child(dice)
-	var place := func() -> void:
-		var d := clampf(btn.size.y - 22.0, 18.0, 36.0)
-		dice.size = Vector2(d, d)
-		dice.position = Vector2(DICE_INSET_X, (btn.size.y - d) * 0.5)
-	btn.resized.connect(place)
-	place.call()
-	btn.mouse_entered.connect(func():
-		dice.visible = true
-		var tw := dice.create_tween()
-		tw.tween_property(dice, "modulate:a", 1.0, 0.12))
-	btn.mouse_exited.connect(func():
-		if not is_instance_valid(dice):
-			return
-		var tw := dice.create_tween()
-		tw.tween_property(dice, "modulate:a", 0.0, 0.12)
-		tw.tween_callback(func(): dice.visible = false))
 
 func _show_main_menu() -> void:
 	_main_view.visible = true
@@ -437,12 +405,31 @@ func _show_main_menu() -> void:
 func _show_team_view() -> void:
 	_main_view.visible = false
 	_team_view.visible = true
+	_refresh_team_diff_row()   # 【天梯】每次进页都刷难度行（锁死噩梦 / 普通模式恢复正常下拉）
 	_deck_current_slot = GameState.last_deck_slot
 	if _selected.size() == 0:
 		_load_deck(_deck_current_slot)   # 进入自动载入上次编辑的卡组（含空槽提示）
 	else:
 		_update_ui()
 	_refresh_deck_slots()
+
+# 【天梯】难度行口径（**每次进选人页刷一次**）：
+#   · 天梯局 ⇒ 难度锁死噩梦：隐藏下拉，只留一行"AI 难度：噩梦（天梯固定）"，并把 GameState 也设成噩梦
+#   · 其它模式 ⇒ 显示下拉，并把选中项同步成当前的 `GameState.ai_difficulty`
+#     （上局若是天梯，这个值会是噩梦 ⇒ 不刷新的话界面上会显示"普通"但实际打噩梦）
+func _refresh_team_diff_row() -> void:
+	if _diff_label == null or _diff_opt == null:
+		return
+	if GameState.ladder_mode != "":
+		GameState.ai_difficulty = LadderStore.LOCKED_DIFFICULTY
+		_diff_label.text = "AI 难度：噩梦（天梯固定）"
+		_diff_label.add_theme_color_override("font_color", Color(1, 0.82, 0.55))
+		_diff_opt.visible = false
+	else:
+		_diff_label.text = "AI 难度"
+		_diff_label.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+		_diff_opt.visible = true
+		_diff_opt.select(GameState.ai_difficulty)
 
 var _hex_pool_size := Vector2.ZERO
 var _pool_scroll: ScrollContainer = null   # 英雄卡池滚动容器（纵向原生滚动）
@@ -754,19 +741,6 @@ func _refresh_banner() -> void:
 	if _detail_label != null and is_instance_valid(_detail_label):
 		_detail_label.text = ""
 
-func _on_random() -> void:
-	_selected = _random_full_deck()
-	_update_ui()
-
-# 随机挑一整队 PICK_COUNT 名不重复英雄（随机派遣用）
-func _random_full_deck() -> Array[String]:
-	var pool: Array = DataRegistry.heroes.keys()
-	pool.shuffle()
-	var out: Array[String] = []
-	for i in PICK_COUNT:
-		out.append(pool[i])
-	return out
-
 func _on_start() -> void:
 	# 新流程：入场前不再锁定队伍——进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）。
 	# 编辑页仍可编辑英雄（改动自动保存到卡组槽），场内只选已保存的卡组。
@@ -775,13 +749,15 @@ func _on_start() -> void:
 	GameState.no_death_limit = false   # 正式模式用 3 人判负规则
 	GameState.dual_control = false
 	GameState.arena_mode = false
+	if GameState.ladder_mode != "":
+		GameState.ai_difficulty = LadderStore.LOCKED_DIFFICULTY   # 【天梯】难度锁死噩梦（下拉已隐藏）
 	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
 # 开始对战但人数不足：弹框说明（不自动随机补足）
 func _show_need_more_dialog() -> void:
 	var d := AcceptDialog.new()
 	d.title = "阵容不足"
-	d.dialog_text = "至少需要 %d 名英雄才能开始对战（当前 %d 名）。\n请回到卡池继续挑选，或点「随机派遣」。" % [MIN_PICK, _selected.size()]
+	d.dialog_text = "至少需要 %d 名英雄才能开始对战（当前 %d 名）。\n请回到卡池继续挑选。" % [MIN_PICK, _selected.size()]
 	d.ok_button_text = "知道了"
 	d.confirmed.connect(d.queue_free)
 	add_child(d)
@@ -792,7 +768,7 @@ func _hero_strength(id: String) -> float:
 	# 单体评分唯一实现在 DataRegistry.hero_strength()（避免两处公式漂移）
 	return DataRegistry.hero_strength(id)
 
-# 两英雄之间的协同分（取自共享知识库 DataRegistry.SYNERGY）
+# 两英雄之间的协同分（唯一实现 = DataRegistry.synergy_bonus）
 func _synergy_bonus(a: String, b: String) -> float:
 	return DataRegistry.synergy_bonus(a, b)
 
@@ -902,12 +878,17 @@ func _build_deck_preview(ids: Array) -> void:
 		_deck_host.add_child(card)
 
 func _go_test_deploy() -> void:
+	GameState.ladder_mode = ""   # 离开天梯标记（自由部署是沙箱，不记连胜、不落盘）
 	get_tree().change_scene_to_file("res://scenes/QuickTest.tscn")
 
 # ---- 单机模式入口：把「普通模式 / 竞技场模式」合并成一个按钮，点开再选玩法 ----
 # 两个玩法各自的流程一个字没改，只是入口从"主菜单两个平级按钮"变成"一个按钮 + 弹出选择"：
 #   普通模式 → 原来的 _show_team_view()（编队页）；竞技场模式 → 原来的 _go_arena()（接着弹"选择 AI 难度"）。
 var _single_mode_overlay: Control = null
+# 【天梯】选人页"AI 难度"行：天梯局隐藏下拉、只留一行"噩梦（天梯固定）"。
+#   口径见 `_refresh_team_diff_row()`（**每次进页刷**，不能在建页时按模式决定建不建）。
+var _diff_label: Label = null
+var _diff_opt: OptionButton = null
 
 func _ask_single_mode() -> void:
 	if _single_mode_overlay != null and is_instance_valid(_single_mode_overlay):
@@ -967,6 +948,7 @@ func _ask_single_mode() -> void:
 	help_btn.offset_bottom = 32.0
 	help_btn.pressed.connect(_open_mode_help)
 	head.add_child(help_btn)
+	UiDice.detach(help_btn)   # 【2026-09-25 用户要求】这个"?"也不要悬浮骰子
 	# 每个玩法一个大按钮（介绍文字已删，玩法差异改由右上角「?」里的说明承担）
 	var add := func(txt: String, cb: Callable) -> void:
 		var b := Button.new()
@@ -977,11 +959,64 @@ func _ask_single_mode() -> void:
 		box.add_child(b)
 	add.call("普通模式", _single_mode_normal)
 	add.call("竞技场模式", _single_mode_arena)
+	# 【2026-09-24 用户要求】天梯入口并进这里，而且**再分一级**：
+	#   单机模式 → 普通模式 / 竞技场模式 / **天梯模式** → 天梯普通模式 / 天梯竞技场模式
+	#   （主菜单上那个单独的「天梯模式」按钮已撤；两个天梯变体各存各的进度，见 `LadderStore`）
+	add.call("天梯模式", _ask_ladder_variant)
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)
-	cancel.add_theme_font_size_override("font_size", 18)
+	cancel.add_theme_font_size_override("font_size", 22)
 	cancel.pressed.connect(_close_single_mode)
+	box.add_child(cancel)
+
+# 【天梯】第二级弹框：天梯普通模式 / 天梯竞技场模式（各带自己的进度；两个变体进度互相独立）
+func _ask_ladder_variant() -> void:
+	_close_single_mode()
+	if _ladder_overlay != null and is_instance_valid(_ladder_overlay):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_ladder_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(minf(440.0, vsize.x * 0.8), 0.0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "天梯模式 · 选择玩法"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	# 【2026-09-24 用户要求】原来这里有两行提示（"连胜挑战 · 难度固定噩梦 · 可退出续上" + 两个变体的进度）
+	#   ⇒ 用户要求删掉 ⇒ 弹框只留标题 + 两个玩法按钮 + 返回。
+	#   （进度信息没丢：选人页顶部、续档询问弹框、以及「对战统计」里都还有。）
+	var add := func(txt: String, cb: Callable) -> void:
+		var b := Button.new()
+		b.text = txt
+		b.custom_minimum_size = Vector2(0, 56)
+		b.add_theme_font_size_override("font_size", 22)
+		b.pressed.connect(cb)
+		box.add_child(b)
+	add.call("天梯普通模式", _ladder_pick_normal)
+	add.call("天梯竞技场模式", _ladder_pick_arena)
+	var cancel := Button.new()
+	cancel.text = "返回"
+	cancel.custom_minimum_size = Vector2(0, 48)
+	cancel.add_theme_font_size_override("font_size", 22)
+	cancel.pressed.connect(func(): _close_ladder(); _ask_single_mode())
 	box.add_child(cancel)
 
 func _close_single_mode() -> void:
@@ -991,17 +1026,163 @@ func _close_single_mode() -> void:
 
 func _single_mode_normal() -> void:
 	_close_single_mode()
+	GameState.ladder_mode = ""   # 离开天梯：单机普通模式不是天梯局
 	_show_team_view()
 
 func _single_mode_arena() -> void:
 	_close_single_mode()
+	GameState.ladder_mode = ""   # 离开天梯：单机竞技场模式不是天梯局
 	_go_arena()   # 竞技场：紧接着弹「选择 AI 难度」
+
+# ==================== 【2026-09-24 用户要求·天梯模式】 ====================
+# 天梯 = 打连胜的挑战模式，两个变体（天梯普通 / 天梯竞技场）**玩法与单机的普通/竞技场完全一样**，差别只有：
+#   · 难度**锁死噩梦**（`LadderStore.LOCKED_DIFFICULTY`，选人页不再显示难度下拉）
+#   · 每次回合开始自动落盘（`Battle._ladder_autosave()`）⇒ 退出/崩溃后再进来，从最近一次回合开始继续
+#   · **输一局 = 本次天梯结束**（当前连胜清零、最高连胜保留）；赢一局可在结算面板点「继续挑战」
+#   · 中途回主菜单**不算放弃**（存档留着）——只有输了或明确点"放弃并重新开始"才结束
+var _ladder_overlay: Control = null
+
+func _close_ladder() -> void:
+	if _ladder_overlay != null and is_instance_valid(_ladder_overlay):
+		_ladder_overlay.queue_free()
+	_ladder_overlay = null
+
+func _ladder_pick_normal() -> void:
+	_close_ladder()
+	_ladder_entry(LadderStore.MODE_NORMAL)
+
+func _ladder_pick_arena() -> void:
+	_close_ladder()
+	_ladder_entry(LadderStore.MODE_ARENA)
+
+# 入口分派：**按变体各查各的档**（用户要求两个变体状态分开）⇒ 只有"这个变体自己有存档"时才问继续；
+# 另一个变体有存档不影响这里（它的进度原样留着）。
+func _ladder_entry(m: String) -> void:
+	if LadderStore.has_run(m):
+		_ladder_ask_resume(m)
+		return
+	_ladder_go(m, true)
+
+func _ladder_ask_resume(m: String) -> void:
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_ladder_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(minf(440.0, vsize.x * 0.8), 0.0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "继续上次的天梯？"
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	# 【2026-09-24 用户要求】原来标题下面还有一行小字（"天梯普通模式 · 第 N 局 · 当前连胜 M" +
+	#   "将从退出前那次回合开始继续 / 上一局已打完"）⇒ 已删；弹框现在只有 标题 + 三个按钮。
+	var go := Button.new()
+	go.text = "继续"
+	go.custom_minimum_size = Vector2(0, 54)
+	go.add_theme_font_size_override("font_size", 22)
+	go.pressed.connect(func(): _close_ladder(); _ladder_go(m, false))
+	box.add_child(go)
+	var fresh := Button.new()
+	fresh.text = "放弃并重新开始"
+	fresh.custom_minimum_size = Vector2(0, 48)
+	fresh.add_theme_font_size_override("font_size", 22)
+	# 【2026-09-24 用户要求】"放弃"要**再确认**一次（会清当前连胜 + 删本轮存档）
+	fresh.pressed.connect(func(): _close_ladder(); _ladder_ask_abandon(m))
+	box.add_child(fresh)
+	var cancel := Button.new()
+	cancel.text = "返回"
+	cancel.custom_minimum_size = Vector2(0, 44)
+	cancel.add_theme_font_size_override("font_size", 22)
+	cancel.pressed.connect(func(): _close_ladder(); _ask_ladder_variant())
+	box.add_child(cancel)
+
+# 【天梯】放弃前再确认（用户要求）：从续档询问里点"放弃并重新开始"、或从暂停界面点"放弃本次天梯"，
+#   两边都要过这一道。确认后才 `_ladder_go(m, true)`（清这个变体的连胜 + 建新一轮）。
+func _ladder_ask_abandon(m: String) -> void:
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_ladder_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.6)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	box.custom_minimum_size = Vector2(minf(440.0, vsize.x * 0.8), 0.0)
+	panel.add_child(box)
+	var title := Label.new()
+	title.text = "确定放弃这次天梯？"
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color(1, 0.6, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+	# ⚠️ 这里**不要**再加说明小字（用户 2026-09-24：「你不要自己乱加这种描述，显得很乱，需要的话我会让你加的」）
+	var yes := Button.new()
+	yes.text = "确定放弃并重新开始"
+	yes.custom_minimum_size = Vector2(0, 54)
+	yes.add_theme_font_size_override("font_size", 20)
+	yes.pressed.connect(func(): _close_ladder(); _ladder_go(m, true))
+	box.add_child(yes)
+	var no := Button.new()
+	no.text = "取消"
+	no.custom_minimum_size = Vector2(0, 48)
+	no.add_theme_font_size_override("font_size", 20)
+	no.pressed.connect(func(): _close_ladder(); _ladder_ask_resume(m))
+	box.add_child(no)
+
+# 真正开一轮天梯：`fresh=true` = 清这个变体的连胜 + 新建存档；false = 沿用这个变体手上这轮
+#   ⚠️ 只动 `m` 这个变体的槽（另一个变体的进度原样保留）
+func _ladder_go(m: String, fresh: bool) -> void:
+	var arena := m == LadderStore.MODE_ARENA
+	if fresh:
+		Stats.reset_streak(Stats.ladder_key(arena))
+		LadderStore.begin(m, [])
+	GameState.ladder_mode = m
+	GameState.ai_difficulty = LadderStore.LOCKED_DIFFICULTY   # 锁死噩梦
+	GameState.no_death_limit = false
+	GameState.dual_control = false
+	GameState.clear_placement()
+	if arena:
+		GameState.arena_mode = true
+		GameState.pick_deck_in_battle = false
+		get_tree().change_scene_to_file("res://scenes/Main.tscn")   # 竞技场：进局后 2 选 1 选人
+		return
+	GameState.arena_mode = false
+	GameState.pick_deck_in_battle = true   # 与普通模式同一条路：进场弹「选择卡组」
+	# 【2026-09-24 用户报「第2局部署界面退出去，再进来是普通模式选人界面」】
+	#   本来这里分"有快照 ⇒ 进战斗 / 没快照 ⇒ 先回选人页组队"，但选人页对天梯是多余的一步
+	#   （天梯的卡组是在战斗内「选择卡组」里选的）⇒ **一律直接进战斗**，由 Battle 分派：
+	#     有回合快照 ⇒ 续档 · 本局已开打（部署/选人阶段退出的）⇒ 直接回到部署 · 都不是 ⇒ 弹「选择卡组」开新一局
+	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
 # ---- 【2026-09-23 用户要求】「单机模式 · 选择玩法」弹框右上角那个"?"的说明窗 ----
 # 为什么单独写一份文本、而不直接复用主菜单的 `RULES_TEXT`：用户要的是**游戏模式说明**
 #   （普通模式 / 竞技场模式各自怎么开局、差在哪），而 `RULES_TEXT` 是全套玩法与关键词。
 #   末尾留一句指路：要看完整规则就去主菜单「游戏说明」。
-const MODE_HELP_TEXT := "《酒馆纷争》游戏模式说明\n\n【普通模式】\n· 进对局前先在编队页组队：从英雄池里选5-8名英雄，\n· 开战后在战斗内弹出「选择卡组」：从 3 个已存卡组里挑一个出战，也可以点「随机英雄」直接随机。\n\n【竞技场模式】\n· 开局进入选人界面：双方各选4次 ；没被选择的英雄进入对方卡组\n· 双方各凑 8 名之后轮流上首发，其余进替补席。\n\n【两种模式共同的规则】\n· 每队 3 名首发上场，其余替补待命；一方累计阵亡 3 名英雄（含替补）即判负。\n·更完整的玩法与关键词说明，见主菜单的「游戏说明」。"
+const MODE_HELP_TEXT := "《酒馆纷争》游戏模式说明\n\n【普通模式】\n· 进对局前先在编队页组队：从英雄池里选5-8名英雄，\n· 开战后在战斗内弹出「选择卡组」：从 3 个已存卡组里挑一个出战，也可以点「随机英雄」直接随机。\n\n【竞技场模式】\n· 开局进入选人界面：双方各选4次 ；没被选择的英雄进入对方卡组\n· 双方各凑 8 名之后轮流上首发，其余进替补席。\n\n【天梯普通模式 / 天梯竞技场模式】\n· 玩法分别与普通模式、竞技场模式完全一样，但目的是**打连胜**，难度固定「噩梦」。\n· 每局开始时自动存档：退出（含崩溃/强杀）后再进来，从**退出前那次回合开始**继续，不会重开对局。\n· 赢一局结算面板可点「继续挑战」，连胜 +1；**输一局本轮就结束**（当前连胜清零，最高连胜保留）。\n· 对局中要退出：点右上角「暂停」→「保存并退出」（进度留着，下次继续）或「放弃本次天梯」（本轮结束）。\n· 两个天梯各自独立计进度：可以同时各存一轮，互不影响。\n\n【两种模式共同的规则】\n· 每队 3 名首发上场，其余替补待命；一方累计阵亡 3 名英雄（含替补）即判负。\n·更完整的玩法与关键词说明，见主菜单的「游戏说明」。"
 
 var _mode_help_overlay: Control = null
 
@@ -1108,7 +1289,7 @@ func _ask_arena_difficulty() -> void:
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)
-	cancel.add_theme_font_size_override("font_size", 18)
+	cancel.add_theme_font_size_override("font_size", 22)
 	cancel.pressed.connect(func():
 		if _arena_dif_overlay != null:
 			_arena_dif_overlay.queue_free()
@@ -1129,6 +1310,7 @@ func _start_arena(dif: int) -> void:
 # 联机对战：进入联机大厅（开房/加入）
 func _go_net() -> void:
 	NetBus.stop()
+	GameState.ladder_mode = ""   # 离开天梯标记（联机局不是天梯局；天梯存档留着，下次进来还能继续）
 	GameState.reset_online()   # 进入大厅前清干净上次联机残留（连接/标志/卡组）
 	get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
 
@@ -1209,17 +1391,44 @@ func _open_stats() -> void:
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
-	# 表头 + 四行数据（模式 / 胜场 / 败场 / 胜率）
+	# 表头 + 六行数据（模式 / 胜场 / 败场 / 胜率 / 最高连胜 / 当前连胜）
+	# 【2026-09-24 用户要求·天梯模式】后两列只有天梯两项有值，其它模式显示"—"。
+	# 【2026-09-25 用户报「对战统计的框超出画面了」】列宽改成**按屏幕可用宽度收缩**：
+	#   理想列宽合计 660 ＋ 5 道间隔 80 ＋ 面板内边距 40 = **780px**，而本作视口只有 **720** 宽
+	#   ⇒ 面板即使被下面那句 `clampf` 夹到 680，**内容的最小宽度仍然顶在那里**（Control 的 `size`
+	#   不会小于 `combined_minimum_size`）⇒ 实机就是左右各被切掉一截。现在**先压列宽**：
+	#   模式列 ≥110（最长档名"单机竞技场模式" 7 字 × 17px ≈ 119 ⇒ 110 起会略挤，故按比例缩时
+	#   它掉得最少）、数字列 ≥46；可用宽度 <560 时列间隔再从 16 收到 10。
+	var h_sep := 16.0
+	var col_w := [220.0, 76.0, 76.0, 96.0, 96.0, 96.0]
+	var floors := [118.0, 46.0, 46.0, 62.0, 62.0, 62.0]
+	var avail_w: float = maxf(vsize.x - 40.0, 320.0)     # 面板外侧左右各留 20px 缝
+	var room: float = avail_w - 40.0 - h_sep * 5.0       # 40 = 主题 sb_panel 的左右 content_margin
+	if room < 560.0:
+		h_sep = 10.0
+		room = avail_w - 40.0 - h_sep * 5.0
+	var ideal_sum := 0.0
+	var floor_sum := 0.0
+	for i in 6:
+		ideal_sum += col_w[i]
+		floor_sum += floors[i]
+	if room < ideal_sum:
+		if room <= floor_sum:
+			col_w = floors.duplicate()                    # 极窄屏：按最低宽度排（宁可略挤也不切）
+		else:
+			var k: float = (room - floor_sum) / (ideal_sum - floor_sum)
+			for i in 6:
+				col_w[i] = floors[i] + (col_w[i] - floors[i]) * k
 	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 16)
+	grid.columns = 6
+	grid.add_theme_constant_override("h_separation", int(h_sep))
 	grid.add_theme_constant_override("v_separation", 10)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vb.add_child(grid)
-	var col_w := [220.0, 76.0, 76.0, 96.0]
-	for i in 4:
+	# ⚠️ `col_w` 已经在上面按屏幕宽度算好了（见那段说明），这里**不要再声明一次**
+	for i in 6:
 		var head := Label.new()
-		head.text = ["模式", "胜场", "败场", "胜率"][i]
+		head.text = ["模式", "胜场", "败场", "胜率", "最高连胜", "当前连胜"][i]
 		head.add_theme_font_size_override("font_size", 15)
 		head.add_theme_color_override("font_color", Color(0.75, 0.8, 0.92))
 		head.custom_minimum_size = Vector2(col_w[i], 0)
@@ -1253,6 +1462,19 @@ func _open_stats() -> void:
 		r_lb.custom_minimum_size = Vector2(col_w[3], 0)
 		r_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		grid.add_child(r_lb)
+		# 【天梯】最高连胜 / 当前连胜（其它模式 = "—"）
+		for ci in [4, 5]:
+			var s_lb := Label.new()
+			var is_ladder: bool = Stats.LADDER_MODES.has(key)
+			if is_ladder:
+				s_lb.text = str(Stats.best_streak(key) if ci == 4 else Stats.current_streak(key))
+			else:
+				s_lb.text = "—"
+			s_lb.add_theme_font_size_override("font_size", 17)
+			s_lb.add_theme_color_override("font_color", Color(1, 0.82, 0.5) if is_ladder else Color(0.6, 0.62, 0.7))
+			s_lb.custom_minimum_size = Vector2(col_w[ci], 0)
+			s_lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			grid.add_child(s_lb)
 	# 总计
 	var total_w := 0
 	var total_l := 0
@@ -1718,6 +1940,7 @@ class HeroFilter extends RefCounted:
 			b.toggled.connect(func(_on: bool): _on_chip(b))
 			flow.add_child(b)
 			_chips.append(b)
+			UiDice.detach(b)   # 【2026-09-25 用户要求】筛选小卡不要悬浮骰子（密集排布，压字）
 
 	# 点弹框外面的遮罩区域也关掉弹框（落在面板上的点击由面板吃掉，不会走到这里）
 	func _on_overlay_input(ev: InputEvent) -> void:

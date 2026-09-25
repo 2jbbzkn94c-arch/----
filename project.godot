@@ -15,7 +15,7 @@ config/version="0.1.0"
 run/main_scene="res://scenes/Menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
-config/version_date="2026-09-24 13:52"
+config/version_date="2026-09-25 10:40"
 
 [autoload]
 
@@ -24,7 +24,9 @@ GameState="*res://autoload/GameState.gd"
 AudioManager="*res://autoload/AudioManager.gd"
 DeckStore="*res://autoload/DeckStore.gd"
 Stats="*res://autoload/Stats.gd"
+LadderStore="*res://autoload/LadderStore.gd"
 NetBus="*res://autoload/NetBus.gd"
+UiDice="*res://autoload/UiDice.gd"
 
 [display]
 

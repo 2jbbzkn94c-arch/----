@@ -34,6 +34,8 @@ const KEY_VAR := {
 	#   本表要跟着加回，否则 `ablate` 模式无法拆这两键。
 	"RISK_W": "w_risk",
 	"RISK_CORE_POW": "w_risk_core_pow",
+	# 【2026-09-25】⑦ 核心系数的**混合权重**（0 = 纯身价 = 现役；旧键 `RISK_CORE_BY_OUTPUT` 已删）。
+	"RISK_CORE_OUTPUT_W": "w_risk_core_output_w",
 	"INCOMING_POOL_W": "w_incoming_pool",
 	# 【已删 2026-09-20】REPLY_TOPK / REPLY_W（对手最优反击一层）实测无效果（rp4 −0.45 / rp8 +1.74，CI 跨 0）⇒ 连代码删除。
 	"TERMINAL_W": "w_terminal",
@@ -50,9 +52,11 @@ const KEY_VAR := {
 	#   噩梦档 `hero_46` 段是空的 ⇒ 兜底值就是实际生效值 ✓（要测"打开有没有用"正是这一条）。
 	"HEAL_CREDIT_W": "w_heal_credit",
 	"POSSESS_TARGET_W": "w_possess_target",
+	# 【2026-09-25·方案 C】⑬b 附体电池（与 ⑬ 同款：真实读取走 `_wh(宿魂段)`，这里注入扁平兜底值）
+	"POSSESS_BATTERY_W": "w_possess_battery",
 	# ============ 【2026-09-24 补齐】2026-09-21 之后新增 / 历史上漏收的键 ============
-	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 49 个）；`INT_KEYS` 恒等于其中
-	#   `int(v)` 转型的那 18 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`
+	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 50 个）；`INT_KEYS` 恒等于其中
+	#   `int(v)` 转型的那 21 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`
 	#   **静默测不到那个键** —— 看起来像"这个键没用"，其实是探针根本没动它。
 	# ⚠️ **英雄段覆盖（`_wh()`）**：下面这些都**按英雄段覆盖**读 ——
 	#   `POISON_TICK_VALUE` / `POISON_APPLY_W` / `SOLID_HOLD_W` / `SILENCE_VALUE_W` /
@@ -98,15 +102,23 @@ const KEY_VAR := {
 	"TWO_PHASE_LAYOUTS": "w_tp_layouts",
 	# 【2026-09-24·用户「做L1」】阶段 2 的"同末态去重"（1 = 开；见 `src/BattleAI.gd` 的 `const TWO_PHASE_P2_DEDUP`）。
 	"TWO_PHASE_P2_DEDUP": "w_tp_p2_dedup",
+	# 【2026-09-25·用户「死灵法师在场的时候还是会超时」】「挨打合计」同局面记忆化（1 = 开；见 `src/BattleAI.gd` 的 `const INC_MEMO`）。
+	"INC_MEMO": "w_inc_memo",
+	# 【2026-09-25·用户「死灵法师在场的时候还是会超时」】阶段 2 内层宽度（0 = 沿用 beam/8；见 src/BattleAI.gd 的 const TWO_PHASE_INNER）。
+	"TWO_PHASE_INNER": "w_tp_inner",
+	# 【2026-09-25·用户「你都试试，比比哪个效果好」】漏斗名额的"同轮廓限席"（0 = 关；见 src/BattleAI.gd 的 const FUNNEL_DIVERSITY）。
+	"FUNNEL_DIVERSITY": "w_funnel_div",
+	# 【2026-09-25·用户「长剑是步臭棋」】搜索后的"逐单位复查"（0 = 关 · 1 = 一趟 · 2 = 两趟；见 src/BattleAI.gd 的 const TWO_PHASE_POLISH）。
+	"TWO_PHASE_POLISH": "w_tp_polish",
 	# 【2026-09-24·用户拍板「改」】召唤物的阶段 1 候选集（1 = 只走"能打到人的格"；见 `src/BattleAI.gd` 的
 	#   `const SUMMON_SLOT_ONLY` 处三处铁证：骷髅兵本方回合结束即消散 ⇒ 不能借此攻击的落点价值恒 0）。
 	"SUMMON_SLOT_ONLY": "w_summon_slot_only",
 }
 
-# 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 14 个**键（数量不对 = 有键漏了或类型变了）。
+# 【2026-09-24 补齐】= `set_weights` 里 `int(v)` 转型的**全部 21 个**键（数量不对 = 有键漏了或类型变了）。
 const INT_KEYS := ["BEAM", "TIME_BUDGET_MS", "MOVE_ACCEPT_DAMAGE", "MOVE_ACCEPT_POOL", "SUB_JOIN_RULE", "WEAK_MODE", "WEAK_SEED",
 	"NO_LOSS_FILTER", "TIEBREAK_MODE", "POISON_MAX_TICKS", "STAY_OPTION", "FORM_MERGE_MODE", "SEARCH_MODE",
-	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "TWO_PHASE_LAYOUTS", "TWO_PHASE_P2_DEDUP", "SUMMON_SLOT_ONLY"]
+	"TWO_PHASE_P1_BEAM", "TWO_PHASE_DEDUP", "TWO_PHASE_LAYOUTS", "TWO_PHASE_P2_DEDUP", "SUMMON_SLOT_ONLY", "INC_MEMO", "TWO_PHASE_INNER", "FUNNEL_DIVERSITY", "TWO_PHASE_POLISH"]
 const FACTORS := [0.5, 2.0]
 ## 宽程阶梯（含 0 = 归零消融）：用来区分"局部不敏感"的两种原因——
 ##   · **不重要的项**：整条曲线都平（任何值都不改出招）

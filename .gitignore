@@ -55,3 +55,8 @@ RL/ai/_prev_*.gd.uid
 RL/probe/_*.txt
 RL/probe/_*.log
 
+
+# session scratch / AI tooling temp (not part of the project)
+/.dsh/tmp/
+# reference screenshots kept for debugging (not part of the project)
+/PICTURE/

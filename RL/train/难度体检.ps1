@@ -68,7 +68,7 @@ param(
     #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
     #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
     [string]$Baseline = 'RL\weights\噩梦_基线.json',
-    [ValidateSet('tiers', 'tiers2', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel', 'p2dd')][string]$Mode = 'tiers'   # tiers = 难度四档；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'tiers3', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel', 'p2dd', 'tpinner', 'fundiv', 'core', 'combo', 'polish')][string]$Mode = 'tiers'   # tiers = 难度四档（**旧口径**：低档=裸默认+概率弱化）；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；**tiers3 = 真·难度梯度：档位互相打（简单→普通 · 普通→困难 · 困难→噩梦 · 简单→噩梦 · 普通→噩梦：A = 该组 base 那一档、B = 该组 checkpoint 那一档，2026-09-25 用户口径「前三个难度建立在噩梦基础上」+「以噩梦为唯一对比项」）**；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**core = ⑦核心系数**混合权重** RISK_CORE_OUTPUT_W（cw0 纯身价 ／ cw25 ／ cw5，2026-09-25 用户口径「让低血量的延缓死亡时间，增加输出机会」。二选一那版 RISK_CORE_BY_OUTPUT 已删）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -391,6 +391,22 @@ if ($Mode -eq 'shield') {
     $GROUPS = @(@{ slug = 'SH'; base = 'RL\weights\噩梦.json'; tiers = @($SH_ARMS.Keys) })
 }
 
+# ---- 模式 C（`core`）：⑦核心风险"核心系数**混合权重**"`RISK_CORE_OUTPUT_W` 的**棋力**批（2026-09-25）----
+# 为什么要跑：用户口径「让低血量的延缓死亡时间，增加输出机会」—— ⑦ 现在按**身价**挑核心，而身价走面板值、
+#   含 `max_hp × 0.45` ⇒ 实测倒挂（塔盾 1 攻/40 血 20.10 > 白游侠 2 攻/19 血 18.85）⇒ ⑦ 更护着打不出伤害的肉。
+# 核心系数 = `身价^(1−w) × 输出潜力^w`：`cw0` = 现役（纯身价，对照）· `cw25` = 混一点 · `cw5` = 两者相乘开方。
+# ⚠️ 先试过**二选一**（旧键 `RISK_CORE_BY_OUTPUT` 硬切纯输出潜力）：`c1 − c0 = −3.13 [−7.26,+1.01]`
+#   （4 组里 3 组偏负、打出/局还降 1.3）⇒ 那个键**已删**，登记见 `1_通用策略.md` §四 已删表 / §五 T34。
+# 读法：配对 Δpts(臂 − cw0) + 生产侧胜率 + 挨打/打出/回合；探针 `RL/probe/核心保谁自检.gd` 看"该保谁"的排序变化。
+$CORE_ARMS = [ordered]@{ 'cw0' = 0.0; 'cw25' = 0.25; 'cw5' = 0.5 }
+if ($Mode -eq 'core') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $CORE_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ RISK_CORE_OUTPUT_W = [double]$CORE_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'CO'; base = 'RL\weights\噩梦.json'; tiers = @($CORE_ARMS.Keys) })
+}
+
 # ---- 模式 N（`dedup`）：阶段 1「同末态去重」`TWO_PHASE_DEDUP` 的**棋力**批（T23）----
 # 为什么要跑：去重在机制上"只省算、不改漏斗 top-16"，但那条推理有两个理论边界（同分并列的取舍、
 #   T4 那个 `_evaluate` 共享缓存的顺序依赖）⇒ 要坐实"不降水平"必须跑整局。d1 = 现役（对照）。
@@ -417,6 +433,98 @@ if ($Mode -eq 'bpool') {
         $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ MOVE_ACCEPT_POOL = [int]$BP_ARMS[$k] } }
     }
     $GROUPS = @(@{ slug = 'BP'; base = 'RL\weights\噩梦.json'; tiers = @($BP_ARMS.Keys) })
+}
+
+# ---- 模式 U（`fundiv`）：**漏斗名额按"战术轮廓"多样化** `FUNNEL_DIVERSITY`（2026-09-25·用户「还有什么能减少路径的」→「你都试试，比比哪个效果好」）----
+# 背景：漏斗（`TWO_PHASE_LAYOUTS`）只按代理分取前 N 名，而「83% 的局面分差 < 0.5」⇒ 前 N 名里常常一半是
+#   **同一个战术想法的不同写法**（阶段 2 排出来的计划也一样）⇒ 名额的信息量被浪费。本键 = 给"同轮廓"限席
+#   （轮廓 = 我方每个单位够得到的敌人），送进阶段 2 的**套数不变**（成本不变），只是这 N 套里"不同想法"更多。
+# 四臂（都跑在新基线 `噩梦_基线_0925.json` 上，漏斗 N 用 `TWO_PHASE_LAYOUTS` 注入）：
+#   · `p16` = N16 + 限席关（**今天的生产行为** = 对照）
+#   · `p8`  = N8 + 限席关（**单纯把漏斗砍一半**，量"少走路掉不掉水平"）
+#   · `d8`  = N8 + 限席 2（**同样 8 个名额，但按不同想法分配**）
+#   · `d8s1`= N8 + 限席 1（把"每种想法只留一套"压到底，**探针里唯一真改写出招的那档**）
+# 读法：`p8 − p16` = 砍路的代价；`d8 − p8` = 同样名额下"选法改好"值多少；`d8 − p16` = 少走路还能不能持平。
+# ⚠️ 2026-09-25 03:1x 探针先跑（`RL/probe/路径分账自检.gd` · 4 局面 · 见 T36）：**限席 2 在 4/4 局面上一次都没触发**
+#   （`d8` 与 `p8` 出招指纹/终局分数/`leaves` 逐字相同）⇒ 追加 `d8s1` = **限席 1**（真会改写漏斗内容的那一档）。
+$FD_ARMS = [ordered]@{
+    'p16' = @{ TWO_PHASE_LAYOUTS = 16; FUNNEL_DIVERSITY = 0 }
+    'p8'  = @{ TWO_PHASE_LAYOUTS = 8;  FUNNEL_DIVERSITY = 0 }
+    'd8'  = @{ TWO_PHASE_LAYOUTS = 8;  FUNNEL_DIVERSITY = 2 }
+    'd8s1' = @{ TWO_PHASE_LAYOUTS = 8; FUNNEL_DIVERSITY = 1 }
+}
+if ($Mode -eq 'fundiv') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $FD_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = $FD_ARMS[$k] }
+    }
+    $GROUPS = @(@{ slug = 'FD'; base = 'RL\weights\噩梦.json'; tiers = @($FD_ARMS.Keys) })
+}
+
+# ---- 模式 W（`polish`）：**搜索后的"逐单位复查"** `TWO_PHASE_POLISH`（2026-09-25·用户「长剑是步臭棋…他本来可以打 6 伤」）----
+# 病灶：两阶段搜索挑的是"整套阵型"，阶段 1 的**代理分**把"某单位换一手"的那套挤出漏斗（线上 N = 8）
+#   ⇒ 那一手永远看不到（引擎自己的诊断叫「疑似被搜索漏掉（剪枝）」）。用户那局思考 2.0s / 上限 40s（时间没花完）。
+# 三臂（都按**今天生产**的口径注入：N = 8 + INNER = 16；底座仍走 `-Baseline` 的 0925 快照）：
+#   · `p0`  = 复查关（**对照 = 今天生产**）
+#   · pl1 = 复查一趟 · pl2 = 复查最多两趟（不再改进就停）
+# 读法：`pl1 − p0` / `pl2 − p0` = 复查值多少棋力、多花多少墙钟；实机抬头行会打「复查（逐单位改良）：换 N 手 / +X.X 分 / Yms」。
+$PL_ARMS = [ordered]@{
+    'p0'  = @{ TWO_PHASE_LAYOUTS = 8; TWO_PHASE_INNER = 16; TWO_PHASE_POLISH = 0 }
+    'pl1' = @{ TWO_PHASE_LAYOUTS = 8; TWO_PHASE_INNER = 16; TWO_PHASE_POLISH = 1 }
+    'pl2' = @{ TWO_PHASE_LAYOUTS = 8; TWO_PHASE_INNER = 16; TWO_PHASE_POLISH = 2 }
+}
+if ($Mode -eq 'polish') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $PL_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = $PL_ARMS[$k] }
+    }
+    $GROUPS = @(@{ slug = 'PL'; base = 'RL\weights\噩梦.json'; tiers = @($PL_ARMS.Keys) })
+}
+
+# ---- 模式 V（`combo`）：**两项算力键"联合落地"批**（2026-09-25·用户「3跑一个」）----
+# 背景：(a) 内层宽度 `TWO_PHASE_INNER` 25→16（T35：48 配对 +0.54 [−0.62,+1.70]、墙钟 −5~11%）与
+#   (b) 漏斗宽度 `TWO_PHASE_LAYOUTS` 16→8（T36：48 配对 +1.96 [−0.38,+4.30]、墙钟 −18%、召唤 −21%）
+#   **各自都没量到棋力损失**。本批 = 同一条协议上把两者**一起落**，量：
+#   · `p16`   = N16 + INNER25 = **今天生产**（对照 = 噪音对照）
+#   · `p8`    = N8  + INNER25（(b) 那一档，核对本批与 T36 对得上）
+#   · `i16`   = N16 + INNER16（(a) 那一档）
+#   · `c8i16` = N8  + INNER16 = **联合落地候选**（要看的就这一格）
+# 读法：`c8i16 − p16` = 联合能省多少、掉不掉水平；`c8i16 − p8` / `c8i16 − i16` = 交互项（两项可否相加）。
+# ⚠️ 两侧都用基线 `噩梦_基线_0925.json`（含 P1_BEAM 96 / INNER 25 / P2_DEDUP 1 / SUMMON_SLOT_ONLY 1）
+#   ⇒ `p16` 那一臂 = 基线本身（应当量出 0.00 = 噪音对照）。
+# ⚠️ 本块**必须留在 `if ($Mode -eq …)` 顶层**：第一版插在 fundiv 的 `{ }` 里 ⇒ `-Mode combo` 静默退回默认
+#   tiers（四档批），跑了一分钟才发现。改这一段后务必用 `[Parser]::ParseFile` + 看 `[run] run=… configs=` 复核。
+$CB_ARMS = [ordered]@{
+    'p16'   = @{ TWO_PHASE_LAYOUTS = 16; TWO_PHASE_INNER = 25 }
+    'p8'    = @{ TWO_PHASE_LAYOUTS = 8;  TWO_PHASE_INNER = 25 }
+    'i16'   = @{ TWO_PHASE_LAYOUTS = 16; TWO_PHASE_INNER = 16 }
+    'c8i16' = @{ TWO_PHASE_LAYOUTS = 8;  TWO_PHASE_INNER = 16 }
+}
+
+if ($Mode -eq 'combo') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $CB_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = $CB_ARMS[$k] }
+    }
+    $GROUPS = @(@{ slug = 'CB'; base = 'RL\weights\噩梦.json'; tiers = @($CB_ARMS.Keys) })
+}
+
+# ---- 模式 T（`tpinner`）：**阶段 2 内层宽度** `TWO_PHASE_INNER` 剂量批（2026-09-25·用户「还有什么能减少路径的」→「你都试试」）----
+# 背景：阶段 2 对每套阵型还跑一个"谁打谁"的内层 beam，宽度原来写死 = `beam / 8` ⇒ 线上 `BEAM=400` 时
+#   inner = 50（走查台 200 ⇒ 25），而阶段 2 的评估次数 `leaves` **恒 = 阵型数 × inner**。
+#   2026-09-25 已把 `TWO_PHASE_INNER = 25` 写进生产（探针：召唤局 19.6s → 13.6s、4/4 局面逐位相同）。
+# 本批 = 在**新基线 `噩梦_基线_0925.json`**（= 含 P1_BEAM 96 / INNER 25 / P2_DEDUP 1 / SUMMON_SLOT_ONLY 1
+#   的生产档快照）上继续往下探：
+#   · `t25` = 25（**噪音对照**：与基线同值 ⇒ 应当量出 0.00，用来判本批分辨率）
+#   · `t16` = 16（探针里逐位相同过的档）· `t12` = 12（再往下探底）
+#   ⚠️ 走查台 `beam = 200` 时 `beam/8 = 25` ⇒ 不注入 theta 就是 25，所以 `t25` 只能当对照用。
+$TI_ARMS = [ordered]@{ 't25' = 25; 't16' = 16; 't12' = 12 }
+if ($Mode -eq 'tpinner') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $TI_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ TWO_PHASE_INNER = [int]$TI_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'TI'; base = 'RL\weights\噩梦.json'; tiers = @($TI_ARMS.Keys) })
 }
 
 # ---- 模式 Q（`funnel`）：**阶段 2 漏斗宽度** `TWO_PHASE_LAYOUTS` 剂量批（2026-09-24·用户「你把漏斗调到其他数值，跑一下」）----
@@ -535,6 +643,39 @@ if ($Mode -eq 'tiers2') {
     $GROUPS = $g
 }
 
+# ---- 模式 L（`tiers3`）：「**真·难度梯度**」—— 照实读四份**生产权重文件**（2026-09-25 新口径）----
+# 为什么要新模式：2026-09-25 用户拍板「把前三个难度按照噩梦的基础上修改」+「困难和噩梦的区别就是专属键和概率弱智」
+#   ⇒ 低三档不再是"裸默认 + 概率弱化"，而是由 `RL\train\派生低档权重.ps1` 从 `噩梦.json` **派生**的文件
+#   （通用评分键照抄噩梦 / 不抄算力键 / 不带 hero_XX 英雄段 / 三档之间只差 `WEAK_P`）。
+#   ⇒ 本模式**不做任何 θ 注入**，直接读那几份文件，量"档位打档位"的强度差。
+#   · 每对单独一组（一份 spec 只能有一个 `base_weights`）：**A 方 = 该档自己的文件**（`base_weights`），
+#     **B 方 = 另一档的文件**（`league.checkpoint` + `opp=cand` ⇒ 用 fork 跑，与 A 同码同宽度）
+#     ⇒ 读数的字面意义 = 「**A 打 B**」：A 生产侧胜率 < 50%、pts/game < 0 ⇒ A 更弱。
+#   · 【2026-09-25 用户口径】「也可以用简单打普通，普通打困难，困难打噩梦，这样子也能看出强度梯度」
+#     +「以噩梦难度为唯一对比项」⇒ 默认五对：`简单→普通` · `普通→困难` · `困难→噩梦` ·
+#     `简单→噩梦` · `普通→噩梦`（前三条 = 相邻梯度，后两条 = 都跟噩梦比）。
+#   · ⚠️ 走查台把 `beam` 交给 spec 覆盖（不读文件里的 `BEAM`）⇒ 双方都跑 200；
+#     但 `SEARCH_MODE=2`（两阶段）由文件驱动 ⇒ 带算力键的那几档确实跑两阶段（单格会明显更慢）。
+#   · 判读：相邻三条应出现「A 明显打不过 B」（胜率 < 50%）；三条 vs 噩梦的落差应随档位单调收窄。
+#   · 改完权重文件后想复测梯度，就重跑本模式（Tag 换一个即可）。
+$TIER3_PAIRS = @(
+    @{ a = 'RL\weights\简单.json'; b = 'RL\weights\普通.json';  arm = 'easy_vs_norm'  },
+    @{ a = 'RL\weights\普通.json'; b = 'RL\weights\困难.json';  arm = 'norm_vs_hard'  },
+    @{ a = 'RL\weights\困难.json'; b = 'RL\weights\噩梦.json';  arm = 'hard_vs_nmare' },
+    @{ a = 'RL\weights\简单.json'; b = 'RL\weights\噩梦.json';  arm = 'easy_vs_nmare' },
+    @{ a = 'RL\weights\普通.json'; b = 'RL\weights\噩梦.json';  arm = 'norm_vs_nmare' }
+)
+if ($Mode -eq 'tiers3') {
+    $TIERS = [ordered]@{}
+    $g = @(); $gi = 0
+    foreach ($p in $TIER3_PAIRS) {
+        $gi++
+        $TIERS[$p.arm] = @{ base = $p.a; beam = 200; theta = @{} }
+        $g += @{ slug = ('D{0}' -f $gi); base = $p.a; opp = $p.b; tiers = @($p.arm) }
+    }
+    $GROUPS = $g
+}
+
 function New-LadderSpec([string]$deck, [string]$deckSlug, [string]$groupBase, [string[]]$groupTiers) {
     # 【2026-09-24】镜像噩梦协议：两侧同码、同底座、同牌组、同宽度 ⇒ 唯一差别 = config 里的 θ。
     #   `$OppNm` 打开时**强制**用 `$Baseline` 当 base（并且与 league.checkpoint 同一份）——
@@ -561,6 +702,16 @@ function New-LadderSpec([string]$deck, [string]$deckSlug, [string]$groupBase, [s
     if ($OppNm) {
         $o['league'] = @{ self_play_fraction = 1.0; checkpoint = $Baseline; base_opp_beam = $OPP_BEAM }
     }
+    # 【2026-09-25 用户拍板】`tiers3`（真·难度梯度）的**对比项 = 另一档的权重文件**（默认噩梦）：
+    #   用户口径：「也可以用简单打普通，普通打困难，困难打噩梦，这样子也能看出强度梯度」+
+    #   「以噩梦难度为唯一对比项」⇒ 每个 group 自带一个 `opp` 文件：A 方 = `base_weights`（该档自己），
+    #   B 方 = fork + `opp` 文件（`$script:OppFile`）⇒ Δ/胜负的字面意义 = 「A 打 B」。
+    #   为什么不用 `opp=base` 的陪练副本：那条路默认**不传 B 方权重**（实测 `nB=0` = 零键 = 旧困难口径），
+    #   而用户要的是"档位之间互相打"。
+    if ($script:OppFile) {
+        $o['opponent'] = 'cand'
+        $o['league'] = @{ self_play_fraction = 1.0; checkpoint = $script:OppFile; base_opp_beam = $OPP_BEAM }
+    }
     $base = Get-Content (Join-Path $PSScriptRoot 'spec_nmchk.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $o.seeds.train = @($base.seeds.train)
     $o.seeds.holdout = @($base.seeds.holdout)
@@ -582,6 +733,8 @@ foreach ($deck in $Decks) {
     $deckIdx++
     foreach ($grp in $GROUPS) {
         $slug = ('L{0}{1}' -f $deckIdx, $grp.slug)
+        # 【2026-09-25】`tiers3` 的每组自带对手文件（`$grp.opp`）：A = 该组 base、B = 这个文件。
+        $script:OppFile = $(if ($grp.ContainsKey('opp')) { [string]$grp.opp } else { '' })
         $spec = New-LadderSpec $deck $slug $grp.base $grp.tiers
         $run = ('ladder6_{0}_{1}' -f $Tag, $slug)
         & $train -Task run -Spec $spec -Run $run -SeedSet train -SeedStart $SeedStart -SeedBlock $Seeds -FixedDecks -Workers $Workers -TimeoutSec $TimeoutSec | Out-Null
@@ -609,6 +762,21 @@ if ($Mode -eq 'smode') {
     Write-Host '[档位·smode] sm0 = SEARCH_MODE 0（旧口径，对照）／ sm2 = SEARCH_MODE 2（现役两阶段联合搜索）；两臂同一份 `噩梦.json`、对手恒为困难陪练副本'
     Write-Host '[档位·smode] ⚠️ 下表那一列 `Δpts_vs_困难` 在本模式读作 **Δpts(sm2 − sm0)**（对照臂 = sm0，配对口径同其它模式）'
 }
+if ($Mode -eq 'tiers3') {
+    Write-Host '[档位·tiers3] **真·难度梯度（2026-09-25 新口径）**：照实读生产权重文件，**档位之间互相打**（A = base_weights 那一档，B = 该组的 `league.checkpoint` 那一档，两侧同码同宽度 200）'
+    Write-Host '[档位·tiers3] 五对 = 简单→普通 · 普通→困难 · 困难→噩梦（相邻三条，看梯度）· 简单→噩梦 · 普通→噩梦（都跟噩梦比）；三份低档由 `RL\train\派生低档权重.ps1` 从 噩梦.json 派生（通用评分键照抄 / 简单普通不写算力键 / 困难两阶段+400+25s / 无 hero_XX 段 / 只差 WEAK_P=0.70·0.40·0.20）'
+    Write-Host '[档位·tiers3] ⚠️ 本模式下表那一列 `Δpts_vs_困难` **读不了**（每组只有一条臂、且对手各不相同）⇒ 看 **生产侧胜率**（< 50% = A 打不过 B）与 `pts/game` 的符号；走查台把 beam 交给 spec（200）⇒ 文件里的 BEAM=400 本批量不到，但 SEARCH_MODE=2 由文件驱动、照跑（带算力键的格子会明显更慢）'
+    foreach ($p in $TIER3_PAIRS) {
+        $line = '[档位·tiers3] ' + $p.arm + ' ： A = ' + $p.a
+        foreach ($f in @($p.a, $p.b)) {
+            $full = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) $f
+            $line += $(if (Test-Path $full) { '' } else { ' ⚠️缺文件' })
+        }
+        $shaA = (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) $p.a) -Algorithm SHA256).Hash.Substring(0,12)
+        $shaB = (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) $p.b) -Algorithm SHA256).Hash.Substring(0,12)
+        Write-Host ($line + '（sha12 ' + $shaA + '） 打 B = ' + $p.b + '（sha12 ' + $shaB + '）')
+    }
+}
 if ($Mode -eq 'tiers2') {
     Write-Host '[档位·tiers2] hard = 零键基线（= 困难口径，对照）／ nmare = 噩梦.json（通用键 + hero_XX 英雄段，同一份文件）；对手恒为困难陪练副本'
     Write-Host ('[档位·tiers2] 候选宽度：hard = 200 ／ nmare = {0}（`-NmBeam`，0 = 默认 200；对手 beam 恒 200）' -f $(if ($NmBeam -gt 0) { $NmBeam } else { 200 }))
@@ -631,6 +799,12 @@ if ($Mode -eq 'poison') {
 if ($Mode -eq 'shield') {
     Write-Host '[档位·shield] s0 = 关 ／ s2 = 2.0 ／ s4 = 4.0（**现役，对照臂**）／ s8 = 8.0；四臂同一份 `噩梦.json`、对手恒为困难陪练副本'
     Write-Host '[档位·shield] ⚠️ 下表 `Δpts_vs_困难` 读作 **Δpts(臂 − 4.0)**；另请看日志里 ㉔破盾 非零的出现率（"poke 拆盾"意图）'
+}
+if ($Mode -eq 'core') {
+    Write-Host '[档位·core] cw0 = 纯身价（**现役，对照臂**）／ cw25 = 身价^0.75 × 输出^0.25 ／ cw5 = 身价^0.5 × 输出^0.5；三臂同一份 `噩梦.json`、对手恒为困难陪练副本'
+    Write-Host '[档位·core] ⚠️ 旧键 `RISK_CORE_BY_OUTPUT`（硬切纯输出潜力）读数 c1−c0 = −3.13 [−7.26,+1.01] ⇒ 已删，改成本键的**几何混合**'
+    Write-Host ("[基线 sha12] 噩梦.json = {0}（RISK_CORE_OUTPUT_W 的现役值 0 就在这份文件里）" -f `
+        (Get-FileHash (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'RL\weights\噩梦.json') -Algorithm SHA256).Hash.Substring(0,12))
 }
 if ($Mode -eq 'dedup') {
     Write-Host '[档位·dedup] d0 = 关（阶段 1 不去重）／ d1 = 1（**现役，对照臂**）；两臂同一份 `噩梦.json`、对手恒为困难陪练副本'
@@ -673,6 +847,12 @@ if ($Mode -eq 'taunt') { $ctl = 't3' }
 if ($Mode -eq 'p1beam') { $ctl = 'b0' }
 # 【2026-09-23 深夜】`poison` 模式五臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役口径 `p25t4`**（Δpts 读作 `臂 − 2.5/4`）。
 if ($Mode -eq 'poison') { $ctl = 'p25t4' }
+# 【2026-09-25】`core` 模式三臂都跑在 `噩梦.json` 上 ⇒ 对照 = **现役值 `cw0`**（Δpts 读作 `臂 − cw0`，
+#   而 `cw0` 那行的 Δpts 恰好 = 0，可当"这批有没有跑歪"的自检行）。
+if ($Mode -eq 'core') { $ctl = 'cw0' }
+# 【2026-09-25】`tiers3`（真·难度梯度）每组一条臂、**对手各不相同** ⇒ 这张表的 `Δpts_vs_困难` 列
+#   **读不了**（没有共同对照臂）；判读看**生产侧胜率**（< 50% = A 打不过 B）与 `pts/game` 的符号。
+if ($Mode -eq 'tiers3') { $ctl = '' }
 # 【2026-09-24】下面六个模式的对照臂 = 各自的**现役值**（Δpts 读作 `臂 − 现役`）。
 if ($Mode -eq 'shield') { $ctl = 's4' }
 if ($Mode -eq 'dedup')  { $ctl = 'd1' }

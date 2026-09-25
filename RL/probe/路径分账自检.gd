@@ -48,6 +48,33 @@ func _run() -> void:
 		#   （预期：计划指纹**逐字相同**、`p2_ms` 与阶段 2 评分次数下降）
 		{ "name": "f16p2d1", "beam": 200, "theta": { "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_P2_DEDUP": 1 } },
 		{ "name": "f32p2d1", "beam": 200, "theta": { "TWO_PHASE_LAYOUTS": 32, "TWO_PHASE_P2_DEDUP": 1 } },
+		# 【2026-09-24 夜·用户「死灵法师在场的时候还是会超时」】**照生产档口径量一遍**：
+		#   `prod`    = beam 400 + P1_BEAM 96 + DEDUP 1 + P2_DEDUP 1 + 漏斗 16（= `噩梦.json` 现在的样子）
+		#   `prodsm1` = 同上 + SUMMON_SLOT_ONLY 1（**唯一差别**：召唤物只枚举"能打到人的落点"+原地）
+		#   ⚠️ 探针不限时 ⇒ 看 `ms` 有没有超过生产的 `TIME_BUDGET_MS = 40000`（超了 = 实机那一回合就是超时）
+		{ "name": "prod", "beam": 400, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16 } },
+		{ "name": "prodsm1", "beam": 400, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1 } },
+		# 【2026-09-25·用户「死灵法师在场的时候还是会超时」】**带 40s 上限的快速口径**：
+		#   不限时的 `prod` 在召唤局上跑满 3000s 都没结束 ⇒ 直接按生产的 `TIME_BUDGET_MS = 40000` 量
+		#   「到点那一刻各阶段走到哪、有没有超时收尾」，几秒~几十秒就出数。
+		{ "name": "prod40", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16 } },
+		{ "name": "prodsm1_40", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1 } },
+		# 【2026-09-25·`INC_MEMO` 判决臂】生产配置（含召唤物剪枝）下，记忆化 0 vs 1：
+		#   预期 `score` / `fp` **逐字相同**（同 sim 同参 ⇒ 同值），`ms` 明显下降。
+		{ "name": "m0", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "INC_MEMO": 0 } },
+		# 【2026-09-25·`TWO_PHASE_INNER` 判决臂】生产配置（BEAM 400 ⇒ 现役 inner = beam/8 = **50**）对比封顶：
+		{ "name": "i50", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 50 } },
+		{ "name": "i25", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		{ "name": "i16", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 16 } },
+		# 【2026-09-25·`FUNNEL_DIVERSITY` 判决臂】p16 = 今天生产 / p8 = 漏斗砍半 / d8 = 同样 8 席但按"战术轮廓"限席
+		{ "name": "p16", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		{ "name": "p8", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 8, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		{ "name": "d8", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 8, "FUNNEL_DIVERSITY": 2, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		# 【2026-09-25·`FUNNEL_DIVERSITY` 第二档】限席 2 在上面 4 个局面**一次都没触发**（`d8` ≡ `p8` 逐字相同）
+		#   ⇒ 把上限压到 1（**每个"战术轮廓"只占一席**）才真会改写漏斗内容，用它判"限席到底有没有用"。
+		{ "name": "d8s1", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 8, "FUNNEL_DIVERSITY": 1, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		{ "name": "d16s1", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "FUNNEL_DIVERSITY": 1, "SUMMON_SLOT_ONLY": 1, "TWO_PHASE_INNER": 25 } },
+		{ "name": "m1", "beam": 400, "cap_ms": 40000, "theta": { "TWO_PHASE_P1_BEAM": 96, "TWO_PHASE_P2_DEDUP": 1, "TWO_PHASE_LAYOUTS": 16, "SUMMON_SLOT_ONLY": 1, "INC_MEMO": 1 } },
 	]
 	# `--` 后面可以只跑指定臂（逗号分隔），例如 `-- f16,f16p2d1` ⇒ 省时间
 	var only: Array = []
@@ -67,7 +94,7 @@ func _run() -> void:
 			inj["BEAM"] = int(arm["beam"])
 			inj["SEARCH_MODE"] = 2
 			inj["TWO_PHASE_DEDUP"] = 1
-			inj["TIME_BUDGET_MS"] = 0
+			inj["TIME_BUDGET_MS"] = int(arm.get("cap_ms", 0))
 			for k in (arm["theta"] as Dictionary).keys():
 				inj[k] = (arm["theta"] as Dictionary)[k]
 			var ai = _mk(inj)
@@ -86,12 +113,13 @@ func _run() -> void:
 			for st in plan:
 				ai._apply(end, int(st["idx"]), st["action"])
 			var end_score := float(ai._evaluate(end, true))
-			print("PATH|%s|%s|ms=%d|p1_ms=%d|p2_ms=%d|evals=%d|dups=%d|p2_evals=%d|p2_dups=%d|hero_kids=%d|sm_kids=%d|built=%d|used=%d|leaves=%d|steps=%d|score=%.2f|fp=%s" % [
+			print("PATH|%s|%s|ms=%d|p1_ms=%d|p2_ms=%d|evals=%d|dups=%d|p2_evals=%d|p2_dups=%d|hero_kids=%d|sm_kids=%d|built=%d|used=%d|leaves=%d|timeout=%s|steps=%d|score=%.2f|fp=%s" % [
 				nm, String(arm["name"]), wall, int(ai.last_tp_phase1_ms), int(ai.last_tp_phase2_ms),
 				int(ai.last_tp_p1_evals), int(ai.last_tp_p1_dups),
 				int(ai.last_tp_p2_evals), int(ai.last_tp_p2_dups),
 				int(ai.last_tp_p1_hero_kids), int(ai.last_tp_p1_summon_kids),
 				int(ai.last_tp_layouts_built), int(ai.last_tp_layouts_used), int(ai.last_tp_leaves),
+				str(bool(ai.last_search_timeout)),
 				plan.size(), end_score, ">".join(fp)])
 	print("PATH|READ|p1_ms vs p2_ms 决定「该砍哪一半」；dups/evals = 同末态重份比例；leaves 随 used 线性涨 ⇒ 漏斗就是阶段 2 的乘法器")
 	print("PATH|END")

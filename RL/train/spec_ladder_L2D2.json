@@ -1,0 +1,271 @@
+{
+    "base_weights":  "RL\\weights\\普通.json",
+    "opponent":  "cand",
+    "beam":  {
+                 "candidate":  200,
+                 "opponent":  200
+             },
+    "decks":  {
+                  "player":  "hero_24,hero_09,hero_20",
+                  "enemy":  "hero_24,hero_09,hero_20"
+              },
+    "seeds":  {
+                  "train":  [
+                                10001,
+                                10002,
+                                10003,
+                                10004,
+                                10005,
+                                10006,
+                                10007,
+                                10008,
+                                10009,
+                                10010,
+                                10011,
+                                10012,
+                                10013,
+                                10014,
+                                10015,
+                                10016,
+                                10017,
+                                10018,
+                                10019,
+                                10020,
+                                10021,
+                                10022,
+                                10023,
+                                10024,
+                                10025,
+                                10026,
+                                10027,
+                                10028,
+                                10029,
+                                10030,
+                                10031,
+                                10032,
+                                10033,
+                                10034,
+                                10035,
+                                10036,
+                                10037,
+                                10038,
+                                10039,
+                                10040,
+                                10041,
+                                10042,
+                                10043,
+                                10044,
+                                10045,
+                                10046,
+                                10047,
+                                10048,
+                                10049,
+                                10050,
+                                10051,
+                                10052,
+                                10053,
+                                10054,
+                                10055,
+                                10056,
+                                10057,
+                                10058,
+                                10059,
+                                10060,
+                                10061,
+                                10062,
+                                10063,
+                                10064,
+                                10065,
+                                10066,
+                                10067,
+                                10068,
+                                10069,
+                                10070,
+                                10071,
+                                10072,
+                                10073,
+                                10074,
+                                10075,
+                                10076,
+                                10077,
+                                10078,
+                                10079,
+                                10080,
+                                10081,
+                                10082,
+                                10083,
+                                10084,
+                                10085,
+                                10086,
+                                10087,
+                                10088,
+                                10089,
+                                10090,
+                                10091,
+                                10092,
+                                10093,
+                                10094,
+                                10095,
+                                10096,
+                                10097,
+                                10098,
+                                10099,
+                                10100,
+                                10101,
+                                10102,
+                                10103,
+                                10104,
+                                10105,
+                                10106,
+                                10107,
+                                10108,
+                                10109,
+                                10110,
+                                10111,
+                                10112,
+                                10113,
+                                10114,
+                                10115,
+                                10116,
+                                10117,
+                                10118,
+                                10119,
+                                10120
+                            ],
+                  "holdout":  [
+                                  90001,
+                                  90002,
+                                  90003,
+                                  90004,
+                                  90005,
+                                  90006,
+                                  90007,
+                                  90008,
+                                  90009,
+                                  90010,
+                                  90011,
+                                  90012,
+                                  90013,
+                                  90014,
+                                  90015,
+                                  90016,
+                                  90017,
+                                  90018,
+                                  90019,
+                                  90020,
+                                  90021,
+                                  90022,
+                                  90023,
+                                  90024
+                              ]
+              },
+    "measurement":  {
+                        "asides":  [
+                                       "e"
+                                   ],
+                        "firsts":  [
+                                       "p",
+                                       "e"
+                                   ]
+                    },
+    "lineups":  {
+                    "_comment":  "Deterministic round-robin 3v3 generator. round r = floor(seed/slots), slot j = seed mod slots, stride = train.strides[(r+j) mod n], members = (i*stride + r) mod pool_size for i=j,j+1,j+2. Every 49 consecutive slots sweep all 49 heroes; switching stride per round makes the train lineups cover every hero \u003e= 3 times. Holdout strides were searched so no holdout lineup collides with a train lineup. version=v2: each seed gets an anchor sharing NO hero with its generated lineup (v1 had 23/120 train seeds with the same hero on both sides); v1 is retained ONLY to reproduce historical runs (pilot / inj / beamsweep). Even seed -\u003e generated lineup takes the enemy side, odd seed -\u003e the player side.",
+                    "version":  "v2",
+                    "pool_size":  49,
+                    "slots":  12,
+                    "train":  {
+                                  "strides":  [
+                                                  11,
+                                                  3,
+                                                  29,
+                                                  19,
+                                                  37,
+                                                  15,
+                                                  39,
+                                                  25,
+                                                  45,
+                                                  27,
+                                                  31,
+                                                  1
+                                              ],
+                                  "_anchors_v2_comment":  "Small pools of low-HERO_VALUE heroes. The generator picks the first pool with no hero in common with the seed\u0027s generated lineup; a 2-hero pool against a 3-hero lineup always leaves at least one pool disjoint, so disjointness is guaranteed, not hoped for.",
+                                  "anchors_v2":  [
+                                                     [
+                                                         "hero_11",
+                                                         "hero_04"
+                                                     ],
+                                                     [
+                                                         "hero_49",
+                                                         "hero_07"
+                                                     ],
+                                                     [
+                                                         "hero_28",
+                                                         "hero_34"
+                                                     ]
+                                                 ]
+                              },
+                    "holdout":  {
+                                    "strides":  [
+                                                    1,
+                                                    29,
+                                                    39,
+                                                    33,
+                                                    25,
+                                                    15,
+                                                    9,
+                                                    31,
+                                                    17,
+                                                    47,
+                                                    3,
+                                                    13
+                                                ],
+                                    "anchors_v2":  [
+                                                       [
+                                                           "hero_11",
+                                                           "hero_07"
+                                                       ],
+                                                       [
+                                                           "hero_49",
+                                                           "hero_04"
+                                                       ],
+                                                       [
+                                                           "hero_28",
+                                                           "hero_34"
+                                                       ]
+                                                   ]
+                                },
+                    "anchors_v1_only":  [
+                                            {
+                                                "name":  "A",
+                                                "deck":  "hero_13,hero_12,hero_23"
+                                            },
+                                            {
+                                                "name":  "B",
+                                                "deck":  "hero_11,hero_22,hero_31"
+                                            },
+                                            {
+                                                "name":  "C",
+                                                "deck":  "hero_45,hero_06,hero_26"
+                                            }
+                                        ]
+                },
+    "params":  {
+
+               },
+    "configs":  [
+                    {
+                        "beam_opp":  200,
+                        "name":  "norm_vs_hard",
+                        "note":  "难度档 norm_vs_hard",
+                        "theta":  {
+
+                                  },
+                        "beam":  200
+                    }
+                ],
+    "league":  {
+                   "self_play_fraction":  1,
+                   "base_opp_beam":  200,
+                   "checkpoint":  "RL\\weights\\困难.json"
+               }
+}

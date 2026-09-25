@@ -1,13 +1,13 @@
 {
-    "base_weights":  "RL\\weights\\噩梦.json",
-    "opponent":  "base",
+    "base_weights":  "RL\\weights\\噩梦_基线.json",
+    "opponent":  "cand",
     "beam":  {
                  "candidate":  200,
                  "opponent":  200
              },
     "decks":  {
-                  "player":  "hero_42,hero_03,hero_17",
-                  "enemy":  "hero_42,hero_03,hero_17"
+                  "player":  "hero_24,hero_09,hero_20",
+                  "enemy":  "hero_24,hero_09,hero_20"
               },
     "seeds":  {
                   "train":  [
@@ -264,6 +264,15 @@
                     },
                     {
                         "beam_opp":  200,
+                        "name":  "b192",
+                        "note":  "难度档 b192",
+                        "theta":  {
+                                      "TWO_PHASE_P1_BEAM":  192
+                                  },
+                        "beam":  200
+                    },
+                    {
+                        "beam_opp":  200,
                         "name":  "b96",
                         "note":  "难度档 b96",
                         "theta":  {
@@ -273,12 +282,17 @@
                     },
                     {
                         "beam_opp":  200,
-                        "name":  "b192",
-                        "note":  "难度档 b192",
+                        "name":  "b48",
+                        "note":  "难度档 b48",
                         "theta":  {
-                                      "TWO_PHASE_P1_BEAM":  192
+                                      "TWO_PHASE_P1_BEAM":  48
                                   },
                         "beam":  200
                     }
-                ]
+                ],
+    "league":  {
+                   "self_play_fraction":  1,
+                   "base_opp_beam":  200,
+                   "checkpoint":  "RL\\weights\\噩梦_基线.json"
+               }
 }

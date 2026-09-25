@@ -1,13 +1,13 @@
 {
-    "base_weights":  "RL\\weights\\空白基线.json",
-    "opponent":  "base",
+    "base_weights":  "RL\\weights\\噩梦_基线_0925.json",
+    "opponent":  "cand",
     "beam":  {
                  "candidate":  200,
                  "opponent":  200
              },
     "decks":  {
-                  "player":  "hero_42,hero_03,hero_17",
-                  "enemy":  "hero_42,hero_03,hero_17"
+                  "player":  "hero_46,hero_11,hero_27",
+                  "enemy":  "hero_46,hero_11,hero_27"
               },
     "seeds":  {
                   "train":  [
@@ -255,30 +255,41 @@
     "configs":  [
                     {
                         "beam_opp":  200,
-                        "name":  "pull06",
-                        "note":  "难度档 pull06",
+                        "name":  "p0",
+                        "note":  "难度档 p0",
                         "theta":  {
-                                      "ENGAGE_PULL_PER_CELL":  0.6
+                                      "TWO_PHASE_INNER":  16,
+                                      "TWO_PHASE_LAYOUTS":  8,
+                                      "TWO_PHASE_POLISH":  0
                                   },
                         "beam":  200
                     },
                     {
                         "beam_opp":  200,
-                        "name":  "pull12",
-                        "note":  "难度档 pull12",
+                        "name":  "pl1",
+                        "note":  "难度档 pl1",
                         "theta":  {
-                                      "ENGAGE_PULL_PER_CELL":  1.2
+                                      "TWO_PHASE_INNER":  16,
+                                      "TWO_PHASE_LAYOUTS":  8,
+                                      "TWO_PHASE_POLISH":  1
                                   },
                         "beam":  200
                     },
                     {
                         "beam_opp":  200,
-                        "name":  "pull24",
-                        "note":  "难度档 pull24",
+                        "name":  "pl2",
+                        "note":  "难度档 pl2",
                         "theta":  {
-                                      "ENGAGE_PULL_PER_CELL":  2.4
+                                      "TWO_PHASE_INNER":  16,
+                                      "TWO_PHASE_LAYOUTS":  8,
+                                      "TWO_PHASE_POLISH":  2
                                   },
                         "beam":  200
                     }
-                ]
+                ],
+    "league":  {
+                   "self_play_fraction":  1,
+                   "base_opp_beam":  200,
+                   "checkpoint":  "RL\\weights\\噩梦_基线_0925.json"
+               }
 }

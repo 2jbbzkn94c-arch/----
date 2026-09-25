@@ -435,20 +435,32 @@ const _CONSOLE_AI_LOG := true
 const NIGHTMARE_DIFFICULTY := 3                          # 与 GameState.AI_DIFFICULTY_MAX 对应
 const AI_CANDIDATE_PATH := "res://RL/ai/AI_Battle.gd"    # 候选（带保真修正 + 可注入权重）
 const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦档：训练权重 + 英雄段
-# 【2026-09-20 新增·默认零变化】低档权重文件通道（用户 2026-09-20 定的难度梯度）：
-#   简单(0) = RL/weights/简单.json（`WEAK_MODE=5` 贪心+关集火 · `WEAK_P=0.70` ⇒ 好操作概率 30%）
-#   普通(1) = RL/weights/普通.json（`WEAK_MODE=5` 同上         · `WEAK_P=0.40` ⇒ 好操作概率 60%）
-#   ⚠️ **下面这两行的值以权重文件为准**（2026-09-21 更正：这里原先写着 简单 0.85 / 普通 `MODE=4`·0.50，
-#      而两份 json 实际一直是 5/0.70 与 5/0.40 —— 注释过期了，已对齐；只改注释，行为零变化）。
-#   ⚠️ **文件不存在 ⇒ 完全不注入 ⇒ 与改动前逐位相同**；困难(2) 永不走这条路（锚点）。实测见
-#   RL/reports/难度体检_6队_20260919.md（简单 = 胜率 0.2292 / 普通(只关集火) = Δpts −7.31 CI[−13.23,−1.38]）。
-#   2026-09-21 复测（`难度体检 -Mode weakp2`，6 队 × 4 种子）：两档对困难只有 −6.11 / −4.57（CI 跨 0）⇒
-#   **梯度仍嫌太浅**，见 `RL/reports/难度体检_T1_低档棋力落点_20260921.md`。
-#   另：简单档还有一条**选人层面**的弱化（2026-09-21）——`SIMPLE_PICK_SCORE_W` / `_pick_weight()`
+# 【2026-09-20 新增·默认零变化】低档权重文件通道。
+# 【2026-09-25 用户拍板·新口径】「把前三个难度按照噩梦的基础上修改」+「困难和噩梦的区别就是专属键和概率弱智」
+#   ⇒ 三档的权重文件**由 `RL/train/派生低档权重.ps1` 从 `噩梦.json` 派生**（噩梦.json 是唯一真源）：
+#     · 通用评分键**照抄噩梦**（⑦位置暴露 / 队形 / 毒价 / 嘲讽吸火 / 破盾 / 判负线闸门 / 血量池 …）
+#       ⇒ 低档的"判断力"与噩梦同一套，落差只由"概率弱智"承担；
+#     · **算力：三档一律不抄**（`SEARCH_MODE`/`BEAM`/`TIME_BUDGET_MS`/`TWO_PHASE_*`/`SUMMON_SLOT_ONLY`）
+#       ⇒ 简单/普通/困难 都是 beam 200、思考上限 10s、走现役"每单位移动+攻击组合"搜索；
+#       两阶段联合搜索 / `BEAM=400` / 40s 都是**噩梦专属**（用户 2026-09-25「困难2阶段关，beam200」）；
+#     · **不带 `hero_XX` 英雄专属段**（那同样是噩梦专属：毒蛇/堡垒/沉默术士… 的特化价低档没有）。
+#   三档之间**只差 `WEAK_P`**（这一回合改走弱化引擎＝每单位各自贪心+关集火合力的概率）：
+#     简单(0) = `简单.json` `WEAK_P=1.00`（**每个回合**都走弱化引擎）
+#     普通(1) = `普通.json` `WEAK_P=0.50`
+#     困难(2) = `困难.json` `WEAK_P=0.20`（⚠️ 从这里起困难**也读文件**了，旧口径"困难永不走这条路（锚点）"已作废）
+#   四档与噩梦的差别汇总：简单/普通/困难 = 同一套评分键 + 无英雄段 + **同样的算力**（200 / 10s / 现役搜索），
+#     三档彼此只差弱化概率（1.00 / 0.50 / 0.20）；噩梦 = 评分键 + **7 段英雄专属价** + 两阶段 / 400 / **40s** + 不弱化。
+#   ⚠️ **文件不存在 ⇒ 完全不注入 ⇒ 退回引擎默认（= 旧困难口径）**；删掉这三份 json 就是回退。
+#   ⚠️ 改权重文件**重开一局**即生效（`_load_weights_json` 每局建 AI 时读一次）。
+#   旧口径的实测（**低档 = 裸默认 + 概率弱化**，仅作历史参照，不可与新读数混比）：`难度体检 -Mode weakp2`
+#   为 −6.11 / −4.57（CI 跨 0）、`-Mode tiers2` 那批 ≈ −4.6 / −6~−14，均嫌浅；见
+#   `RL/reports/难度体检_6队_20260919.md` 与 `RL/reports/难度体检_T1_低档棋力落点_20260921.md`。
+#   另：选人层面还有一条难度梯度（2026-09-21 起，2026-09-25 按用户口径改成三档）——`FLAT_PICK_SCORE_W` / `_pick_weight()`
 #   把"敌方卡组组建 + 竞技场 2选1"从按评分挑改成大幅拉平的加权随机（只影响难度 0）。
 const AI_LOW_TIER_WEIGHTS_PATH := {
 	0: "res://RL/weights/简单.json",
 	1: "res://RL/weights/普通.json",
+	2: "res://RL/weights/困难.json",
 }
 # 取证日志（默认零输出，保留）：确认"噩梦档这一局到底用了哪个 AI、权重读进来没有、BEAM 是多少"。
 #   怎么开：启动前设环境变量 ZB_NIGHTMARE_DEBUG=1（任意非空值），再进难度=3 的对局。
@@ -571,6 +583,25 @@ func _ready() -> void:
 			if GameState.enemy_deck.size() == 0:
 				GameState.enemy_deck = ["hero_13", "hero_12", "hero_23"]
 			_begin_deployment()
+	elif GameState.ladder_mode != "" and LadderStore.has_snapshot():
+		# 【2026-09-24 用户要求·天梯模式】续档：**不**重新布障碍/刷道具/选人，直接从快照重建局面，
+		#   再从"最近一次回合开始"继续（存档点见 `_begin_side()` 开头那行 `_ladder_autosave()`）。
+		#   快照里已经含障碍/道具/金矿/墓碑/单位/账本 ⇒ 上面那两步开局铺场必须跳过，否则会重复铺一遍。
+		_setup_hud()
+		_ladder_restore()
+	elif GameState.ladder_mode != "" and LadderStore.has_pending_match():
+		# 【2026-09-24 用户报「第2局部署界面退出去，再进来是选人界面」】这一局**已经开打但还没到回合开始**
+		#   （= 部署 / 选人阶段退出的，没有回合快照）⇒ 直接用本轮记住的双方卡组回到**部署**那一步，
+		#   不再让玩家从选人页 / 选择卡组重来一遍。
+		_place_obstacles()
+		_spawn_opening_items()
+		_setup_hud()
+		GameState.pick_deck_in_battle = false
+		GameState.set_decks(LadderStore.player_deck(), LadderStore.enemy_deck())
+		if _CONSOLE_AI_LOG:
+			print("[天梯] 回到未打完的部署：%s vs %s（第 %d 局）" % [
+				str(GameState.player_deck), str(GameState.enemy_deck), LadderStore.match_no()])
+		_begin_deployment()
 	elif GameState.player_placement.size() > 0 or GameState.enemy_placement.size() > 0:
 		# 测试场景直接指定放置：不上部署选人
 		_place_units()
@@ -581,7 +612,10 @@ func _ready() -> void:
 		_spawn_opening_items()   # 进入战斗即刷新开局道具（障碍已定、单位未上）
 		_setup_hud()
 		if GameState.arena_mode:
-			_begin_arena_draft()   # 竞技场：先随构建双方卡组，再部署
+			if _ladder_active() and LadderStore.has_draft():
+				_resume_arena_draft(LadderStore.draft())   # 【2026-09-25 修】天梯竞技场：选人阶段退出的 ⇒ 接上原进度
+			else:
+				_begin_arena_draft()   # 竞技场：先随机构建双方卡组，再部署
 		elif GameState.pick_deck_in_battle:
 			_begin_deck_pick()     # 普通模式新流程：先弹"选择卡组"面板，选完再部署
 		else:
@@ -804,6 +838,9 @@ func _start_with_player_deck(player_ids: Array) -> void:
 		while _recent_enemy_decks.size() > PICK_RECENT_MAX:
 			_recent_enemy_decks.pop_back()
 	GameState.set_decks(_order_deck(player_ids), _order_deck(enemy))
+	# 【天梯】记住本轮用的我方卡组 ⇒ 中途退出/在结算面板关游戏，下次进来还能原样续上
+	if GameState.ladder_mode != "":
+		LadderStore.note_player_deck(GameState.player_deck)
 	# 配方落库（必须在 `set_decks()` 之后：它是"本局敌方走哪条类型"的运行态，部署端与替补端都读它）
 	if not _pending_recipe.is_empty():
 		GameState.enemy_recipe = _pending_recipe
@@ -824,20 +861,26 @@ func _start_with_player_deck(player_ids: Array) -> void:
 	deck_pick_done.emit()   # 通知 HUD 收起"选择卡组"面板（无论走哪条选择路径都收）
 	_begin_deployment()
 
-# 【2026-09-21 用户拍板】简单档的"选人"大幅拉平：**不再按评分挑最优，改成加权随机**
-#   权重 = `1 + SIMPLE_PICK_SCORE_W × max(评分, 0)` ⇒ 好英雄仍略占优（最优/最差大约 3~4 倍），
-#   但远达不到"总是挑最优"。**只作用于赛前两处选人**（用户口径 A）：
+# 【2026-09-25 用户口径·选人阶段三档】（原来是"只有简单档被拉平"，现改为三档各有口径）
+#   简单(0) = **完全不看评分瞎选** ⇒ 权重恒 1（等概率，评分一点都不参与）
+#   普通(1) = **照旧日"简单档"的口径**（拉平掷签）⇒ `1 + FLAT_PICK_SCORE_W × max(评分, 0)`
+#             ⇒ 好英雄仍略占优（最优/最差 ≈ 3~4 倍），但远达不到"总挑最优"
+#   困难(2) / 噩梦(3) = **保持原样** ⇒ `max(评分, 0) + 1`（≈ 总挑最优；并列/接近由调用点的规则管）
+# **只作用于赛前两处选人**（用户口径 A）：
 #     ① 敌方卡组组建（`_synergy_pick_enemy`，单机普通模式的敌方队伍）
-#     ② 竞技场 2选1 的敌方选择（`_action_arena_enemy_pick`，改成按权重的掷签而不是取最优）
+#        ＋ 该处的**队伍池档位路径**也照此口径：简单档在全档里等概率抽一支（不看在线分排名，见 `_pick_from_candidates`）
+#     ② 竞技场 2选1 的敌方选择（`_action_arena_enemy_pick`，按权重掷签而不是取最优）
 #   **战斗内的选人不在此列**（开局部署选人 / 替补选人照旧按评分）—— 那两处被真实/模拟两侧的
 #   "选人规则镜像"共用，改了会破坏对拍。
-#   普通(1)/困难(2)/噩梦(3) 一律走原口径 ⇒ 逐位不变。调"乱"的程度只要动这一个常数。
-const SIMPLE_PICK_SCORE_W := 0.1
+#   调"乱"的程度只要动 `FLAT_PICK_SCORE_W` 这一个常数（0 ⇒ 普通也变成纯随机）。
+const FLAT_PICK_SCORE_W := 0.1
 
 func _pick_weight(sc: float) -> float:
-	if GameState.ai_difficulty == 0:   # 0 = 简单
-		return 1.0 + SIMPLE_PICK_SCORE_W * maxf(sc, 0.0)
-	return maxf(sc, 0.0) + 1.0         # 普通/困难/噩梦：现行口径（权重下限 1，任何英雄都有机会）
+	if GameState.ai_difficulty == 0:   # 0 = 简单：不看评分
+		return 1.0
+	if GameState.ai_difficulty == 1:   # 1 = 普通：拉平（旧"简单档"口径）
+		return 1.0 + FLAT_PICK_SCORE_W * maxf(sc, 0.0)
+	return maxf(sc, 0.0) + 1.0         # 困难/噩梦：原口径（权重下限 1，任何英雄都有机会）
 
 # ============ 【2026-09-21 用户拍板】标准单机的"选队伍强化"三层（L1+L2+L3）============
 # 用户原话：「**普通模式我可以L1 2 3都做吗？竞技场模式我觉得还是按照现在的玩法，毕竟竞技场
@@ -1094,6 +1137,17 @@ func _enemy_deck_score(deck: Array, player_ids: Array) -> float:
 func _pick_from_candidates(cands: Array, player_ids: Array) -> Array:
 	if cands.is_empty():
 		return []
+	# 【2026-09-25 用户口径】简单档 = **完全不看评分瞎选** ⇒ 直接在全档里**等概率**抽一支，
+	#   连"在线分排名"都不算（只保留"最近几局没用过"的偏好，避免连着遇到同一支队）。
+	#   ⚠️ 普通/困难/噩梦仍走下面的打分排序口径（普通档的"拉平"体现在 `_pick_weight()` 那条路径上，
+	#      队伍池这条路径里 mid/strong 档的抽法与改动前逐位相同）。
+	if GameState.ai_difficulty == 0:
+		var fresh0: Array = []
+		for c in cands:
+			if not _recent_enemy_decks.has(str(c)):
+				fresh0.append(c)
+		var pool0: Array = fresh0 if not fresh0.is_empty() else cands
+		return pool0[randi() % pool0.size()]
 	var scored: Array = []
 	for c in cands:
 		scored.append({ "deck": c, "sc": _enemy_deck_score(c, player_ids) })
@@ -1160,7 +1214,7 @@ func _synergy_pick_enemy(want: int, player_ids: Array = []) -> Array:
 			if tw != 0.0 and not player_ids.is_empty():
 				var parts: Dictionary = DataRegistry.battle_unit_value_parts(String(id), chosen, player_ids, null)
 				sc += tw * float(parts["counter"])
-			var w := _pick_weight(sc)   # 【2026-09-21】简单档在这里被大幅拉平（见 `SIMPLE_PICK_SCORE_W`）
+			var w := _pick_weight(sc)   # 【2026-09-25 用户口径】简单=不看评分（等权）· 普通=拉平 · 困难/噩梦=原口径（见 `FLAT_PICK_SCORE_W`）
 			wins.append(w)
 			ids.append(id)
 			total += w
@@ -1186,6 +1240,7 @@ func _begin_arena_draft() -> void:
 	_rng_shuffle(_arena_pool)   # rng 洗牌（同种子两端一致）
 	_arena_picked = []
 	_arena_enemy = []
+	_arena_gave = []
 	_arena_player_rounds = 0
 	_arena_enemy_rounds = 0
 	# 关键：选人一开始就清空上一局卡组。否则在 8 轮选完（才 set_decks）之前，
@@ -1193,6 +1248,55 @@ func _begin_arena_draft() -> void:
 	GameState.set_decks([], [])
 	_notify_team()   # 立即刷新 HUD：已选阵容为-> 旧队伍面板随之收
 	_show_arena_round()
+
+# ---- 【2026-09-25 修·用户实机「天梯竞技场选人阶段退出去，能选的人就变了」】选人阶段的中途存档 ----
+# 病灶：候选池由 `rng` 洗牌得到（`_rng_shuffle(_arena_pool)`），而天梯的存档点只有"每次回合开始"
+#   （`_begin_side()` 开头）⇒ **2 选 1 选人还没到回合**、一个存档都没有 ⇒ 退出重进就重新洗牌：
+#   能选的人全变（而且可以反复退出来"重摇"选人）。⇒ 选人进度（池子 + 已选 + 轮数 + 先手）交给
+#   `LadderStore.save_draft()`，重进时原样恢复。⚠️ 本轮候选对**不用单独存**：它恒等于池子最前面两个
+#   （选完才从池里删，见 `_on_arena_pick` / `_action_arena_enemy_pick`）。
+func _arena_draft_snapshot() -> Dictionary:
+	return {
+		"ver": 1,
+		"pool": _arena_pool.duplicate(),
+		"picked": _arena_picked.duplicate(),
+		"enemy": _arena_enemy.duplicate(),
+		"gave": _arena_gave.duplicate(),
+		"player_rounds": _arena_player_rounds,
+		"enemy_rounds": _arena_enemy_rounds,
+		"first_side": _first_side,
+		"deploy_side": _deploy_side,
+	}
+
+func _ladder_draft_save() -> void:
+	if not _ladder_active():
+		return
+	LadderStore.save_draft(_arena_draft_snapshot())
+
+# 重进时把选人进度原样接上（**不重新洗牌、不重掷先手**）
+func _resume_arena_draft(d: Dictionary) -> void:
+	# 【防御】存档可能来自旧版本（英雄表加/删过英雄）⇒ 池子凑不满剩余轮数就丢弃、当场重开一轮选人
+	var _rounds_done := int(d.get("player_rounds", 0)) + int(d.get("enemy_rounds", 0))
+	var _need := (ARENA_PICKS_PER_SIDE * 2 - _rounds_done) * 2
+	if (d.get("pool", []) as Array).size() < _need:
+		LadderStore.clear_draft()
+		_begin_arena_draft()   # 重新洗牌开一轮（会立刻写一份新存档）
+		return
+	_arena_pool = (d.get("pool", []) as Array).duplicate()
+	_arena_picked = (d.get("picked", []) as Array).duplicate()
+	_arena_enemy = (d.get("enemy", []) as Array).duplicate()
+	_arena_gave = (d.get("gave", []) as Array).duplicate()
+	_arena_player_rounds = int(d.get("player_rounds", 0))
+	_arena_enemy_rounds = int(d.get("enemy_rounds", 0))
+	_first_side = int(d.get("first_side", _first_side))
+	_deploy_side = int(d.get("deploy_side", _deploy_side))
+	_first_side_decided = true   # 先手已定 ⇒ 别让 `_prepare_first_side()` 再掷一次（否则与退出前不是同一局）
+	_arena_pending = []
+	state = State.ARENA_DRAFT
+	arena_pick_time_left = -1.0
+	GameState.set_decks([], [])   # 与 `_begin_arena_draft()` 同口径：没选完不显示上一局的卡组
+	_notify_team()
+	_show_arena_round()   # 从（已恢复的）池子最前面取本轮候选 ⇒ 与退出前**同一批**
 
 func _show_arena_round() -> void:
 	# 8 轮：4 轮玩2 1（自己拿 1、另 1 给敌方）；后 4 轮敌方选（敌方1、另 1 给你
@@ -1207,6 +1311,7 @@ func _show_arena_round() -> void:
 		arena_draft_done.emit()
 		_begin_deployment()
 		return
+	_ladder_draft_save()   # 【2026-09-25】选人途中：本轮一开就落一次档 ⇒ 退出重进看同一批候选
 	var remaining := _arena_pool.duplicate()
 	if remaining.size() >= 2:
 		# 取两个不重复
@@ -1265,28 +1370,76 @@ func _deck_synergy_note(deck: Array, hid: String) -> String:
 			parts.append("%s+%.1f" % [nm.display_name if nm != null else c, b])
 	return "、".join(parts)
 
-# 敌方选人辅助：候选英雄能对玩家已选英雄的克制程度（从角色列表"被克列抽取的关系
+# 敌方选人辅助：候选英雄能对**敌方已知的玩家牌**的克制程度（从角色列表"被克"列抽取的关系）
+# 【2026-09-25 用户口径「竞技场 AI 不能在偷看玩家的牌，只能根据自己选择的牌和给玩家的牌做配合和克制」】
+#   ⇒ 这里**只读 `_arena_gave`**（= 敌方轮里"没拿、归玩家"的那几张，敌方自己送出去的），
+#   **不再读 `_arena_picked`**（那是玩家的真实卡组 —— 竞技场前 4 轮是玩家轮，敌方拿的是"挑剩的那张"，
+#   按用户口径它**不许**因此反推玩家的选择）。
 func _counter_player_score(hid: String) -> float:
 	var s := 0.0
-	for pid in _arena_picked:
+	for pid in _arena_gave:
 		var cr := DataRegistry.counter_bonus(hid, pid)
 		if cr > 0.0:
-			s += cr   # 该候选克制玩家某英雄 -> 敌方更值得
+			s += cr   # 该候选克制"敌方送给玩家的某张牌" -> 敌方更值得
 	return s
 
-# 克玩家明细（日志用）：列出克制了玩家“哪些已选英雄”
+# 克已知玩家牌明细（日志用）：列出克制了"敌方送出去的哪些牌"
 func _counter_player_note(hid: String) -> String:
 	var parts: Array[String] = []
-	for pid in _arena_picked:
+	for pid in _arena_gave:
 		var cr := DataRegistry.counter_bonus(hid, pid)
 		if cr > 0.0:
 			var nm: DataRegistry.HeroDef = DataRegistry.heroes.get(pid, null)
 			parts.append("%s+%.1f" % [nm.display_name if nm != null else pid, cr])
 	return "、".join(parts)
 
+# 【2026-09-25 用户口径·第二版】"我拿 `take`、把 `give` 送给他"——**这一手本身**的关系分。
+#   用户原话：「**AI 第一手克制分也不是恒为零，你要考虑自己选的和送给敌人的那张关系**」。
+#   敌方**唯一允许知道**的两样东西：**自己的牌**（含这一手要拿的 `take`）与**自己送出去的那张 `give`**
+#   ⇒ 逐对算双向净额（我克他 − 他克我）：
+#     ① `take` ↔ `give`：我拿的这张克我要送出去的（+）／我送出去的这张反过来克我拿的（−）；
+#     ② `give` ↔ 我已选的每一张：送出去的这张会不会克我现有的人（−）／我现有的人克不克它（+）。
+#   ⚠️ 所以**敌方的第一手（第 5 轮）这一项就可能非零** —— `_counter_player_score()` 那时恒为 0
+#      （它只认"前几轮已经送出去、进了 `_arena_gave` 的牌"），两项不重叠、不重复计价。
+#   ⚠️ 刻意不做的两件（都不影响它自己）：`give` 与"前几轮已送给他的牌"之间的关系（那两张都在他手里，
+#      自己打自己）；`take` 与"他已公开的牌"之间的关系（那是 `_counter_player_score()` 的活）。
+func _counter_gift_score(take: String, give: String) -> float:
+	var s := DataRegistry.counter_bonus(take, give) - DataRegistry.counter_bonus(give, take)
+	for mine in _arena_own_picks():
+		s += DataRegistry.counter_bonus(String(mine), give) - DataRegistry.counter_bonus(give, String(mine))
+	return s
+
+# 赠牌关系明细（日志用）：只列 |净额| > 0.05 的那些对
+# ⚠️ 口径：这一手"我拿 `take`"⇒ 送出去的是 `give`，所以两条明细都围绕 `give` 写（别写成 take）
+func _counter_gift_note(take: String, give: String) -> String:
+	var tn := _hero_display(take)
+	var gn := _hero_display(give)
+	var parts: Array[String] = []
+	var v1 := DataRegistry.counter_bonus(take, give) - DataRegistry.counter_bonus(give, take)
+	if absf(v1) > 0.05:
+		parts.append(("%s克%s+%.1f" % [tn, gn, v1]) if v1 > 0.0 else ("%s克%s%.1f" % [gn, tn, v1]))
+	for mine in _arena_own_picks():
+		var mn := _hero_display(String(mine))
+		var v2 := DataRegistry.counter_bonus(String(mine), give) - DataRegistry.counter_bonus(give, String(mine))
+		if absf(v2) > 0.05:
+			parts.append(("%s克%s+%.1f" % [mn, gn, v2]) if v2 > 0.0 else ("%s克%s%.1f" % [gn, mn, v2]))
+	return "、".join(parts)
+
+func _hero_display(hid: String) -> String:
+	var d: DataRegistry.HeroDef = DataRegistry.heroes.get(hid, null)
+	return d.display_name if d != null else hid
+
+# 【2026-09-25 用户口径·第三版】选人阶段"AI 自己挑过的牌" = `_arena_enemy` 去掉**玩家塞过来的那 4 张**。
+#   用户原话：「**玩家塞过来的牌，AI 在选人阶段是不知道的**」⇒ 敌方轮的打分（协同 / 职能配比 /
+#   赠牌关系的"我已选"一侧）一律只读这一段，**不读整支 `_arena_enemy`**（那是最终队伍，含玩家塞的）。
+#   ⚠️ 不需要新状态：轮次是死的 —— 前 `ARENA_PICKS_PER_SIDE` 轮是玩家轮（塞给敌方），之后才是敌方轮，
+#      所以"塞过来的"恒 = `_arena_enemy` 的前 4 个、自己挑的 = 后面那几个（存档/续档也天然一致）。
+func _arena_own_picks() -> Array:
+	return _arena_enemy.slice(ARENA_PICKS_PER_SIDE)
+
 # 【2026-09-18 新增·用户第 1 条】候选对"玩家已首发（`player_deployed`）"的**净克制**：
 #   我克他（`counter_bonus(cand, pid)`） − 他克我（`counter_bonus(pid, cand)`）。
-# 与 `_counter_player_score()`（竞技场阶段、读 `_arena_picked`、只算单向）口径的区别就在这两点：
+# 与 `_counter_player_score()`（竞技场选人阶段、读 `_arena_gave`（= 敌方送出去的牌）、只算单向）口径的区别就在这两点：
 # 这里是首发部署阶段、读 `player_deployed`、**双向净额**（避免选出一个"能打人但更怕挨打"的英雄）。
 func _counter_deployed_score(hid: String) -> float:
 	var s := 0.0
@@ -1304,16 +1457,28 @@ func _action_arena_enemy_pick() -> void:
 		return
 	var a: String = _arena_pending[0]
 	var b: String = _arena_pending[1]
-	# 候选价值 = 单体强度 + 与敌方已选英雄的协同 + 对玩家已选英雄的克制。
+	# 候选价值 = 单体强度 + 与**自己挑过的牌**的协同 + 对**已知玩家牌**（= 自己送出去的那几张）的克制
+	#            + **这一手"我拿谁／送他谁"的关系分**（`_counter_gift_score`，第一手就非零）。
+	# 【2026-09-25 用户口径·第一版】**不许偷看玩家卡组**：前 4 轮是玩家轮，敌方只是"收下挑剩的那张"，
+	#   按用户要求它不得据此反推玩家的选择 ⇒ 克制作只认 `_arena_gave`（敌方轮里送出去的那几张）。
+	# 【2026-09-25 用户口径·第三版】**玩家塞过来的那 4 张，AI 在选人阶段"不知道"**
+	#   （用户原话：「玩家塞过来的牌，AI 在选人阶段是不知道的」）⇒ 协同 / 职能配比 / 赠牌关系里的
+	#   "我已选的每一张"一律只读 `_arena_own_picks()`（它自己挑的那几张），**不读整支 `_arena_enemy`**。
+	#   所以敌方**第一手**时：协同 = 0、职能配比 = 按空阵容算、`克玩家(已送)` = 0，
+	#   只剩"单体强度 + 本手赠牌关系"在起作用（这正是用户两次追问要的效果）。
 	# （不再计入"双选协同"：本局只能选一张、另一张必给玩家，两张之间的配合分是同一个对称常数，
-	#  不改变任何选择，只让日志虚高；送强组合给玩家的顾虑由"克玩家"分体现。）
-	var sc_a := _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + DataRegistry.role_balance_bonus(_arena_enemy, a)
-	var sc_b := _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + DataRegistry.role_balance_bonus(_arena_enemy, b)
+	#  不改变任何选择，只让日志虚高；送强组合给玩家的顾虑由"克玩家(已送)"分体现。）
+	var own: Array = _arena_own_picks()      # 自己挑过的（选人阶段唯一"知道"的自己的牌）
+	var gift_a := _counter_gift_score(a, b)   # 拿 a、把 b 送给他
+	var gift_b := _counter_gift_score(b, a)   # 拿 b、把 a 送给他
+	var sc_a := _hero_strength(a) + _deck_synergy(own, a) + _counter_player_score(a) + gift_a + DataRegistry.role_balance_bonus(own, a)
+	var sc_b := _hero_strength(b) + _deck_synergy(own, b) + _counter_player_score(b) + gift_b + DataRegistry.role_balance_bonus(own, b)
 	# 轻微随机：两个候选价值接近（差< 1.5）时随机决定，避免完全可预测
-	# 【2026-09-21 用户拍板】简单档：**改成按（拉平后的）权重掷签**，不再取最优 ——
-	#   两张分值相近时约等于五五开，分值拉开时也只是略偏（见 `SIMPLE_PICK_SCORE_W`）。
+	# 【2026-09-25 用户口径·选人阶段】简单/普通都走"按权重掷签"：
+	#   简单 ⇒ `_pick_weight()` 恒 1 ⇒ **等概率，评分完全不参与**（= 完全不看评分瞎选）；
+	#   普通 ⇒ 拉平权重（旧"简单档"口径）；困难/噩梦 ⇒ 保持原样（取最优，差 ≤1.5 才随机）。
 	var en_hid: String
-	if GameState.ai_difficulty == 0:   # 0 = 简单
+	if GameState.ai_difficulty <= 1:   # 0 = 简单（纯随机）/ 1 = 普通（拉平掷签）
 		var w_a := _pick_weight(sc_a)
 		var w_b := _pick_weight(sc_b)
 		en_hid = a if rng.randf() * (w_a + w_b) < w_a else b
@@ -1325,23 +1490,30 @@ func _action_arena_enemy_pick() -> void:
 	if _CONSOLE_AI_LOG:
 		var nm_a := DataRegistry.get_hero(a).display_name
 		var nm_b := DataRegistry.get_hero(b).display_name
-		var rb_a: float = DataRegistry.role_balance_bonus(_arena_enemy, a)
-		var rb_b: float = DataRegistry.role_balance_bonus(_arena_enemy, b)
-		var tot_a: float = _hero_strength(a) + _deck_synergy(_arena_enemy, a) + _counter_player_score(a) + rb_a
-		var tot_b: float = _hero_strength(b) + _deck_synergy(_arena_enemy, b) + _counter_player_score(b) + rb_b
+		var rb_a: float = DataRegistry.role_balance_bonus(own, a)
+		var rb_b: float = DataRegistry.role_balance_bonus(own, b)
+		var tot_a: float = _hero_strength(a) + _deck_synergy(own, a) + _counter_player_score(a) + gift_a + rb_a
+		var tot_b: float = _hero_strength(b) + _deck_synergy(own, b) + _counter_player_score(b) + gift_b + rb_b
 		var pick_name := DataRegistry.get_hero(en_hid).display_name
 		if _CONSOLE_AI_LOG:
-			print("\n[AI竞技场选人] 敌方选人 第 %d/%d 轮（敌方此前已有 %d 名：前4轮玩家未选的自动归敌方）" % [_arena_enemy_rounds + 1, ARENA_PICKS_PER_SIDE, _arena_enemy.size()])
-		var note_a := _deck_synergy_note(_arena_enemy, a)
-		var note_b := _deck_synergy_note(_arena_enemy, b)
+			# 【第三版口径】"自己挑过的"才参与判断；玩家塞过来的那几张在选人阶段不算它的信息
+			print("\n[AI竞技场选人] 敌方选人 第 %d/%d 轮（它自己挑过 %d 名%s）" % [
+				_arena_enemy_rounds + 1, ARENA_PICKS_PER_SIDE, own.size(),
+				("，另有 %d 名是玩家那边归过来的、选人阶段不参与判断" % (ARENA_PICKS_PER_SIDE - _arena_enemy_rounds)) if _arena_enemy_rounds < ARENA_PICKS_PER_SIDE else ""])
+		var note_a := _deck_synergy_note(own, a)
+		var note_b := _deck_synergy_note(own, b)
 		var cnt_note_a := _counter_player_note(a)
 		var cnt_note_b := _counter_player_note(b)
+		# 赠牌关系明细：拿 a 就是把 b 送他，所以 a 那一行看 gift_a（b 同理）
+		var gift_note_a := _counter_gift_note(a, b)
+		var gift_note_b := _counter_gift_note(b, a)
 		if _CONSOLE_AI_LOG:
-			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_a, DataRegistry.hero_role_name(a), _hero_strength(a), _deck_synergy(_arena_enemy, a), ("(" + note_a + ")") if note_a != "" else "", _counter_player_score(a), ("(" + cnt_note_a + ")") if cnt_note_a != "" else "", rb_a, tot_a])
-			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家%.1f%s + 职能配比%.1f = %.1f" % [nm_b, DataRegistry.hero_role_name(b), _hero_strength(b), _deck_synergy(_arena_enemy, b), ("(" + note_b + ")") if note_b != "" else "", _counter_player_score(b), ("(" + cnt_note_b + ")") if cnt_note_b != "" else "", rb_b, tot_b])
+			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家(已送)%.1f%s + 赠牌关系%.1f%s + 职能配比%.1f = %.1f" % [nm_a, DataRegistry.hero_role_name(a), _hero_strength(a), _deck_synergy(own, a), ("(" + note_a + ")") if note_a != "" else "", _counter_player_score(a), ("(" + cnt_note_a + ")") if cnt_note_a != "" else "", gift_a, ("(" + gift_note_a + ")") if gift_note_a != "" else "", rb_a, tot_a])
+			print("  %s(%s)：单体%.1f + 己方协同%.1f%s + 克玩家(已送)%.1f%s + 赠牌关系%.1f%s + 职能配比%.1f = %.1f" % [nm_b, DataRegistry.hero_role_name(b), _hero_strength(b), _deck_synergy(own, b), ("(" + note_b + ")") if note_b != "" else "", _counter_player_score(b), ("(" + cnt_note_b + ")") if cnt_note_b != "" else "", gift_b, ("(" + gift_note_b + ")") if gift_note_b != "" else "", rb_b, tot_b])
 			print("[AI竞技场选人] → 敌方选择 %s（另一张 %s 归玩家）" % [pick_name, DataRegistry.get_hero(give_player).display_name])
 	_arena_enemy.append(en_hid)
-	_arena_picked.append(give_player)   # 敌方没拿的归
+	_arena_picked.append(give_player)   # 敌方没拿的归你
+	_arena_gave.append(give_player)     # 【2026-09-25】这张是"敌方送出去的" ⇒ 之后它允许据此做克制
 	for c in _arena_pending:
 		_arena_pool.erase(c)   # 本轮两个候选离开候选池，避免重复抽取
 	_arena_enemy_rounds += 1
@@ -1575,6 +1747,10 @@ var _arena_pending: Array = []       # 当前轮随机的2个候选英id
 var _arena_pool: Array = []          # 剩余候选池（未被选走的英雄）
 var _arena_picked: Array = []        # 玩家已选（进己方卡组）
 var _arena_enemy: Array = []         # 敌方已选（进敌方卡组）
+# 【2026-09-25 用户口径「竞技场 AI 不能在偷看玩家的牌」】敌方**送出去**的牌
+# （= 敌方轮里"没拿、归玩家"的那几张）。这是敌方**唯一允许知道**的玩家牌
+# ⇒ `_counter_player_score()` 只读它，**不读 `_arena_picked`**。
+var _arena_gave: Array = []
 var _arena_player_rounds := 0        # 玩家已进行的轮数（前4
 var _arena_enemy_rounds := 0         # 敌方已进行的轮数（后4
 signal arena_draft_requested(pair: Array)   # 通知 HUD 显示本轮2
@@ -1707,6 +1883,12 @@ func _prepare_first_side() -> void:
 
 func _begin_deployment() -> void:
 	state = State.DEPLOY   # 先进入部署态：顶部标签显示"部署选人"而不是旧回合
+	# 【2026-09-24 天梯】部署一开就算"这一局已经开打"：把双方卡组记进本轮存档 ⇒
+	#   在部署/选人阶段退出（还没到第 1 回合、没有回合快照）时，下次进来能**用同一副卡组直接回到部署**，
+	#   而不是从选人页/选择卡组重来一遍（用户实测报的就是这个）。
+	if _ladder_active():
+		LadderStore.clear_draft()   # 【2026-09-25】选人已结束 ⇒ 撤掉选人存档（往后由"本局已开打"/回合快照接手）
+		LadderStore.note_match_started(GameState.player_deck, GameState.enemy_deck)
 	_prepare_first_side()
 	player_pool = GameState.player_deck.duplicate()
 	enemy_pool = GameState.enemy_deck.duplicate()
@@ -2013,6 +2195,39 @@ func _deploy_candidate_value(cand: String, deployed: Array) -> float:
 		s -= 1.0
 	return s
 
+# 【2026-09-24 用户拍板 C·首发"看完整组合"】整套阵容的分 = 按"单体从高到低"逐个用现有逐槽函数累加。
+#   为什么用这个口径而不是另写一套集合评分：这样**角色规则（坦克重复压价 / 防全脆皮）与逐槽完全同一套**，
+#   只是从"每一步只看目前已上阵的人"改成"先看完整组合、再决定这一槽上谁"。
+func _deploy_set_value(ids: Array) -> float:
+	var ordered := ids.duplicate()
+	ordered.sort_custom(func(a, b): return _hero_strength(a) > _hero_strength(b))
+	var dep: Array = []
+	var s := 0.0
+	for h in ordered:
+		s += _deploy_candidate_value(h, dep)
+		dep.append(h)
+	return s
+
+# 组合枚举：从 pool 里取 r 个的所有组合（r ≤ 0 ⇒ 只给一个空组合）。池子 ≤ 8、r ≤ 3 ⇒ 最多 56 套，开销可忽略。
+func _combos_of(pool: Array, r: int) -> Array:
+	var out: Array = []
+	if r <= 0:
+		out.append([])
+		return out
+	if pool.size() < r:
+		return out
+	if r == 1:
+		for h in pool:
+			out.append([h])
+		return out
+	for i in pool.size():
+		var rest: Array = pool.slice(i + 1)
+		for tail in _combos_of(rest, r - 1):
+			var combo: Array = [pool[i]]
+			combo.append_array(tail)
+			out.append(combo)
+	return out
+
 # “硬身板/控制型”判定：坦克 或 高血量(≥24) 或 功能（支援/光环/控制类）
 func _deploy_is_hard(id: String) -> bool:
 	var def := DataRegistry.get_hero(id)
@@ -2109,21 +2324,60 @@ func _enemy_deploy() -> void:
 			_deploy_after_pick()
 			return
 	if enemy_pool.size() > 0 and enemy_deployed.size() < DEPLOY_COUNT_BATTLE:
-		# 上人策略：从卡池挑一与已上场敌人配合最的英雄作为首发，
-		# 而不是简单按顺序 pop_front —保证首发阵容机制协同
+		# 【2026-09-24 用户拍板 C·首发改「看完整组合」】旧口径是**逐槽贪心**：每槽只挑
+		#   「与**已经上阵的人**配合最好」的那个（`_deploy_candidate_value(cand, enemy_deployed)`）。
+		#   ⚠️ 结构病：`_deck_synergy()` 只跟**已上阵**的人算 ⇒ 任何「两人组合」的配合分在
+		#   **第 1 个人**那一步恒为 0 ⇒ 组合永远凑不齐。用户实测：血锁 + 嬉皮死神 明明有 +1.0
+		#   配合分（嬉皮死神的"配合"列写着「能使敌人位移的角色」，血锁的拉人正好合上），
+		#   却因为血锁单体排不进前三而永远上不了场。
+		#   新口径：**枚举"补满首发所需人数"的所有组合**（池子 ≤ 8、还需 ≤ 3 ⇒ 最多 56 套），
+		#   用**整套阵容**的总分挑最好的那套 ⇒ 第 1 个人会为"将来能凑成的那套组合"让路；
+		#   每一槽都重算 ⇒ 中途玩家换人（克制分变）会自动跟着改。
+		var pool_ok: Array = []
+		for h0 in enemy_pool:
+			var cd0: DataRegistry.HeroDef = DataRegistry.get_hero(h0)
+			if cd0 != null and cd0.skills.has(DataRegistry.Skill.BENCH):
+				continue   # 带 <替补> 标签的不首发（技能要替补登场才触发，首发浪费）
+			pool_ok.append(h0)
+		var need := DEPLOY_COUNT_BATTLE - enemy_deployed.size()
+		# 每个候选的"边际贡献" = 上它、其余按最优补齐 ⇒ **整套首发**能到多少分（择优口径）
+		var cand_rows: Array = []
+		if need >= 1 and pool_ok.size() >= need:
+			for hc in pool_ok:
+				var rest: Array = pool_ok.duplicate()
+				rest.erase(hc)
+				var best_have := -1e9
+				var best_tail: Array = []
+				for tail in _combos_of(rest, need - 1):
+					var ids: Array = enemy_deployed.duplicate()
+					ids.append(hc)
+					ids.append_array(tail)
+					var v := _deploy_set_value(ids)
+					if v > best_have:
+						best_have = v
+						best_tail = tail
+				cand_rows.append({ "h": hc, "sc": best_have, "tail": best_tail })
+			cand_rows.sort_custom(func(x, y): return float(x["sc"]) > float(y["sc"]))
 		var best_i := -1
 		var best_sc := -1e9
-		for i in enemy_pool.size():
-			var cand: String = enemy_pool[i]
-			# 首发优先：带 <替补> 标签的英雄不主动首发（技能替补登场才触发，首发浪费）
-			var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
-			if cd != null and cd.skills.has(DataRegistry.Skill.BENCH):
-				continue
-			var sc := _deploy_candidate_value(cand, enemy_deployed)
-			if sc > best_sc:
-				best_sc = sc
-				best_i = i
-		# 若全部卡池都是替补型（best_i 无解），退而选协同最高的任意一
+		var best_add: Array = []
+		if cand_rows.size() > 0:
+			best_i = enemy_pool.find(String((cand_rows[0] as Dictionary)["h"]))
+			best_sc = float((cand_rows[0] as Dictionary)["sc"])
+			best_add = (cand_rows[0] as Dictionary)["tail"]
+		# 兜底（池子不够 / 全是替补型）：退回旧的"逐槽贪心"
+		if best_i < 0:
+			best_sc = -1e9
+			for i in enemy_pool.size():
+				var cand: String = enemy_pool[i]
+				var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
+				if cd != null and cd.skills.has(DataRegistry.Skill.BENCH):
+					continue
+				var sc := _deploy_candidate_value(cand, enemy_deployed)
+				if sc > best_sc:
+					best_sc = sc
+					best_i = i
+		# 若全部卡池都是替补型（best_i 无解），退而选单体最高的任意一
 		if best_i < 0:
 			best_i = 0
 			var bs := -1e9
@@ -2134,22 +2388,39 @@ func _enemy_deploy() -> void:
 					best_i = i
 		var hid: String = enemy_pool[best_i]
 		if _CONSOLE_AI_LOG:
-			var rows: Array = []
-			for i in enemy_pool.size():
-				var cand2: String = enemy_pool[i]
-				var cd2 := DataRegistry.get_hero(cand2)
-				var is_bench: bool = cd2 != null and cd2.skills.has(DataRegistry.Skill.BENCH)
-				var sc2 := _deploy_candidate_value(cand2, enemy_deployed) if not is_bench else _hero_strength(cand2)
-				rows.append({ "n": cd2.display_name if cd2 != null else cand2, "role": DataRegistry.hero_role_name(cand2), "sc": sc2, "b": is_bench })
-			rows.sort_custom(func(x, y): return x["sc"] > y["sc"])
-			if _CONSOLE_AI_LOG:
-				print("\n[AI首发部署] 第 %d 名首发（敌方，剩余 %d 人）" % [enemy_deployed.size() + 1, enemy_pool.size()])
-			for r in rows.slice(0, mini(4, rows.size())):
-				var mark := "（带<替补>标签，不首发）" if r["b"] else ""
-				if _CONSOLE_AI_LOG:
+			print("\n[AI首发部署] 第 %d 名首发（敌方，剩余 %d 人）" % [enemy_deployed.size() + 1, enemy_pool.size()])
+			if cand_rows.size() > 0:
+				print("  （组合口径：后面那个数是「上它 + 其余按最优补齐 ⇒ **整套首发**的总分」）")
+				for r in cand_rows.slice(0, mini(4, cand_rows.size())):
+					var hid_r := String((r as Dictionary)["h"])
+					var nms_r: Array[String] = []
+					for h3 in ((r as Dictionary)["tail"] as Array):
+						nms_r.append(DataRegistry.get_hero(String(h3)).display_name)
+					print("  - %s[%s]  整套%.1f（搭配 %s）" % [
+						DataRegistry.get_hero(hid_r).display_name, DataRegistry.hero_role_name(hid_r),
+						float((r as Dictionary)["sc"]),
+						("、".join(nms_r) if nms_r.size() > 0 else "—")])
+			else:
+				var rows: Array = []
+				for i in enemy_pool.size():
+					var cand2: String = enemy_pool[i]
+					var cd2: DataRegistry.HeroDef = DataRegistry.get_hero(cand2)
+					var is_bench: bool = cd2 != null and cd2.skills.has(DataRegistry.Skill.BENCH)
+					rows.append({ "n": cd2.display_name if cd2 != null else cand2,
+						"role": DataRegistry.hero_role_name(cand2),
+						"sc": _hero_strength(cand2) if is_bench else _deploy_candidate_value(cand2, enemy_deployed),
+						"b": is_bench })
+				rows.sort_custom(func(x, y): return x["sc"] > y["sc"])
+				for r in rows.slice(0, mini(4, rows.size())):
+					var mark := "（带<替补>标签，不首发）" if r["b"] else ""
 					print("  - %s[%s]  价值%.1f%s" % [r["n"], r["role"], float(r["sc"]), mark])
-			if _CONSOLE_AI_LOG:
-				print("[AI首发部署] → 上阵 %s" % DataRegistry.get_hero(hid).display_name)
+			if best_add.size() > 0:
+				var nms: Array[String] = []
+				for h2 in best_add:
+					nms.append(DataRegistry.get_hero(String(h2)).display_name)
+				print("[AI首发部署·组合] 最优首发阵容 = %s + %s（整套 %.1f）" % [
+					"已上阵 %d 人" % enemy_deployed.size(), "、".join(nms), best_sc])
+			print("[AI首发部署] → 上阵 %s" % DataRegistry.get_hero(hid).display_name)
 		enemy_pool.remove_at(best_i)
 		enemy_deployed.append(hid)
 		var cell := _free_spawn_cell(DataRegistry.Faction.ENEMY)
@@ -2614,6 +2885,10 @@ func _start_match() -> void:
 func _begin_side(side: int) -> void:
 	if GameState.match_over:
 		return   # 对局已结束（如烧死判负）：不再开新回替补界面
+	# 【2026-09-24 用户要求·天梯模式】**回合开始 = 存档点**：在补位/毒伤/回合开始技之前先把局面落盘一次
+	#   ⇒ 正常退出、崩溃、强杀，下次进来都从"最近一次回合开始"继续（口径见 `autoload/LadderStore.gd`）。
+	#   单机天梯之外零开销（`_ladder_active()` 第一行就返回）。
+	_ladder_autosave(side)
 	_ending_side = false   # 新回合开始：解除"回合标记（含客方提交结束后的等待窗口
 	# 【2026-09-21 用户要求】**回合切换提醒先弹出来**，再走后面的账目结算与回合开始技演出。
 	#   原来横幅在 `_begin_side()` **末尾**才 emit ⇒ 圣诞老人的礼物都飞完了提示才出现（用户实机反馈），
@@ -3067,6 +3342,7 @@ func _emit_match_result(winner_side: int) -> void:
 	# （自由部署测试 no_death_limit=true 不计入；中途退出/断线不会走到这里）
 	if not GameState.no_death_limit:
 		_record_stats(local_win)
+	_ladder_on_match_result(local_win)   # 【天梯】连胜记账 / 失败即结束本轮（非天梯无操作）
 	match_result.emit(local_win)
 	if GameState.is_online and GameState.is_host:
 		NetBus.send_all(JSON.stringify({ "type": "match_end", "winner": winner_side }))
@@ -4619,6 +4895,12 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 			attacker.refresh_stats()
 	_sync_ranged_adjacent()   # 攻击后（换位/击退/拉近）相邻关系变化：刷新远程被贴身状
 	if _check_win():
+		# 【2026-09-25 修·用户实机「死了三人后敌方动画还在动／结算前空等几秒」】判负成立的这一路
+		#   原来直接 `return` ⇒ 单机敌方回放收不到 `action_finished`、要等 `_wait_action_done()` 的
+		#   3s 超时才醒。判负成立同样要**放行回放**（`state` 已是 `ENDED`，不回 `ENEMY_TURN`；
+		#   联机那条路一个字不变）。
+		if for_enemy and not GameState.is_online:
+			action_finished.emit()
 		return
 	if for_enemy:
 		# 单机：action_finished 通知敌方 AI 回放循环继续；联机对端真人行动后回到等待状态
@@ -5721,7 +6003,11 @@ func _best_enemy_sub_idx() -> int:
 	if enemy_roster.is_empty():
 		return 0
 	var ctx := _sub_ctx()
-	var need := String(ctx.get("need", ""))
+	# 【2026-09-24 用户拍板 A】预设替补这条路：**名单里没人能满足的需求不算数** —— 按优先级逐个需求试，
+	#   第一个"条件成立 ＋ 名单里至少一人够格"的才是本次需求；全都不成立 ⇒ 兜底（按身价挑）。病灶（用户实机）：
+	#   只剩 赏金猎人＋负墟、伤员 2 ⇒ 旧口径判"缺治疗"，而 5 人预设名单里一个治疗族都没有。
+	var need := DataRegistry.sub_need_for(enemy_roster, ctx)
+	ctx["need"] = need
 	var best_i := 0
 	var best_s := -1e18
 	var rows: Array = []
@@ -5729,24 +6015,45 @@ func _best_enemy_sub_idx() -> int:
 		var hid: String = String(enemy_roster[i])
 		var sc := DataRegistry.sub_hero_score(hid, need, ctx)
 		var s := float(sc.get("s", -1e18))
-		rows.append({ "i": i, "hid": hid, "s": s, "why": sc.get("why", []) })
+		rows.append({ "i": i, "hid": hid, "s": s, "why": sc.get("why", []),
+			"base": float(sc.get("base", s)), "prio": float(sc.get("prio", 0.0)), "bonus": float(sc.get("bonus", 0.0)) })
 		if s > best_s:
 			best_s = s
 			best_i = i
 	if _CONSOLE_AI_LOG and rows.size() > 0:
+		# 【2026-09-24 用户追问「替补需求的顺序是怎么算的，我在控制台看不出来」】把**判定过程**打出来：
+		#   ① 场上计数（条件用的输入）② 每个需求：条件成不成立 / 名单里谁够格 / 是否被采用
+		#   ③ 每个候选的分数构成（身价 ＋ 优先价20 ＋ 需求加分），避免"价值 42"这种看不懂的数。
+		print("\n[AI替补上人] 场况：嘲讽%d 治疗族%d 伤员%d 输出%d(攻和%d) 远程%d ｜ 对面核心=%s（已被克制=%s）" % [
+			int(ctx.get("taunt", 0)), int(ctx.get("healers", 0)), int(ctx.get("wounded", 0)),
+			int(ctx.get("dps", 0)), int(ctx.get("atk_sum", 0)), int(ctx.get("ranged", 0)),
+			(_hero_name(String(ctx.get("core", ""))) if String(ctx.get("core", "")) != "" else "无"),
+			str(ctx.get("countered", false))])
+		print("[AI替补上人] 需求判定（优先级从上到下；**条件成立 ＋ 名单里有人够格** 才采用）：")
+		for n in DataRegistry.SUB_NEED_ORDER:
+			var nm := String(n)
+			var cond: bool = DataRegistry.sub_need_ok(nm, ctx)
+			var ok_names: Array = []
+			for hid2 in enemy_roster:
+				if DataRegistry.sub_hero_eligible(String(hid2), nm, ctx):
+					ok_names.append(_hero_name(String(hid2)))
+			print("    %s：条件%s ｜ 名单够格：%s ｜ %s" % [nm, ("成立" if cond else "不成立"),
+				("无" if ok_names.is_empty() else "、".join(ok_names)),
+				("**← 本次需求**" if nm == need else ("跳过" if not cond else "跳过（名单里没人够格）"))])
+		print("[AI替补上人] 预设替补 %d 人 · 需求 = %s" % [enemy_roster.size(), DataRegistry.sub_need_label(need)])
 		rows.sort_custom(func(x, y): return float(x["s"]) > float(y["s"]))
-		print("\n[AI替补上人] 预设替补 %d 人 · 需求 = %s" % [
-			enemy_roster.size(), DataRegistry.sub_need_label(need)])
-		for r in rows.slice(0, mini(3, rows.size())):
+		for r in rows.slice(0, mini(4, rows.size())):
 			var why_txt := "、".join(r["why"]) if (r["why"] as Array).size() > 0 else "常规"
-			print("  - %s 价值%.1f（%s）" % [_hero_name(String(r["hid"])), float(r["s"]), why_txt])
+			print("  - %s 价值%.1f（身价%.1f ＋ 优先价%.0f ＋ 需求加分%.1f）（%s）" % [
+				_hero_name(String(r["hid"])), float(r["s"]), float(r["base"]), float(r["prio"]), float(r["bonus"]), why_txt])
 		print("[AI替补上人] → 上 %s（预设名单里最高分）" % _hero_name(String(enemy_roster[best_i])))
 	return best_i
 
 ## 替补选人的「需求上下文」（**真实侧**）：只统计**存活单位**，然后问 `DataRegistry.sub_need()`。
 ## ⚠️ 英雄属性一律用**英雄表**（`def.skills / attack_type / atk`），不用实时数值 ⇒ 与模拟镜像必然一致
 ##   （实时值两侧来源不同：真实读 `effective_*()`、模拟读被状态改过的 `eatk`）。
-## 字段：taunt/healers/dps/ranged/wounded（我方存活计数）· core（对面存活里身价最高者）· countered（我方
+## 字段：taunt/healers/dps/atk_sum/ranged/wounded（我方存活计数；`atk_sum` = 表格攻之和，
+##   2026-09-25 起是"缺输出"的判据）· core（对面存活里身价最高者）· countered（我方
 ##   是否已有人克制它）· ally_heroes/foe_heroes（身价与克制用）· player_near（对面贴着我方，后勤贬价用）。
 func _sub_ctx() -> Dictionary:
 	var ally: Array = []
@@ -5754,6 +6061,7 @@ func _sub_ctx() -> Dictionary:
 	var taunt := 0
 	var healers := 0
 	var dps := 0
+	var atk_sum := 0
 	var ranged := 0
 	var wounded := 0
 	var heals: Array = DataRegistry.MECH_TAGS["治疗"]
@@ -5771,6 +6079,9 @@ func _sub_ctx() -> Dictionary:
 					healers += 1
 				if int(def.atk) >= DataRegistry.SUB_DPS_ATK:
 					dps += 1
+				# 【2026-09-25 拍板 C】"缺输出"的判据（总量）——与 `dps` **同一作用域**：
+				#   只统计查得到**英雄表**的存活单位（召唤物等无 def 的不算，与其它判据口径一致）
+				atk_sum += int(def.atk)
 				if def.attack_type == DataRegistry.AttackType.RANGED:
 					ranged += 1
 			if u.hp < u.max_hp:
@@ -5803,7 +6114,7 @@ func _sub_ctx() -> Dictionary:
 		if player_near:
 			break
 	var ctx := {
-		"taunt": taunt, "healers": healers, "dps": dps, "ranged": ranged, "wounded": wounded,
+		"taunt": taunt, "healers": healers, "dps": dps, "atk_sum": atk_sum, "ranged": ranged, "wounded": wounded,
 		"core": core, "countered": countered, "ally_heroes": ally, "foe_heroes": foe,
 		"player_near": player_near,
 	}
@@ -6869,3 +7180,224 @@ func _drain_pending_deaths() -> void:
 		if not is_inside_tree() or my_session != _session_id or Time.get_ticks_msec() > deadline:
 			return   # 场景已释放/已重开/超时：安全退出
 		await get_tree().process_frame
+
+
+# ==================== 【2026-09-24 用户要求·天梯模式】中局存档 / 恢复 ====================
+# 口径（用户原话）：「天梯模式可以保存退出，退出后再进来，载入退出前回合开始状态，而不是对局重新开始；
+#   遇到非正常状态退出，依旧载入退出前回合开始状态」。
+# 实现：**每次回合开始自动落盘一次**（覆盖式）⇒ 磁盘上永远是"最近一次回合开始"，
+#   所以"正常退出"和"崩溃/强杀"走的是同一条路，不需要额外的崩溃处理。
+# 存档点选在 `_begin_side()` 的**最开头**（补位/猛毒跳伤/金矿倒计时/回合开始技都还没跑）⇒
+#   恢复 = 重建局面 + 重新调用 `_begin_side(side)`，把"回合开始那一套"原样重放一遍；
+#   其中用到随机的部分（圣诞老人放道具、黄金矿工放金矿…）靠一起存/取的 `rng.state` 保证落到同一处。
+# 只服务单机天梯；联机/自由部署/普通模式一律不进这里。
+
+const LADDER_SNAP_VER := 1
+
+func _ladder_active() -> bool:
+	# 本轮天梯必须还在（输了/放弃了就没档了）⇒ 之后无论从哪条路再开一局，都不会误记连胜
+	return GameState.ladder_mode != "" and not GameState.is_online and LadderStore.has_run()
+
+func _ladder_autosave(side: int) -> void:
+	if not _ladder_active():
+		return
+	LadderStore.save_snapshot(_ladder_snapshot(side))
+
+# 胜负记账：赢 = 当前连胜 +1（并刷新最高连胜）· 输 = 本次天梯结束（当前连胜清零、最高连胜保留、删档）
+func _ladder_on_match_result(local_win: bool) -> void:
+	if not _ladder_active():
+		return
+	var key := Stats.current_mode_key()
+	if local_win:
+		Stats.note_streak_win(key)
+		LadderStore.note_player_deck(GameState.player_deck)
+		LadderStore.begin_next_match()   # 轮次 +1、清掉本局快照（下一局从选人/部署重新开始）
+	else:
+		# 【2026-09-25 用户要求·天梯结算面板】失败那一刻的当前连胜要留给结算面板读
+		#   （下一行 `Stats.reset_streak()` 会把它清零）⇒ 先存进 `GameState.ladder_final_streak`。
+		GameState.ladder_final_streak = Stats.current_streak(key)
+		Stats.reset_streak(key)
+		LadderStore.finish_run()
+	if _CONSOLE_AI_LOG:
+		print("[天梯] %s：%s（当前连胜 %d · 最高连胜 %d）" % [
+			LadderStore.mode_name(), "胜" if local_win else "负",
+			Stats.current_streak(key), Stats.best_streak(key)])
+
+# ---- 快照 ----
+func _ladder_snapshot(side: int) -> Dictionary:
+	var us: Array = []
+	var idx := {}   # Unit -> 快照下标（附体绑定按下标存，避免依赖 Unit.id 唯一）
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		idx[u] = us.size()
+		us.append({
+			"vars": _dump_script_vars(u),
+			"bhex": _dump_script_vars(u.behavior),
+		})
+	var possess: Array = []
+	for t in _possess_links.keys():
+		var c = _possess_links[t]
+		if t is Unit and c is Unit and idx.has(t) and idx.has(c):
+			possess.append([int(idx[t]), int(idx[c])])
+	return {
+		"ver": LADDER_SNAP_VER, "side": side, "round": GameState.round_number,
+		"first_side": _first_side, "deploy_side": _deploy_side, "deck_pick_match": _deck_pick_match,
+		"arena_mode": GameState.arena_mode, "no_death_limit": GameState.no_death_limit,
+		"ai_difficulty": GameState.ai_difficulty,
+		"player_deck": GameState.player_deck.duplicate(), "enemy_deck": GameState.enemy_deck.duplicate(),
+		"enemy_recipe": GameState.enemy_recipe.duplicate(true),
+		"player_pool": player_pool.duplicate(), "enemy_pool": enemy_pool.duplicate(),
+		"player_deployed": player_deployed.duplicate(), "enemy_deployed": enemy_deployed.duplicate(),
+		"player_roster": player_roster.duplicate(), "enemy_roster": enemy_roster.duplicate(),
+		"player_dead": player_dead, "enemy_dead": enemy_dead,
+		"pending_player_subs": _pending_player_subs, "pending_enemy_sub": _pending_enemy_sub,
+		"pending_sub": _pending_sub, "gold_tick_round": _gold_tick_round,
+		"opening_items_spawned": _opening_items_spawned,
+		"rng_state": rng.state,
+		"units": us,
+		"bombs": bombs.duplicate(), "obstacles": obstacles.duplicate(), "buff_items": buff_items.duplicate(),
+		"buff_owner": buff_owner.duplicate(), "gift_hidden": _gift_hidden_cells.duplicate(),
+		"graves": graves.duplicate(), "gold_left": gold_left.duplicate(), "possess": possess,
+	}
+
+# 通用字段转储：只取"脚本自己声明的成员变量"里**可序列化**的那几种类型（对象/节点引用一律跳过）。
+# ⇒ 52 个英雄脚本里只有 3 个带对象级状态（锤头鲨 `bonus` / 风语者 `_aura_given` / 负墟 `_last_frame`），
+#   这条通用规则把它们一并覆盖，以后新增英雄状态也不用回来改这里。
+const _SNAP_TYPES := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_VECTOR2I, TYPE_ARRAY, TYPE_DICTIONARY]
+
+func _dump_script_vars(obj) -> Dictionary:
+	var out: Dictionary = {}
+	if obj == null or not is_instance_valid(obj):
+		return out
+	var scr: Script = obj.get_script()
+	if scr == null:
+		return out
+	for p in scr.get_script_property_list():
+		if int(p.get("usage", 0)) & PROPERTY_USAGE_SCRIPT_VARIABLE == 0:
+			continue
+		var nm := String(p.get("name", ""))
+		if nm == "":
+			continue
+		var v = obj.get(nm)
+		var ty := typeof(v)
+		if ty == TYPE_DICTIONARY:
+			out[nm] = (v as Dictionary).duplicate(true)
+		elif ty == TYPE_ARRAY:
+			out[nm] = (v as Array).duplicate()
+		elif _SNAP_TYPES.has(ty):
+			out[nm] = v
+	return out
+
+func _apply_script_vars(obj, d) -> void:
+	if obj == null or not is_instance_valid(obj) or not (d is Dictionary):
+		return
+	for nm in (d as Dictionary).keys():
+		obj.set(String(nm), (d as Dictionary)[nm])
+
+func _fill_cells(dst: Dictionary, src) -> void:
+	dst.clear()
+	if src is Dictionary:
+		for k in (src as Dictionary).keys():
+			dst[k] = (src as Dictionary)[k]
+
+# 造人：与 `_spawn_unit()` 同一条路径，但**不跑** `on_spawn()`、也不拾取落点道具 ——
+# 续档时那些副作用已经写在快照字段里了，重放会重复计算（如太阳斩登场 +3 攻击）。
+func _spawn_unit_raw(hero_id: String, faction: int, cell: Vector2i) -> Unit:
+	var def := DataRegistry.get_hero(hero_id)
+	if def == null:
+		push_warning("天梯续档：认不出的英雄 id " + hero_id)
+		return null
+	var u := Unit.new(def, faction, cell, hex_size * 0.9)
+	if def.skills.has(DataRegistry.Skill.SWIFT):
+		u.move_range += 1
+	u.behavior = HeroRegistry.create(hero_id)
+	u.behavior.setup(self, u)
+	u.position = board_view.cell_world_center(cell)
+	u.hp_changed.connect(_on_unit_hp_changed)
+	u.damaged.connect(_on_unit_damaged)
+	u.died.connect(_on_unit_died)
+	u.dying.connect(_on_unit_dying)
+	add_child(u)
+	units.append(u)
+	occupancy[cell] = u
+	return u
+
+# ---- 恢复 ----
+func _ladder_restore() -> void:
+	var snap: Dictionary = LadderStore.snapshot()
+	if snap.is_empty():
+		return
+	# 1) 棋盘实体（**原地改**：`board_view` 拿的是这几个字典的引用，换对象它就不跟着画了）
+	_fill_cells(bombs, snap.get("bombs", {}))
+	_fill_cells(obstacles, snap.get("obstacles", {}))
+	_fill_cells(buff_items, snap.get("buff_items", {}))
+	_fill_cells(buff_owner, snap.get("buff_owner", {}))
+	_fill_cells(_gift_hidden_cells, snap.get("gift_hidden", {}))
+	_fill_cells(graves, snap.get("graves", {}))
+	_fill_cells(gold_left, snap.get("gold_left", {}))
+	# 2) 账本
+	player_pool = (snap.get("player_pool", []) as Array).duplicate()
+	enemy_pool = (snap.get("enemy_pool", []) as Array).duplicate()
+	player_deployed = (snap.get("player_deployed", []) as Array).duplicate()
+	enemy_deployed = (snap.get("enemy_deployed", []) as Array).duplicate()
+	player_roster = (snap.get("player_roster", []) as Array).duplicate()
+	enemy_roster = (snap.get("enemy_roster", []) as Array).duplicate()
+	player_dead = int(snap.get("player_dead", 0))
+	enemy_dead = int(snap.get("enemy_dead", 0))
+	_pending_player_subs = int(snap.get("pending_player_subs", 0))
+	_pending_enemy_sub = int(snap.get("pending_enemy_sub", 0))
+	_pending_sub = String(snap.get("pending_sub", ""))
+	_gold_tick_round = int(snap.get("gold_tick_round", -1))
+	_opening_items_spawned = bool(snap.get("opening_items_spawned", true))
+	_first_side = int(snap.get("first_side", GameState.SIDE_PLAYER))
+	_deploy_side = int(snap.get("deploy_side", GameState.SIDE_PLAYER))
+	_deck_pick_match = bool(snap.get("deck_pick_match", false))
+	_first_side_decided = true
+	rng.state = int(snap.get("rng_state", rng.state))
+	# 3) GameState（卡组/配方/回合/行动方）—— 后续的替补挑人也要读它，所以必须一起恢复
+	GameState.set_decks(snap.get("player_deck", []), snap.get("enemy_deck", []))
+	GameState.enemy_recipe = (snap.get("enemy_recipe", {}) as Dictionary).duplicate(true)   # set_decks 会清它 ⇒ 放在后面
+	GameState.arena_mode = bool(snap.get("arena_mode", false))
+	GameState.no_death_limit = bool(snap.get("no_death_limit", false))
+	GameState.ai_difficulty = int(snap.get("ai_difficulty", LadderStore.LOCKED_DIFFICULTY))
+	GameState.round_number = int(snap.get("round", 1))
+	GameState.active_side = int(snap.get("side", GameState.SIDE_PLAYER))
+	GameState.match_over = false
+	GameState.match_running = true
+	# 4) 单位：先按快照的（英雄, 阵营, 格）造节点，再把字段盖回去
+	var recs: Array = snap.get("units", [])
+	var spawned: Array = []
+	for rec in recs:
+		var d: Dictionary = (rec as Dictionary).get("vars", {})
+		var u := _spawn_unit_raw(String(d.get("hero_id", "")), int(d.get("faction", 0)), d.get("cell", Vector2i.ZERO))
+		if u == null:
+			spawned.append(null)
+			continue
+		_apply_script_vars(u, d)
+		_apply_script_vars(u.behavior, (rec as Dictionary).get("bhex", {}))
+		u.alive = true
+		u.position = board_view.cell_world_center(u.cell)
+		u.refresh_stats()
+		spawned.append(u)
+	# 5) 附体绑定（按快照下标找回）
+	_possess_links.clear()
+	for pr in (snap.get("possess", []) as Array):
+		var pair: Array = pr
+		if pair.size() != 2:
+			continue
+		var i0 := int(pair[0])
+		var i1 := int(pair[1])
+		if i0 >= 0 and i1 >= 0 and i0 < spawned.size() and i1 < spawned.size():
+			var t = spawned[i0]
+			var c = spawned[i1]
+			if t != null and c != null:
+				_possess_links[t] = c
+	# 6) 回到"这个回合开始"：状态归位后照常跑 `_begin_side()`（补位/毒伤/回合开始技重放一遍）
+	state = State.IDLE
+	_refresh_board()
+	_sync_ranged_adjacent()
+	if _CONSOLE_AI_LOG:
+		print("[天梯] 已续档：第 %d 回合 · %s行动 · 场上 %d 个单位" % [
+			GameState.round_number, "我方" if int(snap.get("side", 0)) == _my_side() else "敌方", units.size()])
+	_begin_side(int(snap.get("side", GameState.SIDE_PLAYER)))

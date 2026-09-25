@@ -40,6 +40,7 @@ var _opp := "cand"              # cand / base
 var _first_mode := "p"          # p / e / both
 
 var _sum := { "games": 0, "w": 0, "l": 0, "d": 0, "ptsA": 0.0, "ptsB": 0.0, "ms_max": 0 }
+var _game_ms_max := 0           # 本局单次思考最久的毫秒（每局清零；纯取证，见 `_ai_side`）
 
 func _ready() -> void:
 	_watchdog()
@@ -105,6 +106,8 @@ func _run() -> void:
 
 ## a_side = 候选（A）这一方扮演的阵营；first_side = 谁先手
 func _play(seed_v: int, a_side: int, first_side: int) -> Dictionary:
+	var t_game := Time.get_ticks_msec()   # 本局墙钟起点（打印在 R|m| 的 ms= 上）
+	_game_ms_max = 0                      # 本局"单次思考最久"（_ai_side 里累计，打印在 msmax= 上）
 	await _setup(seed_v, first_side)
 	var hp0 := _side_hp()
 	var rounds := 0
@@ -163,9 +166,16 @@ func _play(seed_v: int, a_side: int, first_side: int) -> Dictionary:
 		elif killsB >= Battle.LOSS_DEATH_COUNT and killsA < Battle.LOSS_DEATH_COUNT:
 			res = "L"
 	# 平局/超时/同归于尽都记 D（同归于尽在真实规则里判"本端胜"，这里不采纳以免偏袒）
-	print("R|m|seed=%d|a_side=%d|first=%d|res=%s|killsA=%d|killsB=%d|rounds=%d|ptsA=%.2f|ptsB=%.2f|dmgA=%d|dmgB=%d|hpA=%d|hpB=%d|over=%s|subA=%d|subB=%d" % [
+	# 【2026-09-25 用户要求「统计一下每一局的时间有没有异常」】`R|m|` 行末尾补两个**纯取证**字段
+	#   （key=value 解析 ⇒ 自动进 `measure.csv` 新列，不改任何既有列/判定）：
+	#   `ms` = 这一局从建局到收尾的墙钟毫秒 · `msmax` = 这一局**单次思考最久**的那一步（AI 搜索 ms）。
+	#   ⚠️ `msmax` 才是能和实战比的数：本 harness 把 `time_budget_ms` 设成 0（不限时、可复现），
+	#   而生产噩梦档是 `TIME_BUDGET_MS = 40000` ⇒ `msmax > 40000` 的那些步在实战里会被超时截断
+	#   （后半段转 `_greedy_finish()` 贪心收尾），那正是"时间异常"的判据。
+	print("R|m|seed=%d|a_side=%d|first=%d|res=%s|killsA=%d|killsB=%d|rounds=%d|ptsA=%.2f|ptsB=%.2f|dmgA=%d|dmgB=%d|hpA=%d|hpB=%d|over=%s|subA=%d|subB=%d|ms=%d|msmax=%d" % [
 		seed_v, a_side, first_side, res, killsA, killsB, rounds, ptsA, ptsB, dmgA, dmgB, hpA, hpB,
-		str(bool(out["over"])), subA, subB])
+		str(bool(out["over"])), subA, subB,
+		Time.get_ticks_msec() - t_game, _game_ms_max])
 	_sum["games"] = int(_sum["games"]) + 1
 	_sum["ptsA"] = float(_sum["ptsA"]) + ptsA
 	_sum["ptsB"] = float(_sum["ptsB"]) + ptsB
@@ -246,6 +256,8 @@ func _ai_side(side: int, a_side: int) -> void:
 	var el := Time.get_ticks_msec() - t_s
 	if el > int(_sum["ms_max"]):
 		_sum["ms_max"] = el
+	if el > _game_ms_max:
+		_game_ms_max = el      # 本局最久的一次思考（`R|m|` 的 msmax=，与生产 40s 上限对比用）
 	for step in plan:
 		if GameState.match_over:
 			break

@@ -1147,7 +1147,7 @@ function Get-MeasureHeader {
     # inv identifies the BATCH INSTANCE. The same batch file name is reused every time the same cell is
     # measured (re-measure after a weights/harness change, resume, -Force), so without it neither the
     # append-only raw log nor the derived table can tell an old measurement of a cell from a new one.
-    return 'run,config,weights_file,weights_fp,seed,round,first,a_side,lineup_used,lineup_side,res,killsA,killsB,rounds,ptsA,ptsB,dmgA,dmgB,hpA,hpB,over,subA,subB,batch_out,batch_wall_s,seq,line_no,weights_sha12,beam_opp,opp,wB_sha,inv,audit'
+    return 'run,config,weights_file,weights_fp,seed,round,first,a_side,lineup_used,lineup_side,res,killsA,killsB,rounds,ptsA,ptsB,dmgA,dmgB,hpA,hpB,over,subA,subB,batch_out,batch_wall_s,seq,line_no,weights_sha12,beam_opp,opp,wB_sha,inv,audit,ms,msmax'
 }
 
 function Get-AuditString([object]$Meta, [string]$Opp = '', [string]$WB = '', [int]$BeamBOverride = 0) {
@@ -1227,8 +1227,13 @@ function Get-RuleScoreKeys {
              # 2026-09-18 追加：结局量（用户第 2/3 条「本回合输出与下回合被输出的最优平衡」
              # 「被输出尽量分摊、优先保护核心、用肉盾抗伤害」）。都默认 0 = 关闭 ⇒ 生产逐位不变。
              # TERMINAL_W = 终局项（判负线凸曲线）· RISK_W = ⑦位置暴露（max 型）· RISK_CORE_POW = 其中的核心指数
+             # 【2026-09-25】RISK_CORE_OUTPUT_W = ⑦ 核心系数的**混合权重**：`身价^(1−w) × 输出潜力^w`
+             #   （0 = 纯身价 = 现役逐位不变 · 0.5 = 两者相乘开方 · 1 = 纯输出潜力）。
+             #   用户口径「让低血量的延缓死亡时间，增加输出机会」；实测身价倒挂（塔盾 20.10 > 白游侠 18.85）。
+             #   ⚠️ 旧的**二选一**键 `RISK_CORE_BY_OUTPUT` 已删（A/B 批 c1−c0 = −3.13 [−7.26,+1.01] 没用，
+             #   登记见 `Data/Progress_tracking/1_通用策略.md` §四 已删表 / §五 T34）。
              # ⑦ 于 2026-09-20 第三轮随分摊族删过，2026-09-21 按用户拍板 A 恢复（输入换成「挨打合计」）。
-             'TERMINAL_W', 'RISK_W', 'RISK_CORE_POW',
+             'TERMINAL_W', 'RISK_W', 'RISK_CORE_POW', 'RISK_CORE_OUTPUT_W',
              # 2026-09-21 追加：**"我方挨打按血量池折算"**（用户：「一个 2 的坦克不敢打 4 攻的输出，
              #   但实际坦克的血多，不一定亏」）⇒ 倍率 = 1 + INCOMING_POOL_W × (20 ÷ 当前血 − 1)，
              #   只作用在 ③血量账的**我方掉血**那一侧（打出去那侧已有 ④集火 frac² 计价）。默认 0 = 关。
@@ -1265,6 +1270,9 @@ function Get-RuleScoreKeys {
              # 2026-09-20 追加（T6）：**『这一击新挂上毒』的动作收益**（只在目标原本没毒时计数 +1）。
              #   与 POISON_TICK_VALUE（计价『敌人身上有毒』这个状态）互补：一个付状态钱、一个付动作钱。默认 0 = 关。
              'POISON_APPLY_W', 'POSSESS_TARGET_W', 'SOLID_HOLD_W',
+             # 【2026-09-25·方案 C 用户拍板】⑬b 附体电池（宿魂未被沉默/眩晕时「站火线白赚镜像」的定价；
+             #   值写在 `hero_46` 段（`_wh` 覆盖读）= 1.0 起，扁平键只是兜底（默认 0 = 关）。
+             'POSSESS_BATTERY_W',
              # 【2026-09-21 追加·B 档英雄特化（用户拍板：做沉默 / 荆棘树人打远程后勤 / 战锤克毒蛇）】
              #   三个键都是**动作量**：由 `_apply` 在我方命中那一刻累加（`sim.silence_val` / `pin_val` /
              #   `paralyze_val`）、`_evaluate` 直接入账，价钱按**施加者**英雄段覆盖读（`_wh`）⇒
@@ -1424,6 +1432,34 @@ function Get-RuleScoreKeys {
              #   且占整局 44~89%（召唤队 97%）⇒ 它是"漏斗宽度"的乘法器。
              #   0 = 关（**逐位不变**）· 1 = 开。⇒ 规则键 40 → 41、可注入 48 → 49。
              'TWO_PHASE_P2_DEDUP',
+             # 【2026-09-25·用户「死灵法师在场的时候还是会超时」】**「挨打合计」的同局面记忆化**（`INC_MEMO`）。
+             #   `_incoming_total_on()` 是最贵的一次查询，而同一份 sim 的同一批 (单位, 格) 在一次 `_evaluate()`
+             #   里被问 2~4 遍（⑥规则B / ⑦核心风险 / ㉕嘲讽吸火两趟）⇒ 单位越多越致命（召唤队 5~6 个）。
+             #   0 = 关（**逐位不变**）· 1 = 开。⇒ 规则键 41 → 42、可注入 49 → 50。
+             'INC_MEMO',
+             # 【2026-09-25·用户「死灵法师在场的时候还是会超时」】**阶段 2 的内层宽度**（`TWO_PHASE_INNER`）。
+             #   原来写死 = `beam / 8` ⇒ 线上 `BEAM = 400` 时 inner = 50（走查台 200 ⇒ 25），而阶段 2 的
+             #   评估次数 = 阵型数 × inner ⇒ 跟着 beam 一起翻倍；"加宽 beam 不增棋力"是已判死②的结论 ⇒
+             #   inner 没有理由跟着 beam 涨。本键把它独立出来：0 = 沿用 `beam/8`（**逐位不变**）。
+             #   算力分配键、不进自动搜索。⇒ 规则键 42 → 43、可注入 50 → 51。
+             'TWO_PHASE_INNER',
+             # 【2026-09-25·用户「你都试试，比比哪个效果好」】**漏斗名额的"同轮廓限席"**（`FUNNEL_DIVERSITY`）。
+             #   病灶：漏斗只按代理分 `_layout_score` 取前 N 名，而这游戏自己量过"83% 的局面分差 < 0.5"
+             #   ⇒ 前 N 名里常常一半是**同一个战术想法的不同写法**（某个单位少挪一格）⇒ N 个名额的信息量被浪费。
+             #   口径：值 = **每个"战术轮廓"最多占几席**（0 = 关，**逐位不变**）；轮廓 = `_layout_profile()`
+             #   = 我方每个单位"够得到的敌人"的布尔画像 + 抵达距离（不看视线/嘲讽门）。
+             #   名额没满则按原代理分顺序补满 ⇒ 送进阶段 2 的套数仍恒等于 `TWO_PHASE_LAYOUTS`
+             #   （**成本不变**），只是这 N 套里"不同的想法"更多；保送的那套（`path` 为空）永远不被挤掉。
+             #   算力分配键、不进自动搜索。⇒ 规则键 43 → 44、可注入 51 → 52。
+             'FUNNEL_DIVERSITY',
+             # 【2026-09-25·用户实机「长剑是步臭棋…他本来可以打 6 伤」】**搜索后的"逐单位复查"**（`TWO_PHASE_POLISH`）。
+             #   病灶：两阶段搜索挑的是"整套阵型"，阶段 1 的**代理分**把"某单位换一手"的那套挤出漏斗
+             #   （线上 `TWO_PHASE_LAYOUTS` = 8）⇒ 那一手永远看不到（引擎自己的诊断叫「疑似被搜索漏掉（剪枝）」）。
+             #   口径：搜完之后固定其它单位、逐个单位把它自己的动作换成 `_actions_for()` 里的其它候选
+             #   （保持它在计划里的原位置/出手顺序），用**完整 `_evaluate`** 打分，只接受更优的。
+             #   0 = 关（**逐位不变**）· 1 = 一趟 · 2 = 最多两趟。算力键、不进自动搜索。
+             #   ⇒ 规则键 45 → 46、可注入 52 → 53。
+             'TWO_PHASE_POLISH',
              # 【2026-09-24·用户「单位多的局能不能优化路径，比如有死灵法师的」→「改」】**召唤物的阶段 1 候选集**。
              #   事实：`heroes/summon_骷髅兵.gd::on_turn_end()` = 本方回合结束即消散（攻 1 / 血 1 / 无特性）
              #   ⇒ 骷髅永远挡不住敌人、也永远不会被敌人主动打 ⇒ 它的价值只有「本回合打出的伤害 + 替英雄吃下的反击」
@@ -1792,10 +1828,15 @@ function Get-RunWallEvents([string]$Run) {
 }
 
 function Get-MeasureColumns {
+    # 【2026-09-25 用户要求「统计一下每一局的时间有没有异常」】末尾加两列纯取证字段：
+    #   `ms` = 单局墙钟毫秒（`对局.gd` 的 `R|m|` 行新增）· `msmax` = 该局**单次思考最久**的那一步。
+    #   ⚠️ `msmax` 是唯一能与实战对比的数：harness 把 `time_budget_ms` 设 0（不限时、可复现），
+    #   生产噩梦档是 `TIME_BUDGET_MS=40000` ⇒ `msmax > 40000` 的步在实战里会被截断（转贪心收尾）。
+    #   旧批次的 measure.csv 没有这两列（Get-RowField 读不到会给空串），不影响既有读数。
     return @('run', 'config', 'weights_file', 'weights_fp', 'seed', 'round', 'first', 'a_side', 'lineup_used',
              'lineup_side', 'res', 'killsA', 'killsB', 'rounds', 'ptsA', 'ptsB', 'dmgA', 'dmgB', 'hpA', 'hpB',
              'over', 'subA', 'subB', 'batch_out', 'batch_wall_s', 'seq', 'line_no', 'weights_sha12', 'beam_opp',
-             'opp', 'wB_sha', 'inv', 'audit')
+             'opp', 'wB_sha', 'inv', 'audit', 'ms', 'msmax')
 }
 
 function Add-MeasureRows([string]$Run, [object[]]$Rows) {
@@ -1959,6 +2000,8 @@ function Repair-MeasureCsv([string]$Run, [object]$Spec = $null) {
             inv = $cur.inv
             weights_sha12 = $cur.wsha; beam_opp = $cur.beamOpp
             opp = $cur.opp; wB_sha = $cur.wbSha; audit = $cur.audit
+            # 【2026-09-25】从 raw log 的 R|m| 里补回单局耗时（旧日志没这两个 token ⇒ 空串）
+            ms = [string]$kv['ms']; msmax = [string]$kv['msmax']
         })
     }
     if ($rows.Count -eq 0) { throw ('repair: raw log has no parsable game rows for run ' + $Run) }
@@ -2099,6 +2142,8 @@ function Invoke-GodotCell {
             weights_sha12 = [string]$Cfg.meta.sha12
             beam_opp = [string]$beamOppUse; opp = [string]$oppUse; wB_sha = [string]$WBSha; inv = [string]$InvToken
             audit = (Get-AuditString $Cfg.meta $oppUse $WBSha $beamOppUse)
+            # 【2026-09-25】单局墙钟 / 单局最久一次思考（旧 harness 没有这两个 token ⇒ 空串）
+            ms = [string]$m.ms; msmax = [string]$m.msmax
         }
     }
     Add-MeasureRows -Run $Run -Rows $newRows

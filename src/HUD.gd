@@ -51,6 +51,10 @@ var _reveal_pending := { "my": 0, "op": 0 }
 var _mark_filled := { "my": 0, "op": 0 }
 var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上角）
 var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
+var _ladder_confirm: Control = null  # 【天梯】"确定放弃本次天梯？"的再确认层（用户要求）
+# 【2026-09-25 用户要求·天梯主动放弃】放弃确认后**也要弹结算面板**（提示"才X连胜，跑什么？去简单难度偷偷进步啊？"）
+#   ⇒ 这个一次性标记让 `show_result()` 知道"这次是放弃、不是打输"（用它选文案 + 保持整棵树暂停）。
+var _ladder_gave_up := false
 # 【2026-09-23 深夜·用户贴的 `HUD.gd:54 UNUSED_PRIVATE_CLASS_VARIABLE`】这两行是老"整行文字"版阵亡栏
 #   留下的计数器（`_last_pd`/`_last_ed`）—— 2026-09-23 改成**逐槽 DeathMark** 后，界面状态改由
 #   `_reveal_pending` / `_mark_filled` 记录 ⇒ 这两个再没人读写，已删除（纯删死变量，行为零变化）。
@@ -1977,11 +1981,14 @@ func _refresh_controls() -> void:
 	if _end_btn != null:
 		_end_btn.disabled = not my_turn
 	if _restart_btn != null:
-		_restart_btn.visible = not GameState.is_online
+		# 【天梯】不给"重开"（用户要求）：重开会把本局作废，与"输了才结束本轮"的口径冲突；
+		#   天梯里要退出/结束都走暂停键那两个按钮。
+		_restart_btn.visible = not GameState.is_online and GameState.ladder_mode == ""
 	if _pause_btn != null:
 		_pause_btn.visible = not GameState.is_online   # 暂停仅单机（联机暂停会与对端不同步）
 	if _back_btn != null:
-		_back_btn.visible = true
+		# 【天梯】也不给"返回选人"（同上）；天梯的退出 = 暂停 → 保存并退出 / 放弃
+		_back_btn.visible = GameState.ladder_mode == ""
 		_back_btn.text = "返回大厅" if GameState.is_online else "返回选人"
 
 # 属性浮层实时跟随鼠标，并收敛到屏幕内（避免被底部/右侧挡住）
@@ -2070,6 +2077,23 @@ func _on_pause_pressed() -> void:
 	resume.custom_minimum_size = Vector2(240, 50)
 	resume.pressed.connect(_on_resume_pressed)
 	vb.add_child(resume)
+	# 【2026-09-24 用户要求·天梯模式】天梯里**没有**「重开」和「返回选人」按钮（顶部常驻重开已隐藏、
+	#   结算面板也不给返回），退出与结束都在这里：**保存并退出** / **放弃本次天梯**。
+	if GameState.ladder_mode != "":
+		var save_quit := Button.new()
+		save_quit.text = "保存并退出"
+		save_quit.add_theme_font_size_override("font_size", 20)
+		save_quit.custom_minimum_size = Vector2(240, 50)
+		save_quit.pressed.connect(_on_ladder_save_quit)
+		vb.add_child(save_quit)
+		var give_up := Button.new()
+		give_up.text = "放弃本次天梯"
+		give_up.add_theme_font_size_override("font_size", 20)
+		give_up.custom_minimum_size = Vector2(240, 50)
+		give_up.pressed.connect(_on_ladder_give_up)
+		vb.add_child(give_up)
+		# 【2026-09-24 用户要求】原来按钮下面还有一块小字（"天梯普通模式 · 第 N 局 · 当前连胜 M 场" + 两行按钮说明）
+		#   ⇒ 已删；暂停面板现在就三行：继续游戏 / 保存并退出 / 放弃本次天梯。
 	panel.reset_size()
 	var pw: float = clampf(maxf(panel.get_combined_minimum_size().x, 300.0), 300.0, maxf(vsize.x - 40.0, 300.0))
 	var ph: float = panel.get_combined_minimum_size().y
@@ -2079,6 +2103,85 @@ func _on_pause_pressed() -> void:
 
 func _on_resume_pressed() -> void:
 	_resume()
+
+# 【天梯·保存并退出】存档已经在"每次回合开始"落过盘了（见 `Battle._ladder_autosave()`），
+#   这里只做两件事：确认手上这份快照确实在（没有就**在真的开打之后**现补一份），然后回主菜单。
+#   ⚠️ 部署 / 选卡组 / 竞技场选人阶段**不补快照**：那会儿还没有"回合开始"可回，
+#      硬存一个半成品的局面反而会在续档时被当成"回合已开始"。这种情形按文档口径就是"没有回合可回"。
+#   本轮存档**保留** ⇒ 下次进天梯可以继续。
+func _on_ladder_save_quit() -> void:
+	if battle != null and not LadderStore.has_snapshot() and GameState.match_running \
+			and not GameState.match_over and battle.units.size() > 0:
+		battle._ladder_autosave(GameState.active_side)
+	_resume()
+	GameState.ladder_mode = ""
+	GameState.arena_mode = false
+	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
+
+# 【天梯·放弃】用户要求先**再确认**一次（这一步会清当前连胜 + 删本轮存档，误触代价太大）：
+#   这里只负责弹确认层；真正确认后走 `_ladder_do_give_up()`。
+func _on_ladder_give_up() -> void:
+	if _ladder_confirm != null and is_instance_valid(_ladder_confirm):
+		return
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	# 暂停后引擎不再处理 PAUSABLE 节点：确认层与按钮必须能在暂停中工作（与暂停遮罩同一处理）
+	ov.process_mode = Node.PROCESS_MODE_WHEN_PAUSED
+	add_child(ov)
+	_ladder_confirm = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var panel := PanelContainer.new()
+	ov.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "确定放弃本次天梯？"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.6, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	# ⚠️ 这里**不要**再加说明小字（用户 2026-09-24：「你不要自己乱加这种描述，显得很乱，需要的话我会让你加的」）
+	var yes := Button.new()
+	yes.text = "确定放弃"
+	yes.add_theme_font_size_override("font_size", 20)
+	yes.custom_minimum_size = Vector2(240, 50)
+	yes.pressed.connect(_ladder_do_give_up)
+	vb.add_child(yes)
+	var no := Button.new()
+	no.text = "取消"
+	no.add_theme_font_size_override("font_size", 20)
+	no.custom_minimum_size = Vector2(240, 50)
+	no.pressed.connect(_close_ladder_confirm)
+	vb.add_child(no)
+	panel.reset_size()
+	var pw: float = clampf(maxf(panel.get_combined_minimum_size().x, 320.0), 320.0, maxf(vsize.x - 40.0, 320.0))
+	var ph: float = panel.get_combined_minimum_size().y
+	panel.size = Vector2(pw, ph)
+	panel.position = Vector2((vsize.x - pw) / 2.0, (vsize.y - ph) / 2.0)
+
+func _close_ladder_confirm() -> void:
+	if _ladder_confirm != null and is_instance_valid(_ladder_confirm):
+		_ladder_confirm.queue_free()
+	_ladder_confirm = null
+
+# 【天梯·放弃】确认之后才真的执行：当前连胜清零、删档（最高连胜保留）
+# 【2026-09-25 用户要求】不再直接回主菜单，而是**弹结算面板**：
+#   「才X连胜，跑什么？去简单难度偷偷进步啊？」（X = 放弃那一刻的当前连胜）
+#   ⚠️ 面板弹出期间**整棵树保持暂停**（`_resume()` 不在这里调）⇒ 战斗冻结，AI 不会在面板后面接着跑；
+#      结算浮层自己按 `PROCESS_MODE_WHEN_PAUSED` 收输入（见 `show_result()`），点「返回主菜单」才真的换场景。
+func _ladder_do_give_up() -> void:
+	_close_ladder_confirm()
+	GameState.ladder_final_streak = Stats.current_streak(Stats.current_mode_key())
+	Stats.reset_streak(Stats.current_mode_key())
+	LadderStore.finish_run()
+	_ladder_gave_up = true
+	show_result(false)
 
 # 解除暂停（幂等）：收起遮罩并恢复场景树
 func _resume() -> void:
@@ -2129,7 +2232,13 @@ func _on_restart(redraft := false) -> void:
 		get_tree().reload_current_scene()
 
 func show_result(win: bool) -> void:
-	_resume()   # 结算时确保不在暂停态（否则结算浮层按钮点不动）
+	# 【2026-09-25】主动放弃天梯时**不能**解暂停（战斗要冻在面板后面）⇒ 只收掉暂停遮罩，保持 paused。
+	if _ladder_gave_up:
+		if _pause_overlay != null and is_instance_valid(_pause_overlay):
+			_pause_overlay.queue_free()
+		_pause_overlay = null
+	else:
+		_resume()   # 结算时确保不在暂停态（否则结算浮层按钮点不动）
 	# 【2026-09-23 新增·配套阵亡演出】判负/判胜的那一刻（第 3 名阵亡后 0.3s）结算浮层就会弹出来，
 	#   正好压在"卡面飞向阵亡标志"的演出上 ⇒ 若还有演出在飞，先等它落地再弹（只延迟面板，不改判定）。
 	#   headless（跑批/无窗口）没有演出 ⇒ 这段不生效、时序与改动前逐位一致。
@@ -2143,6 +2252,9 @@ func show_result(win: bool) -> void:
 	var overlay := Control.new()
 	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	if _ladder_gave_up:
+		# 放弃天梯：树是暂停的 ⇒ 面板必须能在暂停中收输入（与再确认层同一处理）。
+		overlay.process_mode = Node.PROCESS_MODE_WHEN_PAUSED
 	add_child(overlay)
 	_result_overlay = overlay
 
@@ -2166,13 +2278,70 @@ func show_result(win: bool) -> void:
 	box.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "敌方英雄阵亡达 3 名。" if win else "我方英雄阵亡达 3 名。"
 	sub.add_theme_font_size_override("font_size", 18)
-	sub.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	# 【2026-09-24 用户要求·天梯模式】结算面板显示连胜：赢了显示"当前连胜"（可点继续挑战）。
+	# 【2026-09-25 用户要求·天梯失败面板】失败那一面**只留一句调侃**：
+	#   用户原话「我方英雄阵亡达3名和下面那行去掉。最下面那行本轮已结束（...）也去掉。
+	#   就写"才x连胜就不行了？你适合打简单难度"」⇒ sub 只写这一句、`qhint`（本轮已结束…）整块删掉。
+	#   x = `GameState.ladder_final_streak`（失败那一刻的当前连胜，见 `Battle._ladder_on_match_result()`）。
+	var ladder := GameState.ladder_mode != ""
+	if ladder:
+		var lk := Stats.current_mode_key()
+		if win:
+			sub.text = "%s · 当前连胜：%d 场" % [LadderStore.mode_name(), Stats.current_streak(lk)]
+			sub.add_theme_color_override("font_color", Color(1, 0.86, 0.5))
+		else:
+			# 【2026-09-25 用户要求】0 连胜单独一句「你好歹赢一场啊」（打输 / 主动放弃都一样 —— 一场没赢，
+			#   说"才0连胜"没意思）；有连胜才用下面两种调侃：
+			#   打输 = 「才X连胜就不行了？你适合打简单难度」；主动放弃 = 「才X连胜，跑什么？去简单难度偷偷进步啊？」
+			#   X 都是"结束那一刻的当前连胜"（= `GameState.ladder_final_streak`）。
+			var st := GameState.ladder_final_streak
+			if st <= 0:
+				sub.text = "你好歹赢一场啊"
+			elif _ladder_gave_up:
+				sub.text = "才%d连胜，跑什么？去简单难度偷偷进步啊？" % st
+			else:
+				sub.text = "才%d连胜就不行了？你适合打简单难度" % st
+			_ladder_gave_up = false
+			sub.add_theme_color_override("font_color", Color(1, 0.7, 0.6))
+	else:
+		sub.text = "敌方英雄阵亡达 3 名。" if win else "我方英雄阵亡达 3 名。"
+		sub.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(sub)
 
 	box.add_child(_vspacer(12))
+
+	# 【2026-09-24 用户要求·天梯模式】天梯里**不要**「重开 / 返回选人」这两个按钮
+	#   （用户原话：「把天梯模式的重开和返回选人按钮删除」）⇒ 结算面板只留：
+	#   赢了 =「继续挑战」+「保存并退出」；输了 = 本轮结束，只给「返回主菜单」（退出/结束走暂停界面那两个）。
+	if ladder and win:
+		var again := Button.new()
+		again.text = "继续挑战"
+		again.custom_minimum_size = Vector2(260, 52)
+		again.add_theme_font_size_override("font_size", 20)
+		again.pressed.connect(_on_restart.bind(true))   # 连胜继续，下一局重新选人/选卡组
+		box.add_child(again)
+		# 【2026-09-24 用户要求·补】胜利面板也要能"存着走"（原来只有继续挑战 ⇒ 想退出只能先进下一局再暂停）
+		var save_quit := Button.new()
+		save_quit.text = "保存并退出"
+		save_quit.custom_minimum_size = Vector2(260, 50)
+		save_quit.add_theme_font_size_override("font_size", 20)
+		save_quit.pressed.connect(_on_ladder_save_quit)
+		box.add_child(save_quit)
+		return   # 天梯：结算面板不再有"返回"类按钮（退出走这里或暂停键）
+	if ladder and not win:
+		# 输了 = 本轮已经结束（存档在 `_ladder_on_match_result()` 里删掉了）⇒ 只剩"回主菜单"一条路；
+		# 「保存并退出 / 放弃本次天梯」在**暂停界面**（对局中退出用那两个）。
+		var back := Button.new()
+		back.text = "返回主菜单"
+		back.custom_minimum_size = Vector2(260, 50)
+		back.add_theme_font_size_override("font_size", 20)
+		back.pressed.connect(_on_back_to_menu)
+		box.add_child(back)
+		# 【2026-09-25 用户要求】原来这里还有一行小字「本轮已结束（最高连胜 N 场保留）」⇒ **整块删掉**
+		#   （用户原话「最下面那行本轮已结束（...）也去掉」）。
+		return
 
 	var again := Button.new()
 	again.text = "再来一局" if GameState.is_online else "再战一局"
@@ -2205,6 +2374,9 @@ func _on_back_to_menu() -> void:
 		get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
 		return
 	GameState.arena_mode = false   # 返回选人界面：退出竞技场模式（再来一局时不再走竞技场）
+	# 【天梯】回主菜单**不算放弃**（用户拍板）：存档留着，下次进天梯可以继续；
+	#   只把"本局属于天梯"这个标记清掉，免得之后玩普通/竞技场被当成天梯局。
+	GameState.ladder_mode = ""
 	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 
 # 扣血提醒火焰图标：纯代码自绘（不依赖 emoji 字体），在 _process 里脉动跳动。
