@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/probe/远程退开伤害自检.gd" id="1"]
+
+[node name="PinnedRetreatCheck" type="Node"]
+script = ExtResource("1")

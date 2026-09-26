@@ -503,6 +503,49 @@ const SHIELD_BREAK_DMG_REF := 1.0
 # ⚠️ 新评分项 ⇒ 值要靠剂量批定（登记在 `1_通用策略.md` §五 T21）。
 const TAUNT_SOAK_W := 0.0
 const SILENCE_COUNTER_MIN := 3.0    # 沉默术士「克制」列原文的门槛（写死：这是角色列表事实，不是旋钮）
+# ============ 【2026-09-26·用户口述四条·默认全 0】红帽（hero_40）「扑街自爆」的用法 ============
+# 机制（`heroes/hero_40_红帽.gd`）：5攻 / 13血；**阵亡时**对相邻的**所有**单位（含己方队友）造成 13 点
+#   **非攻击**伤害（坚固不减、圣盾照挡），相邻障碍各 −1 耐久；⚠️ 脚本第 8 行：**被[沉默]或[眩晕]期间阵亡
+#   ⇒ 完全不触发**。⇒ 她是个"走路的炸弹"，但**远程站圈外打死她一分不吃**、**残血单位换掉她不亏**、
+#   **沉默术士打死她连炸都没有**（`heroes/hero_34_沉默术士.gd::on_attack_dead` 的注释就是拿红帽举例的）。
+# 用户 2026-09-26 口述四条用法，全部写进 `hero_40` 专属段（扁平键默认 0 ⇒ 四档逐位不变）：
+#   ① `REDCAP_HP_FLOOR_W`「保命血线」：对方**所有廉价解**对她末态格的**真实单击合计**（并集：
+#      `<远程>`（打死她不吃自爆）· 血 ≤ `REDCAP_CHEAP_HP`（本来就快死了，换掉不亏）· 能挂沉默的人）
+#      ⇒ **低于这条线就罚**。用户明确「**不需要封顶12**」⇒ 线高于血上限时不截断（该项退化成"尽量把血留满"）。
+#   ② `REDCAP_SUB_RISK_W`「击杀回合防替补」：本回合打死一个敌方英雄 ⇒ 对方替补会在**墓碑格**落位
+#      （`Battle._free_sub_cell_for()` 优先本方墓碑格）⇒ 按对方**替补名单**逐张**最坏**假想（见 `_redcap_sub_threat()`）。
+#   ③ `REDCAP_SILENCE_GUARD_W`「有沉默就保护」：能挂沉默的人够得到她 ⇒ 单独再罚一笔（被沉默后阵亡**不自爆**）。
+#   ④ `REDCAP_TRADE_W`「蓄爆档」：**对方没有廉价解时反过来用** —— 血线**低于**她会吃到的最大反击伤害
+#      ⇒ 自爆的**时机握在自己手里**（她自己选一手炸在哪儿），按"这一炸能换到多少 − 她自己的身价"给分。
+#   ⑤ `REDCAP_BLAST_ALLY_W`「保不住就止损」：下回合对方真实伤害合计（`_incoming_total_on`）≥ 她的血
+#      ⇒ 她大概率要炸 ⇒ **队友别贴着她**（13 点连自己人一起炸；会被炸死的队友额外再加一份）。
+# 为什么全是"末态"项：与 ⑳㉑㉒㉓㉕ 同层（只在 `_evaluate(sim, end_of_turn=true)` 结算）⇒ 中途恒 0，
+#   不污染逐步日志、也不影响中途排序与剪枝。
+# ⚠️ 新评分项 ⇒ 值要靠剂量批定；② 在 RL 跑批里量不到（`RL/harness/对局.gd` 从不发生替补）⇒ 只能靠探针 + 实机验。
+const REDCAP_HP_FLOOR_W := 0.0
+const REDCAP_CHEAP_HP := 5.0          # 用户的"残血"口径：血 ≤ 5 的人算廉价解（键，可调）
+const REDCAP_SUB_RISK_W := 0.0
+const REDCAP_SILENCE_GUARD_W := 0.0
+const REDCAP_TRADE_W := 0.0
+const REDCAP_BLAST_ALLY_W := 0.0
+const REDCAP_BLAST_DMG := 13.0        # 自爆伤害（`heroes/hero_40_红帽.gd:19` 的 13；写死：这是机制事实）
+# 【2026-09-26·用户拍板选项 2】㉖「**脆皮输出的暴露总量**」（键 `EXPOSURE_TOTAL_W`，默认 0 = 逐位不变）。
+#   用户口径：「**即使没有沉默，也不应该把脆皮输出这样暴露**」（起因：他那局 AI 把 13 血的红帽留在
+#   "下回合挨 10 伤"的格子上，只为凑一次击杀）。**病灶是 ⑦ 的量级**：⑦核心风险 = `RISK_W ×
+#   max_我方[挨打合计 ÷ 当前血 × 核心系数]` —— **max 型**、而且除了血**再按核心系数归一** ⇒
+#   实机账本（`RL/probe/红帽暴露自检.gd`）里"13 血挨 10 伤"只值 **−0.82 分**，站那儿的全部代价不到 4 分。
+#   **本项**：把"**脆皮 + 有输出**"的我方单位的下回合预计挨打**按点数**计价（不除血、不归一）：
+#     `罚 = EXPOSURE_TOTAL_W × Σ_{合格单位} 挨打合计`（与 ③ 同一个量纲：1 点预计伤害 = W 分）
+#   **两道门收窄适用面**（血上限是键 `EXPOSURE_HP_MAX`、输出下限是常量 `EXPOSURE_OUT_MIN`）：
+#     ① 面板血上限 ≤ `EXPOSURE_HP_MAX`（默认 15 ⇒ 红帽13 / 影丸14 / 风语者14 / 沉默术士15 在内，
+#        长剑18 / 白游侠19 不在）② 输出潜力（`_output_potential()`）≥ `EXPOSURE_OUT_MIN`（默认 8
+#        ⇒ 后勤/纯辅助/坦克排除）。**为什么要门**：2026-09-20 判死过一版"逐单位线性挨打血点"
+#     （`THREAT_INCOMING_W`：3 攻敌人盯 18 血单位 = 0.5/1.0/1.5 分）—— 全队都按点数罚 ⇒
+#     人人各自躲一格、队形散、该打不打。本项只让"打得出伤害又扛不住"的那几个为此让路。
+#   ⚠️ 只在**末态**结算（与 ⑳㉑㉒㉓㉕ 同层），且与 ⑦ **共用同一份 `_incoming_incs()`**（不多跑尺子）。
+const EXPOSURE_TOTAL_W := 0.0
+const EXPOSURE_HP_MAX := 15.0         # 「脆皮」的界限（键：想让 18 血的长剑也算就写 18）
+const EXPOSURE_OUT_MIN := 8.0         # 「有输出」的界限（**写死**：这是"脆皮输出"这个词的口径，不是旋钮）
 # ---- 【2026-09-20 新增·默认关】"原地不动"候选（`STAY_OPTION`）----
 # 起因（用户实机日志 + 读代码）：
 #   日志行 `装甲堡垒 移动 (2,1)→(3,1)(保持/拉距、避威胁(-2伤)、下回合挨打4.0(1人/最大4)、规则B罚0.0) → 不攻击 [本步 Δ-3.3]`
@@ -989,6 +1032,16 @@ var w_pin_ranged := THORN_PIN_RANGED_W
 var w_paralyze := PARALYZE_ZERO_W
 var w_shield_break := SHIELD_BREAK_W   # 【2026-09-23】㉔破盾（见 const SHIELD_BREAK_W 处说明）
 var w_taunt_soak := TAUNT_SOAK_W       # 【2026-09-23】㉕嘲讽吸火（见 const TAUNT_SOAK_W 处说明）
+# 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 第五条（见 `const REDCAP_HP_FLOOR_W` 处那大段说明）
+var w_redcap_hp_floor := REDCAP_HP_FLOOR_W
+var w_redcap_cheap_hp := REDCAP_CHEAP_HP
+var w_redcap_sub_risk := REDCAP_SUB_RISK_W
+var w_redcap_silence_guard := REDCAP_SILENCE_GUARD_W
+var w_redcap_trade := REDCAP_TRADE_W
+var w_redcap_blast_ally := REDCAP_BLAST_ALLY_W
+# 【2026-09-26·用户拍板选项 2】㉖ 脆皮输出的暴露总量（见 `const EXPOSURE_TOTAL_W` 处说明）
+var w_exposure_total := EXPOSURE_TOTAL_W
+var w_exposure_hp_max := EXPOSURE_HP_MAX
 # 【2026-09-20·默认关】"原地不动"候选（见 `const STAY_OPTION` 处说明）。默认 0 ⇒ 逐位不变。
 var w_stay_option := STAY_OPTION
 # 【2026-09-20 已删·用户拍板】`w_threat_alloc` / `THREAT_ALLOC_W`（⑮分摊总量）随分摊族一起删（见 `_dead_fold()` 上方说明）。
@@ -1267,6 +1320,16 @@ func set_weights(t: Dictionary) -> void:
 			"THORN_PIN_SUP_W": w_pin_sup = float(v)
 			"THORN_PIN_RANGED_W": w_pin_ranged = float(v)
 			"PARALYZE_ZERO_W": w_paralyze = float(v)
+			# 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 止损（见 const REDCAP_HP_FLOOR_W 处说明）
+			"REDCAP_HP_FLOOR_W": w_redcap_hp_floor = float(v)
+			"REDCAP_CHEAP_HP": w_redcap_cheap_hp = float(v)
+			"REDCAP_SUB_RISK_W": w_redcap_sub_risk = float(v)
+			"REDCAP_SILENCE_GUARD_W": w_redcap_silence_guard = float(v)
+			"REDCAP_TRADE_W": w_redcap_trade = float(v)
+			"REDCAP_BLAST_ALLY_W": w_redcap_blast_ally = float(v)
+			# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关）
+			"EXPOSURE_TOTAL_W": w_exposure_total = float(v)
+			"EXPOSURE_HP_MAX": w_exposure_hp_max = float(v)
 			# 【2026-09-20·默认关】"原地不动"候选（1 = 允许；见 const STAY_OPTION 处说明）
 			"STAY_OPTION": w_stay_option = int(v)
 			# 【2026-09-20 已删·用户拍板】`THREAT_SUM_CAP`（见文件上方「整族删除」说明）。
@@ -3610,7 +3673,13 @@ func _term_defs() -> Array:
 	["㉓离队距离", ("−FORM_SPREAD_CELL_W(%.2f) × Σ_我方非召唤物 max(0, 与**最近队友**的格距 − 1)（⑳ 的**距离梯度**：贴身 0 罚、格距 2 罚 1 份、格距 3 罚 2 份……**只看格距、不看地形**；**同样只在末态结算**）"
 			+ (("　⚠️ **队形一把尺（`FORM_MERGE_MODE=1`）**：⑳ 的 0/1 孤立份已并进本项（没有合格队友 ⇒ 再加 `FORM_ISO_STEP_RATIO=%.2f` 份 ⇒ 现役取值下 = 旧的 ⑳ 5.0），**㉑ 退路/被夹 退役**（本模式恒 0）⇒ 整条队形曲线只由本键缩放" % FORM_ISO_STEP_RATIO) if w_form_merge == 1 else "")) % w_form_spread],
 		["㉔破盾", "+SHIELD_BREAK_W(%.1f) × Σ 本回合破掉的盾 × REF(%.1f)/max(伤害, REF)（**用越低的伤害破盾越值**：1 点 poke = 满价、大招被盾吃掉 ≈ 0 价；对面盾被我方破 + / 我方盾被对面破 −）" % [w_shield_break, SHIELD_BREAK_DMG_REF]],
-		["㉕嘲讽吸火", "+TAUNT_SOAK_W(%.1f) × Σ_我方**非嘲讽**单位（**关掉嘲讽门**重算的挨打合计 − 实际挨打合计）× 血量池折算（= 因为嘲讽门，后排这回合少挨的那部分血；**躲在后排 = 差额 0 = 一分不得**，站到火力线上才赚）" % w_taunt_soak]
+		["㉕嘲讽吸火", "+TAUNT_SOAK_W(%.1f) × Σ_我方**非嘲讽**单位（**关掉嘲讽门**重算的挨打合计 − 实际挨打合计）× 血量池折算（= 因为嘲讽门，后排这回合少挨的那部分血；**躲在后排 = 差额 0 = 一分不得**，站到火力线上才赚）" % w_taunt_soak],
+		["㉖暴露总量", "−EXPOSURE_TOTAL_W(%.2f) × Σ_{我方**脆皮输出**} 挨打合计（脆皮 = 面板血上限 ≤ EXPOSURE_HP_MAX(%.0f)；有输出 = `_output_potential()` ≥ EXPOSURE_OUT_MIN(%.0f) ⇒ 后勤/纯辅助/坦克不进。⑦ 是 **max 型 + 按核心系数归一** ⇒ 13 血挨 10 伤只值 0.82 分；本项按**点数**计。只在末态结算，与 ⑦ 共用一次 `_incoming_incs()`）" % [w_exposure_total, w_exposure_hp_max, EXPOSURE_OUT_MIN]],
+		["红帽·血线", "−REDCAP_HP_FLOOR_W(%.2f) × max(0, 廉价解真实单击合计 + 1 − 红帽末态血)（廉价解 = 够得到她的 `<远程>`（打死她不吃自爆）· 血 ≤ REDCAP_CHEAP_HP(%.0f)（换掉不亏）· 能挂沉默的人；**不封顶**；**只在末态结算**）" % [w_redcap_hp_floor, w_redcap_cheap_hp]],
+		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 3 点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
+		["红帽·沉默风险", "−REDCAP_SILENCE_GUARD_W(%.2f) × (1 + **全额**挨打合计)（触发 = 能挂沉默的人**够得到她末态格**（按同一把尺逐个问，**不经过开火位截断**）**或**她当前被沉默；被沉默期间阵亡 ⇒ **不自爆**，`heroes/hero_40_红帽.gd:8`）" % w_redcap_silence_guard],
+		["红帽·蓄爆", "+REDCAP_TRADE_W(%.2f) × max(0, 这一炸能换到的 − 她自己的身价)（**只在「对方没有廉价解」时**：末态血 ≤ 最大反击伤害 ⇒ 自爆时机握在自己手里；且相邻敌人 ≥ 2、净赚才给。量纲 = **分**：净赚 4.75 ⇒ W=0.5 时 +2.4 分）" % w_redcap_trade],
+		["红帽·止损", "−REDCAP_BLAST_ALLY_W(%.2f) × Σ_相邻队友[ 身价/20 + (会被 %.0f 点炸死 ? 1 : 0) ]（**只在**「下回合挨打合计 ≥ 她的血」时算：她大概率要炸，别让自己人贴着）" % [w_redcap_blast_ally, REDCAP_BLAST_DMG]]
 	]
 
 ## 【2026-09-20 新增·诊断专用】把 `_evaluate()` 的每一项**单独算出来**，供逐项打印。
@@ -3677,9 +3746,11 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	# 【2026-09-21 用户拍板 A·恢复】⑦核心风险（与 `_evaluate()` **逐行同口径**：同一条 if、
 	#   同一个 `_incoming_incs()`、同一个公式 —— 否则自校验 `Σ=… vs 本步 Δ…` 会漂）。
 	#   ⚠️ 2026-09-24：⑮必死折已删（见文件头 const 处），这里只剩 ⑦。
-	if w_risk != 0.0:
+	# 【2026-09-26·选项 2】㉖ 与 ⑦ 共用这一次 `_incoming_incs()`（⇒ Σ 自校验不会漂）
+	if w_risk != 0.0 or w_exposure_total != 0.0:
 		var incs_bd := _incoming_incs(sim)
 		d["⑦核心风险"] = _exposure_risk(sim, incs_bd)
+		d["㉖暴露总量"] = _exposure_total(sim, incs_bd)
 	if w_poison_apply != 0.0 or _any_hero_key(["POISON_APPLY_W"]):
 		d["⑯猛毒新挂"] = sim.poison_apply_val
 	# 【2026-09-21 新增·默认关】⑳抱团 / ㉑退路被夹（与 `_evaluate()` 末尾那两行同口径 ⇒ Σ 自校验才对得上）
@@ -3709,6 +3780,12 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	#   ⚠️ 2026-09-23 深夜起**只在末态列出来**（与 ⑳㉑㉒㉓ 同款）⇒ 两处必须同改，否则 Σ 会差一个 ±3。
 	if end_of_turn and w_taunt_soak != 0.0:
 		d["㉕嘲讽吸火"] = w_taunt_soak * _taunt_soak(sim)
+	# 【2026-09-26】红帽（hero_40）那几条：与 `_evaluate()` **同一个门、同一个函数**（`_redcap_terms()`）
+	#   ⇒ Σ 自校验不会漂移；同样只在末态列出来（与 ⑳㉑㉒㉓㉕ 同款）。
+	if end_of_turn and _redcap_on():
+		var rt := _redcap_terms(sim)
+		for rk in rt.keys():
+			d["红帽·" + String(rk)] = float(rt[rk])
 	# 【2026-09-20 补】A 档英雄特化项（毒蛇猛毒 / 宿魂附体 / 装甲堡垒坚固）也逐项列出来，
 	# 否则它们会落在「其它(未列)」里看不懂 —— 毒蛇与装甲堡垒的特化段现在就在 `噩梦.json` 里（2026-09-20 并档）。
 	# 口径与 `_evaluate()` 里那一段**逐行对应**（同一条 if 条件、同一个公式）。
@@ -4109,6 +4186,10 @@ func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
 	var t: SimUnit = sim.units[int(target)] if target is int else target
 	if t == null or t.hero_id != "hero_40" or not t.alive:
 		return false
+	# 【2026-09-26·用户点名】被[沉默]或[眩晕]期间阵亡 ⇒ **根本不会自爆**（`heroes/hero_40_红帽.gd:8`）
+	#   ⇒ 这时候点杀她是**安全**的，不该再躲这一击（原来漏了这道门 ⇒ 白让一手）。
+	if t.silenced or t.stunned:
+		return false
 	if t.shield or t.hp > u.eatk:
 		return false   # 这一击打不死，没有自爆风险
 	for v in sim.units:
@@ -4190,7 +4271,7 @@ func _in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, t: SimUnit) -> bool:
 	if u.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, t.cell):
 		return false
 	# 障碍物阻挡攻击视线（与真实规则一致）；坠炮手(ignore_los)未沉默才无视阻挡
-	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, t.cell):
+	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, t.cell, u):
 		return false
 	return true
 
@@ -4225,7 +4306,7 @@ func _sim_straight_line_cells(from_cell: Vector2i, to_cell: Vector2i) -> bool:
 func _sim_obstacle_ok(sim: Sim, u: SimUnit, from_cell: Vector2i, oc: Vector2i) -> bool:
 	if grid.distance(from_cell, oc) > u.atk_range:
 		return false
-	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, oc):
+	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, oc, u):
 		return false
 	# 血锁：攻击障碍同样只能沿 6 条轴向直线（真实侧判的是 u.branch_override）
 	if u.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, oc):
@@ -4249,13 +4330,22 @@ func _gcd(a: int, b: int) -> int:
 
 # 模拟：from->to 之间（不含两端）是否有障碍物阻挡攻击
 # 与真实规则一致：用六边形 cube 直线插值（修正旧轴向 round 插值在斜向偏格的问题）
-func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i) -> bool:
+# 【2026-09-26 修·用户「白游侠为什么不往后退然后攻击」】`ignore` = **射手本人**：`from_cell` 是"假想落位"，
+#   真实引擎里单位一落位 `u.cell` 就是那一格、**原格已经空了** ⇒ 它不该挡住自己的射线。
+#   原来不传 `ignore` ⇒ 所有"先挪一步再开火"的组合都因为"射手原格落在射线上"被判成打不到 ⇒
+#   `_actions_for()` 里 move+attack 那批线被整批删光（实测 hero_10 白游侠只剩"原地"候选：退到 (1,1)
+#   本可 2 伤打圣光、白嫖散射 +6.0 分、还不吃反击 —— 那手值 +8.78 分，AI 全看不见）。
+#   ⚠️ 忽略的必须是**射手本人**，不是"站在 from_cell 的那个单位"（from_cell 通常是空的）。
+func _sim_path_blocked(sim: Sim, from_cell: Vector2i, to_cell: Vector2i, ignore: SimUnit = null) -> bool:
 	# 与真实规则一致：存在一条全程无阻挡的最短路径即可打；否则被挡。
 	return grid.los_blocked(from_cell, to_cell, func(c):
 		if sim.obstacles.has(c) or sim.graves.has(c):
 			return true
 		if sim.occ.has(c):
-			var oi: int = (sim.occ[c] as SimUnit).sim_index
+			var ou: SimUnit = sim.occ[c] as SimUnit
+			if ignore != null and ou == ignore:
+				return false   # 【2026-09-26】射手本人不算阻挡（它已经站到 from_cell 了）
+			var oi: int = ou.sim_index
 			if oi >= 0 and oi < sim.units.size():
 				return true
 		return false)
@@ -6522,9 +6612,11 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   而一次普通攻击 ≈ +3.8（1 血点 + 集火 frac²）、集火/击杀那一击 +10~16 ⇒ **不会避战**；
 	#   只有"为了 3 点伤害走进 3~4 人火力网"才被否掉（那正确）。详见 `_exposure_risk()` 上方说明。
 	score += _rule_b_score(sim)
-	if w_risk != 0.0:
+		# 【2026-09-26·选项 2】㉖ 与 ⑦ **共用这一次遍历** ⇒ 门放宽成"两项任一开着"。
+	if w_risk != 0.0 or w_exposure_total != 0.0:
 		var incs_ev := _incoming_incs(sim)
 		score += _exposure_risk(sim, incs_ev)
+		score += _exposure_total(sim, incs_ev)
 	# 【2026-09-20 新增·默认关·T6】**"这一击新挂上毒"的动作收益**（见 `const POISON_APPLY_W` 处说明）：
 	#   `sim.poison_apply_val` 由 `_apply` 在"毒蛇命中且目标原本没毒"时累加，金额**已按施加者英雄覆盖读好**
 	#   （`_wh(u.hero_id, "POISON_APPLY_W", w_poison_apply)`，与金矿/坚固同口径）⇒ 这里直接加。
@@ -6757,6 +6849,12 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   与 ⑳㉑ **同一层**：只在"全队都行动完"的末态结算（纯站位量，中途结算会来回跳）。
 	if end_of_turn and w_split != 0.0:
 		score += w_split * _split_parts(sim)
+	# 【2026-09-26 新增·默认全 0】红帽（hero_40）四条用法 + 止损（见 `const REDCAP_HP_FLOOR_W` 处说明）：
+	#   ①保命血线 ②击杀回合防替补 ③有沉默就保护 ④没有廉价解时反过来蓄爆 ⑤保不住时队友别贴着她。
+	#   与上面 ⑳㉑㉒㉓㉕ **同一层**（只在末态结算，中途恒 0）；全 0 ⇒ 门一次比较就跳过。
+	if end_of_turn and _redcap_on():
+		for v in _redcap_terms(sim).values():
+			score += float(v)
 	return score
 
 # 【2026-09-18 新增·默认关闭】终局项：把"死 3 个判负"这条线变成单调且**越近越陡**的分。
@@ -6977,6 +7075,26 @@ func _exposure_risk(sim: Sim, incs: Array) -> float:
 ## 【2026-09-25 用户拍板】**混合**口径（见常量块 `RISK_CORE_OUTPUT_W`）：`身价^(1−w) × 输出潜力^w`
 ##   —— w = 0 逐位等于现役（`身价^1 × 输出^0`）；w > 0 把"还能打出伤害的人"往上抬
 ##   （用户诉求「让低血量的延缓死亡时间、增加输出机会」；旧版二选一的硬切实测 −3.13 已废弃）。
+## 【2026-09-26·用户拍板选项 2】㉖「脆皮输出的暴露总量」的值（见 `const EXPOSURE_TOTAL_W` 处说明）。
+##   `incs` = `_incoming_incs(sim)` 的结果 —— **与 ⑦ 共用同一次遍历**（不额外跑尺子、不多一次 BFS）。
+##   返回 ≤ 0（纯罚分）。两道门（脆皮 / 有输出）见 const 处说明。
+func _exposure_total(sim: Sim, incs: Array) -> float:
+	if w_exposure_total == 0.0:
+		return 0.0
+	var total := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		var inc: float = float(incs[i]) if i < incs.size() else 0.0
+		if inc <= 0.0:
+			continue                      # 挨不到打 ⇒ 没有暴露
+		if float(u.max_hp) > w_exposure_hp_max:
+			continue                      # 血厚的不进（坦克/战士照旧由 ⑦ 管）
+		if _output_potential(u.hero_id) < EXPOSURE_OUT_MIN:
+			continue                      # 没输出的不进（后勤/纯辅助）
+		total += inc
+	return -w_exposure_total * total
 func _core_raw(sim: Sim, u: SimUnit) -> float:
 	var base := _unit_value(sim, u)
 	if w_risk_core_output_w <= 0.0:
@@ -7094,6 +7212,198 @@ func _solid_front_ok(sim: Sim, hu: SimUnit) -> bool:
 			return false          # 有队友比它更靠前 ⇒ 它是缩在后面那个，不给钱
 	return true
 
+# ==================== 【2026-09-26】红帽（hero_40）「扑街自爆」的用法 ====================
+# 口径与动机见 `const REDCAP_HP_FLOOR_W` 处那大段说明（用户 2026-09-26 口述四条 + 一条止损）。
+# 全部**只在末态**结算（`_evaluate(sim, end_of_turn=true)`，与 ⑳㉑㉒㉓㉕ 同层）；扁平键 + `hero_40` 段全 0
+# ⇒ 这个门一次比较就返回 false ⇒ 四档与 RL 跑批逐位不变、也一分钱开销都不付。
+func _redcap_on() -> bool:
+	if w_redcap_hp_floor != 0.0 or w_redcap_sub_risk != 0.0 or w_redcap_silence_guard != 0.0 \
+			or w_redcap_trade != 0.0 or w_redcap_blast_ally != 0.0:
+		return true
+	return _any_hero_key(["REDCAP_HP_FLOOR_W", "REDCAP_SUB_RISK_W", "REDCAP_SILENCE_GUARD_W",
+			"REDCAP_TRADE_W", "REDCAP_BLAST_ALLY_W"])
+
+## 逐项分账（键名同时就是日志里那几行的名字）。`_evaluate()` 与 `_eval_breakdown()` **共用本函数**
+##   ⇒ 两处的口径不可能漂移（那个 Σ 自校验不会差）。
+func _redcap_terms(sim: Sim) -> Dictionary:
+	var d := {}
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY or u.hero_id != "hero_40":
+			continue                      # 只看**我方活着的红帽**（召唤物/替补都不可能是她）
+		var t := _redcap_one(sim, u)
+		for k in t.keys():
+			d[k] = float(d.get(k, 0.0)) + float(t[k])
+	return d
+
+func _redcap_one(sim: Sim, u: SimUnit) -> Dictionary:
+	var w_floor := _wh(u.hero_id, "REDCAP_HP_FLOOR_W", w_redcap_hp_floor)
+	var w_sub := _wh(u.hero_id, "REDCAP_SUB_RISK_W", w_redcap_sub_risk)
+	var w_sil := _wh(u.hero_id, "REDCAP_SILENCE_GUARD_W", w_redcap_silence_guard)
+	var w_trade := _wh(u.hero_id, "REDCAP_TRADE_W", w_redcap_trade)
+	var w_ally := _wh(u.hero_id, "REDCAP_BLAST_ALLY_W", w_redcap_blast_ally)
+	var out := { "血线": 0.0, "替补风险": 0.0, "沉默风险": 0.0, "蓄爆": 0.0, "止损": 0.0 }
+	if w_floor == 0.0 and w_sub == 0.0 and w_sil == 0.0 and w_trade == 0.0 and w_ally == 0.0:
+		return out
+	var cheap_hp := _wh(u.hero_id, "REDCAP_CHEAP_HP", w_redcap_cheap_hp)
+	var hp := float(u.hp)
+	# 与 ⑥⑦㉕ 同一把尺子：**开火位上限 + 嘲讽门 + 视线 + 盾**都已折在里面；
+	# `out["pos"]` 多带一份"每一次普攻是谁打的、打多少"（本次新增，只多写一个键，不改任何判断）。
+	var info := {}
+	var inc_all := _incoming_total_on(sim, u, u.cell, info)
+	# ---- ① 「廉价解」那条线：能打到她的 `<远程>` · 血 ≤ cheap_hp · 能挂沉默的人（并集，同一人只算一次）----
+	var line := 0.0
+	var top_cheap := 0.0
+	for row in (info.get("pos", []) as Array):
+		var r: Array = row
+		var idx := int(r[0])
+		if idx < 0 or idx >= sim.units.size():
+			continue                      # -1 = 骷髅兵·召唤（不是编制内的单位，也不是廉价解）
+		var e: SimUnit = sim.units[idx]
+		if e == null or not e.alive:
+			continue
+		var dmg := float(r[1])
+		var sil: bool = e.hero_id == "hero_34"        # 沉默术士：命中挂[沉默]（唯一的沉默来源，见 ③）
+		if not sil and e.atk_type != DataRegistry.AttackType.RANGED and float(e.hp) > cheap_hp:
+			continue                      # 既不是远程、也不是残血、也不会沉默 ⇒ 不是"廉价解"
+		line += dmg
+		top_cheap = maxf(top_cheap, dmg)
+	# 盾（现在身上 / 本回合末要发的那张）：整次免伤并抵消**最大的一笔** ⇒
+	#   只有当"最大那笔确实来自廉价解"时才从这条线上减掉（否则盾是被别人那一笔吃掉的）。
+	if top_cheap > 0.0 and _shield_next_turn(sim, u) and top_cheap >= float(info.get("max", 0.0)) - 0.0001:
+		line = maxf(line - top_cheap, 0.0)
+	if w_floor != 0.0 and line > 0.0:
+		# 「不封顶」（用户明确）：线高于血上限时本项退化成"尽量把血留满"，不是无解罚分。
+		out["血线"] = -w_floor * maxf(line + 1.0 - hp, 0.0)
+	# ---- ③ 沉默保护（**2026-09-26 用户实机「红帽还是送」后重做 v2**）----
+	# 用户口径：「在对方有沉默的时候，AI 应该要尽可能地保护红帽不被沉默，**即使被沉默了，也不能受到巨额伤害**」。
+	# 第一版有两处漏，两处都会让本项**一次都不触发**：
+	#   ① **沉默者是从 `info["pos"]` 里筛出来的**，而 pos 只留"伤害最高的 N 笔"（开火位上限）⇒
+	#      沉默术士(3 伤)常被更高的伤害挤出名单 ⇒ 漏判（沉默是"命中即生效"、不占开火位、也不看伤害高低）。
+	#      ⇒ 现在**直接用同一把尺子逐个问**「你够不够得到她末态格」。
+	#   ② 罚额是个**常数**（1.5 分）⇒ 与她一次攻击的价值（≈3.8 分）和"掉一个 21 身价单位"根本不在一个量级。
+	#      ⇒ 现在按**全额挨打合计**（不是"廉价解"那条线）算血线：被沉默期间她阵亡**根本不自爆**
+	#        （`heroes/hero_40_红帽.gd:8`）⇒ 她这时候就是"13 血白板"，任何一笔伤害都是净亏 ⇒
+	#        要按"整个敌方队伍能打到她多少"来保，而不是只看远程/残血那几笔。
+	#      ⇒ 罚额 = `W × (1 + max(0, 全额挨打合计 + 1 − 她的血))`：够得到她的沉默者要躲（至少 1 份），
+	#        真到"下回合会被打死"的量级时罚额跟着涨到与她的身价同量级（可达 20~40 分）。
+	var sil_in_reach := false
+	if w_sil != 0.0 or u.silenced:
+		for i in sim.units.size():
+			var se: SimUnit = sim.units[i]
+			if se == null or not se.alive or se.fn == u.fn or se.hero_id != "hero_34":
+				continue
+			if _threat_can_hit(sim, se, u.cell, u):
+				sil_in_reach = true
+				break
+	# 【2026-09-26 用户实机第二次·「有沉默的情况下AI把小红帽暴露出来了，让她直接吃10点伤害」】
+		#   原来只在她**会被打死**时才放大（`max(0, inc+1−hp)`）⇒ 用户那局：她 13 血、那一格挨 10 伤
+		#   ⇒ 放大项 = 0 ⇒ 整个 ③ 只值 **3.0 分**（账本实测：⑦核心风险 −0.82、①血线 0、③ −3.0
+		#   ⇒ 站那儿的全部代价不到 4 分，而打那个嘲讽单位值 +45 ⇒ 她当然站那儿）。
+		#   用户口径：「**尽可能地**保护红帽不被沉默」＋「即使被沉默了，也不能受到巨额伤害」⇒
+		#   有沉默威胁时**每一点挨打都要算钱**：罚额 = `W × (1 + 全额挨打合计)`。
+		#   ⚠️ 只在"能挂沉默的人够得到她末态格"或"她当前被沉默"时生效；对方没沉默 ⇒ 一分不算
+		#     （那时她自己会炸，挨打换击杀本来就划算）。
+		if w_sil != 0.0 and (sil_in_reach or u.silenced):
+			out["沉默风险"] = -w_sil * (1.0 + inc_all)
+	if w_sub != 0.0:
+		var sub_t := _redcap_sub_threat(sim, u)
+		if sub_t > 0.0:
+			out["替补风险"] = -w_sub * clampf(sub_t / maxf(hp, 1.0), 0.0, 1.5)
+	if w_trade != 0.0 and line <= 0.0:
+		# ④ **只在"对方没有廉价解"时**用（用户口径）：这时低血不是危险，而是"自爆主动权"
+		out["蓄爆"] = w_trade * _redcap_trade_gain(sim, u)
+	if w_ally != 0.0 and inc_all >= hp:
+		# ⑤ 下回合对方真实伤害合计能打死她 ⇒ 她大概率要炸 ⇒ 自己人别贴着
+		var pen := 0.0
+		for j in sim.units.size():
+			var v: SimUnit = sim.units[j]
+			if v == null or not v.alive or v == u or v.fn != u.fn:
+				continue
+			if grid.distance(v.cell, u.cell) != 1:
+				continue
+			pen += _unit_value(sim, v) / 20.0
+			if not _shield_next_turn(sim, v) and REDCAP_BLAST_DMG >= float(v.hp):
+				pen += 1.0                # 会被这 13 点炸死（圣盾可整次挡下）⇒ 那一份是真阵亡，不是掉血
+		if pen > 0.0:
+			out["止损"] = -w_ally * pen
+	return out
+
+## ② 的输入：**本回合被打死的敌方英雄**（= 新立起的墓碑格）+ 对方**替补名单**，逐张**最坏**。
+##   ⚠️ 为什么只能在末态这样估：`_sim_flush_subs()` 有一道 `fn != sim.active_fn → continue` 的门
+##     （真实规则：**非行动方**阵亡延到该方回合开始才补位）⇒ 我方回合里打死的人，替补**不在本窗口内落位**，
+##     模拟永远看不到它。真实落位格 = `Battle._free_sub_cell_for()` = **优先本方墓碑格**（就是刚死那人的格子）。
+##   每张替补的威胁 = 登场技（5 个有 `on_enter` 的英雄里只有猎颅者会打人：打"血最低的敌人"3 点 + [眩晕]）
+##     + 它从墓碑格出发**够不够得到她**（`spawn_move` + `spawn_attack_range`；一律按"能走到就算"⇒ 偏保守）。
+func _redcap_sub_threat(sim: Sim, u: SimUnit) -> float:
+	var opp: int = DataRegistry.Faction.PLAYER if u.fn == DataRegistry.Faction.ENEMY else DataRegistry.Faction.ENEMY
+	var pool: Array = sim.rosters.get(opp, [])
+	if pool.is_empty():
+		return 0.0                        # 拿不到替补名单（RL 跑批就是这种）⇒ 本项恒 0、逐位不变
+	# 这一回合被打死的对方单位：快照只收活人 ⇒ 末态里 `not alive` 的一定是本回合内死的
+	var dead_cells: Array = []
+	for i in sim.units.size():
+		var d: SimUnit = sim.units[i]
+		if d != null and not d.alive and d.fn == opp:
+			dead_cells.append(d.cell)
+	if dead_cells.is_empty():
+		return 0.0                        # 没打死人 ⇒ 没有新墓碑 ⇒ 对方替补没地方落
+	# 猎颅者的登场技打"血最低的敌人"：先看那个倒霉蛋是不是她
+	var lowest := true
+	for i in sim.units.size():
+		var v: SimUnit = sim.units[i]
+		if v != null and v.alive and v.fn == u.fn and v != u and v.hp < u.hp:
+			lowest = false
+			break
+	var best := 0.0
+	for hid_v in pool:
+		var hid := String(hid_v)
+		var def: DataRegistry.HeroDef = DataRegistry.get_hero(hid)
+		if def == null:
+			continue
+		var entry := 0.0
+		if hid == "hero_39" and lowest:
+			entry = 3.0                   # `Battle._hurt_lowest_enemy_stun`：3 点 + [眩晕]（src/Battle.gd:4168）
+		best = maxf(best, entry)          # 登场技只要落地就发生（不看距离）
+		var atk := float(def.atk)
+		if hid == "hero_29":
+			atk += 3.0                    # 太阳斩：登场攻击力 +3（heroes/hero_29_太阳斩.gd:5-7）
+		var reach := DataRegistry.spawn_move(def) + DataRegistry.spawn_attack_range(def)
+		for g in dead_cells:
+			if grid.distance(g, u.cell) <= reach:
+				best = maxf(best, entry + atk)
+				break
+	return best
+
+## ④ 的输入：她末态那格 —— "打哪个相邻敌人会吃到多少反击（取最大）" ＋ "这一炸能换到多少"。
+##   反击口径**逐条照抄** `_sim_counter_check()`：眩晕 / 攻击力 ≤ 0 / 本回合已反击过（复仇者除外）都反击不了；
+##   复仇者(hero_23) 未沉默时 ×2。
+##   净赚 = `Σ_相邻敌人[ min(13, 其血) + (13 ≥ 其血 ? 身价×1.25 : 0) ] − 她自己的身价`
+##     （血点 1.0/点 = ③血量账量纲；击杀按 ②身价的对面 1.25 倍系数）⇒ **返回值就是"分"**（不再折算）。
+##   ⇒ 只有「血 ≤ 最大反击伤害」（她一出手就会被打死 ⇒ 自爆由她挑时候）**且相邻敌人 ≥ 2 且净赚 > 0** 才给分。
+func _redcap_trade_gain(sim: Sim, u: SimUnit) -> float:
+	var max_counter := 0.0
+	var gain := 0.0
+	var adj := 0
+	for i in sim.units.size():
+		var e: SimUnit = sim.units[i]
+		if e == null or not e.alive or e.fn == u.fn:
+			continue
+		if grid.distance(e.cell, u.cell) != 1:
+			continue
+		adj += 1
+		if not e.stunned and e.eatk > 0 and (not e.counter_used or e.hero_id == "hero_23"):
+			var cbonus: int = 2 if (e.hero_id == "hero_23" and not e.silenced) else 1
+			max_counter = maxf(max_counter, float(e.eatk * cbonus))
+		gain += minf(REDCAP_BLAST_DMG, float(e.hp))
+		if REDCAP_BLAST_DMG >= float(e.hp):
+			gain += _unit_value(sim, e) * 1.25
+	if adj < 2 or max_counter <= 0.0:
+		return 0.0
+	if float(u.hp) > max_counter:
+		return 0.0                        # 血高于反击线 ⇒ 什么时候炸由对手决定，不是"主动权在自己手里"
+	return maxf(gain - _unit_value(sim, u), 0.0)
+
 ## 【2026-09-21 用户拍板 A】**"我方挨打"的血量池折算**：
 ##   倍率 = `1 + INCOMING_POOL_W × (参考血 TRADE_HP_REF(20) ÷ 该单位**本回合起始血** − 1)`（比值夹在 0.5~3.0）
 ## 为什么需要它（用户实机）：「一个 2 的坦克不敢打 4 攻的输出，但实际坦克的血多，不一定亏」——
@@ -7172,7 +7482,7 @@ func _outgoing_threat_on(sim: Sim, actor: SimUnit) -> float:
 		# 【2026-09-23 深夜⑧】嘲讽折进去：按**开火那格**判（原来无 `from_cell` ⇒ "够得到就锁死"，见 `_taunt_allows`）
 		if not _threat_can_hit(sim, actor, t.cell, t):
 			continue
-		var one := _threat_hit_value(sim, actor, d)
+		var one := _threat_hit_value(sim, actor, d, true, t.cell, t)
 		if t.heavy:
 			one += 1.0             # [重伤] 受伤 +1
 		if t.solid:
@@ -7212,11 +7522,28 @@ func _outgoing_threat_on(sim: Sim, actor: SimUnit) -> float:
 # ⚠️ 历史上"这键是活的"的判断，其实测的是**探针直接调 `_incoming_damage_on()`** 的结果（`RL/probe/暗域威胁.gd`
 #   与 `敏感度.gd` 的 threat 字段）⇒ 探针已随之改口径/废弃，别再按那些旧读数判断键的活性。
 # ⚠️ 旧 spec（`RL/train/spec_ladder_L{1..6}DH.json`）里写过 `DISPLACE_THREAT_W` ⇒ 重跑会因未知键被拒。
+## 【2026-09-26 用户要求·阈值比较补漏①】"这个对手**下回合**能够到多远" —— 照 `_echo_atk_now()` 的现成写法：
+##   把"下回合开局会自动生效的增益"也算进去。目前只有一条：**风语者 hero_43** 的移动光环
+##   （己方回合开始时给**其他**队友 +1 移动力，风语者自己不吃）⇒ 对手阵营里有存活且未被沉默/眩晕的
+##   风语者时，**除风语者本人以外**的每个对手"够得到的那一圈"要 +1。
+##   ⚠️ 与 `_sim_turn_start_atk_bonus()`（烈焰祭司那 +1 攻）同一口径、同一个"下回合开局"时点；
+##   被沉默/眩晕的风语者不发（真实 `grants_move_aura()` = `skill_allowed()`）。
+func _threat_emove_next(sim: Sim, a: SimUnit) -> int:
+	var m := maxi(a.emove, 0)
+	for i in sim.units.size():
+		var p: SimUnit = sim.units[i]
+		if p == null or not p.alive or p == a or p.fn != a.fn:
+			continue
+		if p.hero_id == "hero_43" and not p.silenced and not p.stunned:
+			return m + 1
+	return m
+
 func _threat_can_reach(sim: Sim, t: SimUnit, d: int) -> bool:
 	var range_at := t.atk_range
 	if t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell):
 		range_at = 1   # 远程被贴身：射程压 1（真实规则）
-	return d >= 1 and d <= range_at + maxi(t.emove, 0)
+	# 【2026-09-26 补漏①】原来只算 `maxi(t.emove, 0)` ⇒ 漏了风语者下回合给的 +1（够得到的那一圈少一格）
+	return d >= 1 and d <= range_at + _threat_emove_next(sim, t)
 
 ## 【2026-09-21 用户实测补】**对手 a 下回合能不能真打到"站在 target_cell 的目标"** = 距离 **且** 视线。
 ## 用户原话：「挨打伤害没有考虑障碍物吗，被障碍物挡住的攻击也算到了挨打伤害」—— 原来这里只查
@@ -7321,7 +7648,7 @@ func _cell_in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, target_cell: Vect
 		return false
 	if u.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, target_cell):
 		return false
-	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, target_cell):
+	if not (u.ignore_los and not u.silenced) and _sim_path_blocked(sim, from_cell, target_cell, u):
 		return false
 	return true
 
@@ -7417,7 +7744,7 @@ func _sim_skel_reach(sim: Sim, from_cell: Vector2i, target_cell: Vector2i, budge
 func _threat_firing_ok(sim: Sim, a: SimUnit, from_cell: Vector2i, target_cell: Vector2i) -> bool:
 		if a.hero_id == "hero_41" and not _sim_straight_line_cells(from_cell, target_cell):
 			return false
-		return not _sim_path_blocked(sim, from_cell, target_cell)
+		return not _sim_path_blocked(sim, from_cell, target_cell, a)
 func _cells_within_radius(center: Vector2i, radius: int) -> Array:
 	var out: Array = [center]
 	var frontier: Array = [center]
@@ -7437,17 +7764,23 @@ func _cells_within_radius(center: Vector2i, radius: int) -> Array:
 #   为什么还留着 `discount`：**并列裁决的"威胁差"**（`_outgoing_threat_on`）与塔盾代扛记分（`_bulwark_soak`）要的是
 #   "预期会掉多少血"⇒ 移动要花掉一次走位机会，折减合理；而 ⑥`MOVE_ACCEPT_DAMAGE` 要比的是
 #   "**这个英雄真挨这一下会掉多少血**"⇒ 6 攻的敌人走上来打就是实打实 6 点，折成 4.2 会让阈值形同虚设。
-func _threat_hit_value(sim: Sim, t: SimUnit, d: int, discount: bool = true) -> float:
+func _threat_hit_value(sim: Sim, t: SimUnit, d: int, discount: bool = true,
+		target_cell: Vector2i = Vector2i(-99, -99), threatened: SimUnit = null) -> float:
 	var range_at := t.atk_range
 	var pinned: bool = t.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, t, t.cell)
 	# 【2026-09-24 用户报】远程被贴身 **≠** 这一下只有 1 伤：真实玩家**有空位就会先退开再打**
 	#   （退开后射程恢复 2、基础攻击恢复满额）⇒ 一律按压 1 估会把"下回合要挨的伤害"算得严重偏低。
-	#   判据：这一下打的就是**贴着它的那个目标**（d ≤ 1）且它**退得掉**（能动 + 存在"走得到、且不与我方
-	#   任何单位相邻"的落点，走法与走位候选同一把尺子 `_sim_walk_cells`）⇒ 按退开后的满额伤害算；
-	#   退不掉（动不了 / 能站的格子都还贴着人）⇒ 才按压 1 算。d ≥ 2 的那种本来就被贴身压到射程 1、
-	#   压根够不到目标（保持原样）。
-	if pinned and d <= 1 and _sim_pin_escapable(sim, t):
-		pinned = false
+	#   判据：它**退得掉**（能动 + 存在"走得到、且不与我方任何单位相邻"的落点，走法与走位候选同一把尺子
+	#   `_sim_walk_cells`）**且退开之后这一枪还打得到目标** ⇒ 按退开后的满额伤害算。
+	#   【2026-09-26 用户报·第二次】「沉默术士和影丸虽然被贴身，但都可以往后退」——
+	#     旧判据只有前半句 `d <= 1`（= **打的就是贴着我那个目标**），于是**被我们别的单位贴住的远程**
+	#     （目标在 d ≥ 2）在"先退开、再从射程外打"这条路上仍被算成 1 伤（用户那局日志：
+	#     `红帽：下回合在这一格会挨 2 伤（沉默术士1＋影丸1）`，而它俩是 3/5 攻的远程、退一步就是满额）。
+	#     ⇒ 把 `d <= 1` 降级成新判据的一个特例（`_sim_pin_escape_fire_cell()`）。
+	#   ⚠️ 两个新参都是**可选**的：不传（老调用点/探针）时行为与改动前逐位相同（只认 `d <= 1`）。
+	if pinned and _sim_pin_escapable(sim, t):
+		if d <= 1 or (target_cell.x != -99 and _sim_pin_escape_fire_cell(sim, t, target_cell, threatened)):
+			pinned = false
 	if pinned:
 		range_at = 1
 	# 【2026-09-23 深夜⑪·用户】共鸣者(hero_47) 这一下要用**技能后的攻击力**，不是面板值（见 `_echo_atk_now`）。
@@ -7477,6 +7810,26 @@ func _sim_pin_escapable(sim: Sim, t: SimUnit) -> bool:
 	for c in _sim_walk_cells(sim, t.cell, budget):
 		if not _sim_enemy_adjacent(sim, t, c):
 			return true
+	return false
+
+## 【2026-09-26·用户报】"被贴身的远程**退开之后**还够不够得到这一格" ——
+##   ① 退开 = 走得到（`_sim_walk_cells`，障碍/墓碑/单位都当墙）、且落点**不与我方任何单位相邻**
+##      （否则射程仍被压 1）；② 够得到 = 从那个落点 `_cell_in_range()`（含血锁直线 / 视线 / 坠炮手免阻挡，
+##      此时它是"自由"的 ⇒ 射程用面板值）；③ **嘲讽门按开火那格判**（`_taunt_allows`）——
+##      退开之后若够得到带 `<嘲讽>` 的那位，这一枪就不会落在本目标身上。
+##   与 `_threat_can_hit()` 的"走过去打"分支同一套尺子，只是这里问的是"**退开**再打"。
+func _sim_pin_escape_fire_cell(sim: Sim, t: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> bool:
+	var budget := int(t.emove)
+	if budget <= 0:
+		return false
+	for c in _sim_walk_cells(sim, t.cell, budget):
+		if _sim_enemy_adjacent(sim, t, c):
+			continue
+		if not _cell_in_range(sim, t, c, target_cell):
+			continue
+		if threatened != null and not _taunt_allows(sim, t, threatened, c):
+			continue
+		return true
 	return false
 
 ## 【2026-09-23 深夜⑪·用户】"共鸣者(hero_47) 下一回合打这一下的攻击力"。
@@ -7611,6 +7964,11 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		return 0.0
 	var inst: Array = []      # 每一次伤害单独入列：圣盾"挡最大的一次"要靠它
 	var names: Array = []     # 与 inst 一一对应：这一击是谁打的（只为日志）
+	# 【2026-09-26 新增·只多写一个键】①普攻那一族（**已过开火位上限、未过圣盾**）的"是谁打的 + 打多少"：
+	#   `[[sim.units 下标, 伤害], …]`（骷髅兵·召唤那两笔记 −1）。给红帽那几条用法筛"廉价解"用；
+	#   对本函数的返回值与 `out` 的既有键**零影响**。
+	var pos_idx: Array = []
+	var pos_out: Array = []
 	# ① 普攻：能打到他的每个对手各一次（**只有这一族受开火位数量限制**，见下面 ①.5）
 	var pos_inst: Array = []
 	var pos_names: Array = []
@@ -7631,12 +7989,14 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		#   荆棘树人(嘲讽)的"下回合挨打"被算成 3+1+2=6，真实是 (3+1)×2 + 1 + (2+1)=12
 		#   （⑥规则B 因此只罚 2 分而不是 8 分）；另一局战锤那一格 7 vs 真实 13。
 		#   顺序与生产一致：先加攻（进 `effective_atk`）再乘倍率，最后才由 `_hit_after_target_mods` 算受击侧。
-		var raw := _threat_hit_value(sim, a, d, false) + float(_sim_turn_start_atk_bonus(sim, a))
+		# 【2026-09-26】多传"目标格 + 嘲讽上下文" ⇒ 让"被贴身但退得开"的远程按满额算（见 `_threat_hit_value`）
+		var raw := _threat_hit_value(sim, a, d, false, cell, gate_t) + float(_sim_turn_start_atk_bonus(sim, a))
 		raw *= float(_sim_mult_at(sim, a, t, cell))
 		var one := _hit_after_target_mods(sim, t, cell, raw)
 		if one > 0.0:
 			pos_inst.append(one)
 			pos_names.append(a.name)
+			pos_idx.append(i)
 	# ①.7 【2026-09-25·用户报「阈值比较伤害里还是没有骷髅」】对手**回合开始那一刻才召唤出来的骷髅兵**：
 	#   它们此刻还不在 `sim.units` 里 ⇒ 上面那一圈永远看不到它们（用户猜的「是因为骷髅是后面召唤的吗」= **正是**）。
 	#   机制铁证（三处）：`heroes/hero_33_死灵法师.gd::on_turn_start()` → `Battle._summon_skeletons()`
@@ -7685,6 +8045,7 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			if sk_one > 0.0:
 				pos_inst.append(sk_one)
 				pos_names.append("骷髅兵·召唤")
+				pos_idx.append(-1)        # 不是编制内的单位（红帽那几条用法里会被跳过）
 	# ①.5 【2026-09-23 深夜⑨·用户】"同时能打到他的人"受**可站开火位的数量**限制：六边形一格站一个人，
 	#   目标周围只有 2 个能开火的位子时，最多 2 个敌人能同时打到他 —— 旧算法却把**每个"够得到"的
 	#   敌人都各算一笔**（3 个敌人 ⇒ 3 笔）⇒ 虚高。用户原话：「比如玩家只有两个位置能达到A英雄，
@@ -7704,10 +8065,12 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			var oi := int(order[k]["i"])
 			inst.append(float(pos_inst[oi]))
 			names.append(String(pos_names[oi]))
+			pos_out.append([pos_idx[oi], float(pos_inst[oi])])
 	else:
 		for i in pos_inst.size():
 			inst.append(float(pos_inst[i]))
 			names.append(String(pos_names[i]))
+			pos_out.append([pos_idx[i], float(pos_inst[i])])
 	# ② 移动后触发的技能（烛火/末日/涌电技师）
 	for i in sim.units.size():
 		var b: SimUnit = sim.units[i]
@@ -7745,6 +8108,7 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 	out["n"] = inst.size()
 	out["max"] = top
 	out["parts"] = parts
+	out["pos"] = pos_out      # 【2026-09-26】①普攻逐笔的 [下标, 伤害]（见上面 pos_idx 的说明；不改任何判断）
 	return total
 
 ## 【2026-09-20 用户口径】把"某一次打在这个目标身上的伤害"按**目标侧**规则修正：
@@ -7858,7 +8222,7 @@ func _bulwark_soak(sim: Sim, self_u: SimUnit) -> int:
 			#   （嘲讽按开火那格判 ⇒ 敌人若能绕到一个够不着嘲讽者的点，照样会打 ally ⇒ 代扛照算）。
 			if not _threat_can_hit(sim, a, ally.cell, ally):
 				continue
-			var one := _threat_hit_value(sim, a, d)
+			var one := _threat_hit_value(sim, a, d, true, ally.cell, ally)
 			if ally.heavy:
 				one += 1.0
 			if ally.solid:

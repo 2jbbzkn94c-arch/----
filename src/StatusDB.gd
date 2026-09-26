@@ -25,6 +25,7 @@ const POSSESS := "possess"
 const THORN := "thorn"
 const SOLID := "solid"
 const SHIELD := "shield"
+const WIND := "wind"
 
 # ---- 定义表 ----
 #   label              两字中文名（HUD 文本/属性框/战斗日志都用它）
@@ -45,6 +46,11 @@ const DEFS := {
 	THORN:   { "label": "荆棘", "glyph": "荆", "group": "debuff", "negative": true,  "clear_on_turn_end": true,  "order": 80 },
 	SOLID:   { "label": "坚固", "glyph": "固", "group": "buff",   "negative": false, "clear_on_turn_end": false, "order": 90 },
 	SHIELD:  { "label": "圣盾", "glyph": "盾", "group": "shield", "negative": false, "clear_on_turn_end": false, "order": 100 },
+	# 【2026-09-26 用户要求】风语者的移动光环不再借「疾行」的招牌（与**本来就有<疾行>**的队友撞车、看不出是谁给的）
+	#   ⇒ 单开一个状态 [风语]：牌面金字「风」。⚠️ `clear_on_turn_end = true` 是刻意的 ——
+	#   `Battle._clear_statuses()` 同一个循环里就把 `move_buff` 清零 ⇒ 状态与该数值**同生共死**
+	#   （回合末一起没、下回合 `on_turn_start` 一起再来）；风语者中途离场由 `hero_43` 的 `_retract_aura()` 收回。
+	WIND:    { "label": "风语", "glyph": "风", "group": "buff",   "negative": false, "clear_on_turn_end": true,  "order": 110 },
 }
 
 static var _ordered: Array = []   # 按 order 排好的键（首次访问建一次；调用方只读，别改）

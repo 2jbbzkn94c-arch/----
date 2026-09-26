@@ -54,6 +54,16 @@ const KEY_VAR := {
 	"POSSESS_TARGET_W": "w_possess_target",
 	# 【2026-09-25·方案 C】⑬b 附体电池（与 ⑬ 同款：真实读取走 `_wh(宿魂段)`，这里注入扁平兜底值）
 	"POSSESS_BATTERY_W": "w_possess_battery",
+	# 【2026-09-26】红帽（hero_40）四条用法 + 止损（同样按英雄段覆盖读 ⇒ 这里注入的是扁平兜底值）
+	"REDCAP_HP_FLOOR_W": "w_redcap_hp_floor",
+	"REDCAP_CHEAP_HP": "w_redcap_cheap_hp",
+	"REDCAP_SUB_RISK_W": "w_redcap_sub_risk",
+	"REDCAP_SILENCE_GUARD_W": "w_redcap_silence_guard",
+	"REDCAP_TRADE_W": "w_redcap_trade",
+	"REDCAP_BLAST_ALLY_W": "w_redcap_blast_ally",
+	# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（扁平键，全队生效）
+	"EXPOSURE_TOTAL_W": "w_exposure_total",
+	"EXPOSURE_HP_MAX": "w_exposure_hp_max",
 	# ============ 【2026-09-24 补齐】2026-09-21 之后新增 / 历史上漏收的键 ============
 	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 50 个）；`INT_KEYS` 恒等于其中
 	#   `int(v)` 转型的那 21 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`

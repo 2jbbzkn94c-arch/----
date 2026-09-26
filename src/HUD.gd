@@ -2105,13 +2105,12 @@ func _on_resume_pressed() -> void:
 	_resume()
 
 # 【天梯·保存并退出】存档已经在"每次回合开始"落过盘了（见 `Battle._ladder_autosave()`），
-#   这里只做两件事：确认手上这份快照确实在（没有就**在真的开打之后**现补一份），然后回主菜单。
-#   ⚠️ 部署 / 选卡组 / 竞技场选人阶段**不补快照**：那会儿还没有"回合开始"可回，
-#      硬存一个半成品的局面反而会在续档时被当成"回合已开始"。这种情形按文档口径就是"没有回合可回"。
+#   这里只做两件事：确认手上这份快照确实在（没有就现补一份），然后回主菜单。
+#   ⚠️ 补不补由 `Battle._ladder_can_save()` 判：**部署阶段要补**（快照含"已经上了哪几个人"，
+#      续档时接着部署），选卡组 / 竞技场选人阶段不补（那会儿双方卡组都没定，没有可回的局面）。
 #   本轮存档**保留** ⇒ 下次进天梯可以继续。
 func _on_ladder_save_quit() -> void:
-	if battle != null and not LadderStore.has_snapshot() and GameState.match_running \
-			and not GameState.match_over and battle.units.size() > 0:
+	if battle != null and not LadderStore.has_snapshot() and battle._ladder_can_save():
 		battle._ladder_autosave(GameState.active_side)
 	_resume()
 	GameState.ladder_mode = ""

@@ -250,15 +250,10 @@ func _skill_tags() -> String:
 				out += "勤"
 			DataRegistry.Skill.BENCH:
 				out += "候"
-	# 【2026-09-23 深夜·用户报「风语者的技能生效后，队友卡面上没有疾行的标志」】风语者的移动光环是
-	#   **数值增益**（`heroes/hero_43_风语者.gd` 给队友 `move_buff += 1`），而上面这段只认**自身静态词条**
-	#   （`DataRegistry.Skill.SWIFT` = `<疾行>`）⇒ 吃到光环的队友牌面**一点变化都没有**。
-	#   这里补：**只要身上有移动增益（`move_buff > 0`）就同样挂一个「疾」**，位置/配色与自带词条一致；
-	#   本来就有 `<疾行>` 的不重复（`contains` 去重）。⚠️ 只加 `<疾行>` 的**显示**，不动 `effective_move()`。
-	#   刷新路径：风语者的 `on_enter`/`on_ally_entered`、`Battle._run_side_skills()` 的回合开始统一刷新、
-	#   以及 `_clear_statuses()`（回合末 `move_buff = 0`）**都会调 `refresh_stats()`** ⇒ 见那里新增的一行。
-	if move_buff > 0 and not out.contains("疾"):
-		out += "疾"
+	# 【2026-09-26 用户要求】原来这里给"有移动增益（`move_buff > 0`）"的队友补一个绿字「疾」——
+	#   那是借 <疾行> 的招牌，与**本来就有 <疾行>** 的队友撞车（看不出这一格移动力是风语者给的）。
+	#   现在风语者光环是**独立状态 [风语]**（`StatusDB.WIND`，牌面金字「风」，见 `heroes/hero_43_风语者.gd`）
+	#   ⇒ 本行删除，`<疾行>` 只代表英雄自己的词条。
 	return out
 
 func _hex_points(r: float) -> PackedVector2Array:

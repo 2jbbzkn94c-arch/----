@@ -1,6 +1,9 @@
 extends HeroBase
-## 风语者：所有其他队友移动力 +1，且移动后回复等同于本次移动距离的 HP。
+## 风语者：所有其他队友移动力 +1（牌面上是 [风语] 状态），且移动后回复等同于本次移动距离的 HP。
 ## 光环的发放 / 收回 / 补发全部在本脚本；Battle 只在对应时机派发通用钩子（不认具体英雄）。
+## ⚠️【2026-09-26】光环从"借 <疾行> 的招牌"改成**独立状态 [风语]**（用户要求：与**本来就有 <疾行>**
+##   的队友撞车，看不出这一格移动力是谁给的；角色列表的风语者技能描述也已改成「…获得[风语]」）。
+##   状态的生灭与数值 `move_buff` **严格同口径**：这里发/收 + `Battle._clear_statuses()` 回合末一起清。
 class_name HeroWindspeaker
 
 ## 本回合**实际被本风语者发过光环**的队友（实例 id -> true）。
@@ -25,6 +28,7 @@ func on_turn_start() -> bool:
 	for v in battle.units:
 		if v.alive and v.faction == unit.faction and v != unit:
 			v.move_buff += 1
+			v.add_status(StatusDB.WIND)   # <风语>：与这份 +1 同步挂上（`add_status` 自己会刷牌面）
 			_remember_aura(v)
 	return true
 
@@ -40,11 +44,21 @@ func grants_move_aura() -> bool:
 ## 替补登场的风语者本人：立刻给在场其他队友补 +1（回合中途替补会错过本回合的 on_turn_start）。
 ## 注意：与原实现一致，这里**不含**其他风语者。
 func on_enter() -> void:
+	# 【2026-09-26 修·用户报「风语者登场那回合，全队能多走 1 格」（被冻的猎颅者亮 3 格暴露）】
+	#   回合开始的"先补位"阶段登场的风语者：本函数已经给全队 `move_buff += 1`，紧接着**同一轮**
+	#   `Battle._run_side_skills()` 还会跑 `on_turn_start()` **再 +1** ⇒ 全队多 1 格（回合末清零 ⇒
+	#   只有登场那回合错，下一回合自动正常）。
+	#   `Battle._grant_sub_aura_after_enter()` 早就用这两道门挡住了同一件事（"避免 +2"），但那只挡
+	#   "**别人替新登场者补发**"那条路；"**风语者自己 `_trigger_on_enter` 主动发**"这条路没挡 ⇒ 这里补上。
+	#   ⚠️ 中途换人（两道门都是 false）时照旧发放，那条路仍然需要它。
+	if battle._defer_side_skills or battle._start_placing_subs:
+		return
 	for v in battle.units:
 		if v == null or not is_instance_valid(v) or not v.alive:
 			continue
 		if v.faction == unit.faction and v.hero_id != "hero_43":
 			v.move_buff += 1
+			v.add_status(StatusDB.WIND)
 			v.refresh_stats()
 			_remember_aura(v)
 
@@ -69,6 +83,7 @@ func on_ally_entered(newcomer: Unit) -> void:
 	if newcomer.faction != unit.faction or newcomer.hero_id == "hero_43":
 		return
 	newcomer.move_buff += 1
+	newcomer.add_status(StatusDB.WIND)
 	newcomer.refresh_stats()
 	_remember_aura(newcomer)
 
@@ -87,6 +102,9 @@ func _retract_aura() -> void:
 		var v := instance_from_id(k) as Unit
 		if v != null and is_instance_valid(v) and v.alive and v.move_buff > 0:
 			v.move_buff -= 1
+			# <风语> 只在"这份 +1 是我给的、且没有别的风语者还加着"时才摘掉（双风语者时留着，与数值同口径）
+			if v.move_buff <= 0:
+				v.remove_status(StatusDB.WIND)
 			v.refresh_stats()
 	_aura_given.clear()
 

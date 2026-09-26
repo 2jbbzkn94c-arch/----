@@ -2114,6 +2114,13 @@ func _my_deploy_turn() -> bool:
 		return _deploy_side == 0 and player_deployed.size() < DEPLOY_COUNT_BATTLE
 	return _deploy_side == 1 and enemy_deployed.size() < DEPLOY_COUNT_BATTLE
 
+# 双方是否都已上满首发（= 部署阶段结束）。
+# 【2026-09-25 修·天梯「部署阶段退出被跳过」】部署**中途**（只上了 1~2 人）场上就已经有单位了，
+#   而 `GameState.match_running` 在第 2 局起于部署期也是 true（`reset_match()` 里就 `start_match()` 了）
+#   ⇒ 「本局到底是在部署、还是已经开打」只能看这个，不能看 `units.size()` / `match_running`。
+func _deploy_done() -> bool:
+	return player_deployed.size() >= DEPLOY_COUNT_BATTLE and enemy_deployed.size() >= DEPLOY_COUNT_BATTLE
+
 # 轮次切换/开局时同步部署计时：本端全部选人共享一个总预算（30s，不按轮重置）
 # 预算耗尽后：不再读秒；之后每次轮到自己上人，直接自动随机1 人（仍一轮一个、双方轮流）
 func _sync_deploy_timer() -> void:
@@ -2450,6 +2457,11 @@ func _deploy_after_pick() -> void:
 			action_info.emit("等待对方选人…" if GameState.is_host else "轮到你（敌方）选人：点选下方英雄")
 	else:
 		_deploy_side = 0
+	# 【2026-09-25 修·天梯】部署期也落一次盘（**每上一个人**）：这样正常退出、崩溃、强杀都能接着
+	#   "这份还没打完的部署"回来（`_ladder_restore()` 见 `deploy_done=false` ⇒ `_resume_deploy_phase()`）。
+	#   ⚠️ 必须放在上面那次 `_deploy_side` 翻转**之后**：轮次标记要与双方已上阵人数同口径（否则续档会
+	#   卡在"我方 3/3、对方 2/3、却轮到我方"没人可点）。单机天梯之外零开销（`_ladder_active()` 先返回）。
+	_ladder_autosave(GameState.active_side)
 	deploy_refresh.emit()
 	_sync_deploy_timer()   # 切换后的新轮是否本端真人决定是否限时
 	_deploy_banner_if_my_turn()   # 队伍部署轮转：轮到本端时中央提示"轮到你部署队伍"
@@ -5815,7 +5827,13 @@ func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = tru
 		if enemy_roster.size() > 0 or _dynamic_sub_active():
 			_pending_enemy_sub += 1   # 每阵亡一名，记录一个待补位名额（敌方回合开始才落位
 			# 敌方回合内即阵亡：本回合立即补位，避免该敌方回合缺员行动后要拖到下一敌方回合
-			if GameState.active_side == GameState.SIDE_ENEMY:
+			# 【2026-09-26 修·T42·用户实机「AI 回合最后被反击死，替补上来的英雄不打人」】
+			#   敌方回合内阵亡会**立即补位**，再由 `_plan_enemy_late_sub()` 给它补一手 —— 但补手要
+			#   `_enemy_plan_running == true`（只有回放进行中才成立）。被反击死在**最后一步**时回放
+			#   已返回、门已关 ⇒ 补位做了、补手没做 ⇒ 那个替补当回合站上场却不出手（还被玩家白打一回合）。
+			#   ⇒ 加一道门：**计划已经跑完就不当场补位**，改成记进 `_pending_enemy_sub`、下个敌方回合开始
+			#   落位（与"玩家回合死的"走同一条路）⇒ 落位即能出手，也没有白挨一回合。
+			if GameState.active_side == GameState.SIDE_ENEMY and _enemy_plan_running:
 				_place_enemy_sub()
 	if _CONSOLE_SUB_LOG:
 		var cause_txt2 := ""
@@ -5902,7 +5920,7 @@ func _replan_enemy_action(u: Unit) -> Dictionary:
 	ai.log_decisions = false                            # 临时补算，不重复打印决策说明
 	ai.time_budget_ms = 1200                            # 回合中途的小补算：别占满 10 秒（与 late_sub 同口径）
 	var sim = ai.build_state(descs, snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return {}
@@ -5927,7 +5945,7 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 	# 别让回合中途的补算也占满 10 秒（那会让对局卡顿）。
 	ai.time_budget_ms = 1200
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return
@@ -6437,7 +6455,7 @@ func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
 	var pick: Vector2i = ai.pick_sub_cell(sim, hero_id, cells)
 	if pick.x == -99 and pick.y == -99:
 		return fallback
@@ -6500,7 +6518,7 @@ func _sub_finish_hero_pick(cells: Array) -> int:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
 	var hid: String = ai.pick_sub_hero(sim, enemy_roster, cells)
 	var i := enemy_roster.find(hid)
 	if i < 0:
@@ -7143,7 +7161,7 @@ func _run_enemy_turn() -> void:
 # 写死 BattleAI 会让线程启动失败（"Cannot convert argument 1"）。RefCounted 对生产 AI 与候选都成立。
 func _enemy_ai_worker(ai: RefCounted, snap: Dictionary) -> void:
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, {}, {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()
 	_ai_plan = result
@@ -7254,6 +7272,9 @@ func _ladder_snapshot(side: int) -> Dictionary:
 		"pending_player_subs": _pending_player_subs, "pending_enemy_sub": _pending_enemy_sub,
 		"pending_sub": _pending_sub, "gold_tick_round": _gold_tick_round,
 		"opening_items_spawned": _opening_items_spawned,
+		# 【2026-09-25 修】这一局部署完没完 + 部署读秒还剩多少：没完的档续档时**接着部署**（见 `_resume_deploy_phase()`），
+		#   不能再当成"回合开始"直接开打（用户实测：部署期退出再进来，人没选够就直接开打了）。
+		"deploy_done": _deploy_done(), "deploy_left": deploy_budget_left,
 		"rng_state": rng.state,
 		"units": us,
 		"bombs": bombs.duplicate(), "obstacles": obstacles.duplicate(), "buff_items": buff_items.duplicate(),
@@ -7350,6 +7371,7 @@ func _ladder_restore() -> void:
 	_pending_sub = String(snap.get("pending_sub", ""))
 	_gold_tick_round = int(snap.get("gold_tick_round", -1))
 	_opening_items_spawned = bool(snap.get("opening_items_spawned", true))
+	deploy_budget_left = float(snap.get("deploy_left", DEPLOY_BUDGET_SECONDS))
 	_first_side = int(snap.get("first_side", GameState.SIDE_PLAYER))
 	_deploy_side = int(snap.get("deploy_side", GameState.SIDE_PLAYER))
 	_deck_pick_match = bool(snap.get("deck_pick_match", false))
@@ -7393,7 +7415,13 @@ func _ladder_restore() -> void:
 			var c = spawned[i1]
 			if t != null and c != null:
 				_possess_links[t] = c
-	# 6) 回到"这个回合开始"：状态归位后照常跑 `_begin_side()`（补位/毒伤/回合开始技重放一遍）
+	# 6) 【2026-09-25 修】这一局**还没部署完**（在部署阶段退出，可能只上了 1~2 人）⇒ 不能当"回合开始"续：
+	#    那样会带着没选够的队伍把部署阶段整个跳过、直接开打（用户实测报的就是这个）。
+	#    改成**接着部署**：快照里已上阵的人已经照原格还原，卡池/已上阵名单/读秒也都在 ⇒ 剩下的照常选。
+	if not _snap_deploy_done(snap):
+		_resume_deploy_phase()
+		return
+	# 7) 回到"这个回合开始"：状态归位后照常跑 `_begin_side()`（补位/毒伤/回合开始技重放一遍）
 	state = State.IDLE
 	_refresh_board()
 	_sync_ranged_adjacent()
@@ -7401,3 +7429,49 @@ func _ladder_restore() -> void:
 		print("[天梯] 已续档：第 %d 回合 · %s行动 · 场上 %d 个单位" % [
 			GameState.round_number, "我方" if int(snap.get("side", 0)) == _my_side() else "敌方", units.size()])
 	_begin_side(int(snap.get("side", GameState.SIDE_PLAYER)))
+
+# 快照是不是"部署已完成"的回合快照：新档直接读 `deploy_done`；旧档没这个字段 ⇒ 按双方已上阵人数推断
+#   （部署一结束两边就恒为 3/3，之后再没变过 ⇒ 推断是安全的）。
+func _snap_deploy_done(snap: Dictionary) -> bool:
+	if snap.has("deploy_done"):
+		return bool(snap["deploy_done"])
+	return (snap.get("player_deployed", []) as Array).size() >= DEPLOY_COUNT_BATTLE \
+		and (snap.get("enemy_deployed", []) as Array).size() >= DEPLOY_COUNT_BATTLE
+
+# 天梯续档·回到"还没上满人"的部署阶段：快照里已上阵的人已按原格站好（`_ladder_restore()` 第 4 步），
+#   这里只把部署界面/轮次/读秒接回去 —— 与 `_begin_deployment()` 尾部同一套动作，不再重刷障碍与开局道具。
+func _resume_deploy_phase() -> void:
+	state = State.DEPLOY
+	_pending_deploy = ""
+	_pending_enemy_deploy = ""
+	_first_side_decided = true   # 先手已定（快照里的 `first_side`/`deploy_side`）⇒ 不再弹"本局先手"提示
+	var pc := {}
+	for c in _deploy_cells(DataRegistry.Faction.PLAYER):
+		pc[c] = Color(0.2, 0.6, 0.95, 0.55)
+	for c in _deploy_cells(DataRegistry.Faction.ENEMY):
+		pc[c] = Color(0.95, 0.35, 0.3, 0.5)
+	_preview_cells = pc
+	_refresh_board()
+	_sync_ranged_adjacent()
+	_apply_highlights()
+	deploy_refresh.emit()   # 通知 HUD 重新开"开局选人"面板（它按 state/_deploy_side/卡池自行重建）
+	if _CONSOLE_AI_LOG:
+		print("[天梯] 接着部署：我方 %d/%d · 对方 %d/%d" % [
+			player_deployed.size(), DEPLOY_COUNT_BATTLE, enemy_deployed.size(), DEPLOY_COUNT_BATTLE])
+	_sync_deploy_timer()
+	if _deploy_side == 1 and not GameState.is_online:
+		_enemy_deploy.call_deferred()   # 退在敌方选人轮 ⇒ 接着让敌方 AI 补位
+	else:
+		_deploy_banner_if_my_turn()
+
+# 【天梯·保存并退出】值不值得现补一份快照：
+#   · 要：部署阶段（哪怕只上了 1 个人 —— 快照里含"已上阵的人"，续档接着部署）与对局中
+#   · 不要：选人阶段（选择卡组 / 竞技场 2 选 1）—— 那会儿双方卡组都没定，没有可回的局面
+#   ⚠️ 判据**不看 `GameState.match_running`**：部署期这个标志第 1 局是 false、第 2 局起是 true
+#      （`reset_match()` 里就 `start_match()` 了）⇒ 拿它当判据会变成"第 1 局的部署不存、第 2 局的存"。
+func _ladder_can_save() -> bool:
+	if state == State.ENDED or GameState.match_over:
+		return false
+	if state == State.DECK_PICK or state == State.ARENA_DRAFT:
+		return false
+	return units.size() > 0

@@ -1,4 +1,4 @@
-﻿# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
+# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
 # PURE ASCII ONLY. PS 5.1 reads .ps1 as ANSI: any non-ASCII byte here becomes mojibake.
 # Chinese text lives only in .md reports written with the write tool.
 #
@@ -1280,7 +1280,16 @@ function Get-RuleScoreKeys {
              #   为什么要新键：⑥⑦ 估的是「它这回合能打出多少伤害」，而这三件事关掉的是**结构上读不到的那部分**
              #   （放不出技能 / 走不动 / 攻击力归零导致命中附带机制失效）⇒ 详见 `src/BattleAI.gd` 的
              #   `const SILENCE_VALUE_W` 那块说明。规则键 22 → 26。
+             # 【2026-09-26·用户口述四条】红帽（hero_40）「扑街自爆」的用法（见 `src/BattleAI.gd` 的
+             #   `const REDCAP_HP_FLOOR_W` 处说明）：①保命血线 ②击杀回合防替补 ③有沉默就保护
+             #   ④没有廉价解时蓄爆 ⑤保不住时队友别贴着她；`REDCAP_CHEAP_HP` = "残血"线（默认 5）。
+             #   值写在 `hero_40` 段（`_wh` 覆盖读），扁平键只是兜底（默认 0 = 关）。规则键 26 → 32。
+             #   ⚠️ ② 在 RL 跑批里量不到（`RL/harness/对局.gd` 从不发生替补 ⇒ rosters 恒空）。
              'SILENCE_VALUE_W', 'THORN_PIN_SUP_W', 'THORN_PIN_RANGED_W', 'PARALYZE_ZERO_W',
+             'REDCAP_HP_FLOOR_W', 'REDCAP_CHEAP_HP', 'REDCAP_SUB_RISK_W', 'REDCAP_SILENCE_GUARD_W',
+             'REDCAP_TRADE_W', 'REDCAP_BLAST_ALLY_W',
+             # 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关；血上限是它的第二道门）
+             'EXPOSURE_TOTAL_W', 'EXPOSURE_HP_MAX',
              # 【2026-09-20·用户拍板】原 'LEECH_TRIGGER_W'（古拉 hero_14 的"触发吸血补一笔"）**已判死删除**：
              #   3 队 × 3 个值的棋力批越调越负（−0.56 / −1.83 / −3.70，胜率 0.39→0.33）⇒ 连引擎代码一起
              #   删干净（规则键 41 → 40）。权重文件 / theta 里再写它会落到 `set_weights` 的未知键分支、静默忽略。
