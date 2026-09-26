@@ -1,13 +1,13 @@
 {
-    "base_weights":  "RL\\weights\\噩梦_基线.json",
-    "opponent":  "cand",
+    "base_weights":  "RL\\weights\\噩梦.json",
+    "opponent":  "base",
     "beam":  {
                  "candidate":  200,
                  "opponent":  200
              },
     "decks":  {
-                  "player":  "hero_46,hero_11,hero_27",
-                  "enemy":  "hero_46,hero_11,hero_27"
+                  "player":  "hero_48,hero_14,hero_25",
+                  "enemy":  "hero_48,hero_14,hero_25"
               },
     "seeds":  {
                   "train":  [
@@ -280,10 +280,5 @@
                                   },
                         "beam":  200
                     }
-                ],
-    "league":  {
-                   "self_play_fraction":  1,
-                   "base_opp_beam":  200,
-                   "checkpoint":  "RL\\weights\\噩梦_基线.json"
-               }
+                ]
 }

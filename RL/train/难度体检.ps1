@@ -68,7 +68,7 @@ param(
     #   冻结的理由 = 批跑到一半若有人改了 `噩梦.json`，读数不至于前后不一致（RlTrain 的 checkpoint sha 也会兜底）。
     #   想 A/B 某次落地（例如今晚的 ⑫/㉕）时，把它指向改前快照即可。
     [string]$Baseline = 'RL\weights\噩梦_基线.json',
-    [ValidateSet('tiers', 'tiers2', 'tiers3', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel', 'p2dd', 'tpinner', 'fundiv', 'core', 'combo', 'polish')][string]$Mode = 'tiers'   # tiers = 难度四档（**旧口径**：低档=裸默认+概率弱化）；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；**tiers3 = 真·难度梯度：档位互相打（简单→普通 · 普通→困难 · 困难→噩梦 · 简单→噩梦 · 普通→噩梦：A = 该组 base 那一档、B = 该组 checkpoint 那一档，2026-09-25 用户口径「前三个难度建立在噩梦基础上」+「以噩梦为唯一对比项」）**；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**core = ⑦核心系数**混合权重** RISK_CORE_OUTPUT_W（cw0 纯身价 ／ cw25 ／ cw5，2026-09-25 用户口径「让低血量的延缓死亡时间，增加输出机会」。二选一那版 RISK_CORE_BY_OUTPUT 已删）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
+    [ValidateSet('tiers', 'tiers2', 'tiers3', 'weak', 'ruleb', 'weakp', 'weakp2', 'pull', 'nlf', 'ipool', 'merge', 'smode', 'taunt', 'p1beam', 'poison', 'shield', 'dedup', 'split', 'spread', 'apply', 'hpacc', 'bpool', 'funnel', 'p2dd', 'tpinner', 'fundiv', 'core', 'combo', 'polish', 'pb', 'idle', 'detour')][string]$Mode = 'tiers'   # tiers = 难度四档（**旧口径**：低档=裸默认+概率弱化）；tiers2 = 噩梦/噩梦+ 对困难（用户 2026-09-20 点名）；**tiers3 = 真·难度梯度：档位互相打（简单→普通 · 普通→困难 · 困难→噩梦 · 简单→噩梦 · 普通→噩梦：A = 该组 base 那一档、B = 该组 checkpoint 那一档，2026-09-25 用户口径「前三个难度建立在噩梦基础上」+「以噩梦为唯一对比项」）**；weak = 削弱项候选；weakp/weakp2 = 概率性弱化 p 剂量；pull = 进圈拉力剂量；ipool = 血量池折算 INCOMING_POOL_W 剂量（2026-09-22）；smode = 搜索模式 SEARCH_MODE 剂量（2 对 0，2026-09-23 用户点名）；**taunt = ㉕嘲讽吸火 TAUNT_SOAK_W 剂量（0/1.5/3/6，2026-09-23 用户实机点名）**；**bpool = ⑥ 的罚按血量池折算 MOVE_ACCEPT_POOL（2026-09-24）**；**core = ⑦核心系数**混合权重** RISK_CORE_OUTPUT_W（cw0 纯身价 ／ cw25 ／ cw5，2026-09-25 用户口径「让低血量的延缓死亡时间，增加输出机会」。二选一那版 RISK_CORE_BY_OUTPUT 已删）**；**funnel = 阶段 2 漏斗宽度 TWO_PHASE_LAYOUTS 剂量（8/16/32/64，2026-09-24 用户「你把漏斗调到其他数值，跑一下」）**；原 `rtk`（真推演剂量）已于 2026-09-22 晚随引擎整段删除
 )
 $ErrorActionPreference = 'Stop'
 $train = Join-Path $PSScriptRoot 'Train.ps1'
@@ -614,6 +614,49 @@ if ($Mode -eq 'hpacc') {
         $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ HP_VALUE_W = [double]$HP_ARMS[$k] } }
     }
     $GROUPS = @(@{ slug = 'HP'; base = 'RL\weights\噩梦.json'; tiers = @($HP_ARMS.Keys) })
+}
+# ---- 模式 S（`pb`）：⑬b 附体电池 `POSSESS_BATTERY_W` 剂量批（T40）----
+# ⑬b = 「宿魂挂着附体站到火线上，挨打就是白赚镜像伤」的定价（`_possess_battery_val()`）：
+#   `w × min(宿魂下回合挨打合计, 被附体者剩余血) × 该敌人身价/20`。
+# ⚠️ 这个键现役值写在 **hero_46 段**（`噩梦.json` = 1.0）⇒ theta 必须用**扁平的 hero 覆盖写法**
+#   `HERO_hero_46_POSSESS_BATTERY_W`（RlTrain 会写成 `{ "hero_46": { POSSESS_BATTERY_W: v } }`）。
+#   探针教训：直接注入扁平键 `POSSESS_BATTERY_W` 会被 hero 段那行吃掉（段里写了就以段为准）⇒ 白跑。
+# ⚠️ **本模式的牌组必须含 hero_46**（默认 4 组一个都没有宿魂 ⇒ 整批等于白跑）⇒ 用 `-Decks` 显式传。
+# 读法：配对 Δpts(臂 − pb1 现役) + 生产侧胜率 + 挨打/打出/**回合数**（真深潜 ⇒ 更贴脸 ⇒ 回合数应降）。
+# 行为探针：`RL/probe/宿魂潜入自检.gd`（看宿魂那一手是不是真的"瞬移进敌阵"）。
+$PB2_ARMS = [ordered]@{ 'pb0' = 0.0; 'pb05' = 0.5; 'pb1' = 1.0; 'pb2' = 2.0 }
+if ($Mode -eq 'pb') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $PB2_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ HERO_hero_46_POSSESS_BATTERY_W = [double]$PB2_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'PB2'; base = 'RL\weights\噩梦.json'; tiers = @($PB2_ARMS.Keys) })
+}
+
+# ---- 模式 T（`idle`）：`IDLE_HIT_PENALTY`（"站着能打到人却不打"的价钱）剂量批 ----
+# 现状：**四档权重文件都写着 2.0**（引擎默认 0）⇒ 这是**现役项**，但**从没量过**（T5 只说"随新口径自动落实"）。
+# 判据 = 本回合存在任何能打到人的出招（含走一步再打）；本键是"放弃一次出手"的价钱。
+# 读法：Δpts(臂 − i2 现役) + **出手次数/局**（罚重了应更爱出手）+ 回合数。
+$IH_ARMS = [ordered]@{ 'i0' = 0.0; 'i1' = 1.0; 'i2' = 2.0; 'i4' = 4.0 }
+if ($Mode -eq 'idle') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $IH_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ IDLE_HIT_PENALTY = [double]$IH_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'IH'; base = 'RL\weights\噩梦.json'; tiers = @($IH_ARMS.Keys) })
+}
+
+# ---- 模式 U（`detour`）：① 障碍绕路 `OBSTACLE_DETOUR_WEIGHT` 剂量批 ----
+# 现状：**四份权重文件都没写** ⇒ 四档全吃引擎默认 **4.0**，而且**从没量过**。
+# 它是唯一"把直线距离当基准"的评分项：`Σ max(软路网代价 − 直线距离, 0) × w`（见 `_obstacle_detour()`）。
+# 读法：Δpts(臂 − d4 现役) + **敲障碍次数/局**（`R|u|` 的 `obs`）+ 回合数。
+$OD_ARMS = [ordered]@{ 'd0' = 0.0; 'd2' = 2.0; 'd4' = 4.0; 'd8' = 8.0 }
+if ($Mode -eq 'detour') {
+    $TIERS = [ordered]@{}
+    foreach ($k in $OD_ARMS.Keys) {
+        $TIERS[$k] = @{ base = 'RL\weights\噩梦.json'; beam = 200; theta = @{ OBSTACLE_DETOUR_WEIGHT = [double]$OD_ARMS[$k] } }
+    }
+    $GROUPS = @(@{ slug = 'OD'; base = 'RL\weights\噩梦.json'; tiers = @($OD_ARMS.Keys) })
 }
 # ---- 模式 K（`tiers2`）：「噩梦 现在对困难的胜率」—— 用户 2026-09-20 点名 → 当天改为四档后同步 ----
 # 为什么要单开一个模式：`tiers` 模式里只有 `nmare` 一条噩梦臂，而且它的基线是**旧的 6 键口径**；

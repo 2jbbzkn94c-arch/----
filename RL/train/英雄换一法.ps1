@@ -31,6 +31,10 @@ param(
     [string]$Tag = 'swap1',
     [string]$BaseWeights = 'RL\weights\噩梦.json',
     [int]$SeedBlock = 1,
+    # 【2026-09-25 加】分片并行：同一批切成 $Shards 份、第 $Shard 份自己跑（0 起）。
+    #   为什么要：每对 4 局是**串行**跑的（一个格子一个进程）⇒ 不切分的话 135 对要 ~9 小时。
+    [int]$Shard = 0,
+    [int]$Shards = 1,
     [switch]$SkipRuns,
     [switch]$OnlyPlan
 )
@@ -77,8 +81,13 @@ foreach ($b in $bases) {
         }
     }
 }
-Write-Host ("[换一法] 基准队 {0} 支 · 换入 {1} 个 · 配对 {2} 对（每对 2 格 × 2 先后手 = 4 局，共 {3} 局）" -f `
-    $bases.Count, $swapNames.Count, $pairs.Count, ($pairs.Count * 4))
+$allPairs = @($pairs)
+if ($Shards -gt 1) {
+    $pairs = @()
+    for ($i = 0; $i -lt $allPairs.Count; $i++) { if (($i % $Shards) -eq $Shard) { $pairs += $allPairs[$i] } }
+}
+Write-Host ("[换一法] 基准队 {0} 支 · 换入 {1} 个 · 全批 {2} 对 · 本分片 {3}/{4} 跑 {5} 对（每对 4 局 = {6} 局）" -f `
+    $bases.Count, $swapNames.Count, $allPairs.Count, ($Shard + 1), $Shards, $pairs.Count, ($pairs.Count * 4))
 if ($OnlyPlan) {
     $pairs | Select-Object -First 12 | ForEach-Object {
         Write-Host ("   {0} 位置{1}: {2} → {3}   （{4}）" -f $_.Base, $_.Pos, $_.OutName, $_.InName, (Show-Deck $_.SwapDeck))
@@ -134,7 +143,7 @@ function Get-PtsA([string]$run) {
     }
 }
 $recs = @()
-foreach ($pr in $pairs) {
+foreach ($pr in $allPairs) {
     $ra = Get-PtsA ('{0}_{1}_p{2}_x{3}_a' -f $Tag, $pr.Base, $pr.Pos, $pr.In.Substring(5))
     $rb = Get-PtsA ('{0}_{1}_p{2}_x{3}_b' -f $Tag, $pr.Base, $pr.Pos, $pr.In.Substring(5))
     if ($null -eq $ra -or $null -eq $rb) { continue }

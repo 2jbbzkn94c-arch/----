@@ -41,6 +41,17 @@ var _first_mode := "p"          # p / e / both
 
 var _sum := { "games": 0, "w": 0, "l": 0, "d": 0, "ptsA": 0.0, "ptsB": 0.0, "ms_max": 0 }
 var _game_ms_max := 0           # 本局单次思考最久的毫秒（每局清零；纯取证，见 `_ai_side`）
+# ---- 【2026-09-25 新增】每单位账本（**纯取证**：只加 print，不改任何判定/权重/流程）----
+#   为什么：`measure.csv` 只有局级账 ⇒ 想问"某个英雄值多少分/哪一列最能预测胜负"就得每次专门挂批。
+#   有了它，**每个批都自带英雄级数据**（池子批/难度批/剂量批全都能反哺平衡），见
+#   `RL/reports/英雄平衡_初筛_pool3_20260925.md` 的"下一步 · 第 2 步"。
+#   口径：`dealt/taken` 读 `Unit.damaged(受击者, 实际伤害)` 信号（圣盾/坚固/塔盾代扛之后的值），
+#   归因规则 = **一招之内只有发起者与目标两人**：伤害落在目标身上记给发起者，落在发起者身上记给目标
+#   （= 反击）。毒/烧血/炸弹这类没有发起者的记为"环境伤"（不计入任何人的 dealt）。
+var _led: Dictionary = {}       # unit 实例 id -> 统计字典
+var _led_actor: Unit = null     # 当前这一招的发起者
+var _led_target: Unit = null    # 当前这一招的目标
+var _led_round := 0
 
 func _ready() -> void:
 	_watchdog()
@@ -110,6 +121,7 @@ func _play(seed_v: int, a_side: int, first_side: int) -> Dictionary:
 	_game_ms_max = 0                      # 本局"单次思考最久"（_ai_side 里累计，打印在 msmax= 上）
 	await _setup(seed_v, first_side)
 	var hp0 := _side_hp()
+	_led_begin()
 	var rounds := 0
 	while not GameState.match_over and rounds < MAX_HALF:
 		var side: int = GameState.active_side
@@ -120,12 +132,14 @@ func _play(seed_v: int, a_side: int, first_side: int) -> Dictionary:
 			break
 		await _b._end_side(side)
 		rounds += 1
+		_led_tick_round()
 		if _b.state != Battle.State.PLAYER_INPUT and not GameState.match_over:
 			var t0 := Time.get_ticks_msec()
 			while _b.state != Battle.State.PLAYER_INPUT and not GameState.match_over \
 					and Time.get_ticks_msec() - t0 < READY_WALL_MS:
 				await get_tree().process_frame
 	var hp := _side_hp()
+	_led_print(seed_v, a_side, first_side)
 	var out := {
 		"seed": seed_v, "a_side": a_side, "first": first_side,
 		"pd": _b.player_dead, "ed": _b.enemy_dead,
@@ -269,16 +283,25 @@ func _ai_side(side: int, a_side: int) -> void:
 			continue
 		var a: Dictionary = step.get("action", {})
 		if a.has("move") and a["move"] != null:
+			_led_note(u, "moves")
 			await _act_and_wait(func() -> void: _b._do_move(u, a["move"], fn == DataRegistry.Faction.ENEMY))
 			_resolve_pending_bomb()
 		if a.has("atk_obs"):
+			_led_note(u, "obs")
 			await _act_and_wait(func() -> void: _b._do_attack_obstacle(u, a["atk_obs"], fn == DataRegistry.Faction.ENEMY))
 		if a.has("atk") and int(a["atk"]) >= 0:
 			var ti := int(a["atk"])
 			if ti >= 0 and ti < refs.size() and is_instance_valid(refs[ti]):
 				var t: Unit = refs[ti]
 				if t.alive and t.faction != fn and _b._in_attack_range(u, t):
+					_led_note(u, "attacks")
+					_led_actor = u
+					_led_target = t
 					await _act_and_wait(func() -> void: _b._do_attack(u, t, fn == DataRegistry.Faction.ENEMY))
+					if not is_instance_valid(t) or not t.alive:   # 目标已 free/已死 ⇒ 这一招是击杀
+						_led_note(u, "kills")
+					_led_actor = null
+					_led_target = null
 
 ## 玩家侧的炸弹人（hero_35）在真实游戏里是"移动后由玩家点格放雷"；对局引擎里没有手，
 ## 所以这里调**英雄自己的** `bomb_place_cells()` + `_frontest()`（与单机敌方 AI 分支同一套规则）
@@ -386,3 +409,89 @@ func _sha(path: String) -> String:
 	ctx.update(f.get_buffer(f.get_length()))
 	f.close()
 	return ctx.finish().hex_encode().substr(0, 12)
+
+# ---------------- 每单位账本（见文件上方 `_led` 处说明；纯取证，不改任何判定）----------------
+
+## 账本键：优先用 `Unit.id`（引擎自增、全生命周期唯一）；拿不到才退回 instance id。
+## ⚠️ 不能用 instance id 当键：单位阵亡后会被 `queue_free()`，**实例 id 会被回收**，
+##   后建的实例可能撞上老键 ⇒ 实测出现 `hp_end=32 > max=18` 的串账。
+func _led_key(u: Unit) -> String:
+	if u == null or not is_instance_valid(u):
+		return ""
+	return u.id if u.id != "" else ("obj%d" % u.get_instance_id())
+
+func _led_begin() -> void:
+	_led.clear()
+	_led_actor = null
+	_led_target = null
+	_led_round = 0
+	if _b == null:
+		return
+	for u in _b.units:
+		if u == null or not is_instance_valid(u):
+			continue
+		_led[_led_key(u)] = {
+			"u": u,
+			"hero": u.hero_id, "fn": u.faction, "max_hp": u.max_hp, "hp0": u.hp,
+			"hp_end": u.hp, "alive_end": true, "rounds": 0, "death_round": -1,
+			"dealt": 0, "taken": 0, "kills": 0, "attacks": 0, "moves": 0, "obs": 0,
+		}
+		if not u.damaged.is_connected(_led_on_damaged):
+			u.damaged.connect(_led_on_damaged)
+
+## 受击回调：记"吃伤"；并按"一招之内只有发起者与目标两人"把伤害记给打的人（反击记给被攻击者）
+func _led_on_damaged(victim: Unit, amount: int) -> void:
+	if victim == null or not is_instance_valid(victim):
+		return
+	var vr = _led.get(_led_key(victim))
+	if vr != null:
+		vr["taken"] = int(vr["taken"]) + amount
+	var src: Unit = null
+	if _led_target != null and is_instance_valid(_led_target) and victim == _led_target:
+		src = _led_actor
+	elif _led_actor != null and is_instance_valid(_led_actor) and victim == _led_actor:
+		src = _led_target
+	if src == null or not is_instance_valid(src):
+		return
+	var sr = _led.get(_led_key(src))
+	if sr != null:
+		sr["dealt"] = int(sr["dealt"]) + amount
+
+func _led_note(u: Unit, key: String) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	var r = _led.get(_led_key(u))
+	if r != null:
+		r[key] = int(r[key]) + 1
+
+func _led_tick_round() -> void:
+	_led_round += 1
+	if _b == null or not is_instance_valid(_b):
+		return
+	# ⚠️ 遍历**自己的记录**、不遍历 `_b.units`：实测阵亡单位会被移出 `_b.units`（甚至被 free）
+	#   ⇒ 靠 `_b.units` 会把它整行漏掉（第一次冒烟：6 个单位只打出 1 行）。
+	for k in _led.keys():
+		var r: Dictionary = _led[k]
+		var u = r.get("u", null)
+		if u != null and is_instance_valid(u) and u.alive:
+			r["rounds"] = int(r["rounds"]) + 1
+			r["hp_end"] = u.hp
+			r["alive_end"] = true
+		else:
+			r["alive_end"] = false
+			if int(r["death_round"]) < 0:
+				r["death_round"] = _led_round
+
+## 每局每个单位一行 `R|u|...`（解析见 `RL/train/单位账本.ps1`）
+func _led_print(seed_v: int, a_side: int, first_side: int) -> void:
+	if _b == null or not is_instance_valid(_b) or _led.is_empty():
+		return
+	for k in _led.keys():
+		var r: Dictionary = _led[k]
+		print("R|u|seed=%d|a_side=%d|first=%d|fn=%s|hero=%s|hp0=%d|max=%d|hp_end=%d|alive=%d|rounds=%d|death_round=%d|dealt=%d|taken=%d|kills=%d|attacks=%d|moves=%d|obs=%d" % [
+			seed_v, a_side, first_side,
+			("E" if int(r["fn"]) == DataRegistry.Faction.ENEMY else "P"),
+			str(r["hero"]), int(r["hp0"]), int(r["max_hp"]), int(r["hp_end"]),
+			(1 if bool(r["alive_end"]) else 0), int(r["rounds"]), int(r["death_round"]),
+			int(r["dealt"]), int(r["taken"]), int(r["kills"]), int(r["attacks"]),
+			int(r["moves"]), int(r["obs"])])
