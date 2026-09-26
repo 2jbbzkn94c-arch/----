@@ -157,7 +157,7 @@ func _probe(_tag: String, deck: Array, ecells: Array, pcells: Array, force_open:
 		incs.append("%s:now=%.0f/max=%.0f@%s" % [str(u.name), cur, hi, str(hi_cell)])
 	return {
 		"descs": descs, "cells": pcells,
-		"engaged": bool(sim.engaged0), "thr": float(ai._accept_threshold(sim)),
+		"engaged": bool(sim.engaged0), "thr": float(ai._accept_threshold(null)),   # 2026-09-26：⑥ 的门逐单位化 ⇒ 这里问「阈值本身是多少」
 		"rb0": float(ai._rule_b_score(sim)), "rb1": float(ai1._rule_b_score(sim1)),
 		"inc_txt": " ".join(incs),
 	}

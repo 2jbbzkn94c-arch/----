@@ -99,8 +99,8 @@ func _arm(tag: String, hp: int, w40: Dictionary, foes: Array, opt: Dictionary) -
 		descs.append(_desc(DataRegistry.Faction.PLAYER, String(f[0]), f[1] as Vector2i, String(f[0]) + "(已阵亡)"))
 		dead_idx.append(descs.size() - 1)
 	var occ := {}
-	for d in descs:
-		occ[d["cell"]] = true
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
 	var ai = FORK.new(_grid)
 	ai.difficulty = 3
 	ai.log_decisions = false

@@ -37,8 +37,8 @@ func _arm(tag: String, can_move: int) -> void:
 		descs[2]["emove"] = 0
 		descs[3]["emove"] = 0
 	var occ := {}
-	for d in descs:
-		occ[d["cell"]] = true
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
 	var ai = FORK.new(_grid)
 	ai.difficulty = 3
 	ai.log_decisions = false

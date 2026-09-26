@@ -44,8 +44,8 @@ func _arm(tag: String, w_sil: float, w_exp: float = 2.0) -> void:
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_07", Vector2i(3, 5), "影丸", 14))
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_34", Vector2i(2, 6), "沉默术士", 15))
 	var occ := {}
-	for d in descs:
-		occ[d["cell"]] = true
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
 	var ai = FORK.new(_grid)
 	ai.difficulty = 3
 	ai.log_decisions = false
@@ -142,8 +142,8 @@ func _fixed(tag: String, w_exp: float) -> void:
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_07", Vector2i(3, 5), "影丸", 14))
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_34", Vector2i(2, 6), "沉默术士", 15))
 	var occ := {}
-	for d in descs:
-		occ[d["cell"]] = true
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
 	var ai = FORK.new(_grid)
 	ai.difficulty = 3
 	ai.log_decisions = false

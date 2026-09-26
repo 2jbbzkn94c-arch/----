@@ -43,8 +43,8 @@ func _arm(tag: String, w40: Dictionary) -> void:
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_09", Vector2i(0, 4), "火枪手"))
 	descs.append(_desc(DataRegistry.Faction.PLAYER, "hero_18", Vector2i(4, 4), "长剑"))
 	var occ := {}
-	for d in descs:
-		occ[d["cell"]] = true
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
 	var ai = FORK.new(_grid)
 	ai.difficulty = 3
 	ai.log_decisions = false

@@ -63,7 +63,7 @@ func _run() -> void:
 		var ai = _mk_ai(w)
 		var sim = ai.build_state(pos["descs"], pos.get("occ", {}), pos.get("gold", {}),
 			pos.get("graves", {}), pos.get("obs", {}), pos.get("bombs", {}), pos.get("buff", {}))
-		var thr := float(ai._accept_threshold(sim))
+		var thr := float(ai._accept_threshold(null))   # 2026-09-26：⑥ 的门逐单位化（`SimUnit.reach0`）⇒ 这里问「阈值本身是多少」
 		var gate_open: bool = not bool(sim.engaged0)
 		if gate_open:
 			n_gate += 1
