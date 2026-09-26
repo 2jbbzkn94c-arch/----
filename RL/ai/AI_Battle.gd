@@ -1787,9 +1787,42 @@ func _plan_end_state(sim: Sim, plan: Array) -> Sim:
 	s.walk_cache_pass = {}
 	return s
 
+## 【2026-09-27·用户拍板】"本回合能打到人却没出手"那 2 分（`IDLE_HIT_PENALTY`）**什么时候该收**：
+##   ① 它本回合开始时确实有能打到人的出招（`start_can_hit`，**回合开始快照** —— 这条没变，否则"被挪到
+##      打不到人的格子"就会变成免罚，正是当年那个"莫名其妙不打"的坑），**并且**
+##   ② 那份出招名单（`start_targets` = 回合开始时它能打到的**全部**目标，含"走一步再打"）里
+##      **至少还有一个活着**。
+## 为什么加 ②（用户 2026-09-26 实机报「**能直接斩杀，却先拿低攻的打一下吃个反击**」）：
+##   队友先手把那个目标杀了 ⇒ 它这一手本来就没意义，可旧判据（只看回合开始快照）**照样罚 2 分**
+##   ⇒ 于是"**先用低攻蹭一下**（白吃一次目标的反击）"反而变成省钱的做法：
+##   33 血坦克吃 3 攻反击只要 `3 × 0.61 = 1.82` 分 < 2 分。探针 `RL/probe/斩杀顺序自检.gd` 三盘面复现：
+##   低攻池 1.00（反击 4.00）⇒ 选"高攻先杀" · 池 0.61（反击 1.82）⇒ **选"低攻先蹭"** ·
+##   池 0.61 + 目标 6 攻（反击 3.64）⇒ 又选回"高攻先杀"。
+## ⚠️ 判据用的是**当前局面**（`sim` 传进来的那一刻）—— 阶段 1/2 各自拿自己那层的局面问。
+## `start_targets` 缺省（老调用点/未记录）⇒ 退回旧口径（只看 `start_can_hit`）。
+func _idle_fine_due(sim: Sim, idx: int, start_can_hit: Dictionary, start_targets: Dictionary = {}) -> bool:
+	if w_idle_hit_penalty == 0.0:
+		return false
+	if not bool(start_can_hit.get(idx, false)):
+		return false
+	var ts = start_targets.get(idx, [])
+	if ts is Array:
+		for ti in (ts as Array):
+			var t := int(ti)
+			if t < 0 or t >= sim.units.size():
+				continue
+			var tu: SimUnit = sim.units[t]
+			if tu != null and tu.alive:
+				return true
+		return false
+	return true
+
 ## 一份计划的评分（与 `_search_two_phase()` 里 `_tp_state` 的记账同口径）：末态 `_evaluate(s, true)`，
 ##   再扣掉"本回合开始前能打到人、整份计划里却没出手"的 `IDLE_HIT_PENALTY`（`start_can_hit` 同一把尺子）。
-func _plan_score(s: Sim, plan: Array, enemy_idxs: Array, start_can_hit: Dictionary) -> float:
+## ⚠️ 【2026-09-27】那份罚现在还要过 `_idle_fine_due()` 的第二问：**它本来能打的目标里得还有活着的**
+##   （队友先手把目标杀了 ⇒ 这一手本来就没意义 ⇒ 不罚）。见该函数的说明。
+func _plan_score(s: Sim, plan: Array, enemy_idxs: Array, start_can_hit: Dictionary,
+		start_targets: Dictionary = {}) -> float:
 	var hit_ids := {}
 	for st in plan:
 		var a: Dictionary = st["action"]
@@ -1798,10 +1831,10 @@ func _plan_score(s: Sim, plan: Array, enemy_idxs: Array, start_can_hit: Dictiona
 	var sc := _evaluate(s, true)
 	if w_idle_hit_penalty != 0.0:
 		for i in enemy_idxs:
-			if hit_ids.has(int(i)) or not bool(start_can_hit.get(i, false)):
+			if hit_ids.has(int(i)):
 				continue
 			var u: SimUnit = s.units[int(i)]
-			if u != null and u.alive and not u.attacked:
+			if u != null and u.alive and not u.attacked and _idle_fine_due(s, int(i), start_can_hit, start_targets):
 				sc -= w_idle_hit_penalty
 	return sc
 
@@ -1821,10 +1854,11 @@ func _plan_replace_unit(plan: Array, i: int, a: Dictionary) -> Array:
 	return out
 
 ## 逐单位"最佳响应"复查：返回改良后的状态字典（`path` = 新计划、`score` = 新评分）。
-func _polish_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: Dictionary, deadline: int) -> Dictionary:
+func _polish_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: Dictionary,
+		deadline: int, start_targets: Dictionary = {}) -> Dictionary:
 	var t_p := Time.get_ticks_msec()
 	var plan: Array = (best["path"] as Array).duplicate(true)
-	var score := _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit)
+	var score := _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit, start_targets)
 	var sweeps := 2 if w_tp_polish >= 2 else 1
 	last_polish_swaps = 0
 	last_polish_gain = 0.0
@@ -1855,7 +1889,7 @@ func _polish_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: 
 				var cs := _plan_end_state(sim, cand)
 				if w_no_loss_filter > 0 and _myside_wiped(cs, sim.active_fn):
 					continue   # 硬闸门复刻：不吃"我方全灭 = 直接判负"的线
-				var cs_sc := _plan_score(cs, cand, enemy_idxs, start_can_hit)
+				var cs_sc := _plan_score(cs, cand, enemy_idxs, start_can_hit, start_targets)
 				if cs_sc > pick_sc + 0.0001:
 					pick_sc = cs_sc
 					pick = cand
@@ -2194,13 +2228,19 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	# 【2026-09-23 深夜③】阶段 2 的 `IDLE_HIT_PENALTY` 判据：**在阶段 1 动任何人之前**先记下
 	#   "这个单位本回合有没有能打到人的出招"（与现役 `search()` 里那段同一把尺子）。
 	var start_can_hit: Dictionary = {}
+	# 【2026-09-27·用户拍板】同时记下**能打到的目标是谁**：`IDLE_HIT_PENALTY` 从此只在
+	#   "它本来能打的目标**还有活着的**"时才收（见 `_idle_fine_due()`）。理由（用户实机 + 探针
+	#   `RL/probe/斩杀顺序自检.gd` 复现）：队友已经把那个目标杀了 ⇒ 这一手本来就没意义，
+	#   再罚 2 分就会逼出"**先拿低攻打一下、白吃一次反击**"（3 攻打 33 血坦克只要 1.82 分 ⇒ 比 2 分便宜）。
+	var start_targets: Dictionary = {}
 	for i in enemy_idxs:
-		var hit := false
+		var tg: Array = []
 		for a0 in _actions_for(sim, int(i)):
-			if int(a0.get("atk", -1)) >= 0:
-				hit = true
-				break
-		start_can_hit[i] = hit
+			var tgt0 := int(a0.get("atk", -1))
+			if tgt0 >= 0 and not tg.has(tgt0):
+				tg.append(tgt0)
+		start_can_hit[i] = tg.size() > 0
+		start_targets[i] = tg
 	# ---------- 阶段 1：先各自挪位（只走位、不出手） ----------
 	# 【2026-09-23 深夜⑥·用户实测「你算的是过程中的伤害吧：圣光先挪，那格那时还能被矿工打到，
 	#   暗域才挪过去挡在前面」】确认属实，而且是个独立的病：阶段 1 是**逐层**决定落点的，排在前面的层
@@ -2210,7 +2250,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	#     ② **阵型没排完时，不计"个人暴露"三项**（⑥规则B阈值 / ⑦核心暴露 / ⑮必死折）——它们描述的是
 	#        "我站这儿会不会挨打"，而队友还没挪过来挡在前面，这时算出来的数既不完整、又依赖决定顺序。
 	#        （⚠️ 只对**阶段 1 的排序**这么做；`SEARCH_MODE = 0` 与阶段 2 的完整评分一律照旧把这三项算满。）
-	var layouts: Array = [_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0))]
+	var layouts: Array = [_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets))]
 	var timed_out := false
 	while true:
 		var pending := false
@@ -2268,7 +2308,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 						last_tp_p1_summon_evals += 1
 					else:
 						last_tp_p1_hero_evals += 1
-					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full)))
+					merged.append(_tp_state(s2, path, done2, _layout_score(s2, start_can_hit, full, start_targets)))
 				if abort_requested:
 					return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃（不打日志、不写计划）
 				if deadline > 0 and Time.get_ticks_msec() >= deadline:
@@ -2332,7 +2372,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				stay_i = li0
 				break
 		if stay_i < 0:
-			layouts.append(_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0)))
+			layouts.append(_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets)))
 			stay_i = layouts.size() - 1
 		if stay_i >= layout_n:
 			var keep0: Dictionary = layouts[layout_n - 1]
@@ -2403,9 +2443,12 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 					# ⚠️ 【2026-09-23 深夜③】判据用**本回合开始时**算好的 `start_can_hit`，**不能**用
 					#   `acts2`（那已经是"阶段 1 挪完位之后"的候选表 ⇒ 被挪到打不到人的格子时它恒空 ⇒
 					#   一分不罚 ⇒ 模式 2 把"挪了位却没出手"变成零成本，实机症状＝「莫名其妙的不打」）。
-					var any_attack: bool = bool(start_can_hit.get(idx, false))
+					# ⚠️ 【2026-09-27·用户拍板】再加第二问（`_idle_fine_due()`）：**它本来能打的目标里得还有活着的**。
+					#   起因（用户实机「能直接斩杀却先拿低攻打一下吃反击」）：队友先手杀了那个目标 ⇒
+					#   这一手本来就没意义，可旧判据照样罚 2 分 ⇒ 于是"先用低攻蹭一下、白吃一次反击"
+					#   在账面上反而更省（33 血坦克吃 3 攻反击只有 1.82 分）。读数见该函数注释。
 					var idle_hit := 0.0
-					if w_idle_hit_penalty != 0.0 and any_attack:
+					if _idle_fine_due(st["sim"], idx, start_can_hit, start_targets):
 						var iu: SimUnit = (st["sim"] as Sim).units[idx]
 						if iu != null and iu.alive and not iu.attacked:
 							idle_hit = w_idle_hit_penalty
@@ -2469,7 +2512,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	# 【2026-09-25·用户「减少漏掉更值的那一手」】搜索后的"逐单位复查"（键 `TWO_PHASE_POLISH`，默认 0 = 逐位不变）：
 	#   把"某个单位换一手更值、却被阶段 1 的代理分挤出漏斗"的那类漏，用完整 `_evaluate` 补回来。
 	if w_tp_polish > 0 and not abort_requested:
-		best = _polish_plan(sim, best, enemy_idxs, start_can_hit, deadline)
+		best = _polish_plan(sim, best, enemy_idxs, start_can_hit, deadline, start_targets)
 	if log_decisions:
 		last_search_ms = Time.get_ticks_msec() - t0   # 【取证】本次搜索实际耗时（抬头行会写明）
 		_print_decision(sim, best)
@@ -2643,7 +2686,8 @@ func _tp_attack_actions(sim: Sim, idx: int) -> Array:
 ##     「模式 2 有时候莫名其妙不打」：阶段 2 的那份 `IDLE_HIT_PENALTY` 用的是"挪完之后"的候选表 ⇒
 ##     被挪到打不到人的格子时它恒为 0 ⇒ 一分钱不罚。⚠️ 只在"已经动过"时罚：**没动过的单位阶段 2 还能
 ##     "移动+攻击"救回来**，不该罚。
-func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = true) -> float:
+func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = true,
+		start_targets: Dictionary = {}) -> float:
 	# 【2026-09-23 深夜⑥】阵型没排完 ⇒ **不计个人暴露三项**（⑥规则B阈值 / ⑦核心暴露 / ⑮必死折）：
 	#   它们描述"我站这儿会不会挨打"，而队友还没挪过来挡在前面 ⇒ 这时算出来的数既不完整、又让
 	#   排序依赖"谁先被决定"（用户实测：圣光先挪就被记成暴露，其实暗域随后会挡在它前面）。
@@ -2668,9 +2712,11 @@ func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = tr
 			continue
 		if u.stunned or u.skills.has(DataRegistry.Skill.LOGISTICS):
 			continue
-		if _valid_targets(sim, u, u.cell).size() == 0 and u.moved and bool(start_can_hit.get(i, false)):
+		if _valid_targets(sim, u, u.cell).size() == 0 and u.moved and _idle_fine_due(sim, i, start_can_hit, start_targets):
 			# 【2026-09-23 深夜③】"已经动过、脚下却没目标" ⇒ 这一手多半要空掉 ⇒ 按现役
 			#   `IDLE_HIT_PENALTY` 的口径当场扣一笔（阶段 2 拦不住它：那时它已经不能再移动了）。
+			# 【2026-09-27】加 `_idle_fine_due()` 的第二问：**它本来能打的目标得还有活着的**
+			#   （队友先手杀了那个目标 ⇒ 这一手本来就没意义 ⇒ 不罚）。
 			sc -= w_idle_hit_penalty
 	return sc
 
@@ -3907,7 +3953,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 				var eu: SimUnit = sim.units[j]
 				if eu == null or not eu.alive or eu.fn == DataRegistry.Faction.ENEMY:
 					continue
-				if grid.distance(eu.cell, hu.cell) <= eu.emove + eu.atk_range \
+				if grid.distance(eu.cell, hu.cell) <= _threat_emove_next(sim, eu) + eu.atk_range \
 						and _threat_can_hit(sim, eu, hu.cell, hu):
 					sh += wsh_bd
 					break
@@ -6852,7 +6898,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 					#   ⚠️ 开销：**先用直线距离做便宜的预筛**（几何距离是路网下界 ⇒ 远的一定够不着；与旧判据
 					#     同一个条件、O(1)），只有"名义上够得着"的敌人才付 `_threat_can_hit` 的钱
 					#     （它内部第一层"站着就能打"命中时**不跑 BFS**，正是"站在火力线上"的常见情形）。
-					if grid.distance(eu.cell, hu.cell) <= eu.emove + eu.atk_range \
+					if grid.distance(eu.cell, hu.cell) <= _threat_emove_next(sim, eu) + eu.atk_range \
 							and _threat_can_hit(sim, eu, hu.cell, hu):
 						score += wsh
 						break
@@ -7705,7 +7751,7 @@ func _threat_can_hit(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: Si
 		# 几何预筛：几何距离 > 射程＋移动力 ⇒ 一定够不着（几何距离是路网下界 ⇒ 必要条件，安全）
 		if grid.distance(a.cell, target_cell) > range_at + budget:
 			return false
-		for c in _sim_walk_cells(sim, a.cell, budget):
+		for c in _sim_walk_cells(sim, a.cell, budget, a.skills.has(DataRegistry.Skill.INFILTRATE)):
 			if not _cell_in_range(sim, a, c, target_cell):
 				continue
 			if threatened == null or _taunt_allows(sim, a, threatened, c):
@@ -7749,7 +7795,7 @@ func _cell_in_range(sim: Sim, u: SimUnit, from_cell: Vector2i, target_cell: Vect
 ##   而且带**跨局面共享**的缓存（`sim.walk_cache`）—— 单位位置每一步都在变，那份缓存对"单位算墙"的口径无效。
 ##   棋盘只有 32 格、这里又限了步数（移动力通常 ≤ 3）⇒ 现算一遍远比维护第二套缓存便宜。
 ##   ⚠️ 只给**威胁估计**用；走位候选排序（`dkey`）仍走旧的 `walk_dist()`，两把尺子各管一处。
-func _sim_walk_cells(sim: Sim, from: Vector2i, budget: int) -> Array:
+func _sim_walk_cells(sim: Sim, from: Vector2i, budget: int, passing: bool = false) -> Array:
 	var out: Array = []
 	if budget <= 0:
 		return out
@@ -7762,6 +7808,9 @@ func _sim_walk_cells(sim: Sim, from: Vector2i, budget: int) -> Array:
 				if seen.has(n):
 					continue
 				seen[n] = true
+				if passing and (sim.obstacles.has(n) or sim.graves.has(n) or sim.occ.has(n)):
+					nxt.append(n)   # 【2026-09-26 渗透】可穿过角色/障碍，但不能停在那格
+					continue
 				if sim.obstacles.has(n) or sim.graves.has(n) or sim.occ.has(n):
 					continue   # 墙：地形 + **身体**
 				out.append(n)
@@ -7811,7 +7860,7 @@ func _threat_slots(sim: Sim, t: SimUnit, cell: Vector2i) -> int:
 func _sim_reach_adjacent(sim: Sim, a: SimUnit, target_cell: Vector2i, budget: int) -> bool:
 	if grid.distance(a.cell, target_cell) == 1:
 		return true                       # 已经贴着 ⇒ 原地就能触发
-	for c in _sim_walk_cells(sim, a.cell, budget):
+	for c in _sim_walk_cells(sim, a.cell, budget, a.skills.has(DataRegistry.Skill.INFILTRATE)):
 		if grid.distance(c, target_cell) == 1:
 			return true
 	return false
@@ -7896,10 +7945,10 @@ func _threat_hit_value(sim: Sim, t: SimUnit, d: int, discount: bool = true,
 ##   任何单位相邻**的落点（`_sim_walk_cells` 与走位候选同一把尺子：障碍/墓碑/被占格都当墙；
 ##   `_sim_enemy_adjacent` 自带"被障碍隔断不算贴身"）。**不改变任何其它估计**，只决定这一下按几算。
 func _sim_pin_escapable(sim: Sim, t: SimUnit) -> bool:
-	var budget := int(t.emove)
+	var budget := _threat_emove_next(sim, t)   # 【2026-09-26 补漏①】含风语者下回合的 +1
 	if budget <= 0:
 		return false
-	for c in _sim_walk_cells(sim, t.cell, budget):
+	for c in _sim_walk_cells(sim, t.cell, budget, t.skills.has(DataRegistry.Skill.INFILTRATE)):
 		if not _sim_enemy_adjacent(sim, t, c):
 			return true
 	return false
@@ -7911,10 +7960,10 @@ func _sim_pin_escapable(sim: Sim, t: SimUnit) -> bool:
 ##      退开之后若够得到带 `<嘲讽>` 的那位，这一枪就不会落在本目标身上。
 ##   与 `_threat_can_hit()` 的"走过去打"分支同一套尺子，只是这里问的是"**退开**再打"。
 func _sim_pin_escape_fire_cell(sim: Sim, t: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> bool:
-	var budget := int(t.emove)
+	var budget := _threat_emove_next(sim, t)   # 【2026-09-26 补漏①】含风语者下回合的 +1
 	if budget <= 0:
 		return false
-	for c in _sim_walk_cells(sim, t.cell, budget):
+	for c in _sim_walk_cells(sim, t.cell, budget, t.skills.has(DataRegistry.Skill.INFILTRATE)):
 		if _sim_enemy_adjacent(sim, t, c):
 			continue
 		if not _cell_in_range(sim, t, c, target_cell):
@@ -8164,6 +8213,13 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			inst.append(float(pos_inst[i]))
 			names.append(String(pos_names[i]))
 			pos_out.append([pos_idx[i], float(pos_inst[i])])
+	# ①.8 【2026-09-26·用户拍板】"按对手实际有的 AoE 形状罚扎堆"第一批（白游侠散射 / 长剑剑气）：
+	#   这两笔都是"**它打我队友，我因为站在旁边 / 身后而多挨一下**" ⇒ 放在 ①.5 之后、与 ② 同层
+	#   （**不占开火位**、不参与"只留最高的 N 笔"的封顶 —— 它是某次普攻的附赠，不是另一次普攻）。
+	#   逐条真规则与口径见 `_aoe_riders_on()`。
+	for rdr in _aoe_riders_on(sim, t, cell):
+		inst.append(float(rdr[1]))
+		names.append(String(rdr[0]))
 	# ② 移动后触发的技能（烛火/末日/涌电技师）
 	for i in sim.units.size():
 		var b: SimUnit = sim.units[i]
@@ -8184,17 +8240,26 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		names.append("毒")
 	var total := 0.0
 	var top := 0.0
+	var low := INF
 	for v in inst:
 		total += float(v)
 		top = maxf(top, float(v))
-	# ④ 盾（现在有 / 本回合末要发下来）：整次免伤并消费 ⇒ 挡掉最大的一次
+		low = minf(low, float(v))
+	# ④ 盾（现在有 / 本回合末要发下来）：整次免伤并消费 ⇒ **挡掉最小的一次**
+	# 【2026-09-26 用户口径改】原来挡"最大的一次"⇒ 等于替我们省下最疼的那一击、**低估了挨打**；
+	#   对手的合理解法是**拿最便宜的一击（poke）破盾**、把大伤害留到盾没了再打 ⇒ 估计要按"盾只吃掉最小那笔"算。
+	#   ⚠️ 只改**估计**（本函数）；真实结算里盾怎么挡由 `Unit.add_status/_shield_block_status` 那套说了算，一字未动。
 	if _shield_next_turn(sim, t) and inst.size() > 0:
-		total = maxf(total - top, 0.0)
-		var ix := inst.find(top)
+		var blocked: float = (0.0 if low == INF else low)
+		total = maxf(total - blocked, 0.0)
+		var ix := inst.find(blocked)
 		if ix >= 0:
 			inst.remove_at(ix)
 			if ix < names.size():
-				names[ix] = names[ix] + "(盾挡)"      # 被盾挡掉的那一次标出来，日志才不骗人
+				names[ix] = names[ix] + "(盾挡·最小那笔)"   # 被盾挡掉的那一次标出来（2026-09-26 起标的是最小那笔）
+			top = 0.0                        # 盾吃掉一笔后重算 max（`out["max"]` 还有别处在读）
+			for v2 in inst:
+				top = maxf(top, float(v2))
 	var parts: Array = []
 	for j in inst.size():
 		parts.append([String(names[j]) if j < names.size() else "?", float(inst[j])])
@@ -8210,6 +8275,99 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		out["base_total"] = total        # 原地那格（日志用：被位移后对比）
 		total = _displace_total_max(sim, t, cell, out)
 	return total
+
+## 【2026-09-26·用户拍板】"按对手实际有的 AoE 形状罚扎堆" —— **第一批只做两种**
+##   （用户从四选一里挑的；红帽自爆 / 炸弹人地雷同族暂缓）：
+##   ① **白游侠 hero_10 散射**（`heroes/hero_10_白游侠.gd:16`，`on_attack` 与 `on_attack_dead` 都触发）：
+##      对**被打目标的同阵营相邻单位**（`Battle._same_side_adjacent` = `grid.distance == 1`、**不查视线**）
+##      各造成一次 `unit.effective_atk()` 并附带[冰冻]。
+##   ② **长剑 hero_18 剑气穿透**（`heroes/hero_18_长剑.gd:43` → `Battle._pierce_line()`）：
+##      沿"攻击者 → 目标"的**轴向**、从目标**身后第一格**一路穿到出界，路径上**所有敌人**各吃一次
+##      `unit.effective_atk()`（**穿墙穿人、不挡后面**）。
+## 两条都是"**它打我队友，我因为站在旁边 / 身后而多挨的那一下**"⇒ 给本单位记一笔 rider。
+## ⚠️ 每个对手每回合只出一次手 ⇒ 多个"候选主目标"之间取 **max**、不叠加。
+## ⚠️ 伤害侧照抄真实调用 `take_damage(effective_atk(), ignore_shield=false, is_attack=false, …)`：
+##   **盾能挡**（交给 `inst` 那条统一裁决）· **重伤 +1** · **坚固不减**（传 `is_attack = false`）· 塔盾照减。
+##   `effective_atk()` 是**满额攻击力**（不吃"远程被贴身压 1"）⇒ 用 `_echo_atk_now()`，
+##   再加敌方回合开始那道团队 +1（与 ② 同款）。
+## ⚠️ 未计价：散射附带的 [冰冻] 状态（状态不进这把尺子，要单独做）。
+## 开销：场上没有这两只时第一圈就 `continue` ⇒ 零额外开销；判据全在 O(单位数²) 的小圈里。
+func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
+	var out: Array = []
+	var budget := 0
+	for i in sim.units.size():
+		var a: SimUnit = sim.units[i]
+		if a == null or not a.alive or a.fn == t.fn:
+			continue
+		if a.silenced or a.stunned:
+			continue                       # 真实 `_trigger_on_attack` 要过 `skill_allowed()`
+		var kind := 1 if a.hero_id == "hero_10" else (2 if a.hero_id == "hero_18" else 0)
+		if kind == 0:
+			continue
+		var raw := _echo_atk_now(sim, a) + float(_sim_turn_start_atk_bonus(sim, a))
+		if raw <= 0.0:
+			continue
+		if kind == 2:
+			budget = _threat_emove_next(sim, a)
+		var best := 0.0
+		for j in sim.units.size():
+			var t2: SimUnit = sim.units[j]
+			if t2 == null or not t2.alive or t2.fn != t.fn or t2.sim_index == t.sim_index:
+				continue                   # 主目标必须是**别的**我方单位（自己不会溅到自己）
+			if not _aoe_shape_covers(sim, a, kind, budget, t2.cell, cell):
+				continue
+			if not _threat_can_hit(sim, a, t2.cell, t2):
+				continue                   # 它得真够得到那个主目标（射程＋视线＋身体＋嘲讽门，同一把尺子）
+			var one := _hit_after_target_mods(sim, t, cell, raw, false)
+			if one > best:
+				best = one
+		if best > 0.0:
+			out.append(["%s%s" % [a.name, "散射" if kind == 1 else "剑气"], best])
+	return out
+
+## AoE 形状判据（与上面两条真规则逐字对应）：本单位所在的 `cell` 会不会被"打在 `primary` 上的那一下"波及。
+##   ① 白游侠（远程）：只看**主目标的 6 邻格**（与它自己站哪无关）⇒ 纯几何、O(1)。
+##   ② 长剑（**近战，射程 1** —— `_pierce_line()` 注释："长剑为相邻攻击，步长为单步"）：它必须**站到主目标相邻的
+##      某一格 `fc`** 才能砍，剑气再沿 `fc → 主目标` 方向继续往外穿 ⇒ 本单位被穿到的条件 =
+##      「存在一个方向 `d`，使 `cell` 落在"主目标 + k·d（k ≥ 1）"这条射线上，且反方向那一格
+##      `主目标 − d` 是它站得住、打得到的合法开火位」。
+##      ⚠️ 攻击者**从哪一侧砍**是它的自由 ⇒ 这里按"**任意一侧**能穿到就算"取上界（与全引擎威胁估计同款口径）；
+##      走不到的 `fc` 用几何距离 ≤ `预算` 预筛，再用 `_cell_in_range()` 确认"从那一格真能打"。
+func _aoe_shape_covers(sim: Sim, a: SimUnit, kind: int, budget: int, primary: Vector2i, cell: Vector2i) -> bool:
+	if kind == 1:
+		return grid.distance(primary, cell) == 1
+	if cell == primary:
+		return false
+	for nb in grid.neighbors(primary):
+		var d := grid.axial_of(nb) - grid.axial_of(primary)      # 方向：主目标 → nb
+		if d == Vector2i.ZERO:
+			continue
+		# `cell` 得在 `primary + k·d` 这条射线上（k ≥ 1）
+		if not _aoe_on_ray(primary, d, cell):
+			continue
+		var fc := grid.offset_of(grid.axial_of(primary) - d)     # 反方向那一格 = 它的开火位
+		if fc == cell or not grid.in_bounds(fc):
+			continue
+		if sim.obstacles.has(fc) or sim.graves.has(fc) or sim.occ.has(fc):
+			continue                                             # 那一格站不了人
+		if grid.distance(a.cell, fc) > budget:
+			continue                                             # 走不到那儿（几何预筛）
+		if not _cell_in_range(sim, a, fc, primary):
+			continue                                             # 从那一格确实打得到主目标（射程＋视线）
+		return true
+	return false
+
+## `cell` 是否落在 `from + k·dir`（k ≥ 1）这条**轴向射线**上（长剑剑气用；出界即终止）。
+func _aoe_on_ray(from: Vector2i, dir: Vector2i, cell: Vector2i) -> bool:
+	var cur := grid.axial_of(from) + dir
+	for _i in 60:
+		var off := grid.offset_of(cur)
+		if not grid.in_bounds(off):
+			return false
+		if off == cell:
+			return true
+		cur += dir
+	return false
 
 ## 【2026-09-26·用户要求】**位移落点重算**：对手四条位移的**真规则**（逐条照抄 `heroes/*.gd` 与 `src/Battle.gd`）——
 ##   ① **暗域 hero_27** `on_attack` → `Battle._swap_units()` ⇒ 它打到我 ⇒ **我落到它原来站的那一格**（换位）。
@@ -8322,10 +8480,14 @@ func _pull_landing(sim: Sim, puller_cell: Vector2i, cell: Vector2i) -> Vector2i:
 ## 【2026-09-20 用户口径】把"某一次打在这个目标身上的伤害"按**目标侧**规则修正：
 ##   [重伤] +1 · [坚固] −1（只减攻击伤害，这里三次来源都是 is_attack=true）· 相邻塔盾代扛 −1。
 ## （[圣盾] 不在这一层：它挡的是"整次伤害"，要等所有来源都列齐之后抵消最大的一次。）
-func _hit_after_target_mods(sim: Sim, t: SimUnit, cell: Vector2i, one: float) -> float:
+func _hit_after_target_mods(sim: Sim, t: SimUnit, cell: Vector2i, one: float, is_attack: bool = true) -> float:
 	if t.heavy:
 		one += 1.0
-	if t.solid:
+	# 【2026-09-26】[坚固] 只减**攻击**伤害 —— 真实 `Unit.take_damage()` 里那一句是
+	#   `if has_status(SOLID) and is_attack`，而 AoE rider（白游侠散射 / 长剑剑气）走的正是
+	#   `is_attack = false` 的调用 ⇒ 传 false 时**不减**。默认 true = 既有调用点逐位不变。
+	#   （③毒那笔本来就不进本函数，不受影响。）
+	if t.solid and is_attack:
 		one = maxf(one - 1.0, 0.0)
 	if one > 1.0 and _bulwark_near(sim, t, cell) != null:
 		one -= 1.0

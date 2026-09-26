@@ -60,3 +60,5 @@ RL/probe/_*.log
 /.dsh/tmp/
 # reference screenshots kept for debugging (not part of the project)
 /PICTURE/
+
+/ffmpeg-*/

@@ -1003,6 +1003,11 @@ func _ask_ladder_variant() -> void:
 	# 【2026-09-24 用户要求】原来这里有两行提示（"连胜挑战 · 难度固定噩梦 · 可退出续上" + 两个变体的进度）
 	#   ⇒ 用户要求删掉 ⇒ 弹框只留标题 + 两个玩法按钮 + 返回。
 	#   （进度信息没丢：选人页顶部、续档询问弹框、以及「对战统计」里都还有。）
+	# 【2026-09-26 用户要求】「在天梯模式选择弹框**显示目前连胜数量**」⇒ 只把**当前连胜**这一个数
+	#   写进两个变体各自的按钮文案里（两个变体连胜互相独立，读 `Stats.cur_streaks`，见 `Stats.ladder_key()`）；
+	#   **不另加说明行**（2026-09-24 那次删的就是说明性小字；这次点名的只有这个数）。
+	var n_normal: int = Stats.current_streak(Stats.ladder_key(false))
+	var n_arena: int = Stats.current_streak(Stats.ladder_key(true))
 	var add := func(txt: String, cb: Callable) -> void:
 		var b := Button.new()
 		b.text = txt
@@ -1010,8 +1015,8 @@ func _ask_ladder_variant() -> void:
 		b.add_theme_font_size_override("font_size", 22)
 		b.pressed.connect(cb)
 		box.add_child(b)
-	add.call("天梯普通模式", _ladder_pick_normal)
-	add.call("天梯竞技场模式", _ladder_pick_arena)
+	add.call("天梯普通模式（当前连胜 %d）" % n_normal, _ladder_pick_normal)
+	add.call("天梯竞技场模式（当前连胜 %d）" % n_arena, _ladder_pick_arena)
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)

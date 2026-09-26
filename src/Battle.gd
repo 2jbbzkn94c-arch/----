@@ -3020,6 +3020,15 @@ func _run_side_skills(side: int) -> void:
 	#   刚上场的替补（锤头鲨）"没看见"这份伤害、拿不到 +1（用户反馈）。
 	#   放在本函数 = **替补全部落位之后**，且与金矿倒计时/回合开始技同一时点（联机两端同跑，不会分叉）。
 	_tick_statuses(side)   # 猛毒等：场上所有中毒单位各结算 1 点（与哪一方开始回合无关）
+	# 【2026-09-26 修·用户报「AI 的复仇者在 AI 回合开始时被毒死，却没上替补」】
+	#   毒死发生在「回合开始先补位」之后（本函数开头那一段），而此处 _in_begin_phase 仍为 true
+	#   （要到下面才置 false）⇒ 阵亡处理只把名额记进 _pending_enemy_sub，没有当场落位 ⇒ 这一回合没替补。
+	#   这里在毒伤结算之后立刻补一次，与死因无关（毒 / 反击 / 自爆一视同仁）。
+	#   ⚠️ 只补敌方：玩家侧仍走原本那条（回合开始统一开替补面板），避免在敌方回合中途插入玩家选人流程。
+	_start_placing_subs = true   # 与「先补位」那一段同一套：本次落位跳过即时光环补发（本回合开始技会统一发）
+	if _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
+		_place_enemy_sub()
+	_start_placing_subs = false
 	# 金矿倒计时：每个完整回合（回合号变化）只减一次，两端同一时点同步执行
 	if GameState.round_number != _gold_tick_round:
 		_gold_tick_round = GameState.round_number

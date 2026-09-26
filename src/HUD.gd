@@ -5,6 +5,9 @@ extends CanvasLayer
 var battle: Battle
 
 var _round_label: Label
+## 【2026-09-27】顶部中间那组的"上一次排版输入"（回合文字 + 倒计时文字 + 火焰是否亮 + 视口宽）——
+##   用它挡掉重复的 `_fit_top_center()`（`_update_turn_timer()` 调得很勤）。
+var _top_fit_key := ""
 var _last_phase_state := -1   # 上次刷新时的 Battle.state（_process 检测阶段切换，补刷新顶部标签）
 var _turn_banner: Label = null       # 回合切换中央大字横幅（短暂显示后自动消失）
 var _turn_banner_tween: Tween = null
@@ -1715,6 +1718,63 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 		_start_round_fire()
 	else:
 		_stop_round_fire(normal_color)
+	_top_fit_key = ""          # 文字/火焰都变了 ⇒ 强制重算一次中间那组的字号
+	_fit_top_center()
+
+## 【2026-09-27·用户报「战斗中状态栏在 11 回合后，显示会挤到一起」】顶部中间那组
+##   （`第 N 回合 · 阵营` + 火焰 + 剩余时间）是**整条居中**排的，而左右两侧的阵亡计数行是**绝对定位**
+##   （左侧从 x=12 起排、右侧贴右缘）⇒ 三件事叠加后中间这组会压到两侧：
+##     ① 回合数变成两位数（第 10 回合起多一个字）② **第 11 回合火焰亮起**（+34px）③ 剩余时间也在这组里。
+##   这里按"两侧行的**实际内容宽度**"算出中间还剩多少，再**逐档缩字号**（24 → 22 → 20 → 18）、
+##   必要时把火焰收小，直到放得下。⚠️ 纯布局：**不改任何文案**（不给自己加字/减字）。
+##   很便宜，但没必要每帧算 ⇒ 用 `_top_fit_key`（文字+火焰状态）挡重复调用。
+func _fit_top_center() -> void:
+	if _round_label == null or not is_instance_valid(_round_label):
+		return
+	var flame_on: bool = _flame_icon != null and is_instance_valid(_flame_icon) and _flame_icon.visible
+	var timer_on: bool = _turn_timer_label != null and is_instance_valid(_turn_timer_label) and _turn_timer_label.visible
+	var key := "%s|%s|%s|%.0f" % [_round_label.text, (_turn_timer_label.text if timer_on else ""),
+		str(flame_on), get_viewport().get_visible_rect().size.x]
+	if key == _top_fit_key:
+		return
+	_top_fit_key = key
+	var vsize := get_viewport().get_visible_rect().size
+	var lw := 0.0
+	var rw := 0.0
+	if _my_death_name != null and is_instance_valid(_my_death_name) and _my_death_name.get_parent() is Control:
+		lw = (_my_death_name.get_parent() as Control).get_combined_minimum_size().x
+	if _op_death_name != null and is_instance_valid(_op_death_name) and _op_death_name.get_parent() is Control:
+		rw = (_op_death_name.get_parent() as Control).get_combined_minimum_size().x
+	var avail := vsize.x - lw - rw - 28.0        # 两侧各留 12px 起排缝 + 4px 余量
+	var sep := 4.0
+	if _round_label.get_parent() is HBoxContainer:
+		sep = float((_round_label.get_parent() as HBoxContainer).get_theme_constant("separation"))
+	var font := _round_label.get_theme_font("font")
+	var outline := float(_round_label.get_theme_constant("outline_size"))
+	var need := func(fs: int, fw: float) -> float:
+		var w := font.get_string_size(_round_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x + outline * 2.0
+		if flame_on:
+			w += sep + fw
+		if timer_on:
+			var tf := _turn_timer_label.get_theme_font("font")
+			w += sep + tf.get_string_size(_turn_timer_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+				_turn_timer_label.get_theme_font_size("font_size")).x
+		return w
+	var fs_use := 18
+	for fs in [24, 22, 20, 18]:
+		if float(need.call(int(fs), 34.0)) <= avail:
+			fs_use = int(fs)
+			break
+	_round_label.add_theme_font_size_override("font_size", fs_use)
+	if flame_on:
+		var fw := 34.0
+		if float(need.call(fs_use, fw)) > avail:
+			fw = 26.0
+		if float(need.call(fs_use, fw)) > avail:
+			fw = 20.0
+		_flame_icon.custom_minimum_size = Vector2(fw, fw)
+		_flame_icon.size = Vector2(fw, fw)
+		_flame_icon.set("size_px", fw * 0.76)
 
 # ---- 回合标签"燃烧"效果（第 11 回合起）----
 
@@ -1947,6 +2007,7 @@ func _update_turn_timer() -> void:
 	else:
 		_turn_timer_label.visible = false
 	_set_edge_warning(low_time)
+	_fit_top_center()          # 【2026-09-27】倒计时的文字/显隐也在中间那组里 ⇒ 跟着重算一次（内部有去重）
 
 # 屏幕边缘浅红闪烁：剩余时间 ≤15 秒开启（呼吸效果），否则隐藏
 func _set_edge_warning(on: bool) -> void:

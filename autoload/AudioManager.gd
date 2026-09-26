@@ -17,11 +17,21 @@ const SFX_STREAMS := {
 	"turn": preload("res://assets/audio/turn.wav"),
 	"select": preload("res://assets/audio/select.wav"),
 	"win": preload("res://assets/audio/win.wav"),
+	"click": preload("res://assets/音效/按钮点击.ogg"),
+	# 【2026-09-26 用户要求】原有 5 个音效已整体换成重新生成的版本，并补上事件缺口（破盾/重击/毒/替补/失败）
+	"crit": preload("res://assets/audio/crit.wav"),
+	"shield_break": preload("res://assets/audio/shield_break.wav"),
+	"poison": preload("res://assets/audio/poison.wav"),
+	"sub_enter": preload("res://assets/audio/sub_enter.wav"),
+	"lose": preload("res://assets/audio/lose.wav"),
 }
 
 func _ready() -> void:
 	_load_settings()
 	_streams = SFX_STREAMS
+	# 【2026-09-26 用户要求】按钮点击音效：
+	#   用 node_added 统一接管 —— 静态按钮与运行时新建的面板按钮都能覆盖，不用去每个 Button.new() 那里接。
+	get_tree().node_added.connect(_on_node_added)
 	# 预备几个播放器
 	for i in 4:
 		var pl := AudioStreamPlayer.new()
@@ -77,3 +87,12 @@ func play(sfx: String) -> void:
 
 func set_enabled(on: bool) -> void:
 	_enabled = on
+# ---- 【2026-09-26 用户要求】按钮点击音效（全局）----
+# 用 node_added 接管：静态按钮与运行时新建的面板按钮都覆盖，不用去每个 Button.new() 处接线。
+func _on_node_added(n: Node) -> void:
+	var b := n as BaseButton
+	if b != null and not b.pressed.is_connected(_play_click):
+		b.pressed.connect(_play_click)
+
+func _play_click() -> void:
+	play("click")
