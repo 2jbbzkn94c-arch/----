@@ -6008,6 +6008,9 @@ func _place_enemy_sub() -> void:
 			graves.erase(cell)
 			_refresh_board()
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
+		# 【2026-09-26 修·用户报「炸弹人踩在炸弹上死亡，替补应吃到那颗炸弹」】替补落位也判一次炸弹（原来只判移动落停）
+		if bombs.has(eu.cell):
+			_bomb_enter_check(eu, eu.cell, true)
 		_grant_sub_aura_after_enter(eu)   # 替补补发光环（风语者等：中途上场才补；先补位再技能阶段跳过）
 		_trigger_on_enter(eu)   # 敌方替补登场技能已触发
 		# 敌方回合中途落位（反击反杀/自爆自伤等）：本回合补上一手，别让它白站一轮
@@ -6643,6 +6646,9 @@ func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) 
 	var roster := _roster_of(fn)
 	roster.erase(hero_id)
 	var nu := _spawn_unit(hero_id, fn, cell)
+	# 【2026-09-26 修·用户报「炸弹人踩在炸弹上死亡，替补应吃到那颗炸弹」】替补落位也判一次炸弹（原来只判移动落停）
+	if bombs.has(nu.cell):
+		_bomb_enter_check(nu, nu.cell, fn == DataRegistry.Faction.ENEMY)
 	_grant_sub_aura_after_enter(nu)   # 替补补发光环（风语者…中途上场才补；先补位再技能阶段跳过）
 	_trigger_on_enter(nu)   # 替补登场技能（波盾/太阳梅林/猎颅者）
 	# 共鸣者不在此触发：只在"每方回合开始"由 wants_side_turn_start_sync/on_side_turn_start 统一结算；

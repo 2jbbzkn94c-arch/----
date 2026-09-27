@@ -15,7 +15,7 @@ config/version="0.1.0"
 run/main_scene="res://scenes/Menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
-config/version_date="2026-09-26 13:52"
+config/version_date="2026-09-27 01:20"
 
 [autoload]
 
@@ -44,6 +44,11 @@ theme/custom="res://theme/tavern_theme.tres"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
+; 【2026-09-27·用户报"图片素材糊+锯齿"】默认纹理过滤 1=Linear ⇒ **不看 mipmap**；改成 2=Linear Mipmap
+;   ⇒ 所有画布节点（棋子/图标/障碍/墓碑/金矿/道具/地板/卡面图）缩小时都按 mip 层采样。
+;   ⚠️ 光设这个不够：源图也必须有 mipmap 链（`assets/**/*.png.import` 里 `mipmaps/generate=true`，
+;   运行时重建的纹理见 `DataRegistry.stat_icon()` / `hero_card_art()` 里的 `generate_mipmaps()`）。
+textures/canvas_textures/default_texture_filter=2
 
 [resources]
 

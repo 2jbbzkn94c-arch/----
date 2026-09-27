@@ -33,6 +33,7 @@ param(
     [int]$SeedBlock = 1,
     # 【2026-09-25 加】分片并行：同一批切成 $Shards 份、第 $Shard 份自己跑（0 起）。
     #   为什么要：每对 4 局是**串行**跑的（一个格子一个进程）⇒ 不切分的话 135 对要 ~9 小时。
+    [string]$SwapHeroes = '',   # 【2026-09-26 加】逗号分隔的换入英雄 id（空 = 用脚本里写死的那 8 个）
     [int]$Shard = 0,
     [int]$Shards = 1,
     [switch]$SkipRuns,
@@ -62,6 +63,13 @@ $allNames = @{}
 foreach ($r in (Get-Content (Join-Path $root 'Data\Hero\Source\角色列表.json') -Raw -Encoding UTF8 | ConvertFrom-Json)) {
     $no = "$($r[0])"; if ($no -notmatch '^\d+$') { continue }
     $allNames['hero_{0:D2}' -f [int]$no] = "$($r[2])"
+}
+# 【2026-09-26】-SwapHeroes 覆盖：全英雄扫描时用（名字从角色列表查）
+if ($SwapHeroes) {
+    $swapNames = [ordered]@{}
+    foreach ($id in @($SwapHeroes -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+        $swapNames[$id] = if ($allNames.ContainsKey($id)) { $allNames[$id] } else { $id }
+    }
 }
 function Show-Deck([string[]]$ids) { ($ids | ForEach-Object { $allNames[$_] }) -join '+' }
 

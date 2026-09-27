@@ -966,6 +966,68 @@ const ICON_ATK_LOGISTICS := "res://assets/美术资源/攻击_后勤.png"   # �
 var _stat_icons: Dictionary = {}   # path -> {tex:Texture2D, w,h,cx,cy}
 var _stat_bold_font: FontVariation = null   # 数值（攻击/血量）加粗字体，全部界面共享
 
+# —— 英雄卡面图（六边形卡里的人物本体）——
+# 【2026-09-27·用户要求】六边形卡里放"人物本体"，字体名字不再由卡自己画。
+#   查找顺序（按**中文名**，与现有素材命名一致）：
+#     ① `res://assets/英雄卡面/<名字>_人物.png`（生成图抠出来的透明底本体，卡里就用这张）
+#     ② `res://assets/英雄卡面/<名字>.png`（整张卡面，兜底）
+#     ③ `res://assets/美术资源/角色/<名字>.png`（旧立绘）
+#   三处都没有 ⇒ 返回 null ⇒ 卡退回原来的"纯色六边形"外观（**别的英雄还没出图，行为与改前一致**）。
+#   ⚠️ 新丢进来的 png 若还没被编辑器导入（没有 `.import`），`load()` 会失败 ⇒ 兜底走运行时解码
+#      （`Image.load()`，开发期跑 res:// 目录有效；进编辑器扫一遍就会走正常导入）。
+const HERO_ART_DIRS: Array[String] = ["res://assets/英雄卡面/", "res://assets/美术资源/角色/"]
+const HERO_ART_MAX := 512   # 卡面图最长边上限（卡只有 90~160 px ⇒ 512 已 3~5 倍余量）
+var _hero_art: Dictionary = {}   # 中文名 -> Texture2D / null
+
+func hero_card_art(display_name: String) -> Texture2D:
+	if _hero_art.has(display_name):
+		return _hero_art[display_name]
+	var found: Texture2D = null
+	for d in HERO_ART_DIRS:
+		for suf in ["_人物.png", ".png"]:
+			found = _load_tex_any(d + display_name + suf)
+			if found != null:
+				break
+		if found != null:
+			break
+	# 【为什么必须缩 + 必须带 mipmap】出图是 2048²（RGBA ≈ 11 MB/张），49 个英雄全出图会把显存吃爆；
+	#   而卡/棋子上的实际显示尺寸只有 ~150~190 px（棋盘 `hex_size≈73` ⇒ 棋子 146px 宽、竞技场卡 `card_r=92`
+	#   ⇒ 184px 宽）⇒ ① 先压到最长边 HERO_ART_MAX（省 16 倍显存）；② **再生成 mipmap**：
+	#   512 的图缩到 ~150px 显示 = 约 3 倍缩小，没有 mipmap 时只抽 1/3 像素 ⇒ **边缘锯齿 + 细节发糊**
+	#   （2026-09-27 用户实测报的"糊 + 锯齿"就是这个）。带 mipmap 后由 GPU 按 mip 层采样 ⇒ 干净。
+	#   绘制方还要把 `texture_filter` 设成 `TEXTURE_FILTER_LINEAR_WITH_MIPMAPS`，否则 mipmap 不会被使用。
+	if found != null:
+		var img := found.get_image()
+		if img != null:
+			img.convert(Image.FORMAT_RGBA8)
+			# ⚠️ 导入时如果烘了 mipmap，`get_image()` 会把 mip 链一起带出来 ⇒ ① 数据长度不止 w*h*4
+			#   ② `has_mipmaps()` 为真会让下面的 `generate_mipmaps()` 被跳过（用的是"改之前"那套 mip）。
+			#   所以要**先清掉**，处理完再重新生成。
+			if img.has_mipmaps():
+				img.clear_mipmaps()
+			var w := img.get_width()
+			var h := img.get_height()
+			if maxi(w, h) > HERO_ART_MAX:
+				var sc := float(HERO_ART_MAX) / float(maxi(w, h))
+				img.resize(maxi(1, int(w * sc)), maxi(1, int(h * sc)), Image.INTERPOLATE_LANCZOS)
+			if not img.has_mipmaps():
+				img.generate_mipmaps()
+			found = ImageTexture.create_from_image(img)
+	_hero_art[display_name] = found
+	return found
+
+func _load_tex_any(path: String) -> Texture2D:
+	if ResourceLoader.exists(path):
+		var t := load(path) as Texture2D
+		if t != null:
+			return t
+	var abs_path := ProjectSettings.globalize_path(path)
+	if FileAccess.file_exists(abs_path):
+		var img := Image.new()
+		if img.load(abs_path) == OK:
+			return ImageTexture.create_from_image(img)
+	return null
+
 # 数字/名字加粗：主题无粗体字体，用带中文的系统字体 + FontVariation 合成加粗（跨平台回退列表）
 func stat_bold_font() -> FontVariation:
 	if _stat_bold_font == null:
@@ -976,6 +1038,55 @@ func stat_bold_font() -> FontVariation:
 		_stat_bold_font.variation_embolden = 0.9
 	return _stat_bold_font
 
+# 图标纹理最长边上限（卡/棋子上最多画到 ~96px ⇒ 160 已 1.7 倍余量；原图 384² 纯属浪费）
+const ICON_MAX := 160
+
+# 把不透明像素的颜色**铺满**透明区（多源 BFS，O(N) 一趟）。
+# 为什么要做：mipmap 是"缩小采样"，透明区若还是抠掉前的底色，就会把那个颜色混进边缘
+#   （白底 ⇒ 白边白雾；黑底 ⇒ 黑边）。铺满后任何 mip 层取到的都是图标自己的颜色。
+# 用 `get_data()` 的原始字节做，比逐像素 get_pixel/set_pixel 快很多；alpha 不动，只改 RGB。
+func _fill_alpha_color(img: Image, w: int, h: int) -> void:
+	if w <= 0 or h <= 0:
+		return
+	var data := img.get_data()
+	var n := w * h
+	if data.size() < n * 4:
+		return
+	var seen := PackedByteArray()
+	seen.resize(n)
+	var queue := PackedInt32Array()
+	queue.resize(n)
+	var qh := 0
+	for i in n:
+		if data[i * 4 + 3] > 0:
+			seen[i] = 1
+			queue[qh] = i
+			qh += 1
+	if qh == 0 or qh == n:
+		return   # 全透明（没东西可铺）或全不透明（没什么要铺）
+	var qt := 0
+	while qt < qh:
+		var idx := queue[qt]
+		qt += 1
+		var x := idx % w
+		var o := idx * 4
+		for d in 4:
+			var nx := x + (1 if d == 0 else (-1 if d == 1 else 0))
+			var ny := (idx / w) + (1 if d == 2 else (-1 if d == 3 else 0))
+			if nx < 0 or ny < 0 or nx >= w or ny >= h:
+				continue
+			var nidx := ny * w + nx
+			if seen[nidx] == 1:
+				continue
+			var no := nidx * 4
+			data[no] = data[o]
+			data[no + 1] = data[o + 1]
+			data[no + 2] = data[o + 2]
+			seen[nidx] = 1
+			queue[qh] = nidx
+			qh += 1
+	img.set_data(w, h, false, Image.FORMAT_RGBA8, data)
+
 func stat_icon(path: String) -> Dictionary:
 	if _stat_icons.has(path):
 		return _stat_icons[path]
@@ -985,6 +1096,10 @@ func stat_icon(path: String) -> Dictionary:
 		var img := tex.get_image()
 		if img != null:
 			img.convert(Image.FORMAT_RGBA8)
+			# ⚠️ 同上：导入烘的 mip 链会被 `get_image()` 带出来 ⇒ 先清掉，铺完色再重新生成
+			#   （否则 `_fill_alpha_color` 里的 `set_data` 会因长度不符报错、整个铺色静默失效）。
+			if img.has_mipmaps():
+				img.clear_mipmaps()
 			var w := img.get_width()
 			var h := img.get_height()
 			var minx := w
@@ -1005,12 +1120,27 @@ func stat_icon(path: String) -> Dictionary:
 							miny = y
 						if y > maxy:
 							maxy = y
+			# 【2026-09-27·用户报"素材糊"+"图标有白底"】这里要连做三件事，顺序不能反：
+			#   ① 缩到 ICON_MAX：图标在卡/棋子上最多画到 96px，而原图 384²（6~12 倍缩小）⇒ 缩小采样
+			#      只抽到一小撮像素 = 又糊又锯；缩到 160 后 mip 层只需 1 层，也顺带把 ② 的开销降到 1/9。
+			#   ② 把不透明像素的**颜色铺满透明区**（多源 BFS）：抠掉的白底像素 RGB 还是白的，
+			#      直接生成 mipmap 会把白色混进图标边缘 ⇒ 卡上出现白边/白雾（用户看到的就是这个）。
+			#      注意**不能用 `Image.fix_alpha_edges()`**：它只往外渗 1~2 像素，盖不住。
+			#   ③ `generate_mipmaps()`：之后由 GPU 按 mip 层采样（还需纹理过滤开 mipmap，
+			#      项目默认已设成 LinearWithMipmaps，见 project.godot）。
+			var k := 1.0
+			if maxi(w, h) > ICON_MAX:
+				k = float(ICON_MAX) / float(maxi(w, h))
+				img.resize(maxi(1, int(w * k)), maxi(1, int(h * k)), Image.INTERPOLATE_LANCZOS)
+			_fill_alpha_color(img, img.get_width(), img.get_height())
+			if not img.has_mipmaps():
+				img.generate_mipmaps()
 			res.tex = ImageTexture.create_from_image(img)
 			if maxx >= minx and maxy >= miny:
-				res.w = maxx - minx + 1
-				res.h = maxy - miny + 1
-				res.cx = (minx + maxx) / 2.0
-				res.cy = (miny + maxy) / 2.0
+				res.w = int((maxx - minx + 1) * k)
+				res.h = int((maxy - miny + 1) * k)
+				res.cx = (minx + maxx) / 2.0 * k
+				res.cy = (miny + maxy) / 2.0 * k
 		else:
 			res.tex = tex
 			res.w = tex.get_width()

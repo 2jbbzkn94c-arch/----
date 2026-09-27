@@ -11,12 +11,19 @@ var selected := false
 var disabled_draw := false   # 灰暗显示（非本人回合）
 var radius := 45.0
 
-var _label: Label
+var _label: Label            # 卡面**名字**行（只在"这张卡还没有卡面图"时才建，见 `_build_overlay`）
+var _art: Texture2D = null   # 英雄卡面图（人物本体）；null = 该英雄还没出图 ⇒ 退回纯色六边形
 
 func _init(def_: DataRegistry.HeroDef, id: String, r: float = 45.0) -> void:
 	def = def_
 	hero_id = id
 	radius = r
+	# 【2026-09-27·用户要求】卡面里放"人物本体"：按中文名找图（查表见 DataRegistry.hero_card_art）
+	if def != null:
+		_art = DataRegistry.hero_card_art(def.display_name)
+	# 【2026-09-27·用户报"糊 + 锯齿"】图带 mipmap ⇒ 必须显式开 `LINEAR_WITH_MIPMAPS` 才会用到；
+	#   卡实际只有 ~184px 宽（竞技场 `card_r=92`）而图是 512 ⇒ 无 mipmap 的缩小采样就是锯齿+发糊的来源。
+	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	# 控制区尺寸（平顶六边形：宽=2r，高=√3r）
 	custom_minimum_size = Vector2(2.0 * radius, sqrt(3.0) * radius)
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -25,11 +32,11 @@ func _init(def_: DataRegistry.HeroDef, id: String, r: float = 45.0) -> void:
 	set_process_input(true)
 
 func _ready() -> void:
-	_build_label()
+	_build_overlay()
 
-func _build_label() -> void:
-	var c := size / 2.0
-	# 名称行：放在卡面中上（颜色沿用种族色）。字号随卡片缩放，下限 12 保证小卡也清晰
+# 名字行（**只给还没出图的英雄**）：放在卡面中上，颜色沿用种族色。
+# 字号随卡片缩放，下限 12 保证小卡也清晰。
+func _build_name_label(c: Vector2) -> void:
 	var name_fs := int(clampf(radius * 0.34, 12.0, 36.0))
 	_label = Label.new()
 	_label.text = def.display_name
@@ -45,6 +52,14 @@ func _build_label() -> void:
 	_label.position = c + Vector2(-radius, -radius * 0.5)
 	_label.size = Vector2(radius * 2.0, radius * 0.52)
 	add_child(_label)
+
+# 【2026-09-27·用户口径】名字**只画在"还没出图的英雄"上**：
+#   · `_art != null`（已经有卡面图）⇒ 靠卡里的人物本体认人，**不画名字**；
+#   · `_art == null`（还没出图）⇒ 照旧画名字（否则纯色六边形认不出是谁）。
+func _build_overlay() -> void:
+	var c := size / 2.0
+	if _art == null:
+		_build_name_label(c)
 	# 词条标签（嘲/疾/渗/勤/候）：顶部小字，与棋盘棋子一致；无词条则省略
 	var tags := _card_tags()
 	if tags != "":
@@ -72,9 +87,20 @@ func _build_label() -> void:
 	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, icon_w)
 	var hp_icon := _make_stat_icon(DataRegistry.ICON_HEART, hp_c, icon_w)
 	if atk_icon == null and hp_icon == null:
-		# 素材缺失兜底：退回"HP… 攻…"文字
-		_label.text = def.display_name + "\nHP%d 攻%d" % [def.max_hp, def.atk]
-		_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		# 素材缺失兜底：另起一行只报数值（**不动名字行** —— 有卡面图的卡本来就没名字）
+		var statl := Label.new()
+		statl.text = "HP%d 攻%d" % [def.max_hp, def.atk]
+		statl.add_theme_font_override("font", DataRegistry.stat_bold_font())
+		statl.add_theme_font_size_override("font_size", int(clampf(radius * 0.30, 12.0, 32.0)))
+		statl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		statl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		statl.add_theme_color_override("font_color", Color(1, 1, 1))
+		statl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+		statl.add_theme_constant_override("outline_size", 2)
+		statl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		statl.position = c + Vector2(-radius, -radius * 0.5)
+		statl.size = Vector2(radius * 2.0, radius * 1.0)
+		add_child(statl)
 		return
 	if atk_icon != null:
 		add_child(atk_icon)
@@ -179,6 +205,24 @@ func _draw() -> void:
 	if disabled_draw:
 		bg = bg.darkened(0.45)
 	draw_colored_polygon(pts, bg)
+	# 【2026-09-27·用户要求】卡面人物本体：**顶满卡面**（等比放大到顶到六边形上下边），
+	#   并**按六边形裁剪**（`draw_polygon` + 逐顶点 UV ⇒ 只画六边形以内那部分，放大也不溢出卡边）。
+	#   为什么不会出现"边缘拉伸"：抠图四周本来就留了 2% 全透明边 ⇒ 越界采样（UV<0 / >1）钳到的是透明像素。
+	#   六边形的种族底色仍从人物四周透出来；描边照旧压在最上层（下面是 draw_polyline）。
+	if _art != null:
+		var ts := _art.get_size()
+		if ts.x > 0.0 and ts.y > 0.0:
+			var fit := minf((radius * 2.0) / ts.x, (sqrt(3.0) * radius) / ts.y)
+			var dsz := ts * fit
+			var dpos := c - dsz * 0.5
+			var uvs := PackedVector2Array()
+			for p in pts:
+				uvs.append(Vector2((p.x - dpos.x) / dsz.x, (p.y - dpos.y) / dsz.y))
+			var cols := PackedColorArray()
+			var mc := Color(1, 1, 1, 0.45) if disabled_draw else Color(1, 1, 1, 1)
+			for _i in pts.size():
+				cols.append(mc)
+			draw_polygon(pts, cols, uvs, _art)
 	# 选中高亮：绿色描边（比最初 3px 略粗更醒目，但比黑色粗框细）
 	var border := Color(0.30, 1.0, 0.45) if selected else (_race_color().darkened(0.2) if disabled_draw else _race_color())
 	draw_polyline(_closed(pts), border, clampf(radius * 0.07, 4.0, 8.0) if selected else 2.0, true)

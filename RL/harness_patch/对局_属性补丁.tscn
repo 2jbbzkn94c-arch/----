@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://brl1eq00002bb"]
+
+[ext_resource type="Script" path="res://RL/harness_patch/对局_属性补丁.gd" id="1_script"]
+
+[node name="对局" type="Node"]
+script = ExtResource("1_script")

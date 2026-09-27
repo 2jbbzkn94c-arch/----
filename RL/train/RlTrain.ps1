@@ -1,4 +1,4 @@
-# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
+﻿# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
 # PURE ASCII ONLY. PS 5.1 reads .ps1 as ANSI: any non-ASCII byte here becomes mojibake.
 # Chinese text lives only in .md reports written with the write tool.
 #

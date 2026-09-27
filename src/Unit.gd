@@ -55,6 +55,8 @@ var grave_moved := false  # 暗域占据死亡格时：墓碑已回退到暗域�
 var hex_radius := 44.0
 
 var _hex: Polygon2D
+var _art_hex: Polygon2D          # 【2026-09-27】人物本体那一层（贴在纯色六边形之上；没出图的英雄为 null 效果）
+var _art: Texture2D = null       # 英雄卡面图（`DataRegistry.hero_card_art`）；null = 还没出图 ⇒ 保持原来的纯色棋子
 var _label: Label
 var _atk_label: Label
 var _hp_label: Label
@@ -108,16 +110,24 @@ func _build_visual() -> void:
 	_hex.color = _faction_color(faction)
 	add_child(_hex)
 
-	_label = Label.new()
-	_label.text = display_name
-	_label.add_theme_font_size_override("font_size", int(12.0 * fs))
-	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_label.position = Vector2(-hex_radius, -hex_radius * 0.5)
-	_label.size = Vector2(hex_radius * 2.0, 15.0 * fs)
-	_label.add_theme_color_override("font_color", Color.WHITE)
-	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	_label.add_theme_constant_override("outline_size", maxi(3, int(4.5 * fs)))
-	add_child(_label)
+	# 【2026-09-27·用户要求】棋子上也放"人物本体"：在纯色六边形**之上**再贴一层同多边形的贴图
+	#   （`Polygon2D` 自带"按多边形裁剪" ⇒ 放大到顶满也不溢出卡边）。
+	#   底下那层纯色没撤 ⇒ **阵营色（我方蓝 / 敌方红）仍从人物四周透出来**，与选人卡一个观感；
+	#   贴图层用白色（= 不染色），人物保持原色。
+	_art = DataRegistry.hero_card_art(display_name)
+	_art_hex = Polygon2D.new()
+	_art_hex.polygon = _hex.polygon
+	_art_hex.color = Color(1, 1, 1, 1)
+	# 【2026-09-27·用户报"糊 + 锯齿"】图带 mipmap，必须显式开 `LINEAR_WITH_MIPMAPS` 才会用到；
+	#   棋子只有 ~146px 宽而图是 512 ⇒ 无 mipmap 的缩小采样就是锯齿+发糊的来源。
+	_art_hex.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	# 图被多边形裁掉的那两条边（顶/底，因为人顶满了）也做抗锯齿
+	_art_hex.antialiased = true
+	add_child(_art_hex)
+	_apply_hex_art()
+
+	# 名字行（**只在"这张卡还没有卡面图"时建**，规则见 `_update_name_label`）
+	_update_name_label()
 
 	# 数值图标簇：左下=攻击.png、右下=爱心.png，数字居中压在图标内（先加图标、后加文字）
 	var num_icon_w := hex_radius * 0.7   # 剑（攻击）的框大小
@@ -373,9 +383,65 @@ func refresh_stats() -> void:
 	_update_tags_label()
 
 # 刷新名字标签（用于古灵精怪变身等）
+# 【2026-09-27·用户口径】名字**只画在"还没出图的英雄"上**：
+#   · 有卡面图（`DataRegistry.hero_card_art` 找得到）⇒ 靠棋子上的人物本体认人，**不画名字**；
+#   · 没出图 ⇒ 照旧画名字（否则纯色棋子认不出是谁）。
+#   变身会换 `display_name` ⇒ 这里把"名字 / 人物本体"两者一起对齐（永远只留一个）。
 func _update_name_label() -> void:
-	if _label:
+	var art := DataRegistry.hero_card_art(display_name)
+	if art != _art:
+		_art = art
+		_apply_hex_art()
+	if _art != null:
+		if _label != null:
+			_label.visible = false
+		return
+	if _label == null:
+		_build_name_label()
+	else:
+		_label.visible = true
 		_label.text = display_name
+
+# 名字行（**只给还没出图的英雄**）：与改动前逐项一致（白字 + 黑描边，位置/字号按 `hex_radius` 缩放）
+func _build_name_label() -> void:
+	var fs := hex_radius / 39.0
+	_label = Label.new()
+	_label.text = display_name
+	_label.add_theme_font_size_override("font_size", int(12.0 * fs))
+	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_label.position = Vector2(-hex_radius, -hex_radius * 0.5)
+	_label.size = Vector2(hex_radius * 2.0, 15.0 * fs)
+	_label.add_theme_color_override("font_color", Color.WHITE)
+	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_label.add_theme_constant_override("outline_size", maxi(3, int(4.5 * fs)))
+	add_child(_label)
+
+# 把人物本体贴到棋子六边形上：等比放大到**顶到六边形上下边**，UV 按同一条比例算 ⇒
+#   贴图恰好填满这个多边形（Polygon2D 按多边形裁剪）；`_art == null` 时摘掉贴图、退回纯色棋子。
+#   不会出现"边缘拉伸"：抠图四周留了 2% 全透明边，越界采样钳到的是透明像素。
+func _apply_hex_art() -> void:
+	if _art_hex == null:
+		return
+	if _art == null:
+		# ⚠️ 没图时**必须把这一层藏起来**：`Polygon2D` 没有贴图时会用 `color` 把多边形填成实心，
+		#   而本层 color 是白色（贴图不染色用的）⇒ 不藏的话所有没出图的英雄都会变成**白色棋子**，
+		#   把下面的阵营色（我方蓝 / 敌方红）整个盖掉。
+		_art_hex.texture = null
+		_art_hex.uv = PackedVector2Array()
+		_art_hex.visible = false
+		return
+	_art_hex.visible = true
+	var ts := _art.get_size()
+	if ts.x <= 0.0 or ts.y <= 0.0:
+		return
+	var fit := minf((hex_radius * 2.0) / ts.x, (sqrt(3.0) * hex_radius) / ts.y)
+	var dsz := ts * fit
+	var dpos := -dsz * 0.5
+	var uv := PackedVector2Array()
+	for p in _art_hex.polygon:
+		uv.append(Vector2((p.x - dpos.x) / dsz.x * ts.x, (p.y - dpos.y) / dsz.y * ts.y))
+	_art_hex.texture = _art
+	_art_hex.uv = uv
 
 # 刷新技能词条标签（疾/嘲/渗/勤/候，用于变身继承技能后）
 # 古灵精怪变身等场景可能从"无词条"变到"有词条"：节点可能尚未创建，按需补建。
@@ -459,7 +525,8 @@ func can_move() -> bool:
 	return alive and not has_status(StatusDB.STUN) and not has_status(StatusDB.THORN)
 
 func can_attack() -> bool:
-	return alive and not has_status(StatusDB.STUN)
+	# 【2026-09-26 修·用户要求】被降到 0 攻（麻痹/共鸣者等）就**不能攻击**（原来只判眩晕）。
+	return alive and not has_status(StatusDB.STUN) and effective_atk() > 0
 
 func skill_allowed() -> bool:
 	# 眩晕：不能移动/攻击，也不能触发任何技能（回合开始/结束、登场、光环等）
