@@ -64,15 +64,17 @@ func _run() -> void:
 ##   看 ① 堡垒的候选分有没有"往挡位走"的梯度 ② `search()` 最终把它放哪（挡下多少血点）。
 func _dose_cmp() -> void:
 	for dose in [
-		{ "tag": "㉘ 关（旧行为）", "w": 0.0 },
-		{ "tag": "㉘ = 0.75", "w": 0.75 },
-		{ "tag": "㉘ = 1.5", "w": 1.5 },
-		{ "tag": "㉘ = 3.0", "w": 3.0 },
-		{ "tag": "㉘ = 6.0", "w": 6.0 },
-		{ "tag": "㉘ = 12.0", "w": 12.0 },
+		{ "tag": "两个键全关（现役行为）", "screen": 0.0, "front": 0.0 },
+		{ "tag": "㉘=0.75（末态项）", "screen": 0.75, "front": 0.0 },
+		{ "tag": "㉙=1.5（阶段1排序）", "screen": 0.0, "front": 1.5 },
+		{ "tag": "㉙=3.0", "screen": 0.0, "front": 3.0 },
+		{ "tag": "㉙=6.0", "screen": 0.0, "front": 6.0 },
+		{ "tag": "㉘0.75 + ㉙=3.0", "screen": 0.75, "front": 3.0 },
+		{ "tag": "㉘0.75 + ㉙=6.0", "screen": 0.75, "front": 6.0 },
 	]:
 		var w2: Dictionary = _w.duplicate()
-		w2["TANK_SCREEN_W"] = float(dose["w"])
+		w2["TANK_SCREEN_W"] = float(dose["screen"])
+		w2["TANK_FRONT_W"] = float(dose["front"])
 		_dose = w2
 		_log("TANK|剂量[%s]|起点 = 堡垒(1,2)（挡下 0）" % str(dose["tag"]))
 		_walk()

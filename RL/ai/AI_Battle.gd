@@ -538,6 +538,10 @@ const SILENCE_COUNTER_MIN := 3.0    # 沉默术士「克制」列原文的门槛
 # ⇒ 效果：站到能挡住人的位置 = 正分，撤到"谁也没挡住"的位置 = 0 分。**只在末态结算**（与 ㉕ 同层）。
 # ⚠️ 新评分项 ⇒ 值要靠剂量批定；默认 0 = 关 ⇒ 四档逐位不变。
 const TANK_SCREEN_W := 0.0
+# 【2026-09-28 晚·用户拍板「走 2」】㉙**阶段 1 排序用的"坦克垫在前面"权重**（键 `TANK_FRONT_W`，默认 0 = 关）。
+# 与 ㉘ 的分工：㉘ 是**末态**量（"因为这道嘲讽门，我方少挨了多少血"，取决于队友此刻站哪）；
+#   本键是**位置就绪**的代理（"我这个坦克是不是紧邻着某个更靠后的队友"，与队友临时落点无关）
+#   ⇒ 只有它能进 `_layout_score()`（阶段 1 逐层排阵型时用）。值与 ㉘ 同量纲（1 份 = 1 个脆皮队友 ≈ 1 分）。
 # ============ 【2026-09-26·用户口述四条·默认全 0】红帽（hero_40）「扑街自爆」的用法 ============
 # 机制（`heroes/hero_40_红帽.gd`）：5攻 / 13血；**阵亡时**对相邻的**所有**单位（含己方队友）造成 13 点
 #   **非攻击**伤害（坚固不减、圣盾照挡），相邻障碍各 −1 耐久；⚠️ 脚本第 8 行：**被[沉默]或[眩晕]期间阵亡
@@ -1115,6 +1119,9 @@ var w_shield_break := SHIELD_BREAK_W   # 【2026-09-23】㉔破盾（见 const S
 var w_taunt_soak := TAUNT_SOAK_W       # 【2026-09-23】㉕嘲讽吸火（见 const TAUNT_SOAK_W 处说明）
 # 【2026-09-28 晚·默认关】㉘装甲堡垒的挡刀站位（见 const TANK_SCREEN_W 处说明）。值按英雄覆盖读（`hero_48` 段）。
 var w_tank_screen := TANK_SCREEN_W
+# 【2026-09-28 晚·默认关】㉙阶段 1 排序用的"坦克垫在前面"（见 const `TANK_FRONT_W` 处说明）。
+const TANK_FRONT_W := 0.0
+var w_tank_front := TANK_FRONT_W
 # 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 第五条（见 `const REDCAP_HP_FLOOR_W` 处那大段说明）
 var w_redcap_hp_floor := REDCAP_HP_FLOOR_W
 var w_redcap_cheap_hp := REDCAP_CHEAP_HP
@@ -1459,6 +1466,8 @@ func set_weights(t: Dictionary) -> void:
 			"TAUNT_SOAK_W": w_taunt_soak = float(v)
 			# 【2026-09-28 晚·默认关】㉘装甲堡垒的挡刀站位（见 const TANK_SCREEN_W 处说明）
 			"TANK_SCREEN_W": w_tank_screen = float(v)
+			# 【2026-09-28 晚·默认关】㉙阶段 1 排序用的"坦克垫在前面"（见 const TANK_FRONT_W 处说明）
+			"TANK_FRONT_W": w_tank_front = float(v)
 			"IDLE_HIT_PENALTY": w_idle_hit_penalty = float(v)			# 【2026-09-20 删除·用户拍板】原来这里还有 `"LEECH_TRIGGER_W"`（古拉吸血触发）⇒ 判死删除，
 			# 现在权重文件/theta 里再写这个键会被下面的 `_` 分支静默忽略。
 			# 【2026-09-15 删除·用户决定】"SIEGE_BASE" / "SIEGE_OVER" 两个键随 `_siege_bonus()` 一起删除
@@ -2783,6 +2792,11 @@ func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = tr
 	#   击杀（②身价）与集火（④ frac²）那几笔会被**重复计入三次** ⇒ 高估"扎堆挤同一个目标"的阵型
 	#   （D2 那局修好了、整局胜率却没收益，怀疑就是这里虚报抵消掉了收益）。
 	sc += _tp_attack_gain_accounted(sim)
+	# 【2026-09-28 晚·用户拍板「走 2」】㉙**坦克垫在前面**（`_tank_front_val()`）：阶段 1 是**唯一**
+	#   能让"堡垒站哪"影响整队布局的地方（阶段 2 只能改出手、改不了位置）。加与不加都不影响
+	#   "同末态只评一次"的口径（本项只读位置）。默认 0 = 关 ⇒ 逐位不变；只在场上有装甲堡垒时非零。
+	if w_tank_front != 0.0:
+		sc += w_tank_front * _tank_front_val(sim)
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
 		if u == null or not u.alive or u.fn != int(sim.active_fn) or u.attacked:
@@ -6233,6 +6247,21 @@ func _adj_foe_hit_on(sim: Sim, t: SimUnit, a: SimUnit) -> float:
 	one *= float(_sim_mult_at(sim, a, t, t.cell))
 	return _hit_after_target_mods(sim, t, t.cell, one)
 
+## 【2026-09-28 晚·修】㉑ 的单点威胁值**按"这一格的真实挨打合计"封顶**。
+## 用户实机（小阴影 14 血被三个敌人围着）：㉑ 报 **−30**，而同一条日志里「下回合在这一格会挨 5~6 伤」
+##   ⇒ 两把尺子不一致：㉑ 的单点走 `_adj_foe_hit_on()`（面板单击 × 倍率 × 受击侧修正），
+##   而挨打合计（`_incoming_total_on()`）另外吃了"被贴身远程/血锁射程退化、**塔盾/圣光代扛、盾、可站开火位上限**"
+##   等修正 ⇒ 同一格能差出一大截。对血量池倍率大的脆皮（14 血 ⇒ ×1.43~2.5）误差被再放大一次。
+## 处置：单点值**夹到该单位的真实挨打合计**（`_inc_memoized`，与 ⑥⑦⑮ 同一把尺子）——
+##   语义变成"**这一刀最多算到这个单位真会挨的总量**"，绝不会比"它下回合真正会挨的伤害"还贵。
+## ⚠️ 只在"挨打合计 > 0"时夹（= 0 表示没人够得到它，那时单点也应当很小，照常）。默认关不掉、属判据修正。
+func _adj_foe_hit_capped(sim: Sim, t: SimUnit, a: SimUnit) -> float:
+	var one := _adj_foe_hit_on(sim, t, a)
+	var total := _inc_memoized(sim, t, t.cell)
+	if total > 0.0 and one > total:
+		return total
+	return one
+
 ## 【2026-09-28 新增】**"我这一下会把目标挪到哪一格"** —— 两个位移英雄各一条真规则
 ##   （见 `_pull_value()` 头部的说明）；挪不动 / 不成立 ⇒ `(-99,-99)`。
 ##   · **血锁 hero_41**（拉人）：`Battle._pull_to()` ⇒ 我邻格里**离目标最近**的那个能站的格；
@@ -6612,7 +6641,12 @@ func _formation_parts(sim: Sim) -> Vector3:
 					#      探针 `RL/probe/血锁拉人自检.gd` 盘面①实测 A−B = **−2.000**，全部落在这一项）；
 					#   ③ 与队友那一半**同量纲相减**（旧口径 = 数人头相减）⇒ 单人贴脸不罚，
 					#      "被强敌包夹、身边没人能还手"才罚得重。
-					foe_threat = maxf(foe_threat, _adj_foe_hit_on(sim, u, ou))
+					foe_threat = maxf(foe_threat, _adj_foe_hit_capped(sim, u, ou))
+					# ⚠️ 【2026-09-28 晚·修·用户实机「小阴影被三个敌人围着，㉑ 罚 −30 而同一格只挨 5~6 伤」】
+					#   这里改用 `_adj_foe_hit_capped()`：单点值**夹到该单位的真实挨打合计** ⇒
+					#   "这一刀最多算到它下回合真会挨的总量"，绝不再比真实挨打还贵（理由见那个函数的说明）。
+					#   ⚠️ 队友那一半（`friend_back`）**不夹**：那里问的是"队友能替我还手多少"，
+					#   与被保护者的挨打无关，夹了会把"队友很强"这件事抹平。
 				continue
 			free_n += 1
 		esc += float(maxi(0, FORM_ESCAPE_MIN - free_n))
@@ -7664,6 +7698,61 @@ func _solid_front_ok(sim: Sim, hu: SimUnit) -> bool:
 ##   已过 `_solid_front_ok`"时才跑（一局最多几次）。
 func _tank_screens_someone(sim: Sim, tank: SimUnit) -> bool:
 	return _tank_screen_val(sim) > 0.0
+
+## 【2026-09-28 晚·用户拍板「走 2」】㉙**阶段 1 用的"坦克挡位"判据**（位置就绪版）。
+## 为什么另立一条（不让阶段 1 直接用 ㉘/`_tank_screen_val()`）：**那个量取决于队友此刻站在哪** ——
+##   而阶段 1 是**逐层排阵型**的，轮到坦克时队友还没到位 ⇒ 那时算出来的"挡下多少"是假的，
+##   所以它进不了排序（实测：㉘ 从 0.75 加到 12.0，`search()` 的计划一个字都没变）。
+## 本判据只看**坦克自己**的站位与敌人/队友的相对位置，**与队友的临时落点无关**，所以逐层可用：
+##   `得分 = Σ_{紧邻的我方非召唤物队友 a} exp_mult(a) × [ 我比 a 更靠近最近的敌人 ]`
+##   · "垫在**输出手/脆皮**前面"比"垫在坦克/后勤前面"值钱 ⇒ 用 `_incoming_pool_mult(a)`（血越少越脆 ⇒ 越该被挡）；
+##   · ⚠️ 敌人距离**只看地形路网**（`approach_dist(passing=false)` 那条，障碍/墓碑算墙、**单位身体不算**）——
+##     不能用 `_nearest_enemy_dist()`：它把**敌方身体也当墙**，而坦克恰恰就站在"队友→敌人"那条路上
+##     ⇒ 队友的路被它自己堵住、两者距离相等 ⇒ "我比它更靠近"**永远不成立**（实测该判据恒 0.000）。
+func _tank_front_val(sim: Sim) -> float:
+	var tank: SimUnit = null
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn == DataRegistry.Faction.ENEMY and t.hero_id == "hero_48":
+			tank = t
+			break
+	if tank == null:
+		return 0.0
+	var mine := _nearest_enemy_dist_terrain(sim, tank.cell)
+	if mine >= INF_DIST:
+		return 0.0                       # 场上没有对手 ⇒ 没得挡
+	var s := 0.0
+	var ax := grid.axial_of(tank.cell)
+	for i in sim.units.size():
+		var ally: SimUnit = sim.units[i]
+		if ally == null or not ally.alive or ally == tank or ally.fn != tank.fn:
+			continue
+		if DataRegistry.summons.has(ally.hero_id):
+			continue                     # 召唤物（骷髅兵）不当"被保护对象"（它们本来就是耗材）
+		if grid.distance(tank.cell, ally.cell) != 1:
+			continue                     # 只算**紧邻**的：这也是嘲讽门真正生效的几何条件
+		# 【判据定稿·第二版】"站在它前面" = **堡垒正好占着该队友的 6 个邻格之一**（不含它自己那格）。
+		#   为什么不用"我比它更靠近敌人"：那个比较会被**你自己堵住的那条路**吃掉（第一版实测恒 0.000）——
+		#   堡垒站在队友与敌人中间时，队友的路网距离被它顶高 ⇒ 两边读数相等 ⇒ 差值不成立。
+		#   而"占着邻格"就是嘲讽真正干的事：敌人想打这个队友，就只能站到堡垒旁边 ⇒ 只能打堡垒。
+		for d in FORM_DIRS:
+			if grid.offset_of(ax + d) == ally.cell:
+				s += _incoming_pool_mult(ally)   # 垫在它前面 ⇒ 得分（脆皮权重更高）
+				break
+	return s
+## "只按地形"的最近敌人路网距离（障碍/墓碑算墙，**单位身体不算**）—— 只给 `_tank_front_val()` 用。
+## 与 `_nearest_enemy_dist()` 的差别就是那一条：那个函数把敌方身体也当墙（"我过不去"），
+## 而这里问的是"**谁更靠前**"（几何方位），不该被"我自己堵住了那条路"污染。
+func _nearest_enemy_dist_terrain(sim: Sim, cell: Vector2i) -> int:
+	var best := INF_DIST
+	for i in sim.units.size():
+		var e: SimUnit = sim.units[i]
+		if e == null or not e.alive or e.fn == DataRegistry.Faction.ENEMY:
+			continue
+		var d := approach_dist(sim, cell, e.cell, false)
+		if d < best:
+			best = d
+	return best
 
 # ==================== 【2026-09-26】红帽（hero_40）「扑街自爆」的用法 ====================
 # 口径与动机见 `const REDCAP_HP_FLOOR_W` 处那大段说明（用户 2026-09-26 口述四条 + 一条止损）。
