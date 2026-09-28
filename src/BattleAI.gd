@@ -3239,6 +3239,12 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 						else ("从 %s 走到 %s 打 %s" % [str(pu.cell), str(mc3), alt_name])
 					var s_alt2 := pre.clone()
 					_apply(s_alt2, idx, alt_combo)
+					# 【2026-09-28 晚·修·用户实机「负墟那一行：标题说少 0.8 分、明细加起来却是 −0.7」】
+					#   **两份明细的基准必须同一个局面**：原来传下去的是 `bd1`（= **打完之后**的 `replay`）
+					#   与 `bd_alt2`（= **打之前**的 `pre` 打出替代手）⇒ 两个不同基准的字典相减，
+					#   明细自然与标题对不上（`㉖暴露总量 +2.0` 这类"这一步自己造成的差"也会被算进去）。
+					#   ⇒ 两边统一成 **`pre` 基准**：`bd_pre_alt`（pre 局面）− `bd_alt2`（pre 打出替代手）。
+					var bd_pre_alt := _eval_breakdown(pre)
 					var bd_alt2 := _eval_breakdown(s_alt2)
 					var gap := _evaluate(replay, false) - _evaluate(s_alt2, false)
 					if gap < -0.5:
@@ -3250,7 +3256,9 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 							_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
 							_plain_reason(bd0, bd_alt2, ur.skills.has(DataRegistry.Skill.TAUNT))]
 					# 【2026-09-23 深夜·用户拍板「加」】同一条明细也挂在这里（"没选的那一手"那一支）
-					var g5 := _plain_gap_terms(bd1, bd_alt2, gap)
+					# 【2026-09-28 晚】基准统一成**同一个局面（`pre`）**，口径与标题一致 = **现在这一手 − 替代那一手**：
+					#   `_evaluate(pre)`（现在这一手：留在 pre 没动）− `_evaluate(s_alt2)`（打出替代手）。
+					var g5 := _plain_gap_terms(bd_pre_alt, bd_alt2, _evaluate(pre, false) - _evaluate(s_alt2, false))
 					if g5 != "":
 						alt_note += "\n     分差明细（现在这一手 − 没选的那一手）：" + g5
 		# 【2026-09-23 用户要求·第三版】这一步**打的是这个目标，为什么不打那个**：
@@ -3519,7 +3527,14 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 			parts.append("其它(未列) %+.1f" % other)
 	if parts.is_empty():
 		return ""
-	return " · ".join(parts)
+	var out := " · ".join(parts)
+	# 【2026-09-28 晚·自校验】明细之和必须≈标题那个分差（`gap` 的口径 = **现在这一手 − 替代那一手**）。
+	#   差得明显 = **两份明细的基准局面不是同一个** —— 2026-09-28 抓到过一次：一边传"打完之后"的 `bd1`、
+	#   一边传"打之前"的 `bd_alt2` ⇒ 明细整段错位、标题与明细自相矛盾（用户就是拿这个来问的）。
+	#   这里把同类错误直接打出来，不再让它静静躺在日志里骗人。
+	if not is_nan(gap) and absf(float(gap) - total) >= 0.6:
+		out += " ⚠️ 明细与分差对不上（差 %.1f ⇒ 明细基准不同、属日志 bug）" % (float(gap) - total)
+	return out
 
 ## 把"这一步的评分变化"翻译成人话：取变化最大的 1~3 项，各配一句短语（`_term_phrase`）。
 ## `is_taunt` = **走这一步的单位自己是不是嘲讽单位** —— 只有 ㉕ 用得到：
