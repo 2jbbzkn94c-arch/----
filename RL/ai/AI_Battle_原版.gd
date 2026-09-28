@@ -151,10 +151,10 @@ class Sim:
 	#   语义 = 「**用越低的伤害破盾越值**」：1 点 poke 拆掉一面盾 = 逼对面花资源、自己没浪费输出；
 	#   一记大招被盾整次吃掉 = 纯浪费（折算系数趋近 0）。符号对称：对面盾被我方破 = +、我方盾被对面破 = −。
 	var shield_break_val := 0.0
-	# 【2026-09-28 新增】"血锁开团"的动作量（见 `const PULL_OPEN_W` 处说明）：`_apply` 在血锁出手前
-	#   按**被拉目标的落点**算好累加（包围增量 × PULL_OPEN_W + 拉成孤立 × PULL_ISOLATE_W），
-	#   `_evaluate` 入账。只记我方（`u.fn == ENEMY`），只记这一手真能拉到的目标。
-	var pull_open_val := 0.0
+	# 【2026-09-28 新增】㉗"位移开团"的动作量（见 `const PULL_OPEN_W` 处说明）：`_apply` 在我方
+	#   **强制挪动对手**的那一手之前算好累加（包围增量 × PULL_OPEN_W + 挪成孤立 × PULL_ISOLATE_W），
+	#   `_evaluate` 入账。两个英雄共用：血锁（拉人）/ 暗域（换位）；只记我方、只记真挪得动的目标。
+	var displace_open_val := 0.0
 	# 【RL 修正】当前**行动方**阵营（决定"圣光只在敌方回合护己方"这类时机判定）。
 	# 生产路径里 AI 只在"敌方回合开始"时装快照做搜索，所以缺省就是敌方自己行动；
 	# 对拍 harness 会把行动方设成玩家（active=P）来测圣光，此时要显式传进来（见 build_state）。
@@ -227,8 +227,8 @@ class Sim:
 		c.silence_val = silence_val
 		c.pin_val = pin_val
 		c.paralyze_val = paralyze_val
-		# 【2026-09-28】㉗血锁开团同理：漏掉的话"前几步拉的人"到下一步就消失（只有最后一步计分）。
-		c.pull_open_val = pull_open_val
+		# 【2026-09-28】㉗位移开团同理：漏掉的话"前几步挪过的人"到下一步就消失（只有最后一步计分）。
+		c.displace_open_val = displace_open_val
 		c.active_fn = active_fn
 		c._neg_gained = _neg_gained.duplicate()
 		c.engaged0 = engaged0               # ⑥ 开关的判据是**本回合行动前**的快照 ⇒ 整回合不变
@@ -520,6 +520,23 @@ const SHIELD_BREAK_DMG_REF := 1.0
 # ⚠️ 新评分项 ⇒ 值要靠剂量批定（登记在 `1_通用策略.md` §五 T21）。
 const TAUNT_SOAK_W := 0.0
 const SILENCE_COUNTER_MIN := 3.0    # 沉默术士「克制」列原文的门槛（写死：这是角色列表事实，不是旋钮）
+# ============ 【2026-09-28 晚·新增·默认关】㉘「装甲堡垒的**挡刀站位**」（`TANK_SCREEN_W`）============
+# 用户原话：「现在装甲堡垒还是不太聪明，有时候他能被玩家打到，但站的位置**一点都不影响玩家打其他人**，
+#   就像个孤儿站在一边」。
+# **为什么 ⑭与㉕ 都盖不住这件事**（探针 `RL/probe/堡垒站位自检.gd` 的实测）：
+#   · 引擎**认识**位置好坏：堡垒站 (2,3)/(3,4) 各替队友挡下 **8.00 / 9.00** 血点，站 (1,2)/(3,2)/(0,4) 挡 **0.00**；
+#   · 但**堡垒自己挪窝时看到的候选分里没有这笔钱的梯度** —— 从 (1,2) 出发的 15 条候选里「原地」+0.000 最高，
+#     `search()` 最后把它挪到 (2,1)、全程挡 0。两个原因：① ㉕ 的"少挨的那部分血"记在**被掩护的队友**头上
+#     （坦克自己那一格不参与）；② ⑭`SOLID_HOLD_W` 的钱是"**站着不动 + 被够得着 + 不比队友靠后**"就付，
+#     与"挡没挡住人"无关 ⇒ 它站在没用的一格照样拿 5 分，挪走反而丢。
+# **本项** = 把"**因为这道嘲讽门，我方少挨了多少血**"记到**整队**头上（含嘲讽单位自己一格），
+#   只认 hero_48（= 真正"纯靠站位吃伤害"的那只；塔盾那儿不能这么算 —— 它替队友挨的那点血
+#   本来就是它自己的掉血、已经在 ③血量账 里，再加就重复计价）。
+#   口径与 ㉕ 同一把尺子：`关掉嘲讽门时的挨打合计(该单位) − 实际挨打合计(该单位)`，再乘 `_incoming_pool_mult`，
+#   封顶仍然是"对手这一回合的普攻总输出"（与 ㉕ 同一个 cap，防重复计价）。
+# ⇒ 效果：站到能挡住人的位置 = 正分，撤到"谁也没挡住"的位置 = 0 分。**只在末态结算**（与 ㉕ 同层）。
+# ⚠️ 新评分项 ⇒ 值要靠剂量批定；默认 0 = 关 ⇒ 四档逐位不变。
+const TANK_SCREEN_W := 0.0
 # ============ 【2026-09-26·用户口述四条·默认全 0】红帽（hero_40）「扑街自爆」的用法 ============
 # 机制（`heroes/hero_40_红帽.gd`）：5攻 / 13血；**阵亡时**对相邻的**所有**单位（含己方队友）造成 13 点
 #   **非攻击**伤害（坚固不减、圣盾照挡），相邻障碍各 −1 耐久；⚠️ 脚本第 8 行：**被[沉默]或[眩晕]期间阵亡
@@ -623,23 +640,29 @@ const STAY_OPTION := 0
 #   ⚠️ 判据只能在**动作层**算（`_evaluate` 只看最终状态，看不到"这一手本来够得到"）⇒ 见 `search()`。
 # 0 = 关（默认 ⇒ 逐位不变）· 推荐 2.0~3.0。
 const IDLE_HIT_PENALTY := 0.0
-# ---- 【2026-09-28 新增·默认 0 = 关】**"血锁开团"：把敌人拉进包围 / 拉出来落单值多少分** ----
-# 用户原话：「血锁得学会将敌人拉过来包围，有嬉皮死神配合的时候，得学会拉出来落单」。
-# 背景（探针 `RL/probe/血锁拉人自检.gd` 的实测，见那份文件表头的读数）：血锁的拉人**不是一步可选动作** ——
-#   它是"**从 2~3 格出手**"的副作用（`hero_41::on_attack` → `Battle._pull_to`，贴身则不动）。
-#   而全引擎**没有任何一项为拉人付钱**（此前只有一行注释），于是"拉"与"贴上去打"的分差**全部**由
-#   队形三项（⑳抱团 / ㉑退路被夹 / ㉓离队距离）决定 ⇒ 实测独狼局面里 ㉑ 反而把"拉"罚了 −2.00。
-# 本项 = **动作层**的一笔账（与 ⑯⑰⑱⑲㉔㉕ 同款：`_apply` 累加进 `sim.pull_open_val`、`_evaluate` 入账），
-#   只记我方、只记"这一手真能拉到的目标"，按**被拉目标落点**算两半：
-#   ① **包围**（`PULL_OPEN_W` × 每个"拉完才够得到它"的我方单位）：判据 = `_threat_can_hit(落点)`
+# ---- 【2026-09-28 新增·默认 0 = 关】**㉗"位移开团"：把敌人挪进包围 / 挪出来落单值多少分** ----
+# 用户原话：「血锁得学会将敌人拉过来包围，有嬉皮死神配合的时候，得学会拉出来落单」，
+#   随后（同一天）又点名：「**AI 暗域没有将玩家拉落单的逻辑**」⇒ 本项把两个位移英雄并成一把尺子。
+# 背景（探针 `RL/probe/血锁拉人自检.gd` 的实测，见那份文件表头的读数）：这两位**强制挪动对手**的效果
+#   都**不是一步可选动作**，而是"出手时站在哪"的副作用 ——
+#   · 血锁：`hero_41::on_attack` → `Battle._pull_to()`，把目标拉到**他面前一格**（贴身则不动）；
+#   · 暗域：`hero_27::on_attack` → `Battle._swap_units()`，**与目标互换位置**（目标落到暗域原来那格）。
+#   而全引擎**没有任何一项为"把敌人挪到哪"付钱**（此前只有一行注释），于是"拉/换"与"贴上去打"的分差
+#   **全部**由队形三项（⑳抱团 / ㉑退路被夹 / ㉓离队距离）决定 ⇒ 实测独狼局面里 ㉑ 反而把"拉"罚了 −2.00。
+# 本项 = **动作层**的一笔账（与 ⑯⑰⑱⑲㉔㉕ 同款：`_apply` 累加进 `sim.displace_open_val`、`_evaluate` 入账），
+#   只记我方、只记"这一手真挪得动的目标"，按**目标落点**算两半。
+#   ⚠️ **两个英雄的差别只在"落点怎么算"**（`_displace_out_landing()`）：
+#     血锁 = 邻格里离目标最近的空格（方向由**他站哪一侧**定）；暗域 = **暗域现在站的那一格**
+#     （方向由**暗域战前站在哪**定）⇒ 两者的"挪出来落单"都靠**先摆位**，与"挪多远"无关。
+#   ① **包围**（`PULL_OPEN_W` × 每个"挪完才够得到它"的我方单位）：判据 = `_threat_can_hit(落点)`
 #      ⇒ 与挨打合计/威胁估计**同一把尺子**（含射程、血锁直线、视线、嘲讽门）。够得到它的人变多
 #      = 它挨的刀变多（③血量账、④集火、击杀都由模拟自己算，本项只补"**够得到的增量**"这笔显式收益）。
-#   ② **拉出来落单**（`PULL_ISOLATE_W` × 每个被拉成孤立的敌人）：判据 = `_sim_isolated_at(落点)`，
+#   ② **挪出来落单**（`PULL_ISOLATE_W` × 每个被挪成孤立的敌人）：判据 = `_sim_isolated_at(落点)`，
 #      **且我方场上有嬉皮死神（hero_30）存活且技能有效** —— 孤立 ×2 是它的专属倍率
 #      （`heroes/hero_30_嬉皮死神.gd`：「目标没有与其他敌人相邻 ⇒ 2 倍伤害」）。
 #      ⚠️ 为什么必须挂"有嬉皮死神"这个条件：孤立本身对别的英雄不值钱（不孤立谁也不会多挨一下）
-#      ⇒ 没有嬉皮时这一半恒 0，本键不会让血锁**无缘无故**去拆对面的队。
-# 量与量纲：一次拉人最多值 `PULL_OPEN_W × 我方单位数`，默认 1.2/人 ⇒ 3 人队 ≈ 3.6 分
+#      ⇒ 没有嬉皮时这一半恒 0，本键不会让我方**无缘无故**去拆对面的队。
+# 量与量纲：一手最多值 `PULL_OPEN_W × 我方单位数`，默认 1.2/人 ⇒ 3 人队 ≈ 3.6 分
 #   （≈ 一次普通攻击的 ③血量账 + ④集火），够压过 ㉑ 那 −2.00，但压不过"该打谁"的量级（击杀 20+）。
 const PULL_OPEN_W := 0.0
 const PULL_ISOLATE_W := 0.0
@@ -673,7 +696,7 @@ const PULL_ISOLATE_W := 0.0
 #    ② **血锁把敌人拉到自己面前 = 主动给自己记一份"被夹"**（探针 `RL/probe/血锁拉人自检.gd`
 #    盘面①实测：原地开钩 −1.481 vs 走1格贴身打 +0.519，差的 −2.000 全在这一项）⇒
 #    它直接反着"拉过来包围"这个诉求。改成威胁计价后：弱敌几乎不罚、强敌照样罚得重，
-#    而**"拉过来"这件事本身不再自动挨罚**（"我够不够得到它"由 ㉗血锁开团 与 ③④ 去算）。
+#    而**"挪过来"这件事本身不再自动挨罚**（"我够不够得到它"由 ㉗位移开团 与 ③④ 去算）。
 #    口径与 ⑦核心风险 同一把尺子（邻敌的**真实单击**、再乘血量池倍率 ⇒ 与"我多疼"同量纲）。
 # 两项都是**纯局面量**（只看位置与占位，不需要任何新数据、不看对面怎么走），代价 O(单位数×6)。
 # 默认 0 ⇒ 生产三档逐位不变；噩梦档的初值写在 `RL/weights/噩梦.json`，要调只动那两个数。
@@ -1089,6 +1112,8 @@ var w_pin_ranged := THORN_PIN_RANGED_W
 var w_paralyze := PARALYZE_ZERO_W
 var w_shield_break := SHIELD_BREAK_W   # 【2026-09-23】㉔破盾（见 const SHIELD_BREAK_W 处说明）
 var w_taunt_soak := TAUNT_SOAK_W       # 【2026-09-23】㉕嘲讽吸火（见 const TAUNT_SOAK_W 处说明）
+# 【2026-09-28 晚·默认关】㉘装甲堡垒的挡刀站位（见 const TANK_SCREEN_W 处说明）。值按英雄覆盖读（`hero_48` 段）。
+var w_tank_screen := TANK_SCREEN_W
 # 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 第五条（见 `const REDCAP_HP_FLOOR_W` 处那大段说明）
 var w_redcap_hp_floor := REDCAP_HP_FLOOR_W
 var w_redcap_cheap_hp := REDCAP_CHEAP_HP
@@ -1431,6 +1456,8 @@ func set_weights(t: Dictionary) -> void:
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
 			"TAUNT_SOAK_W": w_taunt_soak = float(v)
+			# 【2026-09-28 晚·默认关】㉘装甲堡垒的挡刀站位（见 const TANK_SCREEN_W 处说明）
+			"TANK_SCREEN_W": w_tank_screen = float(v)
 			"IDLE_HIT_PENALTY": w_idle_hit_penalty = float(v)			# 【2026-09-20 删除·用户拍板】原来这里还有 `"LEECH_TRIGGER_W"`（古拉吸血触发）⇒ 判死删除，
 			# 现在权重文件/theta 里再写这个键会被下面的 `_` 分支静默忽略。
 			# 【2026-09-15 删除·用户决定】"SIEGE_BASE" / "SIEGE_OVER" 两个键随 `_siege_bonus()` 一起删除
@@ -3846,12 +3873,13 @@ func _term_defs() -> Array:
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
 	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ %d 格内**且中间没被障碍/墓碑挡开**的队友一个都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起；**只在全队行动完的末态结算**，中途不算）" % [w_form_cohesion, FORM_RADIUS]],
 	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 贴身敌人的**威胁** − 贴身队友**能还手的威胁**) × %.0f ]（治贴墙/死胡同/被强敌包夹；**同样只在末态结算**。⚠️ 2026-09-28 用户拍板 A：两半都从**数人头**改成**威胁计价**（单点 = 该敌人下回合单击真实伤害 × 血量池倍率 ÷ TRADE_HP_REF；弱敌贴脸不再与强敌同价，坦克挨同一刀更便宜，**血锁自己把敌人拉过来**不再等于「我被夹住」），× %.0f 只是量纲补偿、不表达偏好，见 `const PULL_OPEN_W` 与 `FORM_ESCAPE_SCALE`）" % [w_form_escape, FORM_ESCAPE_MIN, FORM_ESCAPE_SCALE, FORM_ESCAPE_SCALE]],
-	["㉗血锁开团", "+PULL_OPEN_W(%.2f) × Σ_被拉目标(拉完够得到它的我方单位数 − 现在够得到它的数) + PULL_ISOLATE_W(%.2f) × Σ_被拉成孤立的敌人数（**后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才算** —— 孤立 ×2 是它的倍率）。两半都按**拉人落点**判（`_pull_out_landing()` 与真实 `Battle._pull_to()` 同式），是**动作层**的一笔（末态照里「被拉过来的」与「自己走过来的」同分 ⇒ 搜索结构上看不见它）" % [w_pull_open, w_pull_isolate]],
+	["㉗位移开团", "+PULL_OPEN_W(%.2f) × Σ_被拉目标(拉完够得到它的我方单位数 − 现在够得到它的数) + PULL_ISOLATE_W(%.2f) × Σ_被拉成孤立的敌人数（**后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才算** —— 孤立 ×2 是它的倍率）。两半都按**拉人落点**判（`_pull_out_landing()` 与真实 `Battle._pull_to()` 同式），是**动作层**的一笔（末态照里「被拉过来的」与「自己走过来的」同分 ⇒ 搜索结构上看不见它）" % [w_pull_open, w_pull_isolate]],
 	["㉒隔断", "+SPLIT_W(%.2f) × Σ_玩家(两两) clamp( min(「地形+**合格的我方身体**」的路网距离, %d) − max(「只看地形」的路网距离, %d), 0, %d )（**只付『我方身体造成的那部分切断』**：地形本来就隔开的不付；只在末态结算。⚠️ 算墙的我方单位必须**自己有队友在 %d 格内**（孤军堵路不加分）**且远程只有『没贴到玩家身上』时才算** —— 用户两条硬约束）" % [w_split, SPLIT_CAP, SPLIT_FREE_STEPS, SPLIT_CAP, FORM_RADIUS]],
 	["㉓离队距离", ("−FORM_SPREAD_CELL_W(%.2f) × Σ_我方非召唤物 max(0, 与**最近队友**的格距 − 1)（⑳ 的**距离梯度**：贴身 0 罚、格距 2 罚 1 份、格距 3 罚 2 份……**只看格距、不看地形**；**同样只在末态结算**）"
 			+ (("　⚠️ **队形一把尺（`FORM_MERGE_MODE=1`）**：⑳ 的 0/1 孤立份已并进本项（没有合格队友 ⇒ 再加 `FORM_ISO_STEP_RATIO=%.2f` 份 ⇒ 现役取值下 = 旧的 ⑳ 5.0），**㉑ 退路/被夹 退役**（本模式恒 0）⇒ 整条队形曲线只由本键缩放" % FORM_ISO_STEP_RATIO) if w_form_merge == 1 else "")) % w_form_spread],
 		["㉔破盾", "+SHIELD_BREAK_W(%.1f) × Σ 本回合破掉的盾 × REF(%.1f)/max(伤害, REF)（**用越低的伤害破盾越值**：1 点 poke = 满价、大招被盾吃掉 ≈ 0 价；对面盾被我方破 + / 我方盾被对面破 −）" % [w_shield_break, SHIELD_BREAK_DMG_REF]],
 		["㉕嘲讽吸火", "+TAUNT_SOAK_W(%.1f) × Σ_我方**非嘲讽**单位（**关掉嘲讽门**重算的挨打合计 − 实际挨打合计）× 血量池折算（= 因为嘲讽门，后排这回合少挨的那部分血；**躲在后排 = 差额 0 = 一分不得**，站到火力线上才赚）" % w_taunt_soak],
+		["㉘堡垒挡刀", "+TANK_SCREEN_W(%.2f) × Σ_我方单位（含**装甲堡垒自己那一格**）[ 关掉嘲讽门的挨打合计 − 实际挨打合计 ] × 血量池折算，按对手普攻总输出封顶（= **装甲堡垒站在这一格替全队挡下了多少刀**；站到「谁也没挡住」的位置 = 0 分）。⚠️ 只认 hero_48（塔盾替队友挨的那点血已进 ③血量账，再加是重复计价）· 只在末态结算 · 与 ㉕ 取值范围不重叠（两个键别同时开）" % w_tank_screen],
 		["㉖暴露总量", "−EXPOSURE_TOTAL_W(%.2f) × Σ_{我方**脆皮输出**} 挨打合计（脆皮 = 面板血上限 ≤ EXPOSURE_HP_MAX(%.0f)；有输出 = `_output_potential()` ≥ EXPOSURE_OUT_MIN(%.0f) ⇒ 后勤/纯辅助/坦克不进。⑦ 是 **max 型 + 按核心系数归一** ⇒ 13 血挨 10 伤只值 0.82 分；本项按**点数**计。只在末态结算，与 ⑦ 共用一次 `_incoming_incs()`）" % [w_exposure_total, w_exposure_hp_max, EXPOSURE_OUT_MIN]],
 		["红帽·血线", "−REDCAP_HP_FLOOR_W(%.2f) × max(0, 廉价解真实单击合计 + 1 − 红帽末态血)（廉价解 = 够得到她的 `<远程>`（打死她不吃自爆）· 血 ≤ REDCAP_CHEAP_HP(%.0f)（换掉不亏）· 能挂沉默的人；**不封顶**；**只在末态结算**）" % [w_redcap_hp_floor, w_redcap_cheap_hp]],
 		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 3 点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
@@ -3953,7 +3981,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 		d["⑲麻痹零攻"] = sim.paralyze_val
 	# 【2026-09-28 新增·默认关】"血锁开团"（与 `_evaluate()` 那一段逐行对应 ⇒ Σ 自校验不漂）
 	if w_pull_open != 0.0 or w_pull_isolate != 0.0:
-		d["㉗血锁开团"] = sim.pull_open_val
+		d["㉗位移开团"] = sim.displace_open_val
 	# 【2026-09-23 新增·默认关】㉔破盾（与 `_evaluate()` 同口径 ⇒ Σ 自校验才对得上）
 	if w_shield_break != 0.0 and sim.shield_break_val != 0.0:
 		d["㉔破盾"] = w_shield_break * sim.shield_break_val
@@ -3961,6 +3989,11 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	#   ⚠️ 2026-09-23 深夜起**只在末态列出来**（与 ⑳㉑㉒㉓ 同款）⇒ 两处必须同改，否则 Σ 会差一个 ±3。
 	if end_of_turn and w_taunt_soak != 0.0:
 		d["㉕嘲讽吸火"] = w_taunt_soak * _taunt_soak(sim)
+	# 【2026-09-28 晚·默认关】㉘装甲堡垒的挡刀站位（与 `_evaluate()` 那一段逐行对应 ⇒ Σ 自校验不漂）
+	if w_tank_screen != 0.0 or _any_hero_key(["TANK_SCREEN_W"]):
+		var wts_bd := _wh("hero_48", "TANK_SCREEN_W", w_tank_screen)
+		if wts_bd != 0.0:
+			d["㉘堡垒挡刀"] = wts_bd * _tank_screen_val(sim)
 	# 【2026-09-26】红帽（hero_40）那几条：与 `_evaluate()` **同一个门、同一个函数**（`_redcap_terms()`）
 	#   ⇒ Σ 自校验不会漂移；同样只在末态列出来（与 ⑳㉑㉒㉓㉕ 同款）。
 	if end_of_turn and _redcap_on():
@@ -5022,6 +5055,13 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				if u.hero_id == "hero_18":
 					_sim_pierce_line(sim, u, t.cell)   # 长剑：身后直线穿透
 				if u.hero_id == "hero_27":
+					# 【2026-09-28 新增·用户点名「AI 暗域没有将玩家拉落单的逻辑」】㉗ 的换位那一半：
+					#   与血锁共用同一个 `_pull_value()`（判据只有"落点怎么算"不同：暗域 = 它自己现在站的格）
+					#   ⇒ "把目标挪出它队友的圈子"靠的是**暗域先摆位到那条边上**，与挪多远无关。
+					#   ⚠️ 必须在 `_sim_swap_cells()` **之前**算（落点 = 换位前的 `u.cell`）；
+					#   ⚠️ 只在 `t.alive` 时算 —— 打死那一支真实走 `_occupy_dead_cell` 占尸格、**不换位**。
+					if t.alive:
+						sim.displace_open_val += _pull_value(sim, u)
 					if t.alive:
 						_sim_swap_cells(sim, u, t)   # 暗域：换位
 					else:
@@ -5035,9 +5075,9 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				# （见 _sim_pull_target 的亡者分支）。sim 侧这里是"统一伤害出口判死之后"的
 				# 命中后钩子区，所以天然覆盖致死分支（此前 `and t.alive` 的守卫正是为它而设）。
 				if u.hero_id == "hero_41":
-					# 【2026-09-28 新增】"血锁开团"：这一手值多少分（包围增量 / 拉成孤立）——
-					#   必须在**真的拉之前**算（落点取决于拉的时候双方站在哪），见 `_pull_value()`。
-					sim.pull_open_val += _pull_value(sim, u)
+					# 【2026-09-28 新增·当天晚些扩到暗域】㉗"位移开团"：这一手值多少分（包围增量 / 挪成孤立）——
+					#   必须在**真的挪之前**算（落点取决于挪的时候双方站在哪），见 `_pull_value()`。
+					sim.displace_open_val += _pull_value(sim, u)
 					_sim_pull_target(sim, u, t)
 				if u.hero_id == "hero_46" and t.alive and t.fn != u.fn:
 					# 宿魂：令目标附体（负墟免疫则不绑定、攻+1）。后附覆盖先附（与真实一致）
@@ -6032,9 +6072,9 @@ func _sim_nova(sim: Sim, u: SimUnit, target: SimUnit) -> void:
 		if not _sim_knockback_away(sim, v, target.cell):
 			# 真实 heroes/hero_21_超新星.gd:16,28 击穿：`take_damage(..., is_attack=true)`
 			_sim_hit_no_counter(sim, v, u.eatk, true)
-	# 【RL 修正】击退/击穿波及到的相邻障碍各 -1 耐久（真实规则见 heroes/hero_21_超新星.gd 的
-	# on_attack / on_attack_dead 末尾 `battle.sweep_obstacles_around(target.cell)`），模拟原来漏了。
-	_sim_sweep_obstacles_around(sim, target.cell)
+	# 【2026-09-28 用户拍板】超新星的击退/击穿**不再波及障碍**（原来这里有 `_sim_sweep_obstacles_around`，
+	#   跟着"技能对敌人生效时波及到的障碍也掉耐久"那条规则一起做的）；真实侧 `heroes/hero_21_超新星.gd`
+	#   同步摘掉 ⇒ 两边都不扣。其余四处波及（白游侠散射 / 红帽自爆 / 烛火点燃 / 剑气扫过的格）照旧。
 
 # 长剑：目标身后（沿攻击方向）直线上的所有对立单位受伤（伤害=自身攻击，穿透不停止）
 func _sim_pierce_line(sim: Sim, u: SimUnit, target_cell: Vector2i) -> void:
@@ -6215,6 +6255,27 @@ func _adj_foe_hit_on(sim: Sim, t: SimUnit, a: SimUnit) -> float:
 	one *= float(_sim_mult_at(sim, a, t, t.cell))
 	return _hit_after_target_mods(sim, t, t.cell, one)
 
+## 【2026-09-28 新增】**"我这一下会把目标挪到哪一格"** —— 两个位移英雄各一条真规则
+##   （见 `_pull_value()` 头部的说明）；挪不动 / 不成立 ⇒ `(-99,-99)`。
+##   · **血锁 hero_41**（拉人）：`Battle._pull_to()` ⇒ 我邻格里**离目标最近**的那个能站的格；
+##     贴身（格距 ≤1）或没有空位 ⇒ 拉不动（真实侧 `_pull_to()` 直接 return false）。
+##   · **暗域 hero_27**（换位）：`Battle._swap_units()` ⇒ **落点 = 我现在站的这一格**。
+##     ⚠️ 但这一支只在目标**活下来**时成立（`hero_27_暗域.gd:27`：`on_attack_dead` 走的是
+##     `_occupy_dead_cell` 占尸格、**不换位**；模拟 `_apply` 同一个 `t.alive` 判）—— 所以这里
+##     要问一句"我方这一下打不打得死它"：**打得死就返回 (-99,-99)**（尸体不孤立、也不进包围账）。
+func _displace_out_landing(sim: Sim, u: SimUnit, t: SimUnit) -> Vector2i:
+	if u.hero_id == "hero_41":
+		return _pull_out_landing(sim, u.cell, t.cell)
+	if u.hero_id == "hero_27":
+		# 换位那一支**只在目标活着时成立**（真实 `hero_27_暗域.gd:27`：`on_attack_dead` 走 `_occupy_dead_cell`
+		# 占尸格、**不换位**）。调用点已判 `t.alive`，这里再守一道，免得将来从别处调进来算错。
+		if t == null or not t.alive:
+			return Vector2i(-99, -99)
+		if grid.distance(u.cell, t.cell) <= 0:
+			return Vector2i(-99, -99)
+		return u.cell
+	return Vector2i(-99, -99)
+
 ## 【2026-09-28 新增】被拉目标的**落点**（与 `_sim_pull_target()` / 真实 `Battle._pull_to()` 同式）：
 ##   "拉人者邻格里离目标最近的那个能站的格"；贴身（格距 ≤1）或没有空位 ⇒ 返回 `(-99,-99)` = **拉不动**。
 ##   与 `_pull_landing()`（威胁估计那一侧用的那把）**判据相同、可传入假设格** —— 那一把问的是"对手把我拉到哪"，
@@ -6233,34 +6294,44 @@ func _pull_out_landing(sim: Sim, puller_cell: Vector2i, target_cell: Vector2i) -
 			best = n
 	return best
 
-## 【2026-09-28 新增】"血锁开团"这一手值多少分（见 `const PULL_OPEN_W` 处说明）：
-##   ① **包围**：`PULL_OPEN_W` × (拉完够得到我的我方单位数 − 现在够得到我的我方单位数)；
-##   ② **拉出来落单**：`PULL_ISOLATE_W` × (被拉成孤立的敌人数)，但**只在我方场上有嬉皮死神时**才付。
+## 【2026-09-28 新增·2026-09-28 晚扩到暗域】**"强制位移开团"这一手值多少分**（见 `const PULL_OPEN_W` 处说明）：
+##   ① **包围**：`PULL_OPEN_W` × (位移完够得到它的我方单位数 − 现在够得到它的数)；
+##   ② **拉出来落单**：`PULL_ISOLATE_W` × (被挪成孤立的敌人数)，但**只在我方场上有嬉皮死神时**才付。
+## **两个位移英雄共用这一把尺子**（判据 = "目标会落到哪一格"，两个英雄的差别只在那一格怎么算）：
+##   · **血锁 hero_41**（拉人）：落点 = **他邻格里离目标最近的空格**（`_pull_out_landing()`，`Battle._pull_to()` 同式）
+##     ⇒ 方向由**他站哪一侧**决定，"拉出来落单"靠的是**角度**。
+##   · **暗域 hero_27**（换位）：`Battle._swap_units()` ⇒ **目标落到暗域原来站的那一格**、暗域落到目标原来那格
+##     ⇒ 方向由**暗域战前站在哪**决定，"把目标挪出它队友的圈子"靠的是**暗域先走到那条边上**。
+##     ⚠️ 目标若被这一击**打死**，真实走的是 `on_attack_dead` → `_occupy_dead_cell`（占尸格）**不是**换位
+##     （`hero_27_暗域.gd:27`；模拟 `_apply` 同判 `t.alive`）⇒ 打死那一支**不算**本项（尸体不孤立）。
 ## ⚠️ 这里是**动作层**估计（与 ⑯⑰⑱⑲㉔㉕ 同款）：在 `_apply()` 真的动手**之前**算，因为落点取决于
-##   "拉的时候双方站在哪"，动完手局面就变了。用完的目标落点不看，所以不会与模拟重复计价。
+##   "动手时双方站在哪"，动完手局面就变了。用完的目标落点不看，所以不会与模拟重复计价。
 ## ⚠️ 只用**双方当前面板**（`_threat_can_hit` ⇒ 射程 + 移动力 + 血锁直线 + 视线 + 嘲讽门），
 ##   不做"下回合的风语者 +1 / 祭司光环"那些补漏 —— 本项是**相对增量**，保守一点更安全。
 func _pull_value(sim: Sim, u: SimUnit) -> float:
 	if w_pull_open == 0.0 and w_pull_isolate == 0.0:
 		return 0.0
 	if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
-		return 0.0                      # 只记我方（玩家把我们的单位拉走不该给我方加分）
-	if u.hero_id != "hero_41" or u.silenced or u.stunned:
-		return 0.0                      # 只有血锁会拉；被沉默/眩晕时技能不出（`skill_allowed()`）
+		return 0.0                      # 只记我方（玩家把我们的人挪走不该给我方加分）
+	if u.silenced or u.stunned:
+		return 0.0                      # 被沉默/眩晕时技能不出（真实 `skill_allowed()` 那道门）
+	var hero: String = u.hero_id
+	if hero != "hero_41" and hero != "hero_27":
+		return 0.0                      # 只有这两个英雄会**强制挪动对手**
 	var open_n := 0.0
 	var iso_n := 0.0
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]
 		if t == null or not t.alive or t.fn == u.fn:
 			continue
-		var land := _pull_out_landing(sim, u.cell, t.cell)
+		var land := _displace_out_landing(sim, u, t)
 		if land.x == -99:
-			continue                    # 贴身 / 没空位 ⇒ 真实 `_pull_to()` 直接 return，不算这一手
+			continue                    # 拉不动 / 打不死又换不了位 ⇒ 不算这一手
 		if w_pull_open != 0.0:
 			# ⚠️ 分母**必须按这个目标自己算**（"它现在站在哪，我们几个人够得到它"）。
 			#   第一版写成"够得到任意目标的人数"（拿 `u.cell` 当目标格）⇒ 那个数与本目标无关，
 			#   增量经常是负的 ⇒ 整项永远不触发（探针 `血锁拉人自检.gd` 的"㉗逐敌拆解"抓到的）：
-			#   被拉者是人，拉完**离我们别的单位可能更远**（嬉皮那种手短的会因此够不到它）。
+			#   被挪者是人，挪完**离我们别的单位可能更远**（嬉皮那种手短的会因此够不到它）。
 			var before := _pull_reach_count(sim, t.cell, t)
 			var after := _pull_reach_count(sim, land, t)
 			if after > before:
@@ -6932,10 +7003,10 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 		score += sim.pin_val
 	if sim.paralyze_val != 0.0:
 		score += sim.paralyze_val
-	# 【2026-09-28 新增·默认关】㉗血锁开团（见 `const PULL_OPEN_W` 处说明）：把敌人拉进包围 /
+	# 【2026-09-28 新增·默认关·当晚扩到暗域】㉗位移开团（见 `const PULL_OPEN_W` 处说明）：把敌人挪进包围 /
 	#   拉出来落单各值多少分 —— 动作层的一笔，只认血锁、只认"这一手真拉得动"的目标。
 	if w_pull_open != 0.0 or w_pull_isolate != 0.0:
-		score += sim.pull_open_val
+		score += sim.displace_open_val
 	# 【2026-09-23 新增·默认关】㉔破盾（见 `const SHIELD_BREAK_W` 处说明）：`sim.shield_break_val` 已由
 	#   `_sim_take_damage` 在盾吃掉一笔伤害那一刻累加好（含伤害折算 + 阵营符号）⇒ 这里只乘权重。
 	if sim.shield_break_val != 0.0:
@@ -6949,6 +7020,17 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   判据与 ⑳㉑ 同一句话：**不看过程、按"全队都行动完"的站位算**。
 	if end_of_turn and w_taunt_soak != 0.0:
 		score += w_taunt_soak * _taunt_soak(sim)
+	# 【2026-09-28 晚·新增·默认关】㉘装甲堡垒的挡刀站位（见 `const TANK_SCREEN_W` 处说明）：
+	#   把"因为嘲讽门、我方（**含堡垒自己那一格**）少挨的那部分血"记到整队头上 ⇒ 堡垒"站哪儿"终于有梯度。
+	#   ⚠️ **不挂"只在末态结算"这道门**（与 ㉕ 的唯一差别，这是量出来的）：`SEARCH_MODE=2` 的**阶段 1
+	#   就是靠 `_layout_score()` 排阵型的，而它传的是 `end_of_turn=false`** ⇒ 带门的话这项在"决定谁站哪"
+	#   那一步恒 0，剂量从 0.75 加到 12.0 计划都不动（探针 `RL/probe/堡垒站位自检.gd` 实测）。
+	#   中途口径 = "按**此刻**的占位算"（队友还没挪完 ⇒ 读数偏小），但它给的是**相对梯度**
+	#   （"我挪到这一格，此刻能挡住多少"），正是排阵型需要的那一笔。
+	if w_tank_screen != 0.0 or _any_hero_key(["TANK_SCREEN_W"]):
+		var wts := _wh("hero_48", "TANK_SCREEN_W", w_tank_screen)
+		if wts != 0.0:
+			score += wts * _tank_screen_val(sim)
 	# 集火推进（凸性奖励）：对**同一目标**累计的本回合伤害越集中，越接近"合力必杀"。
 	# 为什么单靠"伤害线性项 + 末端击杀奖励"不够：3+3 分摊给两人 与 6 全压一人 同分，
 	# 于是 beam 在中间层就把"合击线"剪掉——最后谁也没死，表现为"三个人打不死一个、
@@ -7076,8 +7158,11 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 			#   `PICTURE/堡垒不向前.png`，第 2 回合）：敌方装甲堡垒蹲在左上角 (0,1)，我方最近的共鸣者
 			#   正好在 **3 格外** = 它的 `移动+射程` 门槛 ⇒ ⑤压上拉力归零（3 格到贴脸整段没拉力），
 			#   而 ⑭ 这 5 分**不分位置**地付给"站着不动"⇒ 原地 +5 / 前进 0 ⇒ 它永远不动。
+			# 【2026-09-28 晚·用户拍板「走 3」】再加第三条**"它真的挡住了人"**（`_tank_screens_someone()`）：
+			#   前两条只管"站着不动 + 被够得着 + 不比队友靠后"，**跟有没有挡住人无关** ⇒ 用户实报
+			#   「站的位置一点都不影响玩家打其他人，就像个孤儿站在一边」照样拿 5 分。这条把它按到实处。
 			if wsh != 0.0 and not is_foe and hu.hero_id == "hero_48" and not hu.moved \
-					and _solid_front_ok(sim, hu):
+					and _solid_front_ok(sim, hu) and _tank_screens_someone(sim, hu):
 				for j in sim.units.size():
 					var eu: SimUnit = sim.units[j]
 					if eu == null or not eu.alive or eu.fn == DataRegistry.Faction.ENEMY:
@@ -7467,6 +7552,13 @@ func _core_ref(sim: Sim) -> float:
 ## ⚠️ 性能：① 只在"我方有存活嘲讽单位"时才算（没有嘲讽 = 整项 0 开销）；
 ##   ② 每个非嘲讽单位**先算"关掉嘲讽"的那一趟**，为 0（没人够得到它）就直接跳过第二趟 ⇒ 常见局面只多一趟；
 ##   ③ 嘲讽单位自己**不算**（它挨打本来就是本分；它的收益在 ⑭`SOLID_HOLD_W` 那笔"站着换[坚固]"与 ③⑦ 的少挨账里）。
+## 【2026-09-28·用户口径】「**㉕ 挺重要的**（限制输出的走位、让它少挨打）；但**他能被玩家下回合伤害的
+##   量也有限，这就不需要嘲讽保护了**」⇒ 关掉嘲讽门后的挨打合计 ≤ `TAUNT_SOAK_MIN_DMG` 的单位**不计入 ㉕**。
+##   起因（用户实机日志）：红帽走出坦克掩护圈去打独脚龟，㉕ 一项 **−7.5**（它其实只多挨 ≈3.2 点）
+##   ＋㉖ −4 ＋㉑ −4 ⇒ 出手被压死、变成「整回合没动作」 ⇒ 用户判定「红帽变得太怂了」。
+##   4 = 与 ⑥ 的 `MOVE_ACCEPT_DAMAGE` **同一条线**（同一把尺子：超过这条线才算"值得保护的挨打"）。
+const TAUNT_SOAK_MIN_DMG := 4.0
+
 func _taunt_soak(sim: Sim) -> float:
 	var has_taunt := false
 	for i in sim.units.size():
@@ -7482,9 +7574,14 @@ func _taunt_soak(sim: Sim) -> float:
 		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
 			continue
 		if u.skills.has(DataRegistry.Skill.TAUNT):
-			continue                                  # 嘲讽单位自己不算（见上方说明）
+			# 【2026-09-28 晚·用户报「装甲堡垒像个孤儿站在一边」】**嘲讽单位自己仍然不在这本账里**。
+			#   试过把它加进来（"它自己挨的打也是吸火"）—— **不成立**：塔盾(hero_11) 的"替相邻队友扛 1 点"
+			#   那点血本来就是它自己的掉血、已经进 ③血量账 ⇒ 再加就是重复计价。装甲堡垒那一支的
+			#   "站位梯度"由**另一项**负责（`_tank_screen_val()` / ㉘），两项分工不重叠。
+			continue
 		var free_inc := _inc_memoized(sim, u, u.cell, true)
-		if free_inc <= 0.0:
+		# 【2026-09-28·用户口径】他能被伤害的量有限 ⇒ 不需要嘲讽保护：连多挨 4 点以内都算会把正常出手压死
+		if free_inc <= TAUNT_SOAK_MIN_DMG:
 			continue                                  # 关掉嘲讽也没人打得到它 ⇒ 差额必然 0，省掉第二趟
 		var soaked := free_inc - _inc_memoized(sim, u, u.cell)
 		if soaked > 0.0:
@@ -7498,6 +7595,45 @@ func _taunt_soak(sim: Sim) -> float:
 	#   封顶口径 = **对手这一回合"普通攻击"的总输出**（只有 ① 走嘲讽门，②技能/③毒 本来就不受门控）：
 	#   逐个存活对手取 `_echo_atk_now()`（共鸣者按共鸣后的值），**后勤/眩晕者不能主动攻击 ⇒ 不计**
 	#   （与 `_threat_can_hit()` 开头那道门同一口径）。O(单位数)，不跑 BFS，热路径安全。
+	var foe_cap := 0.0
+	for i in sim.units.size():
+		var e: SimUnit = sim.units[i]
+		if e == null or not e.alive or e.fn == DataRegistry.Faction.ENEMY:
+			continue
+		if e.stunned or e.skills.has(DataRegistry.Skill.LOGISTICS):
+			continue
+		foe_cap += maxf(_echo_atk_now(sim, e), 0.0)
+	return minf(s, foe_cap)
+
+## 【2026-09-28 晚·新增·默认关】㉘装甲堡垒的**挡刀站位**（`TANK_SCREEN_W`，见 const 处说明）。
+##   公式与 ㉕ **逐字同源**，只把"算谁"换成：**hero_48 自己那一格 + 全部我方单位**（含它自己）——
+##     `Σ_我方单位 u [ 关掉嘲讽门的挨打合计(u) − 实际挨打合计(u) ] × 血量池倍率(u)`，再按对手普攻总输出封顶。
+##   ⇒ "它站在这一格，究竟替全队（含它自己）挡下了多少刀"= 它**站位的价值**。
+##   ⚠️ 只认 hero_48：塔盾(hero_11) 替队友挨的那点血本来就是它自己的掉血（已进 ③血量账），再加就重复计价。
+##   ⚠️ 与 ㉕ 的取值范围不重叠：㉕ 只累加**非嘲讽**队友，本项把嘲讽单位自己也算进来（其余单位在两者里会重复，
+##     所以调用方只该**开其中一个键**；两个都开时这笔钱会双倍 —— 登记在文档里）。
+func _tank_screen_val(sim: Sim) -> float:
+	var tank: SimUnit = null
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn == DataRegistry.Faction.ENEMY and t.hero_id == "hero_48":
+			tank = t
+			break
+	if tank == null:
+		return 0.0                      # 场上没有装甲堡垒 ⇒ 0 开销
+	var s := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		var free_inc := _inc_memoized(sim, u, u.cell, true)
+		# 【2026-09-28·用户口径】他能被伤害的量有限 ⇒ 不需要嘲讽保护：连多挨 4 点以内都算会把正常出手压死
+		if free_inc <= TAUNT_SOAK_MIN_DMG:
+			continue                    # 关掉嘲讽也没人打得到它 ⇒ 差额必然 0，省掉第二趟
+		var soaked := free_inc - _inc_memoized(sim, u, u.cell)
+		if soaked > 0.0:
+			s += soaked * _incoming_pool_mult(u)
+	# 与 ㉕ 同一个封顶：少挨的血点不可能超过对手这一回合的普攻总输出
 	var foe_cap := 0.0
 	for i in sim.units.size():
 		var e: SimUnit = sim.units[i]
@@ -7531,6 +7667,25 @@ func _solid_front_ok(sim: Sim, hu: SimUnit) -> bool:
 		if _nearest_enemy_dist(sim, ally) < mine:
 			return false          # 有队友比它更靠前 ⇒ 它是缩在后面那个，不给钱
 	return true
+
+## 【2026-09-28 晚·用户拍板「走 3」】⑭`SOLID_HOLD_W` 的第三道门：**它到底挡住了没有**。
+## 用户原话：「有时候他能被玩家打到，但站的位置**一点都不影响玩家打其他人**，就像个孤儿站在一边」。
+## **为什么要这道门**（探针 `RL/probe/堡垒站位自检.gd` 实测）：⑭ 的钱原来只要求「站着不动 + 被够得着 +
+##   不比队友靠后」⇒ **站着没用的一格照样拿 5 分、挪走反而丢** ⇒「站着不动」有白钱。而实测引擎**认识**
+##   位置好坏：堡垒站 (2,3)/(3,4) 各替队友挡下 **8.00 / 9.00** 血点，站 (1,2)/(3,2) 挡 **0.00**。
+## 判据（**模拟口径**，与 ㉕/㉘ 同一把尺子、**不新增键、不动 `SOLID_HOLD_W` 的值**）：
+##   直接复用 `_tank_screen_val()` —— 它算的是"因为这道嘲讽门，我方（含堡垒自己那一格）少挨了多少血"。
+##   **> 0 = 它真的在替谁挡刀**（摘掉它的占位后敌人会转去打队友）⇒ 才付这 5 分；**= 0 = 谁也没挡住**（用户说的
+##   "站一边当孤儿"）⇒ 不给钱，于是"站着不动"不再是白钱，挪到能挡的位置才划得来。
+## ⚠️ 两条被否掉的写法（都实测过，记下来免重踩）：
+##   ① **临时 `sim.occ.erase()` 再还原**：`_incoming_total_on()` 的几层子函数都在读 `sim.occ` ⇒ 边改边算的
+##      读数会飘（同一格时而 0、时而 1）；
+##   ② **纯几何**（"堡垒占住的那格本来是不是一条枪线"）：判宽了 —— 队友**相邻**的那条线也算进来，
+##      于是"挡下 0 血点"的位置照样判定为"在挡"（探针实测 ⑭ 依旧处处 +5.00）。
+## ⚠️ 成本：每个队友两趟 `_inc_memoized`（与 ㉕ 同量级、走 `INC_MEMO` 记忆化），且只在"堡垒没动 +
+##   已过 `_solid_front_ok`"时才跑（一局最多几次）。
+func _tank_screens_someone(sim: Sim, tank: SimUnit) -> bool:
+	return _tank_screen_val(sim) > 0.0
 
 # ==================== 【2026-09-26】红帽（hero_40）「扑街自爆」的用法 ====================
 # 口径与动机见 `const REDCAP_HP_FLOOR_W` 处那大段说明（用户 2026-09-26 口述四条 + 一条止损）。
@@ -8294,6 +8449,10 @@ func _layout_profile(sim: Sim, enemy_idxs: Array) -> String:
 		parts.append(str(mask))
 	return "|".join(parts)
 
+## ⚠️ `occ_override`（【2026-09-28 晚】可选的**只读对照用**占位表）：不传 = 读 `sim.occ`（一切照旧，逐位不变）；
+##   传进来 = 本趟的"谁能打到我 / 谁挡着视线"按**这张表**算，而 `sim` 本身一个字节都不动。
+##   用途只有一个：`_tank_screens_someone()` 要问"**把装甲堡垒从这一格拿掉**，队友会多挨多少"——
+##   第一版是直接 `sim.occ.erase()` 再还原，那个**边改边算**的读数会飘（实测同一个位置有时算成"挡下 1 点"）。
 func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = {}, ignore_taunt: bool = false,
 		no_displace: bool = false) -> float:
 	if t == null:

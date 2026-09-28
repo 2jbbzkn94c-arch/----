@@ -72,8 +72,39 @@ func _run() -> void:
 	_s5()
 	_s6()
 	_s7()
+	_s8()
 	_log("LOCK|END")
 	get_tree().quit(0)
+
+# ---------------- 盘面⑧：暗域换位（"把玩家拉落单"的那一半） ----------------
+## 用户 2026-09-28 晚点名：「**AI 暗域没有将玩家拉落单的逻辑**」。
+## 机制：`hero_27::on_attack` → `Battle._swap_units()` ⇒ **目标落到暗域原来站的那一格**（暗域落到目标那格）
+##   ⇒ "把目标挪出它队友的圈子"靠的是**暗域先摆位到那条边上**，与挪多远无关。
+## 摆位：暗域(2,1) · 嬉皮死神(0,2) · 巨剑(3,2) · **另一名巨剑(1,4)**（照角色列表「巨剑 ×2」的实机阵容味道）。
+##   ⇒ 暗域走 1 格到 **(2,2)** 再打 (3,2)：换位后目标落 (2,2)，而 (1,4) 那只是**斜向**的
+##     （`grid.distance((2,2),(1,4)) == 1` 吗？**不是** —— 偏移格差 (1,2) ⇒ 格距 2）⇒ 目标在那个落点上**孤立**
+##     ⇒ 嬉皮那一刀（攻3）在模拟里自动 ×2。原地打则落点 (2,1)，同样要过 `_sim_isolated_at` 这一关。
+func _s8() -> void:
+	_log("LOCK|⑧ 暗域换位：暗域(2,1) 嬉皮(0,2) vs 巨剑(3,2) + 巨剑(1,4)——换位后目标落的正是暗域的格")
+	var descs := [
+		_ally_hero("hero_27", Vector2i(2, 1), 20, 3, "暗域(我方)"),
+		_ally_hero("hero_30", Vector2i(0, 2), 20, 3, "嬉皮死神(我方)"),
+		_foe("hero_12", Vector2i(3, 2), 24, 2, "巨剑A"),
+		_foe("hero_12", Vector2i(1, 4), 24, 2, "巨剑B"),
+	]
+	for dose in [
+		{ "tag": "㉗ 关（旧行为）", "open": 0.0, "iso": 0.0 },
+		{ "tag": "包围1.2 + 落单2.0（现役）", "open": 1.2, "iso": 2.0 },
+	]:
+		var w8: Dictionary = _w.duplicate()
+		w8["PULL_OPEN_W"] = float(dose["open"])
+		w8["PULL_ISOLATE_W"] = float(dose["iso"])
+		_dose = w8
+		var sim = _mk_sim(descs)
+		var tag := "⑧[%s]" % str(dose["tag"])
+		_cmp_end_states(sim, 0, 2, Vector2i(2, 2), tag)
+		_run_search(sim, tag)
+	_dose = {}
 
 # ---------------- 盘面⑦：嬉皮死神协同（"拉出来落单"那一半的靶子） ----------------
 ## 摆位：血锁(2,2) · 目标(2,4) · 嬉皮死神(2,0)。
@@ -262,12 +293,12 @@ func _cmp_end_states(sim, idx: int, tgt: int, walk_cell: Vector2i, tag: String) 
 	ai._apply(sb, idx, b_act)
 	var d_a := float(ai._evaluate(sa, true)) - base
 	var d_b := float(ai._evaluate(sb, true)) - base
-	_log("LOCK|%s|A 原地开钩 Δ=%+.3f（拉完：目标@%s 血%d / 血锁@%s 血%d / 这一手 ㉗=%.2f）" % [
+	_log("LOCK|%s|A 原地开钩 Δ=%+.3f（挪完：目标@%s 血%d / 位移者@%s 血%d / 这一手 ㉗=%.2f）" % [
 		tag, d_a, str(sa.units[tgt].cell), int(sa.units[tgt].hp), str(sa.units[idx].cell), int(sa.units[idx].hp),
-		float(sa.pull_open_val)])
-	_log("LOCK|%s|B 贴身打   Δ=%+.3f（走完：目标@%s 血%d / 血锁@%s 血%d / 这一手 ㉗=%.2f）" % [
+		float(sa.displace_open_val)])
+	_log("LOCK|%s|B 贴身打   Δ=%+.3f（走完：目标@%s 血%d / 位移者@%s 血%d / 这一手 ㉗=%.2f）" % [
 		tag, d_b, str(sb.units[tgt].cell), int(sb.units[tgt].hp), str(sb.units[idx].cell), int(sb.units[idx].hp),
-		float(sb.pull_open_val)])
+		float(sb.displace_open_val)])
 	_log("LOCK|%s|⇒ **A − B = %+.3f**" % [tag, d_a - d_b])
 	# 嬉皮死神 ×2 的判据：目标在各自末态格上挨我方嬉皮一下是几倍？
 	for pair in [["A", sa], ["B", sb]]:
@@ -298,7 +329,7 @@ func _cmp_end_states(sim, idx: int, tgt: int, walk_cell: Vector2i, tag: String) 
 	# ㉑「退路/被夹」到底为什么差？（`_formation_parts()` 的 y 分量 × FORM_ESCAPE_W=2.0）
 	_log("LOCK|%s|队形分量 A coh/esc/spread=%s ｜ B=%s（㉑ = −2.0 × esc）" % [
 		tag, str(ai._formation_parts(sa)), str(ai._formation_parts(sb))])
-	_log("LOCK|%s|㉑ 量纲读数：A 血锁 pool=%.4f（TRADE_HP_REF=%d · INCOMING_POOL_W=%.2f · hp0=%d）" % [
+	_log("LOCK|%s|㉑ 量纲读数：A 位移者 pool=%.4f（TRADE_HP_REF=%d · INCOMING_POOL_W=%.2f · hp0=%d）" % [
 		tag, float(ai._incoming_pool_mult(sa.units[idx])), int(ai.TRADE_HP_REF),
 		float(ai.w_incoming_pool), int(sa.units[idx].hp0)])
 	# ㉑ 的 esc 拆两半：邻格差额 + 正对面那个敌人的单点值（看引擎里 `foe_threat` 到底取到几）
@@ -489,13 +520,13 @@ func _board(s, idx: int, tgt: int) -> String:
 	var me = s.units[idx]
 	var t = s.units[tgt]
 	var bits: Array[String] = []
-	bits.append("血锁@%s 血%d/%d 攻%d 移%d 射%d" % [str(me.cell), int(me.hp), int(me.max_hp), int(me.eatk), int(me.emove), int(me.atk_range)])
-	bits.append("目标@%s 血%d 与血锁格距%d" % [str(t.cell), int(t.hp), _grid.distance(me.cell, t.cell)])
+	bits.append("位移者@%s 血%d/%d 攻%d 移%d 射%d" % [str(me.cell), int(me.hp), int(me.max_hp), int(me.eatk), int(me.emove), int(me.atk_range)])
+	bits.append("目标@%s 血%d 与位移者格距%d" % [str(t.cell), int(t.hp), _grid.distance(me.cell, t.cell)])
 	for i in s.units.size():
 		var u = s.units[i]
 		if u == null or i == idx or i == tgt:
 			continue
-		bits.append("%s@%s 血%d（与血锁 %d / 与目标 %d）" % [str(u.name), str(u.cell), int(u.hp),
+		bits.append("%s@%s 血%d（与位移者 %d / 与目标 %d）" % [str(u.name), str(u.cell), int(u.hp),
 			_grid.distance(me.cell, u.cell), _grid.distance(t.cell, u.cell)])
 	return " ｜ ".join(bits)
 
@@ -522,6 +553,10 @@ func _foe(hero: String, cell: Vector2i, hp: int, atk: int, nm: String) -> Dictio
 	return _u(DataRegistry.Faction.PLAYER, hero, cell, hp, hp, atk, 2, 1, MELEE, [], nm)
 
 func _ally(hero: String, cell: Vector2i, hp: int, atk: int, nm: String) -> Dictionary:
+	return _u(DataRegistry.Faction.ENEMY, hero, cell, hp, hp, atk, 2, 1, MELEE, [], nm)
+
+## 我方英雄（近战、射程 1；暗域/嬉皮都是这个面板）
+func _ally_hero(hero: String, cell: Vector2i, hp: int, atk: int, nm: String) -> Dictionary:
 	return _u(DataRegistry.Faction.ENEMY, hero, cell, hp, hp, atk, 2, 1, MELEE, [], nm)
 
 func _u(fn: int, hero: String, cell: Vector2i, hp: int, max_hp: int, atk: int,

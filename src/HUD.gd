@@ -8,7 +8,10 @@ var _round_label: Label
 ## 【2026-09-27】顶部中间那组的"上一次排版输入"（回合文字 + 倒计时文字 + 火焰是否亮 + 视口宽）——
 ##   用它挡掉重复的 `_fit_top_center()`（`_update_turn_timer()` 调得很勤）。
 var _top_fit_key := ""
-var _last_phase_state := -1   # 上次刷新时的 Battle.state（_process 检测阶段切换，补刷新顶部标签）
+var _last_phase_state := -1
+# 【2026-09-28·用户报「部署阶段选了英雄上场后，替补队伍没把那个英雄移除」】
+#   部署面板盯一个「卡池指纹」（池子人数 + 两个待放位 + 已上阵数）：变了就重刷面板。
+var _deploy_pool_key := ""   # 上次刷新时的 Battle.state（_process 检测阶段切换，补刷新顶部标签）
 var _turn_banner: Label = null       # 回合切换中央大字横幅（短暂显示后自动消失）
 var _turn_banner_tween: Tween = null
 var _flame_icon: Control = null   # 扣血提醒火焰（第11回合起常驻脉动）
@@ -75,6 +78,10 @@ var _last_op_text := ""   # 上次刷新的"敌方"侧文字（联机=姓名）
 var _end_btn: Button          # 结束回合（仅我方回合可点）
 # 【2026-09-27·用户要求】替补队伍列表**默认收起**，由按钮行右贴边的箭头拉出/收回：
 var _team_panel_open := false        # 用户是否把它拉出来了（真值 = 展开）
+## 【2026-09-28·用户要求「竞技场开局默认打开替补队伍面板，直到部署完成再关闭」】
+##   竞技场**部署期间**由系统强制展开。与用户自己的开关（`_team_panel_open`）分开记：
+##   部署一过就自动收回，且不会把"用户手动开过"这件事记成永久展开。
+var _team_panel_forced := false
 var _team_toggle_btn: Button = null  # 那个按钮（`name = "TeamToggle"`，探针按名字找得到）
 var _team_toggle_tex_open := false   # 按钮当前贴的是不是"收回"那张图（每帧刷新时用它挡掉重建）
 ## 【2026-09-28·用户报「点击替补队伍按钮的时候，会弹出一个属性框」】从右往左滑出的那 0.16s 里，
@@ -433,9 +440,14 @@ func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -
 	label.add_theme_color_override("font_color", (color as Color) if color != null else Color(1.0, 0.9, 0.45))
 	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	label.add_theme_constant_override("outline_size", 8)
+	# 【2026-09-28·用户报「竞技场弹出的先手提示被 2 选 1 面板挡住了，往上移」】
+	#   原来是"整屏铺满 + 文字竖直居中" ⇒ 文字正好落在**屏幕正中**，压在竞技场 2 选 1 面板上。
+	#   现在改成**顶部通栏、距顶 22%**：所有横幅一起上移（观感统一），不会再被中央面板盖住。
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	label.offset_top = vs.y * 0.22
+	label.offset_bottom = vs.y * 0.22 + 96.0
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不拦截点击
 	add_child(label)
 	_turn_banner = label
@@ -444,7 +456,7 @@ func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -
 	_turn_banner_tween = t
 	label.modulate.a = 0.0
 	label.scale = Vector2(1.4, 1.4)
-	label.pivot_offset = vs / 2.0
+	label.pivot_offset = Vector2(vs.x / 2.0, 48.0)   # 缩放中心跟着新高度走
 	# 放大+淡入 → 停留 → 淡出并移除
 	t.tween_property(label, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	t.parallel().tween_property(label, "modulate:a", 1.0, 0.16)
@@ -537,7 +549,10 @@ func _show_deploy_panel() -> void:
 	if battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY:
 		_close_deploy_panel()
 		return
-	_close_team_panel()   # 部署期只用"开局选人"面板，与常驻"替补队伍"面板互斥，避免重叠
+	# 【2026-09-28·用户要求】竞技场部署期例外：那一段要**默认开着**替补队伍面板
+	#   （见 `_team_panel_forced`），所以这里不能无条件收掉它。
+	if not _team_panel_forced:
+		_close_team_panel()   # 部署期只用"开局选人"面板，与常驻"替补队伍"面板互斥，避免重叠
 	if _deploy_overlay:
 		_deploy_overlay.queue_free()
 	_deploy_overlay = null
@@ -824,6 +839,9 @@ func _show_arena_pair(pair: Array) -> void:
 	host.size = Vector2(total_w, card_h)
 	wrapbox.add_child(host)
 	var click_cb := func(hid: String):
+		# 【2026-09-28·用户报「竞技场 2 选 1 的音效和点击有间隔」】选人音必须**在最外层点击的那一刻**响：
+		#   下面那段 0.45 秒的"飞卡"动画演完才回调 `_on_arena_pick()` ⇒ 挂在那边会晚半秒。
+		AudioManager.play("select_actor")
 		# 点击即停表：选中动画期间不再倒计时，防止演出中触发自动选导致双选
 		if battle != null and is_instance_valid(battle):
 			battle.arena_pick_time_left = -1.0
@@ -1351,16 +1369,49 @@ func _apply_team_toggle_icon(open_now: bool) -> void:
 		sb.modulate_color = states[st]
 		_team_toggle_btn.add_theme_stylebox_override(String(st), sb)
 
+## 【2026-09-28·用户要求「竞技场开局默认打开替补队伍面板，直到部署完成再关闭」】
+##   竞技场**选人（2 选 1）+ 部署期**要强制展开替补队伍面板（其它模式、其它阶段一律照旧"点箭头才拉出"）。
+##   ⚠️ 【2026-09-28 晚·用户报「竞技场 2 选 1 的时候，替补队伍还是没有默认打开」】第一版只认
+##     `DEPLOY` / `PLACE_DEPLOY` 两个状态 ⇒ **2 选 1 那一段（`ARENA_DRAFT`）压根不展开** ——
+##     而"竞技场开局"用户说的正是那一段（选人时就要看得到自己已选/已进替补席的牌）。
+##     同一族还有第二处早退（`_refresh_team_panel()` 里那条 `DEPLOY/PLACE_DEPLOY` 提前 return）必须一起放行，
+##     否则竞技场轮次里**部署那一段**照样会被早退吃掉（`_team_panel_forced` 拦不住它）。
+func _should_force_team_panel() -> bool:
+	if not GameState.arena_mode:
+		return false
+	if battle == null or not is_instance_valid(battle) or _in_replay():
+		return false
+	# 【2026-09-28·用户报「竞技场模式，部署阶段会有两个队伍列表」】**部署期不再强开**：
+	#   部署阶段本来就有一列"开局选人"的池子，再叠一列队伍面板 = 两个列表；非竞技场的部署期
+	#   也只留选人池（见下面 `_refresh_team_panel()` 那条早退）⇒ 这里只认 2 选 1 那一段。
+	return battle.state == Battle.State.ARENA_DRAFT
+
+## 每帧（`_refresh_controls()` 里）对齐"竞技场强制展开"：
+##   进入竞技场部署 ⇒ 展开（首次照常从屏幕右缘滑入）；部署一完成 ⇒ 收回。
+##   只在状态**变化**时动一次，避免每帧重建面板。
+func _sync_arena_team_panel() -> void:
+	var want := _should_force_team_panel()
+	if want == _team_panel_forced:
+		return
+	_team_panel_forced = want
+	if want:
+		_team_panel_slide_next = true   # 首次展开走滑入动画
+	_refresh_team_panel()               # 显隐统一由 `_refresh_team_panel()` 派生
+
 ## 开关按钮的图标/显隐刷新（部署期、回放里没有"常驻替补列表" ⇒ 藏起来）。
 func _refresh_team_toggle() -> void:
 	if _team_toggle_btn == null or not is_instance_valid(_team_toggle_btn):
 		return
 	var open_now: bool = _team_panel_open or _sub_picking()
 	_apply_team_toggle_icon(open_now)
-	var show := false
+	# ⚠️ 这个局部变量别叫 `show`：会遮住基类（CanvasLayer）的 `show()`，Godot 报 SHADOWED_VARIABLE_BASE_CLASS
+	var show_toggle := false
 	if battle != null and is_instance_valid(battle) and not _in_replay():
-		show = battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY
-	_team_toggle_btn.visible = show
+		# 【2026-09-28 晚·本次改动】竞技场**选人（2 选 1）**也算"由系统强制展开"的阶段 ⇒ 同部署期一样藏箭头
+		#   （面板已经开着，再摆一个"拉出"箭头会让玩家以为能收起它）。普通模式不受影响。
+		show_toggle = battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY \
+			and not _should_force_team_panel()
+	_team_toggle_btn.visible = show_toggle
 	# 【2026-09-28·用户要求】「需要替补的时候……**替补按钮常暗**」：这一阶段置灰（disabled）
 	#   ⇒ 走 disabled 那张压暗样式，且 Godot 的 disabled Button 不再发 pressed。
 	_team_toggle_btn.disabled = _sub_picking()
@@ -1376,8 +1427,13 @@ func _refresh_team_panel() -> void:
 		_close_team_panel()   # 回放里不摆常驻队伍卡（见 `_in_replay()` 的说明）
 		_refresh_team_toggle()
 		return
-	# 部署期：只显示"开局选人"面板，不显示下方常驻面板（避免重叠）
-	if battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY:
+	# 部署期：只显示"开局选人"面板，不显示下方常驻面板（避免重叠）。
+	# 【2026-09-28·用户要求「竞技场开局默认打开替补队伍面板，直到部署完成再关闭」】
+	#   竞技场（选人 + 部署）是**例外**：`_team_panel_forced` 为真时照样摆出替补队伍面板。
+	#   ⚠️ 这条早退**必须带 `_team_panel_forced` 这个例外**，否则 `_sync_arena_team_panel()` 刚置好标志、
+	#      走到这里又被无脑收掉（竞技场部署那一段就会"强制展开"失效）。
+	if (battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY) \
+			and not _team_panel_forced:
 		_close_team_panel()
 		_refresh_team_toggle()
 		return
@@ -1386,7 +1442,7 @@ func _refresh_team_panel() -> void:
 	#   （它原来一直占着屏底 ~200px，也是棋盘长不大的原因之一）。
 	# 【2026-09-28·用户要求】「**不需要替补的时候默认收回**」⇒ 可见性 = 用户的开关 or 正在选替补
 	#   （前者默认 false ⇒ 平时收着；后者保证选替补期间恒在、阶段一过自动消失）。
-	if not _team_panel_open and not picking:
+	if not _team_panel_open and not picking and not _team_panel_forced:
 		_close_team_panel()
 		_refresh_team_toggle()
 		return
@@ -1655,6 +1711,10 @@ func _build() -> void:
 	# 【2026-09-27·用户要求】结束回合**不要骰子**悬停效果（按钮本体就是那张图）。
 	#   `detach()` 会打 `no_dice` 标记 ⇒ 之后重新入树/重建也不会再挂上来；重复调用无副作用。
 	UiDice.detach(end_btn)
+	# 【2026-09-28·用户要求】结束回合按钮放**专用**点击音（原版 `Click_EndTurn`）：
+	#   先打 `no_default_click` 标记（必须早于 add_child ⇒ 全局那一声不会被挂上），再自己接一声。
+	end_btn.set_meta(AudioManager.NO_DEFAULT_CLICK_KEY, true)
+	end_btn.pressed.connect(func() -> void: AudioManager.play("end_turn"))
 	btn_row.add_child(end_btn)
 	_end_btn = end_btn
 
@@ -2229,6 +2289,15 @@ func _process(_dt: float) -> void:
 	# 阶段是本地状态机、无专门信号：仅在真正变化时刷新一次，避免每帧重写。
 	if battle != null and is_instance_valid(battle):
 		var st: int = battle.state
+		# 【2026-09-28·用户报「选英雄上场后替补队伍没移除那个英雄」】部署期盯卡池指纹：
+		#   上阵时 Battle 已经把英雄从池子里扣掉了（player_pool.erase），但面板未必被重建 ⇒ 这里兜一下。
+		if st == Battle.State.DEPLOY or st == Battle.State.PLACE_DEPLOY:
+			var dk := "%d|%s|%s|%d" % [battle._my_deploy_pool().size(), str(battle._pending_deploy), str(battle._pending_enemy_deploy), battle._my_deployed_count()]
+			if dk != _deploy_pool_key:
+				_deploy_pool_key = dk
+				_show_deploy_panel()
+		else:
+			_deploy_pool_key = ""
 		if st != _last_phase_state:
 			var prev_st: int = _last_phase_state
 			_last_phase_state = st
@@ -2257,7 +2326,10 @@ func _update_deploy_pick_timer() -> void:
 		return
 	if battle == null or not is_instance_valid(battle):
 		return
-	if battle.deploy_budget_active:
+	# 【2026-09-28·用户报「对端认输后，屏幕中央的大字倒计时还在跳」】再加一道：
+	#   对局已结束（认输/判负）就不显示 —— 正常由 `Battle._apply_surrender()` 清掉
+	#   `deploy_budget_active`，这里只是双保险，避免任何"停住的读秒"挂在屏幕中央。
+	if battle.deploy_budget_active and GameState.match_running and not GameState.match_over:
 		var secs := int(ceil(battle.deploy_budget_left))
 		_deploy_timer_label.visible = true
 		_deploy_timer_label.text = str(max(secs, 0))
@@ -2406,6 +2478,9 @@ func _refresh_controls() -> void:
 	#   （部署期藏、对局/选替补时显示）⇒ 跟状态机不会脱节（`_show_deploy_panel()` 那条早退路径
 	#   压根不会走到 `_close_team_panel()`，光靠那边刷会漏掉"部署结束"这一下）。
 	_refresh_team_toggle()
+	# 【2026-09-28·用户要求「竞技场开局默认打开替补队伍面板，直到部署完成再关闭」】
+	#   同理挂在这条每帧刷新的路上：进竞技场部署 ⇒ 展开；部署一完成 ⇒ 自动收回（只在状态变化时动一次）。
+	_sync_arena_team_panel()
 
 # 【2026-09-28·用户要求】联机认输：先喊**完整的一句**给对端（本端也回显气泡），再走认输结算。
 func _on_surrender_pressed() -> void:
