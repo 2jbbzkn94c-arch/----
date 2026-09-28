@@ -107,6 +107,12 @@ func on_withdrawn() -> void:
 
 func _retract_aura() -> void:
 	for k in _aura_given.keys():
+		# 【2026-09-28 修·用户贴的 `instance_from_id()` 报错（本行原来是直接 `instance_from_id(k)`）】
+		#   与 `_remember_aura()` 里那道门**同一件事**：录像快照要过 JSON ⇒ 字典的**整数键回来会变成字符串**
+		#   （"12345"），而 `instance_from_id()` 只收 int ⇒ 回放里风语者一阵亡，本函数就每帧刷红字。
+		#   那些键本来就是"录制那一局"的实例 id，在回放这局必然无效 ⇒ 非整数一律跳过（末尾统一清账）。
+		if not (k is int):
+			continue
 		var v := instance_from_id(k) as Unit
 		if v != null and is_instance_valid(v) and v.alive and v.move_buff > 0:
 			v.move_buff -= 1

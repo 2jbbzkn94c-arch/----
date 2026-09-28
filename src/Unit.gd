@@ -316,6 +316,22 @@ func set_big_hit_style() -> void:
 func is_shield_hit_blocked() -> bool:
 	return _shield_block_status
 
+# 【2026-09-28·用户要求·击杀预告】"这一击过门之后会扣多少血 / 会不会致死"的**纯计算**（不改任何状态）：
+#   · `damage_amount()`：重伤 +1、坚固（仅攻击伤害）−1，最低 0 —— `take_damage()` 与预告共用同一把尺；
+#   · `would_be_lethal()`：圣盾在身 ⇒ 这一击被完全挡下、不掉血 ⇒ 不是击杀。
+#   ⚠️ **塔盾代扛**（`_bulwark_absorb`，相邻塔盾替挡 1 点）不在里面：那个钩子会**消耗塔盾的盾**（有副作用），
+#      不能预演 ⇒ 预告按"没有塔盾"估。唯一的偏差方向是"预告了却没打死（被塔盾救下）"，是安全的。
+func damage_amount(amount: int, is_attack: bool = false) -> int:
+	var dmg := amount + (1 if has_status(StatusDB.HEAVY) else 0)
+	if has_status(StatusDB.SOLID) and is_attack:
+		dmg = max(dmg - 1, 0)
+	return max(dmg, 0)
+
+func would_be_lethal(amount: int, is_attack: bool = false) -> bool:
+	if not alive or has_status(StatusDB.SHIELD):
+		return false
+	return hp - damage_amount(amount, is_attack) <= 0
+
 func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false, cause: String = "", is_attack: bool = false) -> void:
 	if not alive:
 		return
@@ -328,9 +344,9 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 		return
 	# 重伤：受到的伤害 +1；坚固：受到的伤害 -1（只减攻击伤害，猛毒/烧血/炸弹等非攻击伤害不减）
 	# 两者可共存，先加后减，最低为0——可完全免疫1点攻击
-	var dmg := amount + (1 if has_status(StatusDB.HEAVY) else 0)
-	if has_status(StatusDB.SOLID) and is_attack:
-		dmg = max(dmg - 1, 0)
+	# 【2026-09-28】这一段抽成 `damage_amount()`：与"击杀预告"（`would_be_lethal()`）**共用同一把尺**，
+	#   免得预告与实际结算各写一份、以后改一处漏一处。
+	var dmg := damage_amount(amount, is_attack)
 	# 塔盾：伤害结算前，相邻塔盾代替承受1点（队友实际伤害减1）
 	var battle_node := get_parent()
 	if battle_node != null and battle_node.has_method("_bulwark_absorb"):

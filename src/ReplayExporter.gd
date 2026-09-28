@@ -1,5 +1,5 @@
 extends RefCounted
-## 【2026-09-28 用户要求】把一条录像**导出成能分享的视频**（回放控制条的「导出」按钮）。
+## 【2026-09-28 用户要求】把回放**录成能分享的视频**（回放控制条的「开始录制 / 停止录制」按钮）。
 ##
 ## 为什么这么做（不依赖任何外部程序）：Godot 运行期**没有**暴露视频编码器 —— 引擎自带的 Movie Writer
 ##   只能在启动时用 `--write-movie` 打开、运行中切不过去；GDScript 也没有"写子进程 stdin"的接口。
@@ -7,34 +7,46 @@ extends RefCounted
 ##   （Windows 播放器 / 微信 / QQ / 剪辑软件都能直接播）。本机若装了 ffmpeg（PATH 或项目内
 ##   `tools/ffmpeg.exe`），顺便转成体积更小的 `mp4`（H.264 / yuv420p / +faststart）。
 ##
-## 口径：
-##   · 导出 = 把回放**从头重播一遍**（控制条照常留在画面上——用户 2026-09-28 要求「录像的时候状态栏也要出来」），
-##     跑到末段结束为止；
-##   · 帧率固定 `FPS`，导出期间把**引擎帧率上限也钉到 `FPS`**（钉不住的话机器渲染多快、每帧就要多推进
-##     多少游戏时间，补偿上限一到视频就整体变快，见 `run()` 里那段说明），再逐帧把 `Engine.time_scale`
-##     调成"这一帧真实耗时 → 目标帧长"的比例 ⇒ 动画/停顿都按固定步长推进，视频时长 ≈ 回放时长；
+## 口径（**2026-09-28 用户要求改成"录制开关"**）：
+##   · 「开始录制」= 从**按下那一刻**起抓帧（不回到开头、不等开场动画演完、**不动倍速**），
+##     「停止录制」（或 ESC）= 收尾存盘；控制条照常留在画面上，也照常录进视频
+##     （用户要求「录像的时候状态栏也要出来」）；
+##   · 帧率固定 `FPS`（**用户报「录像帧率感觉不高」后由 30 提到 60**），录制期间把**引擎帧率上限
+##     也钉到 `FPS`**，再逐帧把 `Engine.time_scale` 调成"观众当时的速度 × 这一帧该推进的游戏时间"
+##     （见 `_drive_time_scale()`）⇒ 视频重放出来的速度 == 屏幕上看到的速度，且与帧率无关；
 ##   · 边抓边写（不落盘帧序列，内存里只有当前一帧）；进度写在**窗口标题**上（不进画面）；
-##   · 结束后把成品所在目录打开（`OS.shell_open`）。
+##   · 停止后**弹"保存位置"**（`ReplayPanel.show_saved_popup()`）而不是自动打开文件夹；位置**有记忆**
+##     （`rec_dir()` / `set_rec_dir()`，落 `user://replay_video.cfg`）。
 ##
 ## 依赖方向：ReplayExporter → Battle（动态调用其回放方法，battle 故意未定型）。
 
-const FPS := 30.0              # 目标帧率（视频帧率）
+const FPS := 60.0              # 目标帧率（视频帧率）【2026-09-28 用户报「录像帧率感觉不高」】30 → 60：
+							   #   30fps 是当初为了修「太快」钉下的，但那样画面本身就是 30fps 的顿感。
+							   #   时长仍由逐帧 `time_scale` 补偿保证（见 `_drive_time_scale()`），与帧率无关。
 const JPG_QUALITY := 0.9       # JPEG 质量（【2026-09-28 用户报「导出的 MP4 好糊啊」】0.8 → 0.9：
 							   #   中间那层 MJPEG 的压缩痕在卡面文字上很明显。体积靠最后那步 x264 压，这层别抠）
 const MAX_LONG_SIDE := 1600    # 抓帧后长边**只在这个尺寸之上才缩**（原来写 720，把 720×1280 的窗口缩成
 							   #   405×720 ⇒ 用户报「好糊」）。1600 = 用户窗口（720×1280）**原样抓**、
 							   #   窗口再放大也只是轻缩；中间 avi 会更大（q0.9 约 300~500KB/帧），
 							   #   但它在转出 mp4 之后就被删掉 ⇒ 最终交付的 mp4 大小不受影响。
-const MAX_FRAMES := 36000      # 硬上限（30fps × 20 分钟）：异常情况下别把磁盘写满
+const MAX_FRAMES := 36000      # 硬上限（60fps × 10 分钟）：异常情况下别把磁盘写满
+# 【2026-09-28】AVI 的 `RIFF size` 是**32 位**（见 `_avi_patch_header()`）⇒ 文件一旦逼近 4GB，
+#   声明长度就会溢出、整份文件作废。60fps + 原生分辨率下每帧约 200KB ⇒ 约 5 分钟就到坎上。
+#   到这里就**主动收尾**（把已抓的部分正常转成 mp4），不硬写出一份坏文件。
+const MAX_BYTES := 3800000000
+const MUX_TIMEOUT_MS := 1800000   # 转 mp4 的兜底上限（30 分钟）：异常时别把玩家永远按在"保存中"
+const NOTICE_HOLD := 3600.0        # 收尾大字横幅的停留秒数：**长到"下一条提示把它替换掉"为止**
+								   #   （"录像保存中…"要一直挂到"录像已保存"出现；`_show_turn_banner` 会
+								   #    kill 旧 tween + 释放旧标签 ⇒ 后一条提示一定覆盖前一条）
 const PATCH_EVERY := 30        # 每这么多帧回填一次头部（≈1 秒）：中途被杀也不会留下"头部全 0"的坏文件
-const OUT_DIR := "user://replay_video"
 
 var battle = null
-var _rel_dir := ""
-var _dir := ""
+var _dir := ""                 # 本次保存目录（= `rec_dir()`，绝对路径）
 var _frames := 0
 var _stopped := false
-var _prev_max_fps := 0         # 导出前的帧率上限（收尾要还原：见 `run()` 里"钉 30fps"的说明）
+var _prev_max_fps := 0         # 录制前的帧率上限（收尾要还原：见 `run()` 里"钉帧率"的说明）
+var _t_start := 0              # 抓帧开始时刻（标题里显示"实际 fps"用）
+var _mux_aborted := false      # 转 mp4 被 ESC 中止（保留 avi）
 var _w := 0
 var _h := 0
 # AVI 写入状态
@@ -59,104 +71,183 @@ var _pos_file_end := 0         # 回填时"整份文件写到哪了"（收尾时
 func _init(battle_) -> void:
 	battle = battle_
 
-## 跑完一次导出。返回成品绝对路径（avi 或 mp4）；失败返回空串。
+# ---- 保存位置（**有记忆**）----
+# 【2026-09-28 用户要求】「停止录制后弹出保存录像位置，录像位置需要有记忆」：
+#   记在 `user://replay_video.cfg` 的 `[video] dir` 里（绝对路径）。没记过就用系统"视频"目录下的
+#   `酒馆纷争录像`（取不到系统目录再退回 `user://replay_video`）—— 放在"视频"里是为了让用户找得到，
+#   那个位置也会在停止录制后的弹框里显示出来，并且可以点「改保存位置…」改掉。
+const CFG_PATH := "user://replay_video.cfg"
+
+static func default_rec_dir() -> String:
+	var vids := OS.get_system_dir(OS.SYSTEM_DIR_MOVIES)   # Godot 的枚举名是 MOVIES（"视频"目录）
+	if vids.strip_edges() != "":
+		return vids.path_join("酒馆纷争录像")
+	return ProjectSettings.globalize_path("user://replay_video")
+
+static func rec_dir() -> String:
+	var cf := ConfigFile.new()
+	if cf.load(CFG_PATH) == OK:
+		var d := String(cf.get_value("video", "dir", "")).strip_edges()
+		if d != "":
+			return d
+	return default_rec_dir()
+
+static func set_rec_dir(d: String) -> void:
+	var cf := ConfigFile.new()
+	cf.load(CFG_PATH)   # 有旧内容就照读（只改这一项）；文件不存在也无所谓，save() 会新建
+	cf.set_value("video", "dir", d.strip_edges())
+	cf.save(CFG_PATH)
+
+## 同名文件已存在就退到 `_2` / `_3` …（同一条录像可以录很多次，别互相覆盖）。
+func _unique_path(dir: String, base: String, ext: String) -> String:
+	var p := "%s/%s%s" % [dir, base, ext]
+	if not FileAccess.file_exists(p):
+		return p
+	for i in range(2, 100):
+		var q := "%s/%s_%d%s" % [dir, base, i, ext]
+		if not FileAccess.file_exists(q):
+			return q
+	return "%s/%s_%d%s" % [dir, base, Time.get_ticks_msec(), ext]
+
+## 让"这一帧"在**游戏时间**轴上正好推进 `倍速 / FPS` 秒：抓帧是"每个渲染帧抓一张"、AVI 又按 `FPS` 播，
+## 只有这样重放出来的速度才等于**观众当时屏幕上的那个速度**（1× ⇒ 实时；录的时候按 2× ⇒ 视频里也是 2×）。
+## ⚠️ 必须配合"把引擎帧率上限钉在 `FPS`"（`run()` 里做）：否则机器渲染多快、每帧就要多推进多少游戏时间
+## （144fps ⇒ 4.8 倍），补偿上限一到视频就整体变快 —— 用户 2026-09-28 报的「默认倍速，太快了」就是这个。
+func _drive_time_scale(last_real: float) -> float:
+	if not is_instance_valid(battle):
+		return last_real
+	var scaled: float = battle.get_process_delta_time()   # 已经乘过 time_scale
+	var ts: float = maxf(Engine.time_scale, 0.001)
+	var real_dt: float = scaled / ts                      # 反推这一帧的真实耗时
+	if real_dt <= 0.0:
+		return last_real
+	var lr: float = real_dt if last_real <= 0.0 else lerpf(last_real, real_dt, 0.25)
+	var want: float = maxf(float(battle._replay_speed), 0.1) / FPS
+	Engine.time_scale = clampf(want / lr, 0.1, 8.0)
+	return lr
+
+## 一次**录制**：从**按下「开始录制」那一刻**起抓帧（不回到开头、不等开场动画、不动倍速），
+## 一直录到观众按「停止录制」（或 ESC）为止，然后收尾成 avi（有 ffmpeg 再转 mp4）。
+## 返回成品绝对路径（一帧都没抓到/写不出文件则返回空串）。保存位置见 `rec_dir()`（**有记忆**）。
 func run(replay_id: String) -> String:
 	if not is_instance_valid(battle):
 		return ""
-	# 【2026-09-28 用户报「部署阶段点击导出，部署阶段上人还是会乱」】先给一声反馈 + 窗口标题提示，
-	#   **然后等回放开场流程跑完**（`replay_is_ready()`）再动手：开场那段自带"部署逐手动画"，
-	#   它还没结束时导出这边会 seek 回第 0 段 ⇒ 两趟上人抢盘面（就是用户看到的"乱"）。
-	_title("导出准备中…（按 ESC 可取消）")
-	AudioManager.play("select")
-	var tw := Time.get_ticks_msec()
-	while is_instance_valid(battle) and not bool(battle.replay_is_ready()) and not _stopped \
-			and Time.get_ticks_msec() - tw < 60000:
-		await battle.get_tree().process_frame
-	if not is_instance_valid(battle):
+	# 保存位置：**上次用的那一处**（用户 2026-09-28 要求「录像位置需要有记忆」）
+	_dir = rec_dir()
+	if not DirAccess.dir_exists_absolute(_dir):
+		DirAccess.make_dir_recursive_absolute(_dir)
+	if not DirAccess.dir_exists_absolute(_dir):
 		_title("")
+		log_msg("录制失败：目录建不出来（%s）" % _dir)
+		AudioManager.play("lose")
 		return ""
-	if _stopped:
-		_title("")
-		log_msg("已取消导出。")
-		return ""
-	var stamp := Time.get_datetime_string_from_system().replace(":", "").replace("-", "").replace("T", "_")
-	_rel_dir = "%s/%s" % [OUT_DIR, stamp]
-	_dir = ProjectSettings.globalize_path(_rel_dir)
-	if not DirAccess.dir_exists_absolute(_rel_dir):
-		DirAccess.make_dir_recursive_absolute(_rel_dir)
-	var avi_abs := "%s/replay_%s.avi" % [_dir, replay_id]
+	var avi_abs := _unique_path(_dir, "replay_%s" % replay_id, ".avi")
 	if not _avi_open(avi_abs):
 		_title("")
-		log_msg("导出失败：写不出文件（%s）" % avi_abs)
+		log_msg("录制失败：写不出文件（%s）" % avi_abs)
+		AudioManager.play("lose")
 		return ""
-	# 【2026-09-28 用户要求】导出期间控制条**不藏了**（用户原话「录像的时候状态栏也要出来」）。
-	#   原来这里把它 `visible = false`（怕录进画面）⇒ 导出的视频里没有任何操作条。
-	# 倍速先归 1×（下面逐帧自己调 time_scale）。
-	battle.replay_set_paused(true)
-	battle.replay_set_speed(1.0)
-	# 【2026-09-28 用户报「怎么默认倍速，太快了」·真因】画面帧率**必须钉在 30**：
-	#   抓帧是"每个渲染帧抓一张"、AVI 又按 30fps 播；每帧推进多少游戏时间靠下面的 `time_scale` 补偿。
-	#   机器渲染得比 30fps 快多少，需要的 `time_scale` 就是那个倍数（60fps ⇒ 2.0、144fps ⇒ 4.8），
-	#   而补偿有个 `clampf(..., 0.1, 4.0)` 上限 ⇒ 高刷屏（或关垂直同步）**顶到上限**后每帧多推进一截
-	#   ⇒ 视频与屏幕上的导出过程一起"快了 4 倍"（用户看到的就是这个）。把上限帧率钉到 30 之后，
-	#   稳态所需 `time_scale ≈ 1.0`，既不再顶上限，屏幕上看到的也正好是真实速度。
+	AudioManager.play("select")   # 开录：给一声
+	# 【2026-09-28 用户报「怎么默认倍速，太快了」·真因】画面帧率**必须钉在 `FPS`**：
+	#   抓帧是"每个渲染帧抓一张"、AVI 又按 `FPS` 播；每帧推进多少游戏时间靠 `_drive_time_scale()` 补偿。
+	#   机器渲染得比 `FPS` 快多少，需要的 `time_scale` 就是那个倍数（`FPS`=60 时：120fps ⇒ 2.0），
+	#   而补偿有个上限 ⇒ 高刷屏（或关垂直同步）**顶到上限**后每帧多推进一截 ⇒ 视频整体变快
+	#   （用户看到的就是"默认倍速，太快了"）。钉到 `FPS` 之后稳态 `time_scale ≈ 倍速`，正好是屏幕上那个速度。
 	_prev_max_fps = Engine.max_fps
 	Engine.max_fps = int(FPS)
-	_title("导出中…（按 ESC 可中止）")
-	# 回到第 0 段（整局从头演）并等跳段落地
-	var seq: int = int(battle._replay_seek_seq)
-	battle.replay_seek_frame(0)
-	var t_wait := Time.get_ticks_msec()
-	while int(battle._replay_seek_seq) == seq and Time.get_ticks_msec() - t_wait < 30000:
-		await battle.get_tree().process_frame
-		if not is_instance_valid(battle):
-			break
-	if is_instance_valid(battle):
-		battle.replay_set_paused(false)
-	# 逐帧抓图（直到回放循环收工）
+	_title("录制中…（点「停止录制」或按 ESC 结束）")
+	# 一直抓到"你说停"为止：**不看回放循环有没有结束**（录的就是"从现在起的这一段"，
+	#   回放演完了就继续录终局画面 —— 用户自己决定什么时候停）。
 	var last_real := 0.0
+	_t_start = Time.get_ticks_msec()
 	while is_instance_valid(battle) and battle.is_inside_tree() and not _stopped:
 		await battle.get_tree().process_frame
 		if not is_instance_valid(battle) or not battle.is_inside_tree():
 			break
-		var live: bool = bool(battle._replay_loop_running) or bool(battle._replay_seeking)
 		_grab()
 		if _frames >= MAX_FRAMES:
+			log_msg("录制收尾：已达帧数上限（%d 帧）。" % MAX_FRAMES)
 			break
-		if not live:
-			break   # 回放已跑完（末段演完 → 结果横幅那一拍也照录）
-		# 帧时长补偿：让"这一帧"在引擎时间轴上正好等于 1/FPS 秒（掉帧也不会让视频变快）
-		var scaled: float = battle.get_process_delta_time()     # 已经乘过 time_scale
-		var ts: float = maxf(Engine.time_scale, 0.001)
-		var real_dt: float = scaled / ts                        # 反推这一帧的真实耗时
-		if real_dt > 0.0:
-			last_real = real_dt if last_real <= 0.0 else lerpf(last_real, real_dt, 0.25)
-			# 上限从 4.0 放到 8.0：钉了 30fps 之后稳态就在 1.0 附近，这个上限只兜"偶发卡顿"
-			# （掉一帧 ⇒ 每帧多推进一点补回来，视频总长仍 ≈ 回放时长）。
-			Engine.time_scale = clampf((1.0 / FPS) / last_real, 0.1, 8.0)
+		if _pos_movi_next >= MAX_BYTES:
+			log_msg("录制收尾：文件接近 AVI 的 4GB 上限，先存到这里的 %.0f 秒。" % (float(_frames) / FPS))
+			break
+		last_real = _drive_time_scale(last_real)
+	# 【2026-09-28 用户要求】停止录制后要给个明示："录像保存中"。
+	#   停抓之后还有两段**可能很久**的活：`_avi_finish()` 写 idx1 索引、`_mux()` 用 x264 转 mp4
+	#   （文件越大越久，几十秒到几分钟）⇒ 原来这段时间屏幕上什么都不显示，看着像按了没反应。
+	#   ⚠️ 标题不进画面，此刻也已经**停止抓帧** ⇒ 不会录进视频。
+	_title("录像保存中…（已停止录制，正在写文件，请稍候）")
+	# 【2026-09-28 用户要求】光有窗口标题不够醒目 ⇒ 同时在画面中央打一条大字横幅。
+	#   ⚠️ 用 HUD 现成的横幅通道（与"蓝方/红方回合""蓝方获胜"同一条，见 `HUD._show_turn_banner`）：
+	#   此刻**抓帧已经停了** ⇒ 这行字不会出现在录下来的视频里。
+	#   （顺带说明：`log_msg()` 走的是 `Battle.log_message` 信号，而全项目**没有任何界面在听**它，
+	#    所以那种"提示"是看不见的 —— 只有探针会连。）
+	#   【2026-09-28 用户要求】没找到 ffmpeg：**一点保存就提示**「保存录像功能需要下载 ffmpeg 软件」
+	#   （他给的原话）—— 这种情况没有耗时的转码，直接把话说在前面。
+	var ff := _find_ffmpeg()
+	if ff == "":
+		_ui_notice("保存录像功能需要下载 ffmpeg 软件")
+		log_msg("保存录像功能需要下载 ffmpeg 软件。")
+	else:
+		_ui_notice("录像保存中…")
 	_avi_finish()
-	# 收尾：时间尺度、帧率上限、控制条、标题全部还原（中止/正常结束都走这里）
-	Engine.time_scale = 1.0
+	# 收尾：帧率上限还原（倍速**不还原**：那是观众自己的设置，录制只是"记录当时的速度"）
 	Engine.max_fps = _prev_max_fps
-	if is_instance_valid(battle):
-		battle.replay_set_speed(1.0)
-	_title("")
-	AudioManager.play("click")   # 【2026-09-28】录完了（或中止了）：再给一声，表示导出收工
+	AudioManager.play("click")   # 【2026-09-28】录完了：再给一声
+	# ⚠️ 标题**不在这里清**：下面转 mp4 还挂着"录像保存中…"（清早了用户就看不到保存进度了），
+	#   统一在最后（成品出来之后）清空 —— 见函数末尾。
 	# 一帧都没抓到（headless / 无渲染）：删掉空文件、如实报告
 	if _frames <= 0:
 		DirAccess.remove_absolute(avi_abs)
-		log_msg("导出失败：这一遍没抓到画面（无渲染环境？）")
+		_title("")
+		_ui_notice("这次没录到画面")
+		log_msg("录制失败：这一遍没抓到画面（无渲染环境？）")
 		return ""
 	var out_path := avi_abs
-	var ff := _find_ffmpeg()
+	# ⚠️ 【2026-09-28】进入"转码"这一段时把中止标志**清掉**：`_stopped` 的语义是"中止**当前**这一段" ——
+	#   用户刚才按 ESC / 点「停止录制」停的是**录制**，那之后要照常把已录的部分**保存**成 mp4
+	#   （这正是他说的"保存中"）；若不清，`_mux()` 轮询的第一帧就会把 ffmpeg 杀掉、只剩 avi。
+	#   转码期间再按一次 ESC 才算中止保存。
+	_stopped = false
 	if ff != "" and _frames > 0:
-		_title("正在转 mp4…")
-		var mp4_abs := "%s/replay_%s.mp4" % [_dir, replay_id]
-		if _mux(ff, avi_abs, mp4_abs):
+		_title("录像保存中…（正在转 mp4，%.0f 秒素材）" % (float(_frames) / FPS))
+		var mp4_abs := _unique_path(_dir, "replay_%s" % replay_id, ".mp4")
+		if await _mux(ff, avi_abs, mp4_abs):
 			DirAccess.remove_absolute(avi_abs)   # 转成功就只留 mp4（更小、更好分享）
 			out_path = mp4_abs
-	OS.shell_open(_dir)   # 打开成品所在目录，方便直接拖去分享
+	_title("")            # 成品出来了：清掉"录像保存中…"
+	# 收工提示（此刻抓帧早已结束 ⇒ 不会录进视频）：让"保存中…"有一个明确的结束。
+	# ⚠️ 这里**不再自动打开文件夹**：保存位置由 `ReplayPanel.show_saved_popup()` 弹框给出，
+	#   用户想打开就点弹框里的「打开文件夹」（用户 2026-09-28 要求"弹出保存录像位置"）。
+	#   【2026-09-28 用户要求】没找到 ffmpeg 时给一句明确提示（他给的原话）—— 那种情况下只有 `.avi`，
+	#   放不出 mp4 是"缺工具"而不是坏了。
+	if _mux_aborted:
+		_ui_notice("已中止保存（avi 原文件保留）")
+		log_msg("已中止保存（avi 原文件保留）。")
+	elif ff == "":
+		_ui_notice("保存录像功能需要下载 ffmpeg 软件")
+		log_msg("保存录像功能需要下载 ffmpeg 软件。")
+	else:
+		_ui_notice("录像已保存")
+		log_msg("录像已保存。")
 	return out_path
+
+## 画面中央的大字提示（走 HUD 现成的回合横幅通道）。抓帧已停时才调用 ⇒ 不会录进视频。
+## 只给"保存中/已保存"这类**导出收尾**用（用户 2026-09-28 要求按 ESC 后要有提示）。
+## ⚠️ 【2026-09-28 用户贴的报错】必须确认 HUD **还在场景树里**再叫它：`_show_turn_banner()` 第一行就
+##   用 `get_viewport()`，而"已经离开树/正在释放"的节点 `get_viewport()` 是 null ⇒
+##   `Cannot call method 'get_visible_rect' on a null value`（用户那次是"结果横幅那 6 秒里点了导出"，
+##   场景被 `_replay_auto_back()` 切走 —— 那边也一并修了）。提示本身是锦上添花，**绝不该让它报错**。
+func _ui_notice(txt: String) -> void:
+	if not is_instance_valid(battle) or not battle.is_inside_tree():
+		return
+	var hud = battle._hud
+	if hud == null or not is_instance_valid(hud) or not hud.is_inside_tree():
+		return
+	if hud.get_viewport() == null:
+		return
+	if hud.has_method("_show_turn_banner"):
+		hud._show_turn_banner(txt, Color(1.0, 0.88, 0.5), NOTICE_HOLD)
 
 func stop() -> void:
 	_stopped = true
@@ -206,8 +297,12 @@ func _grab() -> void:
 		img.resize(_w, _h, Image.INTERPOLATE_LANCZOS)   # 首帧缩放 / 窗口尺寸中途变了：统一到 _w×_h
 	_avi_frame(img.save_jpg_to_buffer(JPG_QUALITY))
 	if _frames % 15 == 0:
-		_title("导出中… %d 帧（%.0f 秒视频 · %d×%d）" % [
-			_frames, float(_frames) / FPS, _w, _h])
+		# 【2026-09-28】标题里带上**实际抓帧速率**：用户报「帧率感觉不高」时要能一眼看出
+		#   "机器到底跟不跟得上 60fps"（跟不上 ⇒ 视频仍是实时、但每秒只有更少张不同的画面）。
+		var el := float(Time.get_ticks_msec() - _t_start) / 1000.0
+		var real_fps := float(_frames) / el if el > 0.5 else 0.0
+		_title("导出中… %d 帧（%.0f 秒视频 · %d×%d · 实际 %.0f fps）" % [
+			_frames, float(_frames) / FPS, _w, _h, real_fps])
 
 func _title(s: String) -> void:
 	DisplayServer.window_set_title("酒馆纷争（战棋原型）" if s == "" else "酒馆纷争 · %s" % s)
@@ -420,6 +515,11 @@ func _find_ffmpeg() -> String:
 			return abs
 	return ""
 
+## 转 mp4。⚠️ 【2026-09-28 用户要求「点击 ESC 后需要提示录像保存中」】**不能再用 `OS.execute()`**：
+##   那个是**阻塞**的，转码几十秒里窗口会变成"无响应"，标题上的"录像保存中…"根本刷不出来
+##   （Windows 对无响应窗口不重绘标题栏）。所以改成 `OS.create_process()` + 逐帧轮询：
+##   窗口全程可响应、标题里的秒数一直在走，**按 ESC 还能把转码一并中止**（保留 avi）。
+## 返回 true = 转码成功且成品非空。
 func _mux(ff: String, in_abs: String, out_abs: String) -> bool:
 	var args := [
 		"-y", "-i", in_abs,
@@ -429,16 +529,39 @@ func _mux(ff: String, in_abs: String, out_abs: String) -> bool:
 		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart",
 		out_abs,
 	]
-	var out: Array = []
-	var code := OS.execute(ff, args, out, true)
 	var loc := ProjectSettings.localize_path(out_abs)
-	var ok := code == 0 and FileAccess.file_exists(loc) and _file_size(loc) > 0
+	var pid := OS.create_process(ff, args)
+	if pid <= 0:
+		log_msg("转 mp4 失败：起不了 ffmpeg 进程。")
+		return false
+	var t0 := Time.get_ticks_msec()
+	while OS.is_process_running(pid):
+		if _stopped:
+			OS.kill(pid)   # ESC：连转码一起停（avi 原文件保留，照样能播）
+			_mux_aborted = true
+			break
+		if Time.get_ticks_msec() - t0 > MUX_TIMEOUT_MS:
+			OS.kill(pid)
+			log_msg("转 mp4 超时（%d 秒），保留 avi。" % (MUX_TIMEOUT_MS / 1000))
+			break
+		_title("录像保存中…（正在转 mp4：已 %d 秒，%.0f 秒素材）" % [
+			(Time.get_ticks_msec() - t0) / 1000, float(_frames) / FPS])
+		if is_instance_valid(battle) and battle.is_inside_tree():
+			await battle.get_tree().process_frame
+		else:
+			var ml := Engine.get_main_loop()
+			if ml is SceneTree:
+				await (ml as SceneTree).process_frame
+			else:
+				break   # 没有场景树（理论到不了）：别死等
+	if _mux_aborted:
+		return false
+	var ok := FileAccess.file_exists(loc) and _file_size(loc) > 0
 	if not ok:
 		# 转失败：**删掉那个 0 字节的残file**（用户报过"mp4 大小是 0"），avi 留着照样能播
 		if FileAccess.file_exists(loc):
 			DirAccess.remove_absolute(loc)
-		if out.size() > 0:
-			log_msg("转 mp4 失败（%d）：%s" % [code, String(out[out.size() - 1]).strip_edges()])
+		log_msg("转 mp4 失败：%s" % loc)
 	return ok
 
 func _file_size(path: String) -> int:

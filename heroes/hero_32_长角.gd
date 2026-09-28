@@ -24,3 +24,15 @@ func on_attack(target: Unit) -> void:
 
 func _bonus_damage(target: Unit) -> int:
 	return battle._bonus_damage(unit, target)
+
+## 【2026-09-28·用户报「长角双倍伤害打死对方时没有触发击杀特效」】击杀预告（`Battle._kill_intro()`）
+## 要"这一击多少伤害"才能判断会不会打死人：长角自己结算伤害（`handles_base_damage() == true`），
+## 所以必须把"**能击退 = 1 倍 / 不能击退 = 2 倍**"这条也报上去 —— 按默认的 1 倍估，
+## 双倍才打死的局面会被判成"打不死" ⇒ 不播击杀卡面（用户报的就是这个）。
+## ⚠️ 用 `battle._knockback_dest()`（**纯计算**：不真的推人、不触发炸弹/拾取），
+##    与 `on_attack()` 真正结算时走的是**同一把尺**（`_knockback()` 内部也调它）。
+func preview_attack_damage(target: Unit) -> int:
+	var hdmg: int = battle._attack_damage(unit) * _bonus_damage(target)
+	if target == null or not is_instance_valid(target) or not target.alive:
+		return hdmg
+	return hdmg if battle._knockback_dest(target, unit.cell).x != -99 else hdmg * 2

@@ -1,4 +1,4 @@
-class_name HUD
+﻿class_name HUD
 extends CanvasLayer
 ## 战斗界面浮层：显示回合/阵营、消息日志、操作提示，并放置结束回合/重开按钮。
 
@@ -52,6 +52,11 @@ var _op_death_name: Label = null
 var _my_marks: Array = []      # 本端视角的"我方"那排（左）
 var _op_marks: Array = []      # 本端视角的"对方"那排（右）
 var _death_fx: DeathFx = null  # 阵亡演出层（全屏，只画特效；比状态栏晚加入 ⇒ 画在状态栏之上）
+# 【2026-09-28·用户要求·击杀演出】击杀特效层（全屏）：击杀者卡面滑进画面停一下 + 阵营色拖影
+#   触发 = `Battle.kill_intro_requested`（**开打前**的预告）：Battle 会一直等到这里播完、调
+#   `battle.kill_intro_finished()` 才继续 ⇒ 观感是"特效先滑完，英雄再动手击杀"。
+var _kill_fx: Control = null
+var _kill_fx_n := 0            # 同屏多次击杀时上下错开（AoE 一次死两个不会完全重叠）
 # 延迟揭示：真实阵亡数（战斗逻辑）先涨，**标志等卡片落地才出现** ⇒ `_reveal_pending` = 已死亡但还没点亮的个数。
 # 槽位 `filled` 的个数记在 `_mark_filled` 里（= 界面上看到的），两者相加 = 真实阵亡数。
 var _reveal_pending := { "my": 0, "op": 0 }
@@ -68,9 +73,32 @@ var _ladder_gave_up := false
 var _last_my_text := ""   # 上次刷新的"我方"侧文字（联机=姓名；用于姓名变化时补刷新）
 var _last_op_text := ""   # 上次刷新的"敌方"侧文字（联机=姓名）
 var _end_btn: Button          # 结束回合（仅我方回合可点）
+# 【2026-09-27·用户要求】替补队伍列表**默认收起**，由按钮行右贴边的箭头拉出/收回：
+var _team_panel_open := false        # 用户是否把它拉出来了（真值 = 展开）
+var _team_toggle_btn: Button = null  # 那个按钮（`name = "TeamToggle"`，探针按名字找得到）
+var _team_toggle_tex_open := false   # 按钮当前贴的是不是"收回"那张图（每帧刷新时用它挡掉重建）
+## 【2026-09-28·用户报「点击替补队伍按钮的时候，会弹出一个属性框」】从右往左滑出的那 0.16s 里，
+##   卡片会从鼠标底下掠过 ⇒ 卡片的悬停回调把**英雄属性框**弹了出来。滑出期间一律不响应悬停/点击，
+##   滑完再清一次属性框（`_team_panel_sliding`）。
+var _team_panel_sliding := false
+# 【2026-09-28·用户要求】英雄死亡 / 主动撤下（= 自动进入替补流程）时，列表也要
+#   **从右往左滑出来**（哪怕它此前已经开着）⇒ 这一个标志由阶段切换处置位，_refresh_team_panel() 用完即清。
+var _team_panel_slide_next := false
 # 【2026-09-27·用户要求】结束回合按钮换成图片（图缺失时自动退回原来的金色文字按钮）
 const END_TURN_TEX := "res://assets/界面/结束回合.png"
 const END_BTN_IMG_H := 112.0   # 图片按钮的高度（宽按图的比例 ⇒ 112 × 237/209 ≈ 127）
+# 【2026-09-27·用户要求】「结束回合按钮往上移一点」+「那行右边贴边加一个箭头，点开拉出替补队伍列表」：
+#   ① 按钮带离屏幕底边留 `BTN_ROW_FOOT_GAP`（原来是 10 ⇒ 现在抬起来 30px）；
+#   ② 替补队伍列表**默认收起**，由右贴边的箭头按钮拉出/收回（`_team_panel_open`）；
+#   ③ 棋盘那边（`Battle._fit_hex_size()`）**共用这两个常量**算"屏底要留多少" ⇒ 别再各写各的魔数。
+const BTN_ROW_FOOT_GAP := 40.0
+const TEAM_TOGGLE_CLOSED := "▲"   # 收起状态下**图缺失时**的退回文案：点它把替补列表拉出来
+# 【2026-09-28·用户要求「加了关于替补队伍的图标，你替换上去」】图标本身就是语义：
+#   收起时贴「展开替补队伍」、拉出后贴「收回替补队伍」（两张都是 216×221）。
+const TEAM_TOGGLE_TEX_CLOSED := "res://assets/图标/展开替补队伍.png"
+const TEAM_TOGGLE_TEX_OPEN := "res://assets/图标/收回替补队伍.png"
+const TEAM_TOGGLE_ICON_H := 58.0   # 图标按钮高度（宽按图的比例 ⇒ 58 × 216/221 ≈ 57）
+const TEAM_TOGGLE_OPEN := "▼"     # 展开状态下的箭头：点它收回去
 # 【2026-09-27】底部常驻行现在只有「结束回合」；`_restart_btn` 已随"重开/返回选人整合进暂停面板"移除。
 # 【2026-09-28·用户要求】联机那枚「返回大厅」也删掉 ⇒ 底部行两种模式都只剩「结束回合」；
 #   联机退出改走**右上角「认输」**：先喊一句完整的话给对端，再走认输结算（退出大厅走结算面板的按钮）。
@@ -169,6 +197,10 @@ func bind(b: Battle) -> void:
 	battle.deck_pick_done.connect(_close_deck_pick_panel)
 	# 【2026-09-23 新增】阵亡演出：死亡瞬间（比 match_result / 替补早 0.3s）播"破碎升天 → 飞向阵亡标志"
 	battle.unit_dying.connect(_on_unit_dying)
+	# 【2026-09-28·用户要求】击杀演出：**开打前的预告**（`Battle.kill_intro_requested`）——
+	#   预判这一击致死时先播卡面，播完回调 `battle.kill_intro_finished()`，Battle 才继续结算
+	#   ⇒ 观感是"击杀特效滑完（图案彻底消失）→ 英雄再动手击杀对方"。
+	battle.kill_intro_requested.connect(_on_kill_intro)
 	battle.team_updated.connect(_refresh_team_panel)
 	battle.deploy_refresh.connect(_show_deploy_panel)
 	battle.card_view_requested.connect(show_unit_card)
@@ -529,7 +561,6 @@ func _show_deploy_panel() -> void:
 	panel.add_child(wrapbox)
 	# 【2026-09-27·用户要求】原来这里有一行标题「开局选人 · 点选英雄部署 · 我方 x/3 对方 x/3」⇒ **整行删掉**，
 	#   面板直接就是卡池那一行（`side_txt` / 标题 Label / 计数都随之消失）。
-	var placing := battle.state == Battle.State.PLACE_DEPLOY
 	# 当前轮是否轮到本端部署选人
 	var my_pick := _deploy_my_pick()
 	# 卡池：始终为本端"我方"部署卡池；轮到本端才可点选
@@ -537,31 +568,45 @@ func _show_deploy_panel() -> void:
 	var sel := battle._pending_deploy
 	if battle._my_faction() == DataRegistry.Faction.ENEMY:
 		sel = battle._pending_enemy_deploy
-	var pool := _make_hex_pool(ids, _on_deploy_hover, _on_deploy_click, not my_pick or placing, sel, true, 48.0)
+	# 【2026-09-28·用户报「部署阶段选了一个英雄之后，英雄卡面会变黑」】原来这里传的是
+	#   `not my_pick or placing` —— `placing`（= 已点英雄、正在放位 PLACE_DEPLOY）也把整排卡池
+	#   设成 `disabled_draw`（底色压暗 45% + 人物图只有 45% 不透明 ⇒ 看着就是"卡面变黑"）。
+	#   但放位阶段**本来就是可以再点别的英雄反悔/切换**的（`_on_deploy_click` → `_on_deploy_pick_again`）⇒
+	#   灰掉是错的（看着不能点、其实能点）。现在只在"不是本端选人轮"时灰。
+	# 【2026-09-28·用户报「两处六边形大小不一样」】半径与替补队伍**共用** `_team_row_radius()`（原写死 48）
+	var deploy_r: float = _team_row_radius(ids.size())
+	var pool := _make_hex_pool(ids, _on_deploy_hover, _on_deploy_click, not my_pick, sel, true, deploy_r)
 	# 【2026-09-27·用户报「队伍有点压着棋盘 / 太下了挡住结束按钮」】卡池宿主高度要按**交错排布**算：
 	#   单行时奇数列的卡往下错半行 ⇒ 最低那张卡底边 = `r + √3·r`（r=48 ⇒ 131px），
 	#   而 `_make_hex_pool` 给的是 2×行距（166px，多留的空白会把整排卡往上顶）；
 	#   我第一次收紧到 1.15×行距（96px）又**太短** ⇒ 奇数列的卡溢出面板盒、正好压到结束回合按钮上。
 	#   ⇒ 按实际用量收：`r + √3·r` 再留 6px 余量（卡片绝对定位、宿主不裁剪 ⇒ 只影响面板盒）。
-	pool.custom_minimum_size.y = 48.0 * (1.0 + sqrt(3.0)) + 6.0
+	pool.custom_minimum_size.y = deploy_r * (1.0 + sqrt(3.0)) + 6.0   # 跟着半径走（原来写死 48）
 	pool.size.y = pool.custom_minimum_size.y
 	wrapbox.add_child(pool)
 	var pw: float = pool.custom_minimum_size.x + 20.0
 	var ph: float = pool.custom_minimum_size.y + 10.0
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
-	# 底边固定在按钮行上方 8px。面板本身**透明且不拦鼠标** ⇒ 即便盒底伸到按钮带里也看不见、点不到。
-	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - END_BTN_IMG_H - 18.0 - ph)
-	# 倒计时大字放按钮行上方（棋盘不遮挡时居中感不变）
+	# 【2026-09-27】棋盘放大后（`Battle._fit_hex_size()` 不再为屏底留 330）卡片行**贴屏幕底边**摆：
+	#   摆到"按钮行上方"就会压住棋盘最下面两行（玩家正是要点那些绿格放人）。部署期「结束回合」已隐藏
+	#   （见 `_refresh_controls()`）⇒ 这条带子归卡片行用。
+	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 34.0)   # 【2026-09-28·用户要求「替补队伍往上移」】由贴屏底 6px 抬到 34px
+	# 【2026-09-28·用户要求】「部署阶段倒计时时间**移到棋盘中间**」：大字居中在**棋盘包围盒中心**
 	var tlabel := Label.new()
-	tlabel.add_theme_font_size_override("font_size", 48)
+	# 【2026-09-28·用户要求「部署阶段倒计时字号大点」】48 → **64**（描边本来 6 ⇒ 跟着放宽到 8，
+	#   否则大字会显得"发飘"）；同时把对齐改成**垂直居中**、宿主盒给足（300×110），
+	#   这样"以棋盘中心为中心"在换字号后依然成立（原来是靠 60 高的盒子碰巧对上的）。
+	tlabel.add_theme_font_size_override("font_size", 64)
 	tlabel.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
 	tlabel.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	tlabel.add_theme_constant_override("outline_size", 6)
+	tlabel.add_theme_constant_override("outline_size", 8)
 	tlabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	tlabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	tlabel.visible = false
-	tlabel.position = Vector2(panel.position.x, panel.position.y - 66)
-	tlabel.size = Vector2(pw, 60)
+	var bc: Vector2 = _board_center_px()
+	tlabel.position = Vector2(bc.x - 150.0, bc.y - 55.0)
+	tlabel.size = Vector2(300, 110)
 	overlay.add_child(tlabel)
 	_deploy_timer_label = tlabel
 
@@ -1012,6 +1057,17 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrapbox.add_child(title)
+	# 【2026-09-28·用户要求】「普通模式，卡组三选一也要弹出哪方先手」：标题下面一行写先手方。
+	#   来源 = `Battle._first_side`（每局由 `_prepare_first_side()` 随机一次，与部署顺序/行动方同源）。
+	#   ⚠️ 只加这一行（用户口径：不加说明性小字）。
+	var first_lbl := Label.new()
+	var first_mine: bool = battle == null or battle._first_side == battle._my_side()
+	first_lbl.text = "先手：%s" % ("我方" if first_mine else "敌方")
+	first_lbl.add_theme_font_size_override("font_size", 20)
+	first_lbl.add_theme_color_override("font_color",
+		Color(0.5, 0.85, 1.0) if first_mine else Color(1.0, 0.5, 0.5))
+	first_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	wrapbox.add_child(first_lbl)
 	# 【2026-09-21 用户定】限时大字：15 秒内不选 ⇒ 随机选一个可用卡组（Battle 侧 `_deck_pick_timeout()`）。
 	# 样式与部署轮/竞技场那两处大字同一套（金 → ≤5 秒转红，见 `_update_deck_pick_timer`）。
 	_deck_pick_timer_label = Label.new()
@@ -1199,21 +1255,141 @@ func _close_deck_pick_panel() -> void:
 	_deck_pick_decks = []
 	_set_score_tooltip_visible(false)
 
+## 【2026-09-27·用户要求】底部按钮带的**顶边 y** —— 现在只有「结束回合」一行 + 右贴边的箭头。
+##   `_build()`、替补列表、开局选人面板三处定位都走它 ⇒ 要挪整条带子只改 `BTN_ROW_FOOT_GAP` 一处。
+func _btn_row_y() -> float:
+	return get_viewport().get_visible_rect().size.y - END_BTN_IMG_H - BTN_ROW_FOOT_GAP
+
+## 【2026-09-28·用户报「部署界面的六边形大小和替补队伍的六边形大小不一样」】两处卡池**共用这一个半径**：
+##   原来部署那行写死 `48.0`、替补那行按可用宽度反算（8 张 ≈54、更少时封顶 56）⇒ 一个 48 一个 54~56，
+##   看着就不是一套。现在两边都走它（`_TEAM_ROW_MAX_R` 封顶 ⇒ 张数少时都是 56、满 8 张 54 ⇒ 观感一致）。
+func _team_row_radius(n: int) -> float:
+	var vsize := get_viewport().get_visible_rect().size
+	var tavail: float = maxf(vsize.x - 44.0, 320.0)
+	return minf(_TEAM_ROW_MAX_R, maxf(tavail / (2.0 + float(maxi(n, 1) - 1) * 1.5), 18.0))
+
+## 【2026-09-28·用户要求】棋盘包围盒的**屏幕中心** —— 部署倒计时大字要摆在那儿。
+##   算法与 `Battle._board_origin()` 一致（逐格 `_raw_cell_to_world` 取包围盒 + 六边形外接半径），
+##   只用 `battle.grid` / `battle.hex_size`，**不改 Battle.gd**（那边并行会话在动）。
+func _board_center_px() -> Vector2:
+	var vsize := get_viewport().get_visible_rect().size
+	if battle == null or not is_instance_valid(battle) or battle.grid == null:
+		return vsize * 0.5
+	var g: HexGrid = battle.grid
+	var hs: float = battle.hex_size
+	var minx := INF
+	var miny := INF
+	var maxx := -INF
+	var maxy := -INF
+	for cell in g.all_cells():
+		var p := g._raw_cell_to_world(cell)
+		minx = min(minx, p.x)
+		miny = min(miny, p.y)
+		maxx = max(maxx, p.x)
+		maxy = max(maxy, p.y)
+	var org: Vector2 = battle._board_origin()
+	var left: float = org.x + minx - hs
+	var top: float = org.y + miny - hs * 0.866
+	return Vector2(left + ((maxx - minx) + 2.0 * hs) * 0.5, top + ((maxy - miny) + 2.0 * hs * 0.866) * 0.5)
+
+## 正在"选替补上阵"（这一阶段**必须**显示替补列表，与用户收没收起无关）
+func _sub_picking() -> bool:
+	# 【2026-09-28·用户报】「替补时点了英雄、还没落位 ⇒ 应该是**高亮选中**，而不是列表消失」：
+	#   除了 SUBSTITUTING/PLACE_SUB 两个状态，**只要还握着没落位的 `_pending_sub` 就算在替补流程里**
+	#   ⇒ 列表在整个"点人 → 找绿格落位"过程里都留着（落位后 `_pending_sub` 清空 ⇒ 自动收回）。
+	if battle == null or not is_instance_valid(battle):
+		return false
+	if battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB:
+		return true
+	return String(battle._pending_sub) != ""
+
+## 【2026-09-27·用户要求】右贴边那个箭头的点击：拉出 / 收回替补队伍列表
+func _on_team_toggle() -> void:
+	# 【2026-09-28·用户报「主动拖下英雄后，点击替补队伍时替补队伍列会重新出来一次」】选替补阶段
+	#   面板是**强制开**的（_sub_picking()），而 _team_panel_open 仍是 false ⇒ 这一点手就把它翻成
+	#   true ⇒ _refresh_team_panel() 把面板**重建并再滑一次**（看着就是又出来一遍）。
+	#   这一阶段列表本来就不能收（要靠它选人）⇒ 直接忽略这一下（不改状态、不重建 ⇒ 也不闪）。
+	if _sub_picking():
+		return
+	_team_panel_open = not _team_panel_open
+	if _team_panel_open:
+		_refresh_team_panel()
+	else:
+		_close_team_panel()
+	_refresh_team_toggle()
+
+## 【2026-09-28·用户要求】把该显示的那张图标贴到"替补列表开关"按钮上：
+##   收起 = `展开替补队伍.png`（点它拉出）· 拉出 = `收回替补队伍.png`（点它收回）。
+##   ⚠️ `_refresh_team_toggle()` 挂在**每帧**的 `_refresh_controls()` 上 ⇒ 这里**只在状态下变时才重建**
+##   （4 个 `StyleBoxTexture` 每帧新建会白烧）；图缺失时退回原来的文字箭头。
+func _apply_team_toggle_icon(open_now: bool) -> void:
+	if _team_toggle_btn == null or not is_instance_valid(_team_toggle_btn):
+		return
+	if _team_toggle_tex_open == open_now and _team_toggle_btn.text == "":
+		return
+	_team_toggle_tex_open = open_now
+	var tex := load(TEAM_TOGGLE_TEX_OPEN if open_now else TEAM_TOGGLE_TEX_CLOSED) as Texture2D
+	if tex == null:
+		_team_toggle_btn.text = TEAM_TOGGLE_OPEN if open_now else TEAM_TOGGLE_CLOSED
+		_team_toggle_tex_open = not open_now   # 强制下次再试（图可能后补上）
+		return
+	_team_toggle_btn.text = ""
+	_team_toggle_btn.custom_minimum_size = Vector2(
+		TEAM_TOGGLE_ICON_H * float(tex.get_width()) / float(tex.get_height()), TEAM_TOGGLE_ICON_H)
+	var states := {
+		"normal": Color(1.0, 1.0, 1.0, 1.0),
+		"hover": Color(1.12, 1.12, 1.12, 1.0),
+		"pressed": Color(0.85, 0.85, 0.85, 1.0),
+		"disabled": Color(0.6, 0.6, 0.62, 0.85),
+	}
+	for st in states.keys():
+		var sb := StyleBoxTexture.new()
+		sb.texture = tex
+		sb.modulate_color = states[st]
+		_team_toggle_btn.add_theme_stylebox_override(String(st), sb)
+
+## 开关按钮的图标/显隐刷新（部署期、回放里没有"常驻替补列表" ⇒ 藏起来）。
+func _refresh_team_toggle() -> void:
+	if _team_toggle_btn == null or not is_instance_valid(_team_toggle_btn):
+		return
+	var open_now: bool = _team_panel_open or _sub_picking()
+	_apply_team_toggle_icon(open_now)
+	var show := false
+	if battle != null and is_instance_valid(battle) and not _in_replay():
+		show = battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY
+	_team_toggle_btn.visible = show
+	# 【2026-09-28·用户要求】「需要替补的时候……**替补按钮常暗**」：这一阶段置灰（disabled）
+	#   ⇒ 走 disabled 那张压暗样式，且 Godot 的 disabled Button 不再发 pressed。
+	_team_toggle_btn.disabled = _sub_picking()
+
 # 下方常驻队伍面板：整支卡组（上阵 + 替补），一字行透明卡牌，随 team_updated 刷新。
 # 同一面板双模式（避免"替补选人面板"与常驻面板重叠/互相遮盖）：
-#  - 平时：只读展示本端替补席/队伍，悬停查看属性；
+#  - 平时：只读展示本端替补席/队伍，悬停查看属性（⚠️ **默认收起**，2026-09-27 起由右贴边箭头拉出）；
 #  - SUBSTITUTING / PLACE_SUB：同一面板变"选择替补上阵"，点击英雄=选中落位（battle._on_sub_pick）。
 func _refresh_team_panel() -> void:
 	if battle == null:
 		return
 	if _in_replay():
 		_close_team_panel()   # 回放里不摆常驻队伍卡（见 `_in_replay()` 的说明）
+		_refresh_team_toggle()
 		return
 	# 部署期：只显示"开局选人"面板，不显示下方常驻面板（避免重叠）
 	if battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY:
 		_close_team_panel()
+		_refresh_team_toggle()
 		return
-	var picking := battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB
+	var picking := _sub_picking()
+	# 【2026-09-27·用户要求】"点击箭头才把替补队伍列表拉出" ⇒ 平时不再常驻摆在棋盘下面
+	#   （它原来一直占着屏底 ~200px，也是棋盘长不大的原因之一）。
+	# 【2026-09-28·用户要求】「**不需要替补的时候默认收回**」⇒ 可见性 = 用户的开关 or 正在选替补
+	#   （前者默认 false ⇒ 平时收着；后者保证选替补期间恒在、阶段一过自动消失）。
+	if not _team_panel_open and not picking:
+		_close_team_panel()
+		_refresh_team_toggle()
+		return
+	# 【2026-09-28·用户报「点击英雄会闪一下」】重建（点英雄刷新高亮）时**不要重新滑入**：
+	#   只有「从无到有」那一次才从屏幕右缘滑出；已经有面板就直接落在目标位置。
+	var had_panel: bool = _team_panel != null
 	if _team_panel:
 		_team_panel.queue_free()
 		_team_panel = null
@@ -1254,6 +1430,8 @@ func _refresh_team_panel() -> void:
 	wrapbox.add_child(title)
 	# 悬停显示英雄属性（带背景浮层，位置由 _process 收敛)
 	var hover_cb := func(hid: String):
+		if _team_panel_sliding:
+			return   # 滑出中：卡片只是从鼠标底下掠过，别弹属性框
 		if hid == "":
 			_set_score_tooltip_visible(false)
 			return
@@ -1262,30 +1440,53 @@ func _refresh_team_panel() -> void:
 		pass
 	if picking:
 		click_cb = func(hid: String):
+			if _team_panel_sliding:
+				return   # 滑出中的误触不算选人
 			battle._on_sub_pick(hid)   # 点击替补英雄：选中并进入落位阶段
 			_refresh_team_panel()      # 立即刷新高亮（_pending_sub），后续动作仍可再点其他英雄
 	# 【2026-09-28·用户要求】「卡组英雄队伍列表放大，8 个英雄占满宽度」：这一行原来固定半径 48
 	#   （8 张只占 600/720 ≈ 83%）⇒ 改成**按可用宽度反算**：一行 n 张平顶六边形总宽 = `2r + (n−1)·1.5r`
 	#   ⇒ `r = 可用宽 / (2 + 1.5·(n−1))`；可用宽 = 视口宽 − 面板左右内边距(6+6)与 20 的余量 − 两侧留白。
 	#   ⚠️ 8 张一行的**物理上限**就是 `视口宽 / 12.5`（≈57）⇒ 再大必须改成两行，见下面 `_TEAM_ROW_MAX_R` 注释。
-	var tn := maxi(ids.size(), 1)
-	var tavail: float = maxf(vsize.x - 44.0, 320.0)
-	var trad := minf(_TEAM_ROW_MAX_R, maxf(tavail / (2.0 + float(tn - 1) * 1.5), 18.0))
+	var trad := _team_row_radius(ids.size())   # 【2026-09-28】与部署卡池共用同一半径
 	var pool := _make_hex_pool(ids, hover_cb, click_cb, false, battle._pending_sub if picking else "", true, trad)
 	wrapbox.add_child(pool)
 	var pw := pool.custom_minimum_size.x + 20.0
 	var ph := pool.custom_minimum_size.y + 34.0
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
-	# 放在按钮行上方（按钮行贴屏底），避免遮住棋盘
-	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 76)
+	# 【2026-09-27·用户要求】替补列表「**从右往左拉出**、**覆盖在结束回合按钮那行**」：
+	#   ① 贴右对齐（改为**水平居中**，见 `target_x`；不再需要给右上角开关让位）；
+	#   ② 竖直方向**以屏幕底为基准**（底边距 6px）⇒ 面板正落在按钮带上、向上多出的部分压在棋盘下沿；
+	#   ③ 起点放在屏幕右缘外 `vsize.x`，再 tween 到目标 x ⇒ 就是"从右往左滑出来"。
+	# 【2026-09-28·用户要求】弹出来的替补队伍**居中显示**（原来贴右）⇒ 水平居中；仍从屏幕右缘滑入。
+	var target_x: float = (vsize.x - pw) * 0.5
+	var do_slide: bool = (not had_panel) or _team_panel_slide_next
+	_team_panel_slide_next = false
+	if not do_slide:
+		panel.position = Vector2(target_x, vsize.y - ph - 6.0)   # 就地更新（不滑、不闪）
+	if do_slide:
+		panel.position = Vector2(vsize.x, vsize.y - ph - 6.0)
+		_team_panel_sliding = true
+		var slide := create_tween()
+		slide.tween_property(panel, "position:x", target_x, 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		slide.finished.connect(func():
+			_team_panel_sliding = false
+			_set_score_tooltip_visible(false))   # 滑完把被"掠过"留下的属性框清掉
+	_refresh_team_toggle()   # 面板建成/收起后把箭头文案同步一次
 
 # 关闭常驻队伍面板
 func _close_team_panel() -> void:
+	# 【2026-09-28·用户报「点击英雄会闪一下」】重建（点英雄刷新高亮）时**不要重新滑入**：
+	#   只有「从无到有」那一次才从屏幕右缘滑出；已经有面板就直接落在目标位置。
+	var had_panel: bool = _team_panel != null
 	if _team_panel:
 		_team_panel.queue_free()
 		_team_panel = null
 	_close_chat_panel()   # 阶段切换/重开时收起喊话选言面板
+	# 【2026-09-27】收起面板的路径也要把箭头状态刷一遍：`_show_deploy_panel()`（进部署）走的就是这条
+	#   ⇒ 部署期箭头必须跟着隐藏（`_refresh_team_toggle()` 内部按 state 判，不递归）。
+	_refresh_team_toggle()
 
 func _build() -> void:
 	var vsize := get_viewport().get_visible_rect().size
@@ -1406,7 +1607,7 @@ func _build() -> void:
 	# 底部常驻按钮行：**只剩「结束回合」**（居中）。「重开 / 返回选人」整合进暂停面板（2026-09-27 用户要求）；
 	#   联机的「返回大厅」也已删（2026-09-28 用户要求）⇒ 两种模式的底部行现在一样，联机退出走右上角「认输」。
 	var btn_row := HBoxContainer.new()
-	btn_row.position = Vector2((vsize.x - 390) / 2.0, vsize.y - END_BTN_IMG_H - 10)
+	btn_row.position = Vector2((vsize.x - 390) / 2.0, _btn_row_y())
 	btn_row.size = Vector2(390, END_BTN_IMG_H)
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	btn_row.add_theme_constant_override("separation", 20)
@@ -1454,6 +1655,29 @@ func _build() -> void:
 	btn_row.add_child(end_btn)
 	_end_btn = end_btn
 
+	# 【2026-09-27·用户要求】「结束按钮那行右边贴边增加一个箭头，点击后可以把替补队伍列表拉出」：
+	#   与按钮带**同一水平带**（垂直居中于图片按钮），右缘留 6px 贴边；点一下拉出、再点收回。
+	# 【2026-09-28·用户要求】「加了关于替补队伍的图标，你替换上去」⇒ 按钮本体换成**图片**
+	#   （收起 = 「展开替补队伍.png」/ 拉出 = 「收回替补队伍.png」，两张 216×221）；
+	#   图缺失时自动退回文字箭头（安全降级，不影响可玩性）。显隐由 `_refresh_team_toggle()` 管。
+	_team_toggle_btn = Button.new()
+	_team_toggle_btn.name = "TeamToggle"
+	_team_toggle_btn.text = TEAM_TOGGLE_CLOSED
+	var tog_tex := load(TEAM_TOGGLE_TEX_CLOSED) as Texture2D
+	if tog_tex != null:
+		_team_toggle_btn.custom_minimum_size = Vector2(
+			TEAM_TOGGLE_ICON_H * float(tog_tex.get_width()) / float(tog_tex.get_height()), TEAM_TOGGLE_ICON_H)
+	else:
+		_team_toggle_btn.custom_minimum_size = Vector2(44, 44)
+	_team_toggle_btn.add_theme_font_size_override("font_size", 20)
+	_team_toggle_btn.pressed.connect(_on_team_toggle)
+	root.add_child(_team_toggle_btn)
+	_apply_team_toggle_icon(false)
+	_team_toggle_btn.reset_size()
+	_team_toggle_btn.position = Vector2(vsize.x - _team_toggle_btn.size.x - 6.0,
+		_btn_row_y() + (END_BTN_IMG_H - _team_toggle_btn.size.y) * 0.5)
+	_refresh_team_toggle()
+
 	# 【2026-09-27 用户报「刚进录像会有黄色字体弹出，被蓝方回合盖住」】建顶栏时就分清是不是回放局：
 	#   回放局一进来就直接写"第 N 回合 · 蓝方/红方回合"，**不留那一帧**黄色对局文案（`_set_round_text(1, true)`
 	#   会先写成"第 1 回合 · 你的回合"，回放里那句话既不对、又会被随后的横幅盖住 → 一闪而过看着很脏）。
@@ -1468,14 +1692,29 @@ func _build() -> void:
 	_refresh_controls()
 	_build_edge_warning(root, vsize)
 
-	# 右下角音效音量调节（喇叭按钮 + 滑条弹层）：与左下角喊话按钮同底线对称；
-	# 按钮贴近屏底，弹层会自动向上弹出。
+	# 【2026-09-28·用户要求】「将音量键移到右上角，**暂停左边**」：与「暂停」（联机时那一格是「认输」）
+	#   同一行、放在它**左边 8px**、垂直居中；弹层仍在按钮**下方**自动弹出（`_open_panel()` 里那条
+	#   "放不下就向上弹"的逻辑照旧兜底）。原来它在右下角（`place_bottom_right`）。
 	var volume := VolumeControl.new()
 	root.add_child(volume)
-	volume.place_bottom_right(vsize, 10.0, 22.0)
+	var right_w: float = _pause_btn.size.x if _pause_btn != null else 50.0
+	if _surrender_btn != null and _surrender_btn.size.x > right_w:
+		right_w = _surrender_btn.size.x
+	var anchor_btn: Control = _pause_btn if _pause_btn != null else _surrender_btn
+	var vol_h: float = VolumeControl.BTN_H
+	volume.size = Vector2(VolumeControl.BTN_W, vol_h)
+	volume.position = Vector2(vsize.x - right_w - 14.0 - VolumeControl.BTN_W,
+		anchor_btn.position.y + (anchor_btn.size.y - vol_h) * 0.5)
 
 	# 左下角"喊话"按钮(仅联机对战中显示)
 	_build_chat_button(root, vsize)
+
+	# 【2026-09-28·用户要求·击杀演出】击杀特效层：**最后 add_child** ⇒ 同 z 下画在按钮/常驻面板之上；
+	#   结算面板是更晚 join 的 ⇒ 仍在它下面（与 `_death_fx` 同一个道理）；只画特效、不接输入。
+	_kill_fx = Control.new()
+	_kill_fx.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_kill_fx.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_kill_fx)
 
 # 屏幕边缘警告层：容器内四条浅红半透明边条；回合剩余时间不足时整体呼吸闪烁
 func _build_edge_warning(root: Control, vsize: Vector2) -> void:
@@ -1694,6 +1933,11 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 ## 【2026-09-27·录像回放】刷新顶部"第 N 回合 · 蓝方/红方回合"。回放里没有 `round_changed`／
 ## `active_side_changed` 这些信号（`_refresh_round()` 因此不会自己重画），换段/跳段后由 Battle 喊一次。
 func refresh_round_label() -> void:
+	# 【2026-09-28 护栏·用户贴的报错】`_set_round_text()` 末尾会 `_fit_top_center()`（里面用
+	#   `get_viewport()`）；HUD 已经离开场景树时（正在切场景 / 已被释放）那是 null ⇒
+	#   `Cannot call method 'get_visible_rect' on a null value`。这里直接不画。
+	if not is_inside_tree():
+		return
 	_set_round_text(GameState.round_number, true)
 
 func _set_round_text(round_num: int, _player_side: bool) -> void:
@@ -1930,9 +2174,36 @@ func _on_unit_dying(u: Unit) -> void:
 	# pending 先 +1：真实计数马上会涨（`_on_unit_died` 在 0.3s 后），这样 `_refresh_deaths` 不会提前点亮
 	if not is_summon:
 		_reveal_pending[side] = int(_reveal_pending[side]) + 1
+	if _death_fx == null or not is_instance_valid(_death_fx):
+		return
 	var fx := DeathFx.new()
 	_death_fx.add_child(fx)
 	fx.play(start, target, col, func(): _reveal_mark(side, true))
+
+# 【2026-09-28·用户要求】击杀演出：**开打前的预告** —— 把击杀者的卡面滑进画面正中停一下、再冲出去，
+#   身后拖一条**阵营色**拖影（我方蓝 / 敌方红，与棋子阵营底色同一组色；按**绝对阵营**取，不由视角翻转）。
+#   触发点 = `Battle.kill_intro_requested`（Battle 预判这一击致死时发的**预告**，普攻与反击各一处）；
+#   播完必须回一个 `battle.kill_intro_finished()` —— Battle 一直在等它，等到才继续前冲/开火/结算
+#   ⇒ 观感是"击杀特效滑完（图案彻底消失）→ 英雄再动手击杀对方"。
+#   ⚠️ 纯演出：不读不改任何战斗状态；headless 在 `KillFx.play()` 里直接短路并立刻回调（跑批零开销）。
+func _on_kill_intro(killer: Unit, _victim: Unit) -> void:
+	var done := func():
+		if battle != null and is_instance_valid(battle):
+			battle.kill_intro_finished()
+	if killer == null or not is_instance_valid(killer) or _kill_fx == null or not is_instance_valid(_kill_fx):
+		done.call()   # 没得演也要放行，否则 Battle 要等到兜底超时
+		return
+	var tex: Texture2D = DataRegistry.hero_card_art(killer.display_name)
+	if tex == null or DisplayServer.get_name() == "headless":
+		done.call()
+		return
+	var col := Color(0.25, 0.55, 0.9) if killer.faction == DataRegistry.Faction.PLAYER else Color(0.85, 0.32, 0.28)
+	var fx := KillFx.new()
+	_kill_fx.add_child(fx)
+	# 连杀/群杀：每张往上/往下错开一点（幅度 = 屏高的 6%），避免完全重叠
+	var off := float(_kill_fx_n % 3 - 1) * 0.06
+	_kill_fx_n += 1
+	fx.play(tex, col, off, done)   # 播完回调 → Battle 放行，英雄随后才动手击杀
 
 func _process(_dt: float) -> void:
 	_refresh_deaths()
@@ -1942,8 +2213,20 @@ func _process(_dt: float) -> void:
 	if battle != null and is_instance_valid(battle):
 		var st: int = battle.state
 		if st != _last_phase_state:
+			var prev_st: int = _last_phase_state
 			_last_phase_state = st
 			_refresh_round()
+			# 【2026-09-28·用户报「点击替补队伍时列表会重新出来一次」】改成：**进入选替补阶段时自动开一次**，
+			#   之后完全听用户的开关（原来 _refresh_team_panel() 里用 picking 强制开 ⇒ 用户一点收起就被它翻回来）。
+			# 【2026-09-28】显隐改由 _refresh_team_panel() 的派生条件负责（用户开关 or 正在选替补）；
+			#   这里只在进入选替补时补刷一次（原来靠 prev_st 判离开，状态一帧内跳两次就会漏）。
+			if st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB:
+				# 【2026-09-28·用户报「主动撤下后点替补英雄又闪一下」】只有**从替补流程之外**进来才滑：
+				#   SUBSTITUTING → PLACE_SUB（= 点了英雄）是同一次替补里的状态推进 ⇒ 不能重滑。
+				var was_sub: bool = prev_st == Battle.State.SUBSTITUTING or prev_st == Battle.State.PLACE_SUB
+				if not was_sub:
+					_team_panel_slide_next = true
+				_refresh_team_panel()
 	_update_turn_timer()
 	_update_arena_pick_timer()
 	_update_deploy_pick_timer()
@@ -2087,13 +2370,25 @@ func _refresh_controls() -> void:
 		else:
 			my_turn = battle.state == Battle.State.PLAYER_INPUT and GameState.active_side == battle._my_side()
 	if _end_btn != null:
-		_end_btn.disabled = not my_turn
+		# 【2026-09-28·用户要求】替补队伍列表弹出时，结束回合**熄灭且不可点**
+		#   （判据与列表的可见条件同源；图片按钮的 disabled 状态本来就是压暗那张）。
+		var team_out: bool = _team_panel_open or _sub_picking()
+		_end_btn.disabled = (not my_turn) or team_out
+		# 【2026-09-27·用户要求「棋盘放大到宽度接近填满」的配套】部署阶段屏底那条带子**让给"开局选人"
+		#   卡片行**：棋盘放大后卡片行只能贴屏底摆（摆在上方就会压住棋盘最下面两行 —— 那正是玩家要
+		#   点绿格放人的地方）。部署期本来也用不到「结束回合」（`disabled` 恒真）⇒ 直接藏起来。
+		_end_btn.visible = battle == null or (battle.state != Battle.State.DEPLOY
+			and battle.state != Battle.State.PLACE_DEPLOY)
 	if _pause_btn != null:
 		_pause_btn.visible = not GameState.is_online   # 暂停仅单机（联机暂停会与对端不同步）
 	if _surrender_btn != null:
 		# 【2026-09-28·用户要求】「认输」只在联机显示（与「暂停」同一角落、互斥）：
 		#   联机没有暂停，退出入口就从底部那枚「返回大厅」换成这里。
 		_surrender_btn.visible = GameState.is_online
+	# 【2026-09-27】箭头（替补列表开关）的显隐也挂在这条每帧刷新的路上：它跟 `battle.state` 走
+	#   （部署期藏、对局/选替补时显示）⇒ 跟状态机不会脱节（`_show_deploy_panel()` 那条早退路径
+	#   压根不会走到 `_close_team_panel()`，光靠那边刷会漏掉"部署结束"这一下）。
+	_refresh_team_toggle()
 
 # 【2026-09-28·用户要求】联机认输：先喊**完整的一句**给对端（本端也回显气泡），再走认输结算。
 func _on_surrender_pressed() -> void:
@@ -2368,6 +2663,8 @@ func show_result(win: bool) -> void:
 	# 【2026-09-23 新增·配套阵亡演出】判负/判胜的那一刻（第 3 名阵亡后 0.3s）结算浮层就会弹出来，
 	#   正好压在"卡面飞向阵亡标志"的演出上 ⇒ 若还有演出在飞，先等它落地再弹（只延迟面板，不改判定）。
 	#   headless（跑批/无窗口）没有演出 ⇒ 这段不生效、时序与改动前逐位一致。
+	# 【2026-09-28·击杀预告】等击杀卡面演完才让 Battle 继续（见 `_on_kill_intro`）——
+	#   这里只要等"飞行中的死亡特效"落地即可（预告那段已经在开打前等过了）。
 	if _death_fx != null and is_instance_valid(_death_fx) and _death_fx.get_child_count() > 0:
 		await get_tree().create_timer(0.75).timeout
 		if not is_inside_tree():
@@ -2960,3 +3257,123 @@ class VolumeControl extends Control:
 		_slider = null
 		_val_label = null
 		queue_redraw()
+
+# 【2026-09-28·新增·用户要求】击杀演出：击杀者的**卡面**从屏幕左外滑进画面**正中央**，在画面里**停顿一下**，
+#   再加速冲出右外并淡掉；身后拖一条**阵营色拖影**（本色残影 + 一条渐隐色带 + 一层同色柔光）。
+#   【同日第二次口径】「英雄滑出来之后要在画面里停顿一下」⇒ 由"一路滑过"改成三段：
+#     ① 滑入 `SLIDE_IN`（缓出，到位自然减速）→ ② 停住 `HOLD`（画面正中不动，拖影在 `TRAIL_OFF` 内收掉）
+#     → ③ 冲出去 `SLIDE_OUT`（缓入加速 + 淡出）。
+#   【同日第三次口径】「先出动画，然后在击杀」+「等击杀特效结束、滑出的英雄图案彻底消失后，英雄再开始击杀对方」
+#     ⇒ 改成**开打前的预告**：由 `Battle._kill_intro()` 预判致死时发 `kill_intro_requested`，Battle 停在原地等
+#     本节点整段播完、回调 `battle.kill_intro_finished()` 之后才继续前冲/开火/结算（死亡演出因此天然在后）。
+#   【同日第五次口径】「拖影不要一整块，增加点层次感」+「残影不要斜线」⇒ 拖影拆成**三层等宽色带 +
+#     速度线 + 同水平线的分层残影**（没有斜边、没有斜向排布），见 `_draw()` / `_band()` / `SPEED_LINES`。
+#   · 建房与触发见 `HUD._on_kill_intro()`；触发点 = `Battle._do_attack()`（普攻）与 `_play_counter()`（反击）。
+#   · headless（跑批 / 无窗口自检）在建的时候就短路自毁 ⇒ 零开销、时序不变。
+#   · 想调观感全在这个类顶部：`H_MUL` 卡面多高 / 三段时长 `SLIDE_IN`·`HOLD`·`SLIDE_OUT` /
+#     `TRAIL_OFF` 到位后多久收掉拖影 / `GHOST_N` 残影个数 / `GHOST_STEP` 残影间距（卡面宽倍数）/
+#     `TRAIL_A` 色带最亮处的透明度。想让"停顿"更久只改 `HOLD`。
+class KillFx extends Control:
+	const H_MUL := 0.42         # 卡面高 = 屏高 × 该值（再按"宽不超过半屏"收一次）
+	const Y_CENTER := 0.575     # 卡面**纵向中心** = 屏高 × 该值（0.5 = 正中）。【2026-09-28·用户口径「位置再往下走一点」】0.5 → 0.575；想更低就加大（0.65 就到队伍栏那一带了）
+	const SLIDE_IN := 0.40      # ① 从左外滑到画面正中
+	const HOLD := 0.50          # ② 在画面里停顿
+	const SLIDE_OUT := 0.26     # ③ 冲出右外（同时淡出）
+	const TRAIL_OFF := 0.16     # 到位后多久把拖影收干净（这段时间算在 `HOLD` 里）
+	const GHOST_N := 5          # 身后本色残影个数
+	const GHOST_STEP := 0.055   # 残影间距 = 卡面宽 × 该值
+	const TRAIL_A := 0.55       # （旧口径：单块色带的透明度；现在拖影分三层，见 `_draw()` 里的 `_band` 调用）
+	# 【2026-09-28·用户口径「不要一整块，增加点层次感」】速度线：`x` = 纵向偏移（卡面高的倍数）、
+	#   `y` = 长度（卡面宽的倍数）—— 几条长短不一的高光细线，上下错开 ⇒ 有"擦过去"的层次。
+	const SPEED_LINES: Array[Vector2] = [
+		Vector2(-0.30, 1.35), Vector2(0.22, 0.95), Vector2(-0.12, 1.10), Vector2(0.34, 0.72)]
+	var _tex: Texture2D = null
+	var _col := Color.WHITE
+	var _p := 0.0               # 位置参数：0 = 屏幕左外，0.5 = 画面正中，1 = 右外
+	var _trail := 1.0           # 拖影强度（停住时为 0）
+	var _yoff := 0.0            # 纵向错开（连杀/群杀时用，单位 = 屏高比例）
+
+	func play(tex: Texture2D, col: Color, yoff: float = 0.0, on_done: Callable = Callable()) -> void:
+		_tex = tex
+		_col = col
+		_yoff = yoff
+		if DisplayServer.get_name() == "headless":
+			if on_done.is_valid():
+				on_done.call()   # 跑批/无窗口：不演，但要立刻放行 Battle 的等待
+			queue_free()
+			return
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var t := create_tween()
+		# ① 滑入：缓出（快到位置时慢下来，像"刹住"）
+		t.tween_method(_set_p, 0.0, 0.5, SLIDE_IN).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		# ② 到位就把拖影收掉（"停住了"的视觉信号），剩下的时间原地**停顿**
+		t.tween_method(_set_trail, 1.0, 0.0, TRAIL_OFF)
+		t.tween_interval(maxf(HOLD - TRAIL_OFF, 0.05))
+		# ③ 再冲出去：缓入加速 + 拖着拖影淡出；**整段播完**才回调（`Battle` 等这个回调才继续击杀）
+		t.tween_method(_set_p, 0.5, 1.0, SLIDE_OUT).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+		t.parallel().tween_method(_set_trail, 0.0, 1.0, 0.12)
+		t.parallel().tween_property(self, "modulate:a", 0.0, SLIDE_OUT)
+		t.tween_callback(func():
+			if on_done.is_valid():
+				on_done.call()
+			queue_free())
+
+	func _set_p(v: float) -> void:
+		_p = v
+		queue_redraw()
+
+	func _set_trail(v: float) -> void:
+		_trail = clampf(v, 0.0, 1.0)
+		queue_redraw()
+
+	func _draw() -> void:
+		if _tex == null:
+			return
+		var vs := size
+		if vs.x <= 1.0 or vs.y <= 1.0:
+			vs = get_viewport().get_visible_rect().size
+		var ts := _tex.get_size()
+		if ts.x <= 0.0 or ts.y <= 0.0:
+			return
+		# 卡面尺寸：高 = 屏高 × H_MUL，同时宽不超过半屏（个别英雄图很宽）
+		var fit := minf((vs.y * H_MUL) / ts.y, (vs.x * 0.5) / ts.x)
+		var dsz := ts * fit
+		var cy := vs.y * (Y_CENTER + _yoff)
+		# 位置：`_p = 0.5` 时左边缘 = (屏宽 − 卡宽)/2 ⇒ **正好居中**
+		var pos := Vector2(lerpf(-dsz.x, vs.x, _p), cy - dsz.y * 0.5)
+		var tr := _trail
+		if tr > 0.001:
+			# 【2026-09-28·用户口径「拖影不要一整块，增加点层次感」】拖影改成**五层**：
+			#   ① 外层柔光带（最高最淡最长）→ ② 主体色带（中层）→ ③ 亮芯（窄而亮，压在最上面）
+			#   → ④ 几条长短不一的速度线（上下错开，给"擦过去"的质感）→ ⑤ 卡面本色残影（逐张变淡）。
+			#   【同日再一句「残影不要斜线」】三块色带一律**等宽矩形**（原来头高尾细 ⇒ 上下两条斜边），
+			#   残影也一律同一水平线 ⇒ 整个拖影只有水平方向的层次，没有斜线。想更干净就删掉 ①/④ 或调小 GHOST_N。
+			var x_head := pos.x + dsz.x * 0.30
+			_band(x_head - dsz.x * 2.4, x_head, cy, dsz.y * 0.26, 0.20 * tr)
+			_band(x_head - dsz.x * 1.8, x_head, cy, dsz.y * 0.17, 0.40 * tr)
+			_band(x_head - dsz.x * 1.2, x_head, cy, dsz.y * 0.055, 0.75 * tr)
+			for s: Vector2 in SPEED_LINES:
+				var sy := cy + dsz.y * s.x
+				var slen := dsz.x * s.y
+				draw_line(Vector2(x_head - dsz.x * 0.15 - slen, sy), Vector2(x_head, sy),
+					Color(_col.r, _col.g, _col.b, 0.45 * tr), maxf(1.5, dsz.y * 0.012), true)
+			for i in range(GHOST_N, 0, -1):
+				var gx := pos.x - dsz.x * GHOST_STEP * float(i)
+				var ga := 0.34 * (1.0 - float(i - 1) / float(GHOST_N)) * tr
+				# 【2026-09-28·用户口径「残影不要斜线」】残影一律**同一水平线**排开（原来每张往下错 1.2% 卡高，
+				#   叠起来像一条往下的斜线）⇒ y 恒等于卡面 y。
+				draw_texture_rect(_tex, Rect2(Vector2(gx, pos.y), dsz), false, Color(_col.r, _col.g, _col.b, ga))
+		# ③ 身后同色柔光（让卡面边缘带一圈阵营色）+ ④ 卡面本体（不染色，保持原色；停顿时就靠它撑住画面）
+		draw_texture_rect(_tex, Rect2(pos - dsz * 0.03, dsz * 1.06), false, Color(_col.r, _col.g, _col.b, 0.5))
+		draw_texture_rect(_tex, Rect2(pos, dsz), false, Color.WHITE)
+
+	## 一条**等宽**的水平渐隐色带（`hh` = 半高、`a` = 头端最亮处的透明度，尾巴渐隐到 0）。
+	## 【2026-09-28·用户口径「残影不要斜线」】原来这里是头高尾细的锥形（上下两条斜边）⇒ 改成矩形。
+	func _band(x_tail: float, x_head: float, y: float, hh: float, a: float) -> void:
+		draw_polygon(PackedVector2Array([
+				Vector2(x_tail, y - hh), Vector2(x_head, y - hh),
+				Vector2(x_head, y + hh), Vector2(x_tail, y + hh)]),
+			PackedColorArray([
+				Color(_col.r, _col.g, _col.b, 0.0), Color(_col.r, _col.g, _col.b, a),
+				Color(_col.r, _col.g, _col.b, a), Color(_col.r, _col.g, _col.b, 0.0)]))

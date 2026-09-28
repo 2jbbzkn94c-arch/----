@@ -303,3 +303,13 @@ func obstacle_damage() -> int:
 ## 默认 false：Battle 先按常规结算基础伤害，再触发 on_attack 追加效果。
 func handles_base_damage() -> bool:
 	return false
+
+## 【2026-09-28·新增】"这一击大概多少伤害"——只给**击杀预告**用（`Battle._kill_intro()` 决定要不要先播击杀卡面）。
+## 默认 = 面板伤害 × 克制系数（与 `Battle._apply_attack()` 结算用的同一式）。
+## ⚠️ **自己结算伤害**的英雄（`handles_base_damage() == true`）必须重写它：预告按默认的 1 倍估，
+##    会漏掉"长角不能击退时的 2 倍"那类差异 ⇒ 双倍才打死的局面不播击杀特效（用户 2026-09-28 报的就是这个）。
+## 只影响演出，不参与任何伤害/判定。
+func preview_attack_damage(target: Unit) -> int:
+	if battle == null or unit == null:
+		return 0
+	return battle._attack_total(unit, target)

@@ -29,6 +29,12 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 	while si < plan.size():
 		var step: Dictionary = plan[si]
 		si += 1
+		# 【2026-09-28】上一招（`plan[si-2]`）此刻已演完、局面已定型 ⇒ 补上"它之后"的局面指纹
+		#   （录制侧用；回放里 `_rec_on` 为 false，什么都不做）。见 `Battle._rec_fp()` 的说明。
+		if battle._rec_on and si >= 2:
+			var prev: Dictionary = plan[si - 2]
+			if not prev.has("fp"):
+				prev["fp"] = battle._rec_step_fp()
 		if GameState.match_over:
 			break
 		if my_session != battle._session_id:
@@ -51,16 +57,9 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		if GameState.match_over or my_session != battle._session_id:
 			break
 		var idx: int = step["idx"]
-		if idx < 0 or idx >= refs.size():
-			continue
-		var raw_u: Variant = refs[idx]
-		if raw_u == null or not is_instance_valid(raw_u):
-			continue
-		if not (raw_u is Unit):
-			continue
-		var u: Unit = raw_u as Unit
+		var u: Unit = _resolve_unit(step.get("who", null), refs, idx)
 		if u == null or not u.alive:
-			continue
+			continue   # 这一步指向的单位找不到 / 已阵亡：跳过（老录像的 idx 越界同理）
 		# 亮起"正在行动"的红橙脉冲描边：多名敌人连续出手时一眼看出轮到谁在动
 		u.set_acting_ring(true)
 		# 亮边后先停一拍再出手：让玩家先定位到这名英雄，再接它的动作
@@ -94,9 +93,9 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			acted = true
 			await _wait_action_done()
 		if a.has("atk") and int(a["atk"]) >= 0:
-			var t_idx := int(a["atk"])
-			if t_idx >= 0 and t_idx < refs.size() and _unit_ok(refs[t_idx]):
-				var t: Unit = refs[t_idx]
+			# 【2026-09-28】目标也按**稳定身份**解析（录像里带 `tgt` 标签时），老录像退回 `refs[atk]`
+			var t: Unit = _resolve_unit(a.get("tgt", null), refs, int(a["atk"]))
+			if t != null and _unit_ok(t):
 				if t.faction != DataRegistry.Faction.ENEMY and _unit_ok(u):
 					# 只允许攻击当前射程内的目标（防御 AI 计划偏差/移动失败导致越界攻击）
 					if battle._in_attack_range(u, t):
@@ -138,12 +137,62 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 	# 全部行动结束：留一拍再进回合末结算（避免最后一招与回合结束演出首尾相连）
 	if my_session != battle._session_id or not battle.is_inside_tree():
 		return
+	# 【2026-09-28】计划里**最后一招**也补上"它之后"的局面指纹（录制侧用）
+	if battle._rec_on and plan.size() > 0:
+		var last: Dictionary = plan[plan.size() - 1]
+		if not last.has("fp") and battle.is_inside_tree():
+			last["fp"] = battle._rec_step_fp()
 	await _gap(STEP_GAP)
 
 ## 暂停中不推进任何一步（单机暂停用；联机不暂停，故几乎是空转）
 func wait_unpaused() -> void:
 	while battle.is_inside_tree() and battle.get_tree().paused:
 		await battle.get_tree().process_frame
+
+# ---- 单位解析（稳定身份优先）----
+
+## 按"稳定身份"找这一步说的是哪个单位：优先用计划里记的标签（阵营 + 英雄 id + 当时的落点），
+## 标签找不到人或老录像没有标签时，才退回 `refs[idx]`。
+## 【2026-09-28 修·用户报的"录像里某个单位差一格/死者对不上"】`idx` / `atk` 都是**当时 units 数组的下标**，
+##   而回放侧那一刻的数组顺序或内容只要有一点不同（召唤物、替补落位先后…），这一招就会作用到别人身上。
+func _resolve_unit(tag, refs: Array, idx: int) -> Unit:
+	if tag is Dictionary:
+		var by_tag := _find_by_tag(tag as Dictionary)
+		if by_tag != null:
+			return by_tag
+	if idx < 0 or idx >= refs.size():
+		return null
+	var r = refs[idx]
+	if r != null and is_instance_valid(r) and r is Unit:
+		return r as Unit
+	return null
+
+## 标签（`{fn, hid, cell}`）→ 当前场上的单位：落点也对上就直接认定；只有同名同阵营一个时也认它；
+## 同名同阵营有多个且落点都不对 ⇒ 返回 null（宁可退回 idx，也不猜）。
+func _find_by_tag(tag: Dictionary) -> Unit:
+	var fn := int(tag.get("fn", -1))
+	var hid := String(tag.get("hid", ""))
+	if hid == "":
+		return null
+	var want := Vector2i(-99, -99)
+	if tag.has("cell"):
+		want = battle._fix_cell(tag["cell"])
+	var same: Unit = null
+	var dup := false
+	for u in battle.units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != fn or u.hero_id != hid:
+			continue
+		if want.x != -99 and u.cell == want:
+			return u        # 英雄与落点都对上 = 就是它
+		if same == null:
+			same = u
+		else:
+			dup = true
+	if same != null and not dup:
+		return same
+	return null
 
 # ---- 内部等待原语 ----
 
