@@ -144,27 +144,75 @@ func _process(_delta: float) -> void:
 func _cur() -> Array:
 	return _sel_p if _side == 0 else _sel_e
 
-# 界面背景贴图（与主菜单/联机大厅同一张）：按顺序取【第一个能加载的】；全缺图 ⇒ null ⇒ 退回纯色底。
-# 换图只需把想用的那张挪到最前（或直接替换文件内容）。
+# 界面背景贴图（**与主菜单同一张、同一取景**）：用户 2026-09-28 报「自由部署界面的背景图没了」——
+#   原因：这里原来只挂 `assets/美术资源/背景/界面背景_六角地砖.jpg`，那张图已经不在工程里了
+#   ⇒ 候选全部加载失败 ⇒ 退回深色纯色底，"背景图就没了"。现在整段照 `Menu.gd` 的口径来：
+#   候选清单（新封面在最前）+ `COVER_VIEW_X` 取景 + 渐变遮罩，三个页面看起来一致。
 const COVER_BG_CANDIDATES := [
-	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",
+	"res://assets/界面/封面.png",
+	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",   # 旧图（若回归仍可作兜底）
+	"res://assets/美术资源/背景/酒桌封面.png",
+	"res://assets/美术资源/背景/酒馆封面.png",
 ]
 
-func _make_cover_bg() -> TextureRect:
+const COVER_VIEW_X := 0.30   # 横向取景：0 = 贴最左 / 0.5 = 居中（与主菜单一致）
+
+# 封面背景图：等比裁切铺满整屏（候选都缺图时返回 null，由纯色底兜底）。
+# 返回**裁剪容器**：里面那张图按"铺满"放大后可能比屏幕宽，容器把超出屏幕的部分裁掉，取景由 `COVER_VIEW_X` 决定。
+func _make_cover_bg() -> Control:
 	for path in COVER_BG_CANDIDATES:
 		if not ResourceLoader.exists(path):
 			continue
 		var tex := load(path) as Texture2D
 		if tex == null:
 			continue
-		var r := TextureRect.new()
-		r.texture = tex
-		r.set_anchors_preset(Control.PRESET_FULL_RECT)
-		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED   # 等比裁切铺满，不变形
-		r.mouse_filter = Control.MOUSE_FILTER_IGNORE               # 不能吃掉英雄池点击/拖动
-		return r
+		var vs := get_viewport().get_visible_rect().size
+		var holder := Control.new()
+		holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不能吃掉英雄池点击/拖动
+		holder.clip_contents = true
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rect.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		var tw := float(tex.get_width())
+		var th := float(tex.get_height())
+		if tw <= 0.0 or th <= 0.0:
+			return null
+		var sc := maxf(vs.x / tw, vs.y / th)
+		rect.size = Vector2(tw * sc, th * sc)
+		rect.position = Vector2((vs.x - rect.size.x) * COVER_VIEW_X, (vs.y - rect.size.y) * 0.5)
+		holder.add_child(rect)
+		return holder
 	return null
+
+# 竖向渐变遮罩（与主菜单同款）：中段压暗保可读性，顶部标题与底部留亮
+func _make_cover_scrim() -> TextureRect:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.34, 0.74, 0.90, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0, 0, 0, 0.24),
+		Color(0, 0, 0, 0.18),
+		Color(0, 0, 0, 0.40),
+		Color(0, 0, 0, 0.36),
+		Color(0, 0, 0, 0.14),
+		Color(0, 0, 0, 0.08),
+	])
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	gt.fill_from = Vector2(0.0, 0.0)
+	gt.fill_to = Vector2(0.0, 1.0)
+	gt.width = 8
+	gt.height = 256
+	var scrim_rect := TextureRect.new()
+	scrim_rect.texture = gt
+	scrim_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	scrim_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	scrim_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return scrim_rect
 
 func _build() -> void:
 	_load_teams()   # 【队伍存档】先把上次的我方/敌方队伍恢复出来，再搭界面（下面 _refresh() 才能显示对）
@@ -178,6 +226,7 @@ func _build() -> void:
 	var cover := _make_cover_bg()
 	if cover != null:
 		add_child(cover)
+	add_child(_make_cover_scrim())   # 【2026-09-28】与主菜单同款的渐变遮罩（背景图可读性）
 
 	var vbox := VBoxContainer.new()
 	vbox.position = Vector2(24, 26)

@@ -334,6 +334,7 @@ var _replay_deploy_seq := 0           # 部署逐手动画的"代"：清场/重�
 var _replay_local_faction := -1       # 【2026-09-28·联机录像】回放里"我方"是哪一方（-1 = 按默认：蓝/玩家）
 var _replay_ready := false            # 回放开场流程（含部署逐手动画）是否跑完 —— 导出器要先等它
 var _replay_skills_defer := -1        # 【2026-09-28】本段"回合开始技"要顺延到段内步骤之后才跑（实战顺序：先补位后技能）
+var _replay_stage_done := -1          # 【2026-09-28】已经跑过"回合开始那套"的段号（防同一段跑两遍，见 `_replay_side_begin()`）
 var _replay_wait_cap_ms := 3000       # 本步"等演出"的兜底上限（替补落位给小一点，见 `REPLAY_SUB_WAIT_CAP`）
 # 【探针观测位】不参与任何生产逻辑：给 `RL/probe`、`.dsh/tmp` 里的对照探针数"这一趟到底重演了几招"。
 var _obs_target := 0
@@ -346,6 +347,9 @@ var _obs_frame_end_hook: Callable = Callable()
 #   "before"（快照刚还原完、"回合开始那套"还没跑）/ "stage"（清账+还原变身+先补位跑完）/
 #   "after"（回合开始技也演完）。生产里恒为空 ⇒ 零行为变化。
 var _obs_stage_hook: Callable = Callable()
+# 【探针观测位·2026-09-28】临时诊断开关：打开后 `_summon_skeletons()` 每次被调用都打印"谁调的/哪一段"。
+#   生产恒 false（一次 if 判断）⇒ 零行为变化。用于定位"同一段召唤两遍"。
+var _obs_summon_log := false
 var _replay_paused := false           # 暂停中（播放循环在此等待）
 var _replay_speed := 1.0              # 倍速（1 / 2 / 4）
 var _replay_panel = null              # 回放控制条（src/ReplayPanel.gd；懒加载）
@@ -2062,6 +2066,8 @@ func _deploy_spawn(faction: int, hero_id: String) -> void:
 func _on_deploy_pick(hero_id: String) -> void:
 	if state != State.DEPLOY or _deploy_side != 0:
 		return
+	if _deploy_entrance_busy:   # 【2026-09-28】登场演出中：不能选下一个（用户口径）
+		return
 	if GameState.is_online and not GameState.is_host:
 		return   # 联机玩家轮：只有主机可点选（客户端等待）
 	if not player_pool.has(hero_id):
@@ -2076,6 +2082,8 @@ func _on_deploy_pick(hero_id: String) -> void:
 # 联机敌轮：客户端（非主机）在 _deploy_side==1 时点选敌方英雄
 func _on_enemy_deploy_pick(hero_id: String) -> void:
 	if state != State.DEPLOY or _deploy_side != 1:
+		return
+	if _deploy_entrance_busy:   # 【2026-09-28】登场演出中：不能选下一个
 		return
 	if not GameState.is_online or GameState.is_host:
 		return   # 联机敌轮：只有客户端可点选（主机等待
@@ -2107,6 +2115,8 @@ func _show_enemy_deploy_zones(enemy_color: Color) -> void:
 func _try_place_deploy(cell: Vector2i) -> bool:
 	if state != State.PLACE_DEPLOY or _pending_deploy == "":
 		return false
+	if _deploy_entrance_busy:   # 【2026-09-28】上一手还在登场演出中
+		return false
 	if not _in_spawn_cell(cell, DataRegistry.Faction.PLAYER):
 		return false
 	if occupancy.has(cell):
@@ -2118,17 +2128,20 @@ func _try_place_deploy(cell: Vector2i) -> bool:
 	# 【2026-09-27 真凶】原来这里是"内联造人"，**绕过了 `_deploy_spawn_at()`** —— 而录像逐手记账
 	#   （`_rec_note_deploy_step`）与"冒出来"演出都在那个函数里 ⇒ 玩家这 3 手**从来没进录像**
 	#   （用户那条 00:02 录像里只有敌方 3 手就是这个）。现在统一走 `_deploy_spawn_at()`。
-	_deploy_spawn_at(DataRegistry.Faction.PLAYER, hid, cell)
 	AudioManager.play("select")
+	_deploy_entrance_busy = true   # 【2026-09-28】这一手登场演出期间：锁住放位/选人（演完放行）
+	_deploy_spawn_at(DataRegistry.Faction.PLAYER, hid, cell)
 	# 联机：把这次部署广播给对端（对端apply_deployment，保证两端一致）
 	if GameState.is_online and NetBus.is_online:
 		NetBus.send_all(JSON.stringify({ "type": "deploy", "faction": DataRegistry.Faction.PLAYER, "hero": hid, "cell": [cell.x, cell.y] }))
-	_deploy_after_pick()
+	_deploy_place_flow()
 	return true
 
 # 敌轮：客户端在敌轮（_deploy_side==1）把选中enemy 英雄放到敌方半场，并广播 ENEMY 部署给主机
 func _try_place_enemy_deploy(cell: Vector2i) -> bool:
 	if state != State.PLACE_DEPLOY or _pending_enemy_deploy == "":
+		return false
+	if _deploy_entrance_busy:   # 【2026-09-28】上一手还在登场演出中
 		return false
 	if not _in_spawn_cell(cell, DataRegistry.Faction.ENEMY):
 		return false
@@ -2143,11 +2156,12 @@ func _try_place_enemy_deploy(cell: Vector2i) -> bool:
 	#   （`_rec_note_deploy_step`）+ 冒出来演出"都在那个函数里 ⇒ 联机客户端这一端的**红方那几手从来没进录像**
 	#   （与玩家那 3 手的老 bug 同源，见 `_try_place_deploy()`）。回放里就变成"我方逐手上、对方一次性出现"。
 	#   统一走 `_deploy_spawn_at()`：记账 + 造人 + 淡入一次到位，两端口径一致。
-	_deploy_spawn_at(DataRegistry.Faction.ENEMY, hid, cell)
 	AudioManager.play("select")
+	_deploy_entrance_busy = true   # 【2026-09-28】这一手登场演出期间：锁住放位/选人（演完放行）
+	_deploy_spawn_at(DataRegistry.Faction.ENEMY, hid, cell)
 	if GameState.is_online and NetBus.is_online:
 		NetBus.send_all(JSON.stringify({ "type": "deploy", "faction": DataRegistry.Faction.ENEMY, "hero": hid, "cell": [cell.x, cell.y] }))
-	_deploy_after_pick()
+	_deploy_place_flow()
 	return true
 
 # 联机部署同步：网络收到对部署某单时调用，在本端对应阵营放置（faction/hero/cell）
@@ -2169,6 +2183,8 @@ func apply_deployment(faction: int, hero_id: String, cell: Vector2i) -> void:
 
 func _on_deploy_pick_again(hero_id: String) -> void:
 	if state != State.PLACE_DEPLOY or _pending_deploy == "":
+		return
+	if _deploy_entrance_busy:   # 【2026-09-28】登场演出中：不许反悔/切换
 		return
 	if hero_id == _pending_deploy:
 		# 反悔：取消当前选中（英雄仍在卡池，位置不动
@@ -2192,6 +2208,8 @@ func _on_deploy_pick_again(hero_id: String) -> void:
 # 联机敌轮：客户端放位阶段再次点敌方英雄可反悔/切换
 func _on_enemy_deploy_pick_again(hero_id: String) -> void:
 	if state != State.PLACE_DEPLOY or _pending_enemy_deploy == "":
+		return
+	if _deploy_entrance_busy:   # 【2026-09-28】登场演出中：不许反悔/切换
 		return
 	if GameState.is_online and GameState.is_host:
 		return
@@ -2566,12 +2584,26 @@ func _enemy_deploy() -> void:
 
 func _deploy_spawn_at(faction: int, hero_id: String, cell: Vector2i) -> void:
 	_rec_note_deploy_step(faction, hero_id, cell)
-	var u := _spawn_unit(hero_id, faction, cell)
-	u.modulate.a = 0.0
-	u.scale = Vector2(0.2, 0.2)
-	var t := create_tween()
-	t.tween_property(u, "modulate:a", 1.0, 0.35)
-	t.parallel().tween_property(u, "scale", Vector2.ONE, 0.35)
+	# 造人 + 登场演出（"从地里转出来"）+ 登场台词全在 `_spawn_unit()` 里；
+	# 演出/台词的等待由调用方用 `_deploy_wait_entrance()` 决定要不要等（用户口径：
+	# 「登场音效结束后才能行动或者登场下一个」⇒ 真人放位那条路等，敌方自动部署不等）。
+	_spawn_unit(hero_id, faction, cell)
+
+# 【2026-09-28·用户口径「登场音效结束后才能行动或者登场下一个」】等这次登场演完 + 台词播完。
+#   上限 `ENTRANCE_VOICE_CAP`；没台词（英雄还没配音）时只等动画 `ENTRANCE_DUR`。
+func _deploy_wait_entrance() -> void:
+	var wait := maxf(ENTRANCE_DUR, minf(_last_entrance_voice_len, ENTRANCE_VOICE_CAP))
+	if wait > 0.0:
+		await get_tree().create_timer(wait).timeout
+
+# 真人放位后的收尾：演出期间锁操作（`_deploy_entrance_busy`），演完再交还操作权 / 开战。
+# ⚠️ 故意**不动 `state`**：出生区色罩是按 state 画的（DEPLOY/PLACE_DEPLOY），改 state 会让提示闪一下。
+func _deploy_place_flow() -> void:
+	if not _deploy_entrance_busy:
+		return
+	await _deploy_wait_entrance()
+	_deploy_entrance_busy = false
+	_deploy_after_pick()
 
 func _deploy_after_pick() -> void:
 	state = State.DEPLOY   # 一次放置完成，回到"继续选人"模式
@@ -3031,7 +3063,36 @@ func _spawn_unit(hero_id: String, faction: int, cell: Vector2i) -> Unit:
 	# 出生/落点上恰有增益道具（含金矿）时立刻拾取：与"移动落点拾取"同一套规则。
 	# 否则英雄（尤其替补）落在出生区里的道具上会白白踩过、拿不到。
 	_pickup_buff_at_cell(u)
+	# 【2026-09-28·用户口径「英雄登场的时候从地里转出来的感觉」】登场演出（所有新出场的单位都走这里：
+	#   部署逐手 / 开局批量落位 / 替补 / 录像重演）。
+	_play_entrance_anim(u)
+	# 【2026-09-28·用户要求】登场台词；长度记下来给 `_deploy_wait_entrance()` 用（回放里不喊，保持原口径）
+	_last_entrance_voice_len = 0.0
+	if not _replay_mode:
+		_last_entrance_voice_len = AudioManager.play_hero_voice(u.display_name, "line")
 	return u
+
+# 【2026-09-28·用户口径「英雄登场的时候从地里转出来的感觉」⇒ 随后改口「不要旋转出场啊，像宿魂那样」】
+#   登场演出 = **宿魂瞬移那套**（`_animate_emerge()`："贴地压扁 + 透明 ⇒ 淡入 + 弹回原尺寸"，
+#   观感是"从土里透出来/钻出来"）：**不旋转**、不挪位置，只动 `scale` 与 `modulate.a`。
+#   纯表现：不碰任何战斗数据；headless（跑批/探针）里 Tween 照常走完，等它的部署流程不会卡住。
+const ENTRANCE_DUR := 0.45        ## 登场演出时长（秒；与"弹回原尺寸"那一段对齐）
+const ENTRANCE_VOICE_CAP := 4.0   ## 等登场台词的上限（再长也不至于把部署卡死）
+const ENTRANCE_SINK_SX := 0.30    ## 起始横向压扁（宿魂同款：0.30）
+const ENTRANCE_SINK_SY := 0.12    ## 起始纵向压扁（宿魂同款：0.12，贴地 = 还埋在土里）
+var _last_entrance_voice_len := 0.0   ## 这次登场的台词时长（`_spawn_unit()` 里记；0 = 没台词）
+var _deploy_entrance_busy := false    ## 登场演出期间锁住放位/选人（演完 `_deploy_place_flow()` 放行）
+
+func _play_entrance_anim(u: Unit) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	var base_scale := u.scale      # 记下原缩放（选中时是 1.08）—— 结尾要还原成它，不能写死 Vector2.ONE
+	u.modulate.a = 0.0
+	u.scale = Vector2(base_scale.x * ENTRANCE_SINK_SX, base_scale.y * ENTRANCE_SINK_SY)
+	var t := create_tween()
+	t.tween_property(u, "modulate:a", 1.0, ENTRANCE_DUR * 0.5)   # 先淡入：观感"从土里透出来"
+	t.parallel().tween_property(u, "scale", base_scale, ENTRANCE_DUR) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)     # 末尾轻微过冲 = 钻出地面的弹性
 
 func _start_match() -> void:
 	log_message.emit("对局开始！你率 3 名英雄迎战敌手")
@@ -4251,12 +4312,34 @@ func apply_command(cmd: Dictionary) -> void:
 	#   `select` 是纯 UI 选中，不入流水（口径与原来一致）；敌方 AI 那一侧走 `EnemyReplay` 直接调
 	#   `_do_move/_do_attack`（不经本函数）⇒ 单机录像里仍然只有一条 `plan` 流水，不会翻倍。
 	var ct := String(cmd.get("type", ""))
+	var u_idx := int(cmd.get("u", -1))
+	var t_idx := int(cmd.get("t", -1))
+	# 【2026-09-28 修·"回放里打错目标"】指令里的 `u` / `t` 是**当时 units 数组的下标**：
+	#   录制侧补上"稳定身份"标签（`who` / `tgt` = 阵营 + 英雄 id + 当时落点），回放侧**优先按标签解析**。
+	#   与敌方 AI 计划同一套（`_tag_plan_identity()` / `_find_unit_by_tag()`）。
+	#   为什么必须补：逐步对照抓到过"同一招在回放里打的是另一个单位"（录制侧打 `1@1,1` 并吃了反击，
+	#   回放侧打 `1@1,2`）—— 数组顺序/内容只要有一点不同，下标就会指到别人。
+	if not _replay_mode:
+		var who := _unit_tag(units[u_idx] if u_idx >= 0 and u_idx < units.size() else null)
+		if not who.is_empty():
+			cmd["who"] = who
+		if t_idx >= 0 and t_idx < units.size():
+			var ttag := _unit_tag(units[t_idx])
+			if not ttag.is_empty():
+				cmd["tgt"] = ttag
+	else:
+		var ru := _find_unit_by_tag(cmd.get("who", null))
+		if ru != null:
+			u_idx = units.find(ru)
+		var rt := _find_unit_by_tag(cmd.get("tgt", null))
+		if rt != null:
+			t_idx = units.find(rt)
 	if ct != "select":
 		_rec_step({
-			"type": ct, "u": int(cmd.get("u", -1)),
-			"to": cmd.get("to", null), "t": int(cmd.get("t", -1)), "cell": cmd.get("cell", null),
+			"type": ct, "u": u_idx,
+			"to": cmd.get("to", null), "t": t_idx, "cell": cmd.get("cell", null),
+			"who": cmd.get("who", null), "tgt": cmd.get("tgt", null),
 		})
-	var u_idx := int(cmd.get("u", -1))
 	var u: Unit = units[u_idx] if u_idx >= 0 and u_idx < units.size() else null
 	match String(cmd.get("type", "")):
 		"move":
@@ -4266,7 +4349,6 @@ func apply_command(cmd: Dictionary) -> void:
 				# 避免主机把敌方英雄当作本端选中(金色选中框/行动范围不应出现在敌方单位上)
 				_do_move(u, to, GameState.is_online and u.faction != _my_faction())
 		"attack":
-			var t_idx := int(cmd.get("t", -1))
 			var t: Unit = units[t_idx] if t_idx >= 0 and t_idx < units.size() else null
 			if u != null and t != null and is_instance_valid(u) and is_instance_valid(t) and u.alive and t.alive:
 				_do_attack(u, t, GameState.is_online and u.faction != _my_faction())
@@ -4344,6 +4426,12 @@ func _impact_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 		_finish_obstacle_hit(for_enemy)
 		return
 	_obstacle_hit_fx(cell)
+	# 【2026-09-28·用户报「伐木工触发技能怎么没有音效」⇒ 口径「Woodcutter_MeleeAttack 攻击全部改为这个」】
+	#   敲障碍 = 伐木工的技能触发点：攻击音效走 `attack`（= 他的 `普通攻击.ogg`，与打单位同一个音），
+	#   外加语音 `attack`（他剩下的那条攻击喊话）。其他英雄没登记 ⇒ 音效/语音各自静默。
+	AudioManager.play_hero_sfx(u.display_name, "attack")
+	if not _replay_mode:
+		AudioManager.play_hero_voice(u.display_name, "attack")
 	var dmg := _hero(u).obstacle_damage()
 	_damage_obstacle(cell, dmg)
 	log_message.emit("%s 攻击障碍物。" % u.display_name)
@@ -4652,6 +4740,13 @@ func _do_move(u: Unit, target_cell: Variant, for_enemy: bool) -> void:
 		_finish_move(u, for_enemy)
 		return
 	state = State.ANIMATING
+	# 【2026-09-28·用户要求】英雄声音：真的走起来了才响
+	#   语音（`VO_*_Move_*`，移动时喊一句）是**一次性**；行走音（`<键>_Walk`）按用户口径
+	#   「移动应该是在移动中都连续播放」⇒ 这里起循环，`_finish_move()` 里停。
+	AudioManager.stop_hero_walk()   # 先掐掉上一次的（正常已停，防御）
+	if not _replay_mode:
+		AudioManager.play_hero_voice(u.display_name, "move")
+		AudioManager.play_hero_walk(u.display_name)
 	# 记录移动距离（大大骑士冲锋加/ 风语者队友回血用）
 	# 大大骑士的冲锋加成在下方路径算定后按"实际冲到格数"统一结算（含被阻挡剪裁的情况）
 	u.last_move_dist = grid.distance(u.cell, target_cell)
@@ -4856,6 +4951,9 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 func _finish_move(u: Unit, for_enemy: bool) -> void:
 	if u == null or not is_instance_valid(u):   # 防御：单位已释放则跳过
 		return
+	# 【2026-09-28·用户口径「移动应该是在移动中都连续播放」】移动演完 ⇒ 停行走音的循环
+	#   （没在播时是空操作；被拦截/提前 return 的路径也会走到这里，一并收干净）
+	AudioManager.stop_hero_walk()
 	# 冲锋结算：移动动画播完后**此刻**才把"实际冲到的格数"写回攻击力上升并刷新面板，
 	# 否则数字会先于棋子滑到位（面板/棋子上的攻击力在移动途中就跳变）
 	if _charge_pending.has(u):
@@ -4941,7 +5039,14 @@ func _do_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		return
 	state = State.ANIMATING
 	_clear_selection()
-	AudioManager.play("attack")
+	# 【2026-09-28·用户口径「Woodcutter_MeleeAttack 伐木工攻击全部改为这个」】攻击音：
+	#   英雄登记了自己的攻击音效就用它（伐木工 = `普通攻击.ogg`），没有才退回通用 `attack.wav`。
+	#   与通用音效同样**回放里照常播**（只有语音不回放，见下面的 `play_hero_voice`）。
+	if not AudioManager.play_hero_sfx(attacker.display_name, "attack"):
+		AudioManager.play("attack")
+	# 【2026-09-28·用户要求】英雄语音（原版音效）：回放里不喊，免得快进时糊成一片
+	if not _replay_mode:
+		AudioManager.play_hero_voice(attacker.display_name, "attack")
 	log_message.emit("%s 攻击 %s。" % [attacker.display_name, target.display_name])
 	# 【2026-09-28·用户口径「击杀特效滑完、英雄再开始击杀对方」】预判这一击会打死人 ⇒ **先播击杀卡面**，
 	#   等它整段演完（滑出的英雄图案彻底消失）再往下走 ⇒ 之后英雄才前冲/开火、伤害与死亡照常结算。
@@ -5075,6 +5180,11 @@ func _kill_intro(killer: Unit, victim: Unit, dmg: int, is_attack: bool = true) -
 		return
 	if not victim.alive or not victim.would_be_lethal(dmg, is_attack):
 		return
+	# 【2026-09-28·用户口径「击杀小骷髅不需要特效」】召唤物（骷髅兵这类消耗品）不播击杀卡面：
+	#   在**发请求之前**就返回（不是让 HUD 忽略）—— 否则没人回调 `kill_intro_finished()`，
+	#   这一击要白等 `KILL_INTRO_MAX_WAIT` 秒才放行。判据与别处同一把尺：`DataRegistry.summons`。
+	if DataRegistry.summons.has(victim.hero_id):
+		return
 	if kill_intro_requested.get_connections().is_empty():
 		return
 	_kill_intro_done = false
@@ -5194,7 +5304,10 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	var cpos := board_view.cell_world_center(counterer.cell)   # 落点=自身格子中心（不受中途换瞬移影响
 	var lunge_to := cpos.lerp(board_view.cell_world_center(attacker.cell), 0.62)   # 沿反向直线轻
 	# 反击伤害 = 反击*实时攻击*（含buff/麻痹/冲锋加成，不套用远程相邻降攻
-	AudioManager.play("attack")
+	# 【2026-09-28·用户口径「反击音效也要用普通攻击的」】反击音 = 反击者自己的普攻音
+	#   （与 `_do_attack` 同一套：英雄登记了就用它，没有才退回通用 `attack.wav`）
+	if not AudioManager.play_hero_sfx(counterer.display_name, "attack"):
+		AudioManager.play("attack")
 	var ct := create_tween()
 	ct.tween_property(counterer, "position", lunge_to, 0.1)
 	ct.tween_callback(func():
@@ -5229,6 +5342,10 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 	var from := board_view.cell_world_center(counterer.cell)
 	var to := board_view.cell_world_center(attacker.cell)
 	var flight := _ray_flight(counterer.cell, attacker.cell)
+	# 【2026-09-28·用户口径「反击音效也要用普通攻击的」】远程反击原来**没有音效**，这里补上：
+	#   与近战反击同口径 —— 优先反击者自己的普攻音（远程英雄 = RangedAttack），没有才退回通用 `attack.wav`。
+	if not AudioManager.play_hero_sfx(counterer.display_name, "attack"):
+		AudioManager.play("attack")
 	# 【2026-09-23】远程反击同样改成"射一条射线"（用反击者自己的英雄配色/样式）
 	_spawn_ranged_ray(counterer, from, to, flight, func():
 		if is_instance_valid(attacker):
@@ -5952,6 +6069,21 @@ func _random_step(v: Unit) -> void:
 		t.tween_property(v, "position", board_view.cell_world_center(n), 0.35)
 
 func _summon_skeletons(u: Unit) -> void:
+	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：打印"谁调的 + 哪一段 + 当时场上几个骷髅"。
+	#   用来定位"同一段里召唤发生了两遍"（探针读数 `before 2 → after 4`）。用 `get_stack()` 直接取调用点。
+	if _obs_summon_log:
+		var st := get_stack()
+		var who := "?"
+		if st.size() >= 2:
+			var fr: Dictionary = st[1]
+			who = "%s @ %s:%d" % [String(fr.get("function", "?")),
+					String(fr.get("source", "")).get_file(), int(fr.get("line", 0))]
+		var n0 := 0
+		for v in units:
+			if v != null and is_instance_valid(v) and v.alive and v.hero_id == "summon_skeleton":
+				n0 += 1
+		print("[召唤诊断] 回放=%s 段=%d 步=%d 召唤者=%s 场上骷髅=%d 调用点=%s" % [
+			str(_replay_mode), _replay_frame, _replay_step, (u.hero_id if u != null else "?"), n0, who])
 	var slots: Array = []
 	for n in grid.neighbors(u.cell):
 		# 召唤落点必须是"能站人"的格：障碍/墓碑不可停靠（与移动、击退、换位的落点规则一致）；
@@ -6138,6 +6270,14 @@ func _on_unit_dying(u: Unit) -> void:
 func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = true) -> void:
 	if u == null or not is_instance_valid(u):
 		return   # 单位已释放：安全退
+	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：谁死了、是不是召唤物、当时哪一段。
+	if _obs_summon_log:
+		print("[阵亡诊断] 回放=%s 段=%d 步=%d %s(%s) 格=%d,%d 主人=%s 召唤物=%s" % [
+			str(_replay_mode), _replay_frame, _replay_step, u.hero_id, u.display_name,
+			u.cell.x, u.cell.y, str(u.summon_owner), str(DataRegistry.summons.has(u.hero_id))])
+	# 【2026-09-28·用户要求】英雄语音（原版音效）：阵亡喊一声
+	if not _replay_mode:
+		AudioManager.play_hero_voice(u.display_name, "death")
 	var cause_txt := ""
 	if u != null and u.death_cause != "":
 		cause_txt = "（%s）" % u.death_cause
@@ -6220,6 +6360,10 @@ func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = tru
 
 # 骷髅随主人（死灵法师）消散：复用 _on_unit_died 的收尾（不立碑、不计胜负、淡出后释放）
 func _skeleton_owner_gone(s: Unit) -> void:
+	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：骷髅的"连带离场"是不是照常走到这一步。
+	if _obs_summon_log and s != null and is_instance_valid(s):
+		print("[离场诊断] 骷髅连带离场 回放=%s 段=%d 步=%d 格=%d,%d" % [
+			str(_replay_mode), _replay_frame, _replay_step, s.cell.x, s.cell.y])
 	if s != null and is_instance_valid(s):
 		_on_unit_died(s)
 
@@ -7600,6 +7744,37 @@ func _unit_tag(u) -> Dictionary:
 	return { "fn": int((u as Unit).faction), "hid": String((u as Unit).hero_id),
 			"cell": [(u as Unit).cell.x, (u as Unit).cell.y] }
 
+## 标签（`{fn, hid, cell}`）→ 当前场上的单位：落点也对上就直接认定；只有同名同阵营一个时也认它；
+## 同名同阵营有多个且落点都不对 ⇒ 返回 null（宁可退回老办法按下标找，也不猜）。
+## 敌方 AI 计划的 `EnemyReplay` 与玩家指令的 `apply_command()` **共用这一处**。
+func _find_unit_by_tag(tag) -> Unit:
+	if not (tag is Dictionary):
+		return null
+	var d: Dictionary = tag
+	var fn := int(d.get("fn", -1))
+	var hid := String(d.get("hid", ""))
+	if hid == "":
+		return null
+	var want := Vector2i(-99, -99)
+	if d.has("cell"):
+		want = _fix_cell(d["cell"])
+	var same: Unit = null
+	var dup := false
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != fn or u.hero_id != hid:
+			continue
+		if want.x != -99 and u.cell == want:
+			return u        # 英雄与落点都对上 = 就是它
+		if same == null:
+			same = u
+		else:
+			dup = true
+	if same != null and not dup:
+		return same
+	return null
+
 ## 给整份计划打身份标签（**只在录制侧调**）：录制时打一次、录像里带着走 ⇒ 回放侧直接用。
 ## 已有标签（回放读回来的录像）一律不覆盖；`refs` 里取不到单位的那一步就留空 ⇒ 回放退回 `idx`。
 func _tag_plan_identity(plan: Array, refs: Array) -> void:
@@ -7689,6 +7864,12 @@ func _begin_replay_from_store() -> void:
 		GameState.replay_id = ""
 		get_tree().change_scene_to_file("res://scenes/Menu.tscn")
 		return
+	# 【2026-09-28 修·"召唤/推人跑了两遍"的第二条路】`Battle._ready()` 的**对局 prologue**（建局 → 开打）
+	#   会起一串协程（`_begin_side()` → `_run_side_skills()` → `_trigger_turn_start_all()`），它们比回放分支
+	#   醒得晚：`_replay_begin()` 已经把盘面换成录像第 0 段的局面之后，这批旧协程才醒来跑"回合开始那套"
+	#   ⇒ 死灵法师**多召唤一次**（探针诊断：两次召唤的调用点不同，其中一次不经过 `_replay_side_begin`）。
+	#   按工程既有做法（`reset_match()` 同样手段）把会话号 +1 ⇒ 那批旧协程在下一次自检时当场作废。
+	_session_id += 1
 	_replay_begin(d)
 
 
@@ -7907,10 +8088,12 @@ func _replay_loop() -> void:
 			_replay_seek_to = -1
 			_replay_seeking = true
 			_replay_hold_seq += 1   # 换代：还可能挂着的那次"停一拍"当场作废
+			var from_frame := _replay_frame
 			if t > _replay_frame:
 				await _replay_fast_forward(t)   # 往后：就地快进
 			else:
 				await _replay_rewind(t)         # 往前：回到第 0 段重建后再快进
+			var went_back := t <= from_frame    # 倒回（含"原地重来"）
 			_replay_seeking = false
 			# 【2026-09-28】跳到**部署段**（第 0 段）走与"进回放"同一条路：先清人（别停在"全员已站好"
 			#   的静态画面上），报完横幅再逐手重演（见 `_replay_deploy_clear()`）。
@@ -7920,15 +8103,16 @@ func _replay_loop() -> void:
 			_replay_paused = true                # 报横幅那一拍先停住（"先提示、再开打"）
 			# 【2026-09-28 用户要求】「点击开局后，在开局处暂停，需要点击继续或者点击录像才开始」：
 			#   落到**部署段**时先真停住（清完场、空盘），观众点了「继续」（或点一下画面）才演横幅+逐手。
-			#   ⚠️ 只对"开局"这一处生效：普通回合的「上/下回合」照旧"落地即停"（点它是为了看那一回合，
-			#   不是为了让系统等自己）—— 所以不动 `_replay_enter_frame()` 里的横幅那一拍。
-			if at_deploy and _replay_seek_pause:
-				# 【2026-09-28 用户要求】「点了开局之后不要出现哪方回合的提示，开始之后才出现」：
-				#   等待期间屏幕上**不该有任何回合提示**。观众多半是在别的回合演到一半时点的「开局」，
-				#   那时上一条回合横幅（「蓝方/红方回合」）还在淡出 ⇒ 一并清掉（含顶栏按第 0 段刷新）。
+			# 【2026-09-28 用户报「点开局后没点继续，死灵法师就开始召唤了」】倒回补跑的那一套
+			#   （`_replay_side_begin()`，见下面 `elif went_back`）原来排在"落地即停"**之前**执行
+			#   ⇒ 一落地就把召唤/推人/放道具全演完了，观众还没点「继续」。现在两者**同一口径**：
+			#   先停住等放行，放行之后才报横幅、才演那一套（"开始之后才出现提示"也一并满足）。
+			#   ⚠️ 只对"落地即停"的跳段生效（`_replay_seek_pause`）；普通回合的「上/下回合」照旧。
+			if (at_deploy or went_back) and _replay_seek_pause:
+				# 等待期间屏幕上**不该有任何回合提示**（含上一条还在淡出的回合横幅）+ 顶栏别停在旧回合号
 				if _hud != null and is_instance_valid(_hud):
 					_hud.clear_transient_ui()
-				GameState.round_number = replay_round_of(0)   # 顶栏别停在上一段的回合号
+				GameState.round_number = replay_round_of(_replay_frame)
 				if _hud != null and is_instance_valid(_hud):
 					_hud.refresh_round_label()
 				await _replay_wait_resume()
@@ -7942,6 +8126,15 @@ func _replay_loop() -> void:
 			await _replay_enter_frame(true)      # `force`：跳段落地这一次一定要报（不受"同一段不重复报"影响）
 			if at_deploy:
 				await _replay_deploy_frame()
+			elif went_back:
+				# 【2026-09-28 修·用户报「有死灵法师的录像，召唤完后点开局，那死灵法师那回合就不会召唤」】
+				#   倒回落到第 t 段时，**那一段的"回合开始那套"从来没跑过**：`_replay_rewind()` 是把段号
+				#   直接设回去的，而这里原来只对"部署段"做了补演 ⇒ 那一段该有的回合开始技全部缺失
+				#   （死灵法师的骷髅、风语者的光环、圣诞老人的道具、傀儡师的推人…）。
+				#   实测：第 1 趟第 0 段 `after 骷髅=4`；点开局后第 2 趟**第 0 段的阶段钩子一次都没出现**。
+				#   ⚠️ 只补"倒回"这一路：往前的快进重演在换段时已经跑过目标段的那一套（再跑一次会翻倍）。
+				#   ⚠️ 它在**等放行之后**才跑（见上面的闸门）—— 否则一落地就召唤，观众还没点「继续」。
+				await _replay_side_begin(_replay_frame)
 			_replay_paused = _replay_seek_pause   # 看完那一拍：按用户点的是「看」还是「继续」定
 			_replay_seek_done = _replay_frame   # 外部确认"我这次跳段落地了"（整趟同帧跑完，看不见中间态）
 			_replay_seek_seq += 1
@@ -8064,6 +8257,23 @@ func _replay_end_frame() -> void:
 func _replay_side_begin(idx: int) -> void:
 	if not _replay_mode or not is_inside_tree():
 		return
+	# 【2026-09-28 修·用户报"召唤/推人跑了两遍"】**同一段的"回合开始那套"只跑一次**。
+	#   病灶（探针实测的两次调用点）：① 进场时残留的清账流程已经跑过一遍（`_ready()` 那套对局 prologue
+	#   的协程）；② `_replay_begin()` 又显式补跑一遍（`Battle.gd:7928`）⇒ 死灵法师一次召唤 2 个，
+	#   盘上出现 4 个（探针读数 `before 骷髅=2 → after 骷髅=4`）。
+	#   倒回（「开局/上回合」）要能重跑 ⇒ `_replay_rewind()` 里把这个号清成 -1（见那里）。
+	if _replay_stage_done == idx:
+		return
+	_replay_stage_done = idx
+	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：打印"谁调的这一段回合开始那套"。
+	if _obs_summon_log:
+		var st := get_stack()
+		var who := "?"
+		if st.size() >= 2:
+			var fr2: Dictionary = st[1]
+			who = "%s @ %s:%d" % [String(fr2.get("function", "?")),
+					String(fr2.get("source", "")).get_file(), int(fr2.get("line", 0))]
+		print("[阶段诊断] _replay_side_begin(段=%d) 调用点=%s" % [idx, who])
 	var side := replay_side_of(idx)
 	if side < 0:
 		return   # 部署段：没有"回合开始的账"
@@ -8287,6 +8497,7 @@ func _replay_fast_forward(target: int) -> void:
 
 ## 倒回第 target 段（往前：只能从第 0 段重建再快进过去）
 func _replay_rewind(target: int) -> void:
+	_replay_stage_done = -1   # 倒回：目标段的"回合开始那套"要能重跑（防重复闸门见 `_replay_side_begin()`）
 	_restore_snapshot((_frames()[0] as Dictionary).get("snap", {}))
 	_replay_frame = 0
 	_replay_step = 0

@@ -167,32 +167,10 @@ func _resolve_unit(tag, refs: Array, idx: int) -> Unit:
 		return r as Unit
 	return null
 
-## 标签（`{fn, hid, cell}`）→ 当前场上的单位：落点也对上就直接认定；只有同名同阵营一个时也认它；
-## 同名同阵营有多个且落点都不对 ⇒ 返回 null（宁可退回 idx，也不猜）。
+## 标签（`{fn, hid, cell}`）→ 当前场上的单位。**实体解析在 `Battle._find_unit_by_tag()`**（玩家指令那一路
+## 也用它，两处必须同口径）；这里只是个别名，保留旧名给本文件内部调用。
 func _find_by_tag(tag: Dictionary) -> Unit:
-	var fn := int(tag.get("fn", -1))
-	var hid := String(tag.get("hid", ""))
-	if hid == "":
-		return null
-	var want := Vector2i(-99, -99)
-	if tag.has("cell"):
-		want = battle._fix_cell(tag["cell"])
-	var same: Unit = null
-	var dup := false
-	for u in battle.units:
-		if u == null or not is_instance_valid(u) or not u.alive:
-			continue
-		if u.faction != fn or u.hero_id != hid:
-			continue
-		if want.x != -99 and u.cell == want:
-			return u        # 英雄与落点都对上 = 就是它
-		if same == null:
-			same = u
-		else:
-			dup = true
-	if same != null and not dup:
-		return same
-	return null
+	return battle._find_unit_by_tag(tag)
 
 # ---- 内部等待原语 ----
 

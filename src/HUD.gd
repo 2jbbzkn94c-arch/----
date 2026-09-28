@@ -1,4 +1,4 @@
-﻿class_name HUD
+class_name HUD
 extends CanvasLayer
 ## 战斗界面浮层：显示回合/阵营、消息日志、操作提示，并放置结束回合/重开按钮。
 
@@ -97,6 +97,9 @@ const TEAM_TOGGLE_CLOSED := "▲"   # 收起状态下**图缺失时**的退回�
 #   收起时贴「展开替补队伍」、拉出后贴「收回替补队伍」（两张都是 216×221）。
 const TEAM_TOGGLE_TEX_CLOSED := "res://assets/图标/展开替补队伍.png"
 const TEAM_TOGGLE_TEX_OPEN := "res://assets/图标/收回替补队伍.png"
+# 【2026-09-28·用户要求】「喊话按钮换成 assets/图标/喊话.png」：有图就**按钮本体用图标**（不写文字，
+#   与上面那个「展开替补队伍」图标按钮同款口径）；图缺失 ⇒ 自动退回原来的文字按钮（不影响联机可玩性）。
+const CHAT_ICON := "res://assets/图标/喊话.png"
 const TEAM_TOGGLE_ICON_H := 58.0   # 图标按钮高度（宽按图的比例 ⇒ 58 × 216/221 ≈ 57）
 const TEAM_TOGGLE_OPEN := "▼"     # 展开状态下的箭头：点它收回去
 # 【2026-09-27】底部常驻行现在只有「结束回合」；`_restart_btn` 已随"重开/返回选人整合进暂停面板"移除。
@@ -1774,18 +1777,32 @@ func _build_chat_button(root: Control, vsize: Vector2) -> void:
 	if not GameState.is_online:
 		return
 	var btn := Button.new()
-	btn.text = "喊话"
-	btn.custom_minimum_size = Vector2(76, 44)
-	btn.add_theme_font_size_override("font_size", 16)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.16, 0.18, 0.26, 0.92)
-	sb.corner_radius_top_left = 10
-	sb.corner_radius_top_right = 10
-	sb.corner_radius_bottom_left = 10
-	sb.corner_radius_bottom_right = 10
-	sb.border_color = Color(0.6, 0.7, 1.0, 0.5)
-	sb.set_border_width_all(1)
-	btn.add_theme_stylebox_override("normal", sb)
+	# 【2026-09-28·用户要求】喊话按钮：有「喊话.png」就用图标本体（44×44），没有才退回文字按钮
+	var chat_ic := load(CHAT_ICON) as Texture2D
+	if chat_ic != null:
+		btn.icon = chat_ic
+		btn.expand_icon = true                       # 图标铺满按钮（54×51 的图按比例缩放）
+		btn.custom_minimum_size = Vector2(44, 44)
+		# 【2026-09-28·用户报「喊话图标有两个重叠」】图标是**带白底的方形图**，压在深色圆角底板上
+		#   会看成"两块叠着"（白方块 + 圆角底板）。与名片按钮同一口径：**去掉底板与边框**，只留图标
+		#   （normal/hover/pressed/focus/disabled 五个状态全套 StyleBoxEmpty）。
+		btn.flat = true
+		for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+			btn.add_theme_stylebox_override(st, StyleBoxEmpty.new())
+	else:
+		btn.text = "喊话"
+		btn.custom_minimum_size = Vector2(76, 44)
+		btn.add_theme_font_size_override("font_size", 16)
+	if chat_ic == null:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.16, 0.18, 0.26, 0.92)
+		sb.corner_radius_top_left = 10
+		sb.corner_radius_top_right = 10
+		sb.corner_radius_bottom_left = 10
+		sb.corner_radius_bottom_right = 10
+		sb.border_color = Color(0.6, 0.7, 1.0, 0.5)
+		sb.set_border_width_all(1)
+		btn.add_theme_stylebox_override("normal", sb)
 	btn.pressed.connect(_toggle_chat_panel)
 	btn.position = Vector2(10, vsize.y - 56 - 10)
 	root.add_child(btn)

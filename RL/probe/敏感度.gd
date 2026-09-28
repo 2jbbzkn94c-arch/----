@@ -64,6 +64,10 @@ const KEY_VAR := {
 	# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（扁平键，全队生效）
 	"EXPOSURE_TOTAL_W": "w_exposure_total",
 	"EXPOSURE_HP_MAX": "w_exposure_hp_max",
+	# 【2026-09-28·用户拍板】㉗**血锁开团**（动作层两键，见 `src/BattleAI.gd` 的 `const PULL_OPEN_W`）：
+	#   包围增量 / 拉出来落单（后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才付）。
+	"PULL_OPEN_W": "w_pull_open",
+	"PULL_ISOLATE_W": "w_pull_isolate",
 	# ============ 【2026-09-24 补齐】2026-09-21 之后新增 / 历史上漏收的键 ============
 	# 口径：**本表应恒等于 `set_weights` 里的扁平键全集**（现在 50 个）；`INT_KEYS` 恒等于其中
 	#   `int(v)` 转型的那 21 个。漏收的后果**不是报错**，而是 `ablate` / `order` / `actdiff`

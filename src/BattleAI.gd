@@ -149,6 +149,10 @@ class Sim:
 	#   语义 = 「**用越低的伤害破盾越值**」：1 点 poke 拆掉一面盾 = 逼对面花资源、自己没浪费输出；
 	#   一记大招被盾整次吃掉 = 纯浪费（折算系数趋近 0）。符号对称：对面盾被我方破 = +、我方盾被对面破 = −。
 	var shield_break_val := 0.0
+	# 【2026-09-28 新增】"血锁开团"的动作量（见 `const PULL_OPEN_W` 处说明）：`_apply` 在血锁出手前
+	#   按**被拉目标的落点**算好累加（包围增量 × PULL_OPEN_W + 拉成孤立 × PULL_ISOLATE_W），
+	#   `_evaluate` 入账。只记我方（`u.fn == ENEMY`），只记这一手真能拉到的目标。
+	var pull_open_val := 0.0
 	# 【RL 修正】当前**行动方**阵营（决定"圣光只在敌方回合护己方"这类时机判定）。
 	# 生产路径里 AI 只在"敌方回合开始"时装快照做搜索，所以缺省就是敌方自己行动；
 	# 对拍 harness 会把行动方设成玩家（active=P）来测圣光，此时要显式传进来（见 build_state）。
@@ -221,6 +225,8 @@ class Sim:
 		c.silence_val = silence_val
 		c.pin_val = pin_val
 		c.paralyze_val = paralyze_val
+		# 【2026-09-28】㉗血锁开团同理：漏掉的话"前几步拉的人"到下一步就消失（只有最后一步计分）。
+		c.pull_open_val = pull_open_val
 		c.active_fn = active_fn
 		c._neg_gained = _neg_gained.duplicate()
 		c.engaged0 = engaged0               # ⑥ 开关的判据是**本回合行动前**的快照 ⇒ 整回合不变
@@ -615,6 +621,26 @@ const STAY_OPTION := 0
 #   ⚠️ 判据只能在**动作层**算（`_evaluate` 只看最终状态，看不到"这一手本来够得到"）⇒ 见 `search()`。
 # 0 = 关（默认 ⇒ 逐位不变）· 推荐 2.0~3.0。
 const IDLE_HIT_PENALTY := 0.0
+# ---- 【2026-09-28 新增·默认 0 = 关】**"血锁开团"：把敌人拉进包围 / 拉出来落单值多少分** ----
+# 用户原话：「血锁得学会将敌人拉过来包围，有嬉皮死神配合的时候，得学会拉出来落单」。
+# 背景（探针 `RL/probe/血锁拉人自检.gd` 的实测，见那份文件表头的读数）：血锁的拉人**不是一步可选动作** ——
+#   它是"**从 2~3 格出手**"的副作用（`hero_41::on_attack` → `Battle._pull_to`，贴身则不动）。
+#   而全引擎**没有任何一项为拉人付钱**（此前只有一行注释），于是"拉"与"贴上去打"的分差**全部**由
+#   队形三项（⑳抱团 / ㉑退路被夹 / ㉓离队距离）决定 ⇒ 实测独狼局面里 ㉑ 反而把"拉"罚了 −2.00。
+# 本项 = **动作层**的一笔账（与 ⑯⑰⑱⑲㉔㉕ 同款：`_apply` 累加进 `sim.pull_open_val`、`_evaluate` 入账），
+#   只记我方、只记"这一手真能拉到的目标"，按**被拉目标落点**算两半：
+#   ① **包围**（`PULL_OPEN_W` × 每个"拉完才够得到它"的我方单位）：判据 = `_threat_can_hit(落点)`
+#      ⇒ 与挨打合计/威胁估计**同一把尺子**（含射程、血锁直线、视线、嘲讽门）。够得到它的人变多
+#      = 它挨的刀变多（③血量账、④集火、击杀都由模拟自己算，本项只补"**够得到的增量**"这笔显式收益）。
+#   ② **拉出来落单**（`PULL_ISOLATE_W` × 每个被拉成孤立的敌人）：判据 = `_sim_isolated_at(落点)`，
+#      **且我方场上有嬉皮死神（hero_30）存活且技能有效** —— 孤立 ×2 是它的专属倍率
+#      （`heroes/hero_30_嬉皮死神.gd`：「目标没有与其他敌人相邻 ⇒ 2 倍伤害」）。
+#      ⚠️ 为什么必须挂"有嬉皮死神"这个条件：孤立本身对别的英雄不值钱（不孤立谁也不会多挨一下）
+#      ⇒ 没有嬉皮时这一半恒 0，本键不会让血锁**无缘无故**去拆对面的队。
+# 量与量纲：一次拉人最多值 `PULL_OPEN_W × 我方单位数`，默认 1.2/人 ⇒ 3 人队 ≈ 3.6 分
+#   （≈ 一次普通攻击的 ③血量账 + ④集火），够压过 ㉑ 那 −2.00，但压不过"该打谁"的量级（击杀 20+）。
+const PULL_OPEN_W := 0.0
+const PULL_ISOLATE_W := 0.0
 # ---- 【2026-09-21 新增·默认关】**两项"队形"评分**（`FORM_COHESION_W` / `FORM_ESCAPE_W`）----
 # 用户原话：「现在有没有什么评分会让 AI 保持一个不错的队形。现在 AI 有个问题，他会因为某些格子的
 #   能打的伤害高或者被伤害少而站得四分五裂，然后被玩家隔离，逐个击破。远程也有可能因为这个原因
@@ -637,8 +663,16 @@ const IDLE_HIT_PENALTY := 0.0
 #    而且两步后队友贴回来就原样还回来 ⇒ **中途结账会看到这种来回** ⇒ 定稿：
 #    **⑳㉑ 只在"全队都行动完"的末态结算**（`_evaluate(sim, end_of_turn)`，中途恒为 0）。
 # ② `FORM_ESCAPE_W`（退路/被夹）：每个我方单位的 6 个邻格里"能走的"还剩几个，少于
-#    `FORM_ESCAPE_MIN` 就罚差额（治"贴墙、死胡同"）；再加「相邻敌人数 − 相邻队友数」的正数部分
-#    （治"被包夹"——身边敌人比队友多，就是被夹住了）。**同样只在末态结算**。
+#    `FORM_ESCAPE_MIN` 就罚差额（治"贴墙、死胡同"）；再加**贴身威胁的净值**
+#    （= max(0, 贴身敌人里最疼的一下 − 贴身队友能还手的最狠一下) × `FORM_ESCAPE_SCALE`；治"被强敌包夹"）。
+#    **同样只在末态结算**。
+#    ⚠️ **2026-09-28 用户拍板 A：两半都从"数人头"改成"威胁计价"**。旧口径是
+#    `max(0, 相邻敌数 − 相邻队友数)`，两个毛病：① 1 攻的后勤贴脸与 6 攻的巨剑同价；
+#    ② **血锁把敌人拉到自己面前 = 主动给自己记一份"被夹"**（探针 `RL/probe/血锁拉人自检.gd`
+#    盘面①实测：原地开钩 −1.481 vs 走1格贴身打 +0.519，差的 −2.000 全在这一项）⇒
+#    它直接反着"拉过来包围"这个诉求。改成威胁计价后：弱敌几乎不罚、强敌照样罚得重，
+#    而**"拉过来"这件事本身不再自动挨罚**（"我够不够得到它"由 ㉗血锁开团 与 ③④ 去算）。
+#    口径与 ⑦核心风险 同一把尺子（邻敌的**真实单击**、再乘血量池倍率 ⇒ 与"我多疼"同量纲）。
 # 两项都是**纯局面量**（只看位置与占位，不需要任何新数据、不看对面怎么走），代价 O(单位数×6)。
 # 默认 0 ⇒ 生产三档逐位不变；噩梦档的初值写在 `RL/weights/噩梦.json`，要调只动那两个数。
 const FORM_COHESION_W := 0.0
@@ -655,6 +689,15 @@ const FORM_ESCAPE_W := 0.0
 const FORM_RADIUS := 2          # 抱团半径（**路网步数**；2 = 一步能回援 = "互相够得着"）
 const FORM_ROUTE_MAX := 6       # ㉓ 梯度上限（步）：被墙/敌人隔死也按 6 步算 ⇒ 最多罚 5 份（有界）
 const FORM_ESCAPE_MIN := 2      # 每个单位至少留 2 个可走邻格（1 个 = 只剩一条路；0 = 死胡同）
+# 【2026-09-28 新增】㉑ 的"相邻敌人"那一半从**数人头**换成**威胁计价**之后的**量纲补偿**（内部常量，不是可调键）：
+#   新口径的单点 = 真实单击 × 血量池倍率 ÷ `TRADE_HP_REF`(20)，**再与"相邻队友能打回去的那一下"相减取正**
+#   （旧口径 = 邻敌数 − 邻友数，也是净值）⇒ 取 3.0 让"一个 3 攻普通敌人贴脸"≈ 旧口径的 1 分：
+#   3 攻打 20 血 = 3 × 1.0 ÷ 20 × 3.0 = 0.45 分/个；6 攻打 12 血 = 6 × 1.67 ÷ 20 × 3.0 = 1.5 分/个。
+#   ⚠️ 为什么是**常量**而不是可调键：它只做单位换算，不表达任何策略偏好；偏好全在 `FORM_ESCAPE_W`（斜率）里。
+#   ⚠️ 与旧口径的实质差别：① 弱敌贴脸罚得少（1 攻后勤 ≈ 0.15 分/个，旧恒 1.0）；
+#      ② 坦克挨同一刀更便宜（血量池倍率进 ㉑，与 ③⑥⑦ 同口径 —— 用户 2026-09-24 方案 A 的意图）；
+#      ③ **队友"能还手"按威胁折算**（旧口径只数人头 ⇒ 一个 1 攻后勤与一个 6 攻巨剑队友同样"解围"）。
+const FORM_ESCAPE_SCALE := 3.0
 # ---- 【2026-09-22 晚·用户拍板】㉓「队形一把尺」：把 ⑳ 并进 ㉓，㉑ 退役（`FORM_MERGE_MODE = 1`）----
 # 用户原话：「㉑ `FORM_ESCAPE_W` 删、⑳ `FORM_COHESION_W` 并进 ㉓（合成"一把队形尺"：只用"与最近队友的
 #   格距"梯度，把 0/1 孤立份并成一个分段函数）」。
@@ -1083,6 +1126,10 @@ var w_engage_pull := ENGAGE_PULL_PER_CELL
 var w_move_accept_damage := MOVE_ACCEPT_DAMAGE
 var w_move_accept_pool := MOVE_ACCEPT_POOL   # 【2026-09-24】⑥ 的罚是否也按血量池折算（见 const 处说明）
 var w_sub_join_rule := SUB_JOIN_RULE
+# 【2026-09-28·默认关】"血锁开团"：包围增量 / 拉出来落单各值多少分（见 `const PULL_OPEN_W` 处说明）。
+# 0 = 关（默认 ⇒ 逐位不变）；噩梦档开了它血锁才会为"钩哪个人、站哪一侧钩"主动摆位。
+var w_pull_open := PULL_OPEN_W
+var w_pull_isolate := PULL_ISOLATE_W
 # 【2026-09-19·默认关】难度档「概率性弱化」，见 `const WEAK_MODE` 处说明。默认 0 ⇒ 逐位不变。
 var w_weak_mode := WEAK_MODE
 var w_weak_p := WEAK_P
@@ -1332,6 +1379,9 @@ func set_weights(t: Dictionary) -> void:
 			"THORN_PIN_SUP_W": w_pin_sup = float(v)
 			"THORN_PIN_RANGED_W": w_pin_ranged = float(v)
 			"PARALYZE_ZERO_W": w_paralyze = float(v)
+			# 【2026-09-28·默认关】"血锁开团"两键（见 const PULL_OPEN_W 处说明）：包围增量 / 拉出来落单
+			"PULL_OPEN_W": w_pull_open = float(v)
+			"PULL_ISOLATE_W": w_pull_isolate = float(v)
 			# 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 止损（见 const REDCAP_HP_FLOOR_W 处说明）
 			"REDCAP_HP_FLOOR_W": w_redcap_hp_floor = float(v)
 			"REDCAP_CHEAP_HP": w_redcap_cheap_hp = float(v)
@@ -3793,7 +3843,8 @@ func _term_defs() -> Array:
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且**真被够得着** ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取。⚠️ 2026-09-23：够得着 = 与 ⑥⑦ 同一把尺 —— 射程＋视线＋**单位身体**＋嘲讽门，**躲在队友后面、玩家其实打不到它 ⇒ 不给这 5 分**）" % w_solid_hold],
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
 	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ %d 格内**且中间没被障碍/墓碑挡开**的队友一个都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起；**只在全队行动完的末态结算**，中途不算）" % [w_form_cohesion, FORM_RADIUS]],
-	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 相邻敌数 − 相邻队友数) ]（治贴墙/死胡同/被包夹；**同样只在末态结算**）" % [w_form_escape, FORM_ESCAPE_MIN]],
+	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 贴身敌人的**威胁** − 贴身队友**能还手的威胁**) × %.0f ]（治贴墙/死胡同/被强敌包夹；**同样只在末态结算**。⚠️ 2026-09-28 用户拍板 A：两半都从**数人头**改成**威胁计价**（单点 = 该敌人下回合单击真实伤害 × 血量池倍率 ÷ TRADE_HP_REF；弱敌贴脸不再与强敌同价，坦克挨同一刀更便宜，**血锁自己把敌人拉过来**不再等于「我被夹住」），× %.0f 只是量纲补偿、不表达偏好，见 `const PULL_OPEN_W` 与 `FORM_ESCAPE_SCALE`）" % [w_form_escape, FORM_ESCAPE_MIN, FORM_ESCAPE_SCALE, FORM_ESCAPE_SCALE]],
+	["㉗血锁开团", "+PULL_OPEN_W(%.2f) × Σ_被拉目标(拉完够得到它的我方单位数 − 现在够得到它的数) + PULL_ISOLATE_W(%.2f) × Σ_被拉成孤立的敌人数（**后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才算** —— 孤立 ×2 是它的倍率）。两半都按**拉人落点**判（`_pull_out_landing()` 与真实 `Battle._pull_to()` 同式），是**动作层**的一笔（末态照里「被拉过来的」与「自己走过来的」同分 ⇒ 搜索结构上看不见它）" % [w_pull_open, w_pull_isolate]],
 	["㉒隔断", "+SPLIT_W(%.2f) × Σ_玩家(两两) clamp( min(「地形+**合格的我方身体**」的路网距离, %d) − max(「只看地形」的路网距离, %d), 0, %d )（**只付『我方身体造成的那部分切断』**：地形本来就隔开的不付；只在末态结算。⚠️ 算墙的我方单位必须**自己有队友在 %d 格内**（孤军堵路不加分）**且远程只有『没贴到玩家身上』时才算** —— 用户两条硬约束）" % [w_split, SPLIT_CAP, SPLIT_FREE_STEPS, SPLIT_CAP, FORM_RADIUS]],
 	["㉓离队距离", ("−FORM_SPREAD_CELL_W(%.2f) × Σ_我方非召唤物 max(0, 与**最近队友**的格距 − 1)（⑳ 的**距离梯度**：贴身 0 罚、格距 2 罚 1 份、格距 3 罚 2 份……**只看格距、不看地形**；**同样只在末态结算**）"
 			+ (("　⚠️ **队形一把尺（`FORM_MERGE_MODE=1`）**：⑳ 的 0/1 孤立份已并进本项（没有合格队友 ⇒ 再加 `FORM_ISO_STEP_RATIO=%.2f` 份 ⇒ 现役取值下 = 旧的 ⑳ 5.0），**㉑ 退路/被夹 退役**（本模式恒 0）⇒ 整条队形曲线只由本键缩放" % FORM_ISO_STEP_RATIO) if w_form_merge == 1 else "")) % w_form_spread],
@@ -3898,6 +3949,9 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 		d["⑱荆棘封锁"] = sim.pin_val
 	if w_paralyze != 0.0 or _any_hero_key(["PARALYZE_ZERO_W"]):
 		d["⑲麻痹零攻"] = sim.paralyze_val
+	# 【2026-09-28 新增·默认关】"血锁开团"（与 `_evaluate()` 那一段逐行对应 ⇒ Σ 自校验不漂）
+	if w_pull_open != 0.0 or w_pull_isolate != 0.0:
+		d["㉗血锁开团"] = sim.pull_open_val
 	# 【2026-09-23 新增·默认关】㉔破盾（与 `_evaluate()` 同口径 ⇒ Σ 自校验才对得上）
 	if w_shield_break != 0.0 and sim.shield_break_val != 0.0:
 		d["㉔破盾"] = w_shield_break * sim.shield_break_val
@@ -4956,6 +5010,9 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				# （见 _sim_pull_target 的亡者分支）。sim 侧这里是"统一伤害出口判死之后"的
 				# 命中后钩子区，所以天然覆盖致死分支（此前 `and t.alive` 的守卫正是为它而设）。
 				if u.hero_id == "hero_41":
+					# 【2026-09-28 新增】"血锁开团"：这一手值多少分（包围增量 / 拉成孤立）——
+					#   必须在**真的拉之前**算（落点取决于拉的时候双方站在哪），见 `_pull_value()`。
+					sim.pull_open_val += _pull_value(sim, u)
 					_sim_pull_target(sim, u, t)
 				if u.hero_id == "hero_46" and t.alive and t.fn != u.fn:
 					# 宿魂：令目标附体（负墟免疫则不绑定、攻+1）。后附覆盖先附（与真实一致）
@@ -6115,6 +6172,106 @@ func _sim_pull_target(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 		sim.gold_cells.erase(t.cell)
 		sim.gold_taken += 1
 
+## 【2026-09-28 新增·用户拍板 A】㉑ 的"相邻敌人/队友"那一半的单点威胁值：
+##   **`a` 下回合打「站在 `t.cell` 的 `t`」这一下有多疼** —— 与挨打合计（`_incoming_total_on()`）**逐项同款**：
+##   ① `_threat_hit_value(..., discount=false)` = 真实单击（不打移动折减；被贴身的远程会退开那条也已含）；
+##   ② `+ _sim_turn_start_atk_bonus()`（敌方回合开始才发的祭司光环）；
+##   ③ `× _sim_mult_at()`（赏金猎人打嘲讽 / 小阴影打最低血 / 嬉皮死神打孤立 这些**攻击者的倍率**）；
+##   ④ `_hit_after_target_mods()`（受击侧：重伤 +1 / 坚固 −1 / 塔盾代扛 −1 / 圣盾整次免伤）。
+## ⚠️ 与挨打合计的**唯一差别**：这里只问"**就是它、就是这一格**"（近战贴身），不做"走过去打"的展开 ——
+##   因为㉑ 罚的是"**贴身站着的那个敌人**"，不是"下回合谁能走过来"（后者是 ⑥⑦ 的活）。
+## 参数用法（2026-09-28 起两处调用）：`t` = 站在这格挨打的人、`a` = 出手的人 ——
+##   ① 敌人打我：`_adj_foe_hit_on(sim, 我, 邻敌)`；② 队友替我打回去：`_adj_foe_hit_on(sim, 队友, 我)`
+##   （第②种里"我"是那个邻格上的敌人 ⇒ 谁挨打/谁出手正好互换，同一把尺子）。
+func _adj_foe_hit_on(sim: Sim, t: SimUnit, a: SimUnit) -> float:
+	if a == null or not a.alive or t == null or not t.alive:
+		return 0.0
+	var one := _threat_hit_value(sim, a, 1, false, t.cell, t) + float(_sim_turn_start_atk_bonus(sim, a))
+	one *= float(_sim_mult_at(sim, a, t, t.cell))
+	return _hit_after_target_mods(sim, t, t.cell, one)
+
+## 【2026-09-28 新增】被拉目标的**落点**（与 `_sim_pull_target()` / 真实 `Battle._pull_to()` 同式）：
+##   "拉人者邻格里离目标最近的那个能站的格"；贴身（格距 ≤1）或没有空位 ⇒ 返回 `(-99,-99)` = **拉不动**。
+##   与 `_pull_landing()`（威胁估计那一侧用的那把）**判据相同、可传入假设格** —— 那一把问的是"对手把我拉到哪"，
+##   这一把问的是"我把对手拉到哪"，两边共用同一套邻格合法性（占位/障碍/墓碑）。
+func _pull_out_landing(sim: Sim, puller_cell: Vector2i, target_cell: Vector2i) -> Vector2i:
+	if grid.distance(puller_cell, target_cell) <= 1:
+		return Vector2i(-99, -99)
+	var best := Vector2i(-99, -99)
+	var best_d := 1 << 30
+	for n in grid.neighbors(puller_cell):
+		if sim.occ.has(n) or sim.obstacles.has(n) or sim.graves.has(n):
+			continue
+		var d := grid.distance(n, target_cell)
+		if d < best_d:
+			best_d = d
+			best = n
+	return best
+
+## 【2026-09-28 新增】"血锁开团"这一手值多少分（见 `const PULL_OPEN_W` 处说明）：
+##   ① **包围**：`PULL_OPEN_W` × (拉完够得到我的我方单位数 − 现在够得到我的我方单位数)；
+##   ② **拉出来落单**：`PULL_ISOLATE_W` × (被拉成孤立的敌人数)，但**只在我方场上有嬉皮死神时**才付。
+## ⚠️ 这里是**动作层**估计（与 ⑯⑰⑱⑲㉔㉕ 同款）：在 `_apply()` 真的动手**之前**算，因为落点取决于
+##   "拉的时候双方站在哪"，动完手局面就变了。用完的目标落点不看，所以不会与模拟重复计价。
+## ⚠️ 只用**双方当前面板**（`_threat_can_hit` ⇒ 射程 + 移动力 + 血锁直线 + 视线 + 嘲讽门），
+##   不做"下回合的风语者 +1 / 祭司光环"那些补漏 —— 本项是**相对增量**，保守一点更安全。
+func _pull_value(sim: Sim, u: SimUnit) -> float:
+	if w_pull_open == 0.0 and w_pull_isolate == 0.0:
+		return 0.0
+	if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+		return 0.0                      # 只记我方（玩家把我们的单位拉走不该给我方加分）
+	if u.hero_id != "hero_41" or u.silenced or u.stunned:
+		return 0.0                      # 只有血锁会拉；被沉默/眩晕时技能不出（`skill_allowed()`）
+	var open_n := 0.0
+	var iso_n := 0.0
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t == null or not t.alive or t.fn == u.fn:
+			continue
+		var land := _pull_out_landing(sim, u.cell, t.cell)
+		if land.x == -99:
+			continue                    # 贴身 / 没空位 ⇒ 真实 `_pull_to()` 直接 return，不算这一手
+		if w_pull_open != 0.0:
+			# ⚠️ 分母**必须按这个目标自己算**（"它现在站在哪，我们几个人够得到它"）。
+			#   第一版写成"够得到任意目标的人数"（拿 `u.cell` 当目标格）⇒ 那个数与本目标无关，
+			#   增量经常是负的 ⇒ 整项永远不触发（探针 `血锁拉人自检.gd` 的"㉗逐敌拆解"抓到的）：
+			#   被拉者是人，拉完**离我们别的单位可能更远**（嬉皮那种手短的会因此够不到它）。
+			var before := _pull_reach_count(sim, t.cell, t)
+			var after := _pull_reach_count(sim, land, t)
+			if after > before:
+				open_n += float(after - before)
+		if w_pull_isolate != 0.0 and _pull_reaper_ready(sim, u) and _sim_isolated_at(sim, t, land, u):
+			iso_n += 1.0
+	if w_pull_open == 0.0:
+		open_n = 0.0
+	if w_pull_isolate == 0.0:
+		iso_n = 0.0
+	return w_pull_open * open_n + w_pull_isolate * iso_n
+
+## "如果目标站在 `at`，我方有多少单位够得到它" —— 与真打一遍的 `_valid_targets()` 同一套判据
+##   （`_threat_can_hit`：射程 / 移动力 / 视线 / 血锁直线 / 嘲讽门）。
+##   注意用的是**我方单位的当前面板**（不做"下回合光环"那些补漏）：本项估的是相对增量，保守更安全。
+func _pull_reach_count(sim: Sim, at: Vector2i, t: SimUnit) -> int:
+	var n := 0
+	for i in sim.units.size():
+		var a: SimUnit = sim.units[i]
+		if a == null or not a.alive or a.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if _threat_can_hit(sim, a, at, t):
+			n += 1
+	return n
+
+## 我方场上有**活着且技能有效**的嬉皮死神（hero_30）吗 —— 孤立 ×2 的付款人。
+## ⚠️ 与真实规则同款门：被沉默/眩晕时 `skill_allowed()` 为假 ⇒ 倍率失效 ⇒ 不该付这笔钱。
+func _pull_reaper_ready(sim: Sim, u: SimUnit) -> bool:
+	for i in sim.units.size():
+		var a: SimUnit = sim.units[i]
+		if a == null or not a.alive or a.fn != u.fn:
+			continue
+		if a.hero_id == "hero_30" and not a.silenced and not a.stunned:
+			return true
+	return false
+
 # 反击判定（与真实规则一致）：普通单位每回合一次；复仇者无限反击；眩晕/已死/**攻击力为 0** 不反。
 # 距离=1（近战互搏 / 贴身）：照常反击。
 # 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，才全额反击。
@@ -6282,7 +6439,9 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 ##     ⚠️ **只看行动完的站位**（2026-09-21 深夜用户口径）：按**末态占位**现算限步路网（`_form_route_field()`）
 ##     —— 障碍 / 墓碑 / **敌方单位**算墙；**我方身体（含召唤物）不算墙**（队友站中间照样算抱团）。
 ##     2026-09-25 用户点名改的正是这一处：「这两个怎么是用直线距离的？需要考虑障碍和敌人的」。
-##   · 退路：`max(0, FORM_ESCAPE_MIN − 可走邻格数)` + `max(0, 相邻敌数 − 相邻队友数)`（贴墙/死胡同/被包夹）
+##   · 退路：`max(0, FORM_ESCAPE_MIN − 可走邻格数)` + **贴身敌人的威胁折算**
+##     （2026-09-28 用户拍板 A：从"相邻敌数 − 相邻队友数"改成 `max` 取最疼的一下 × 血量池倍率，
+##     见 `const PULL_OPEN_W` 与 `_adj_foe_hit_on()`）—— 贴墙/死胡同/被强敌包夹
 ## 口径细节：墓碑与障碍都算"走不了"（真实规则两者都挡路）；被单位占住的邻格不算可走；
 ##   出界的邻格不算（贴边 = 少一条退路，正好是我们要罚的）。两半共用这套"能不能走"口径。
 ## ⚠️ **性能要求**：本函数在 `_evaluate()` 里、但**只在末态**（`end_of_turn`）结算 ⇒ 一次决策被调百次量级。所以：
@@ -6349,10 +6508,10 @@ func _formation_parts(sim: Sim) -> Vector3:
 			spread += FORM_ISO_STEP_RATIO
 		if merged:
 			continue          # 合并模式：㉑（退路/被夹）退役 ⇒ 那一趟扫整个跳过
-		# ② 退路/被夹：数可走邻格 + 相邻敌友
+		# ② 退路/被夹：数可走邻格 + **贴身威胁的净值**（2026-09-28 用户拍板 A，见 const 处说明）
 		var free_n := 0
-		var adj_foe := 0
-		var adj_friend := 0
+		var foe_threat := 0.0     # 贴身敌人里**最疼的那一下**
+		var friend_back := 0.0    # 贴身队友里**能打回去的最狠那一下**（旧口径"相邻队友数"的威胁版）
 		var ax := grid.axial_of(u.cell)
 		for d in FORM_DIRS:
 			var off := grid.offset_of(ax + d)
@@ -6366,15 +6525,24 @@ func _formation_parts(sim: Sim) -> Vector3:
 				#   是旧注释，别照它写 —— 我第一版照注释写了 `int(sim.occ[off])`，实机每次评估都抛
 				#   `Nonexistent 'int' constructor`：2 局刷了 23k 条报错、`search_ms_max` 被拖到 9.9 秒。）
 				var ou: SimUnit = sim.occ[off]
-				if ou != null and ou.alive:
-					if ou.fn == u.fn:
-						adj_friend += 1
-					else:
-						adj_foe += 1
+				if ou == null or not ou.alive:
+					continue
+				if ou.fn == u.fn:
+					# 【2026-09-28】旧口径这里是 `adj_friend += 1`（只做减法）。威胁版要回答
+					#   "这个队友能不能替我打回去" ⇒ 取它**打这个格子上的敌人的那一下**（同一把尺子）。
+					friend_back = maxf(friend_back, _adj_foe_hit_on(sim, ou, u))
+				elif _threat_can_hit(sim, ou, u.cell, u):
+					# 【2026-09-28 用户拍板 A】这里原来是 `adj_foe += 1`（数人头）—— 改成"这一下有多疼"：
+					#   ① 1 攻的后勤贴脸不再与 6 攻的巨剑同价；
+					#   ② **血锁把敌人拉到自己面前不再等于"我被夹住"**（旧口径恒 ≥1 ⇒ 拉人自带 −2 分，
+					#      探针 `RL/probe/血锁拉人自检.gd` 盘面①实测 A−B = **−2.000**，全部落在这一项）；
+					#   ③ 与队友那一半**同量纲相减**（旧口径 = 数人头相减）⇒ 单人贴脸不罚，
+					#      "被强敌包夹、身边没人能还手"才罚得重。
+					foe_threat = maxf(foe_threat, _adj_foe_hit_on(sim, u, ou))
 				continue
 			free_n += 1
 		esc += float(maxi(0, FORM_ESCAPE_MIN - free_n))
-		esc += float(maxi(0, adj_foe - adj_friend))
+		esc += maxf(foe_threat - friend_back, 0.0) * FORM_ESCAPE_SCALE
 	return Vector3(coh, esc, spread)
 
 ## 【2026-09-25·用户点名改】队形族（⑳抱团 / ㉓离队距离 / ㉒的「算墙者不能掉单」）专用**限步路网**：
@@ -6739,6 +6907,10 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 		score += sim.pin_val
 	if sim.paralyze_val != 0.0:
 		score += sim.paralyze_val
+	# 【2026-09-28 新增·默认关】㉗血锁开团（见 `const PULL_OPEN_W` 处说明）：把敌人拉进包围 /
+	#   拉出来落单各值多少分 —— 动作层的一笔，只认血锁、只认"这一手真拉得动"的目标。
+	if w_pull_open != 0.0 or w_pull_isolate != 0.0:
+		score += sim.pull_open_val
 	# 【2026-09-23 新增·默认关】㉔破盾（见 `const SHIELD_BREAK_W` 处说明）：`sim.shield_break_val` 已由
 	#   `_sim_take_damage` 在盾吃掉一笔伤害那一刻累加好（含伤害折算 + 阵营符号）⇒ 这里只乘权重。
 	if sim.shield_break_val != 0.0:

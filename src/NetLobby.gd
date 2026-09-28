@@ -257,30 +257,83 @@ var _peer_mode := "normal"
 var _last_start: Dictionary = {}
 
 # ---- UI ----
-# 界面背景贴图（与主菜单同一张）：按顺序取【第一个能加载的】；全缺图 ⇒ 返回 null ⇒ 只剩纯色底。
-# 换图只需把想用的那张挪到最前（或直接替换文件内容）。
+# 界面背景贴图（**与主菜单同一张、同一取景**）：用户 2026-09-28 报「联机大厅界面的背景图没了」——
+#   原因：这里原来只挂 `assets/美术资源/背景/界面背景_六角地砖.jpg`，那张图已经不在工程里了
+#   ⇒ 候选全部加载失败 ⇒ 只剩纯色底，"背景图就没了"。现在整段照 `Menu.gd` 的口径来：
+#   候选清单（新封面在最前）+ `COVER_VIEW_X` 取景 + 渐变遮罩。
 const COVER_BG_CANDIDATES := [
-	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",
+	"res://assets/界面/封面.png",
+	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",   # 旧图（若回归仍可作兜底）
+	"res://assets/美术资源/背景/酒桌封面.png",
+	"res://assets/美术资源/背景/酒馆封面.png",
 ]
 
-func _make_cover_bg() -> TextureRect:
+const COVER_VIEW_X := 0.30   # 横向取景：0 = 贴最左 / 0.5 = 居中（与主菜单一致）
+
+# 【2026-09-28·用户要求】左上角「名片」按钮的图标（assets/图标/名片.png；缺图自动退回纯文字）
+const CARD_ICON := "res://assets/图标/名片.png"
+
+# 封面背景图：等比裁切铺满整屏（候选都缺图时返回 null，由纯色底兜底）。
+# 返回**裁剪容器**：里面那张图按"铺满"放大后可能比屏幕宽，容器把超出屏幕的部分裁掉，取景由 `COVER_VIEW_X` 决定。
+func _make_cover_bg() -> Control:
 	for path in COVER_BG_CANDIDATES:
 		if not ResourceLoader.exists(path):
 			continue
 		var tex := load(path) as Texture2D
 		if tex == null:
 			continue
-		var r := TextureRect.new()
-		r.texture = tex
-		r.set_anchors_preset(Control.PRESET_FULL_RECT)
-		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		r.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED   # 等比裁切铺满，不变形
-		r.mouse_filter = Control.MOUSE_FILTER_IGNORE               # 不能吃掉按钮点击
-		return r
+		var vs := get_viewport().get_visible_rect().size
+		var holder := Control.new()
+		holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不能吃掉按钮点击
+		holder.clip_contents = true
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rect.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		var tw := float(tex.get_width())
+		var th := float(tex.get_height())
+		if tw <= 0.0 or th <= 0.0:
+			return null
+		var sc := maxf(vs.x / tw, vs.y / th)
+		rect.size = Vector2(tw * sc, th * sc)
+		rect.position = Vector2((vs.x - rect.size.x) * COVER_VIEW_X, (vs.y - rect.size.y) * 0.5)
+		holder.add_child(rect)
+		return holder
 	return null
 
+# 竖向渐变遮罩（与主菜单同款）：中段压暗保可读性，顶部标题与底部留亮
+func _make_cover_scrim() -> TextureRect:
+	var grad := Gradient.new()
+	grad.offsets = PackedFloat32Array([0.0, 0.14, 0.34, 0.74, 0.90, 1.0])
+	grad.colors = PackedColorArray([
+		Color(0, 0, 0, 0.24),
+		Color(0, 0, 0, 0.18),
+		Color(0, 0, 0, 0.40),
+		Color(0, 0, 0, 0.36),
+		Color(0, 0, 0, 0.14),
+		Color(0, 0, 0, 0.08),
+	])
+	var gt := GradientTexture2D.new()
+	gt.gradient = grad
+	gt.fill_from = Vector2(0.0, 0.0)
+	gt.fill_to = Vector2(0.0, 1.0)
+	gt.width = 8
+	gt.height = 256
+	var scrim_rect := TextureRect.new()
+	scrim_rect.texture = gt
+	scrim_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	scrim_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	scrim_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	scrim_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return scrim_rect
+
 func _build() -> void:
-	# 背景：纯色底 → 界面背景贴图（等比裁切铺满）→ 轻微压暗（三层都不接收鼠标）
+	# 背景：纯色底 → 封面背景图（与主菜单同一张、同一取景）→ 同款渐变遮罩（三层都不接收鼠标）
+	# 【2026-09-28】原来这里是"cover + 一层 0.12 的平铺压暗"；改成主菜单那套渐变遮罩（中段压暗、
+	#   顶部与底部留亮），三个页面看起来一致。
 	var bg := WoodFloor.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -288,11 +341,7 @@ func _build() -> void:
 	var cover := _make_cover_bg()
 	if cover != null:
 		add_child(cover)
-	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.12)
-	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
-	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(dim)
+	add_child(_make_cover_scrim())
 
 	var vbox := VBoxContainer.new()
 	vbox.position = Vector2(28, 44)
@@ -457,8 +506,20 @@ func _build() -> void:
 	# 左上角「名片」按钮：弹名片框（改自己的姓名 + 看联机胜率）。
 	# 放在最后添加 ⇒ 位于所有内容之上，不会被上方 vbox 抢走点击（与标题错开，不压字）。
 	_btn_card = Button.new()
-	_btn_card.custom_minimum_size = Vector2(0, 40)
-	_btn_card.add_theme_font_size_override("font_size", 18)
+	# 【2026-09-28·用户口径「不要显示名片的字体。就一个图片就可以。按钮边框也不要」】
+	#   有图时：按钮**只有图标**（不写字）、**无边框**（flat + 五个状态都套 StyleBoxEmpty）；
+	#   图缺失时退回原来的文字按钮（否则会变成一个看不见的空按钮）。
+	var card_ic := load(CARD_ICON) as Texture2D
+	if card_ic != null:
+		_btn_card.icon = card_ic
+		_btn_card.expand_icon = true                      # 图标铺满按钮（82×90 按比例缩放）
+		_btn_card.custom_minimum_size = Vector2(44, 44)
+		_btn_card.flat = true                             # 不要按钮底色
+		for st in ["normal", "hover", "pressed", "focus", "disabled"]:
+			_btn_card.add_theme_stylebox_override(st, StyleBoxEmpty.new())   # 连边框/高亮框一起去掉
+	else:
+		_btn_card.custom_minimum_size = Vector2(0, 40)
+		_btn_card.add_theme_font_size_override("font_size", 18)
 	_btn_card.position = Vector2(14, 6)
 	_btn_card.pressed.connect(_open_name_card)
 	add_child(_btn_card)
@@ -763,8 +824,14 @@ func _broadcast_my_name() -> void:
 
 # 左上角按钮文案随姓名变化（"名片：张三"）
 func _refresh_card_button() -> void:
-	if _btn_card != null and is_instance_valid(_btn_card):
-		_btn_card.text = "名片：%s" % Stats.display_name()
+	if _btn_card == null or not is_instance_valid(_btn_card):
+		return
+	# 【2026-09-28·用户口径「不要显示名片的字体，就一个图片就可以」】有图标就**不写字**；
+	#   没图（缺文件）才退回"名片：姓名"，保证按钮不至于变成看不见的空块。
+	if _btn_card.icon != null:
+		_btn_card.text = ""
+		return
+	_btn_card.text = "名片：%s" % Stats.display_name()
 
 # "编辑卡组"：叠层打开普通模式选人页（网络连接不断、大厅状态保留）。
 # 编辑目标 = 当前已选槽（未选则沿用上次槽位），Menu 会自动载入并自动保存。

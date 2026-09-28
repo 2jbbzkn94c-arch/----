@@ -1,4 +1,4 @@
-﻿# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
+# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
 # PURE ASCII ONLY. PS 5.1 reads .ps1 as ANSI: any non-ASCII byte here becomes mojibake.
 # Chinese text lives only in .md reports written with the write tool.
 #
@@ -1290,6 +1290,12 @@ function Get-RuleScoreKeys {
              'REDCAP_TRADE_W', 'REDCAP_BLAST_ALLY_W',
              # 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关；血上限是它的第二道门）
              'EXPOSURE_TOTAL_W', 'EXPOSURE_HP_MAX',
+             # 【2026-09-28·用户拍板】㉗**血锁开团**（见 `src/BattleAI.gd` 的 `const PULL_OPEN_W` 处说明）：
+             #   「拉过来包围」= 拉到"队友还能打到它"的落点才给分（判据 `_threat_can_hit(落点)`）；
+             #   「拉出来落单」= 拉成孤立、**且我方有活着且未被沉默/眩晕的嬉皮死神**（孤立 ×2 是它的倍率）。
+             #   两个键都只在**动作层**算（`_apply` 累加 / `_evaluate` 入账）；默认 0 = 关 ⇒ 四档逐位不变；
+             #   血锁站到 2~3 格开钩才会触发（拉人是"从 ≥2 格出手"的副作用）。规则键 55 → 57。
+             'PULL_OPEN_W', 'PULL_ISOLATE_W',
              # 【2026-09-20·用户拍板】原 'LEECH_TRIGGER_W'（古拉 hero_14 的"触发吸血补一笔"）**已判死删除**：
              #   3 队 × 3 个值的棋力批越调越负（−0.56 / −1.83 / −3.70，胜率 0.39→0.33）⇒ 连引擎代码一起
              #   删干净（规则键 41 → 40）。权重文件 / theta 里再写它会落到 `set_weights` 的未知键分支、静默忽略。
