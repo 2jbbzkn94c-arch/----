@@ -98,6 +98,7 @@ func on_attack(target: Unit) -> void:
 	if target == null or not is_instance_valid(target):
 		return
 	if damage_mult(target) == 2 and (not target.alive or target.hp < battle._attack_hp_before):
+		play_skill_sfx()
 		_double_hit_fx(target)
 
 func on_attack_dead(target: Unit) -> void:

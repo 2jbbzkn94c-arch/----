@@ -319,8 +319,10 @@ func is_shield_hit_blocked() -> bool:
 # 【2026-09-28·用户要求·击杀预告】"这一击过门之后会扣多少血 / 会不会致死"的**纯计算**（不改任何状态）：
 #   · `damage_amount()`：重伤 +1、坚固（仅攻击伤害）−1，最低 0 —— `take_damage()` 与预告共用同一把尺；
 #   · `would_be_lethal()`：圣盾在身 ⇒ 这一击被完全挡下、不掉血 ⇒ 不是击杀。
-#   ⚠️ **塔盾代扛**（`_bulwark_absorb`，相邻塔盾替挡 1 点）不在里面：那个钩子会**消耗塔盾的盾**（有副作用），
-#      不能预演 ⇒ 预告按"没有塔盾"估。唯一的偏差方向是"预告了却没打死（被塔盾救下）"，是安全的。
+#   ⚠️ **塔盾代扛**（`_bulwark_absorb`，相邻塔盾替挡 1 点）**不在本函数里**：那个钩子有副作用
+#      （扣塔盾的血 / 消耗它的圣盾 / 还会发声），不能预演 ⇒ 由调用方 `Battle._kill_intro()` 先用
+#      纯查询 `_bulwark_preview_reduction()` 减掉那 1 点再问（2026-09-28 用户实机报过
+#      「塔盾帮人抗伤害、被抗的没死只剩 1 血，但依旧跳击杀特效」）。
 func damage_amount(amount: int, is_attack: bool = false) -> int:
 	var dmg := amount + (1 if has_status(StatusDB.HEAVY) else 0)
 	if has_status(StatusDB.SOLID) and is_attack:
@@ -406,6 +408,11 @@ func add_status(s: String, pierce_shield: bool = false) -> void:
 		return
 	statuses[s] = true
 	_update_status_label()
+	# 【2026-09-28·用户口径「圣盾音效 = 生成圣盾的时候，比如吃 buff、比如圣光技能」】
+	#   所有发盾来源（拾取圣盾道具 / 波盾全队盾 / 圣光受伤后补盾）都经过这个挂点 ⇒ 只在这里响一声。
+	#   开局初始化就带着的盾走的是 `_refresh_shield_aura()`（只刷表现）⇒ 不响。
+	if s == StatusDB.SHIELD:
+		AudioManager.play("shield")
 
 func remove_status(s: String) -> void:
 	statuses.erase(s)

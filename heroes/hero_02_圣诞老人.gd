@@ -4,4 +4,5 @@ class_name HeroSanta
 
 func on_turn_start() -> bool:
 	battle._place_buff_items(unit, 2)
+	play_skill_sfx()   # 道具放下去 = 技能发动
 	return true

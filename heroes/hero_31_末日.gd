@@ -19,4 +19,5 @@ func on_move() -> void:
 			v.take_damage(unit.effective_atk(), false, false, "被%s的末日波及" % unit.display_name, true)
 			hurt_any = true
 	if hurt_any:
+		play_skill_sfx()
 		fx()   # 确实伤到人才呈现专属特效

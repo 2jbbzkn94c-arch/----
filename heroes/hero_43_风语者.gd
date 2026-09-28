@@ -33,11 +33,15 @@ func _remember_aura(who: Unit) -> void:
 
 ## 每方回合开始：给其他队友 +1 移动力（不含自己）
 func on_turn_start() -> bool:
+	var given := 0
 	for v in battle.units:
 		if v.alive and v.faction == unit.faction and v != unit:
 			v.move_buff += 1
+			given += 1
 			v.add_status(StatusDB.WIND)   # <风语>：与这份 +1 同步挂上（`add_status` 自己会刷牌面）
 			_remember_aura(v)
+	if given > 0:
+		play_skill_sfx()   # 真的发出光环才响
 	return true
 
 ## 声明"我提供移动光环"，Battle 才会在队友移动/新人入场时来问我。

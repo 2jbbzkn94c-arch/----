@@ -11,6 +11,7 @@ func on_move() -> void:
 		has_target = true
 	if not has_target:
 		return   # 无相邻敌人也无相邻障碍：技能未生效，不演出
+	play_skill_sfx()
 	fx()   # 确实烫到目标时才呈现专属特效
 	for v in enemies:
 		fx_on_target(v)

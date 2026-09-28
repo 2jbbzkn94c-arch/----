@@ -4,4 +4,5 @@ class_name HeroMerlin
 
 func on_enter() -> void:
 	if battle._heal_lowest_and_swap(unit):
+		play_skill_sfx()
 		fx()   # 确实治疗并换位才演出

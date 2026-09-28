@@ -7,6 +7,13 @@ extends RefCounted
 ##   （Windows 播放器 / 微信 / QQ / 剪辑软件都能直接播）。本机若装了 ffmpeg（PATH 或项目内
 ##   `tools/ffmpeg.exe`），顺便转成体积更小的 `mp4`（H.264 / yuv420p / +faststart）。
 ##
+## 【2026-09-29 用户要求「导出的视频没有声音」】**必须带声音**，而且**必须有 ffmpeg**：
+##   · 声音：录制期间在 **Master 总线**上挂一个 `AudioEffectRecord` ⇒ BGM + 台词 + 音效全录下来，
+##     停止时落成一个**临时 wav**，转码时作为第二路输入并进 mp4（`-c:a aac`），转完**立刻删掉**
+##     （用户明确「不需要保留 wav」）；
+##   · 没有 ffmpeg ⇒ **这次录像一概不保存**（用户原话「没有ffmpeg都不能保存录像」）：收尾后把 avi 与
+##     临时 wav 一起删掉，只在画面上给一句「保存录像功能需要下载 ffmpeg 软件」。
+##
 ## 口径（**2026-09-28 用户要求改成"录制开关"**）：
 ##   · 「开始录制」= 从**按下那一刻**起抓帧（不回到开头、不等开场动画演完、**不动倍速**），
 ##     「停止录制」（或 ESC）= 收尾存盘；控制条照常留在画面上，也照常录进视频
@@ -39,6 +46,12 @@ const NOTICE_HOLD := 3600.0        # 收尾大字横幅的停留秒数：**长�
 								   #   （"录像保存中…"要一直挂到"录像已保存"出现；`_show_turn_banner` 会
 								   #    kill 旧 tween + 释放旧标签 ⇒ 后一条提示一定覆盖前一条）
 const PATCH_EVERY := 30        # 每这么多帧回填一次头部（≈1 秒）：中途被杀也不会留下"头部全 0"的坏文件
+# 【2026-09-29 用户要求「导出的视频没有声音」】录制时**同时录 Master 总线的声音**：
+#   挂在总线上 = 背景音乐 + 英雄台词 + 技能音效**全都进**（用户 2026-09-28 确认「要」）。
+#   引擎的 `AudioEffectRecord` 就是干这个的：录下来是一段 `AudioStreamWAV`，先落一个**临时 wav**，
+#   转码时与画面一起喂给 ffmpeg（`-c:a aac`），转完**立刻删掉 wav**（用户明确「不需要保留 wav」）。
+const AUDIO_BUS := "Master"
+const AAC_BITRATE := "160k"    # mp4 音轨码率（人声/音效足够；比视频小两个数量级，体积几乎没影响）
 
 var battle = null
 var _dir := ""                 # 本次保存目录（= `rec_dir()`，绝对路径）
@@ -47,6 +60,10 @@ var _stopped := false
 var _prev_max_fps := 0         # 录制前的帧率上限（收尾要还原：见 `run()` 里"钉帧率"的说明）
 var _t_start := 0              # 抓帧开始时刻（标题里显示"实际 fps"用）
 var _mux_aborted := false      # 转 mp4 被 ESC 中止（保留 avi）
+# 录音状态（见 `_audio_start()` / `_audio_stop()`）
+var _rec_fx: AudioEffectRecord = null   # 挂在 Master 总线上的录音效果器
+var _rec_bus := -1                      # 它挂在第几条总线上
+var _wav_abs := ""                      # 临时 wav 的绝对路径（转完 mp4 即删）
 var _w := 0
 var _h := 0
 # AVI 写入状态
@@ -148,6 +165,8 @@ func run(replay_id: String) -> String:
 		AudioManager.play("lose")
 		return ""
 	AudioManager.play("select")   # 开录：给一声
+	# 【2026-09-29 用户要求「导出的视频没有声音」】画面开抓的同时开始录音（Master 总线，含 BGM/台词/音效）
+	_audio_start(_unique_path(_dir, "replay_%s" % replay_id, ".wav"))
 	# 【2026-09-28 用户报「怎么默认倍速，太快了」·真因】画面帧率**必须钉在 `FPS`**：
 	#   抓帧是"每个渲染帧抓一张"、AVI 又按 `FPS` 播；每帧推进多少游戏时间靠 `_drive_time_scale()` 补偿。
 	#   机器渲染得比 `FPS` 快多少，需要的 `time_scale` 就是那个倍数（`FPS`=60 时：120fps ⇒ 2.0），
@@ -172,6 +191,9 @@ func run(replay_id: String) -> String:
 			log_msg("录制收尾：文件接近 AVI 的 4GB 上限，先存到这里的 %.0f 秒。" % (float(_frames) / FPS))
 			break
 		last_real = _drive_time_scale(last_real)
+	# 【2026-09-29 用户要求「导出的视频没有声音」】抓帧一停，录音也**同时停**（两者时长对齐）。
+	#   返回值 = 临时 wav 的绝对路径（没录到声音/没有音频设备则是空串）。
+	var wav_abs := _audio_stop()
 	# 【2026-09-28 用户要求】停止录制后要给个明示："录像保存中"。
 	#   停抓之后还有两段**可能很久**的活：`_avi_finish()` 写 idx1 索引、`_mux()` 用 x264 转 mp4
 	#   （文件越大越久，几十秒到几分钟）⇒ 原来这段时间屏幕上什么都不显示，看着像按了没反应。
@@ -183,13 +205,24 @@ func run(replay_id: String) -> String:
 	#   （顺带说明：`log_msg()` 走的是 `Battle.log_message` 信号，而全项目**没有任何界面在听**它，
 	#    所以那种"提示"是看不见的 —— 只有探针会连。）
 	#   【2026-09-28 用户要求】没找到 ffmpeg：**一点保存就提示**「保存录像功能需要下载 ffmpeg 软件」
-	#   （他给的原话）—— 这种情况没有耗时的转码，直接把话说在前面。
+	#   （他给的原话）。
+	#   【2026-09-29 用户口径更新】没有 ffmpeg ⇒ **这次录像一概不保存**（他原话「没有ffmpeg都不能保存录像」）：
+	#   画面 + 声音都收尾（关掉 avi、摘掉录音效果器），把 avi 与临时 wav **一起删掉**，只留那句提示。
+	#   （原先"留个 avi 先放着"的兜底按这个口径取消；「不需要没 ffmpeg 时保留 wav」也是同一件事。）
 	var ff := _find_ffmpeg()
 	if ff == "":
+		_avi_finish()                       # 先正常收尾（关掉文件句柄，Windows 才删得掉）
+		Engine.max_fps = _prev_max_fps
+		DirAccess.remove_absolute(avi_abs)
+		if wav_abs != "":
+			DirAccess.remove_absolute(wav_abs)
+			log_msg("删除临时音频：%s" % wav_abs)
+		_title("")
 		_ui_notice("保存录像功能需要下载 ffmpeg 软件")
-		log_msg("保存录像功能需要下载 ffmpeg 软件。")
-	else:
-		_ui_notice("录像保存中…")
+		log_msg("没有 ffmpeg：这次录像没有保存。保存录像功能需要下载 ffmpeg 软件。")
+		AudioManager.play("lose")
+		return ""
+	_ui_notice("录像保存中…")
 	_avi_finish()
 	# 收尾：帧率上限还原（倍速**不还原**：那是观众自己的设置，录制只是"记录当时的速度"）
 	Engine.max_fps = _prev_max_fps
@@ -199,6 +232,8 @@ func run(replay_id: String) -> String:
 	# 一帧都没抓到（headless / 无渲染）：删掉空文件、如实报告
 	if _frames <= 0:
 		DirAccess.remove_absolute(avi_abs)
+		if wav_abs != "":
+			DirAccess.remove_absolute(wav_abs)
 		_title("")
 		_ui_notice("这次没录到画面")
 		log_msg("录制失败：这一遍没抓到画面（无渲染环境？）")
@@ -209,24 +244,23 @@ func run(replay_id: String) -> String:
 	#   （这正是他说的"保存中"）；若不清，`_mux()` 轮询的第一帧就会把 ffmpeg 杀掉、只剩 avi。
 	#   转码期间再按一次 ESC 才算中止保存。
 	_stopped = false
-	if ff != "" and _frames > 0:
-		_title("录像保存中…（正在转 mp4，%.0f 秒素材）" % (float(_frames) / FPS))
-		var mp4_abs := _unique_path(_dir, "replay_%s" % replay_id, ".mp4")
-		if await _mux(ff, avi_abs, mp4_abs):
-			DirAccess.remove_absolute(avi_abs)   # 转成功就只留 mp4（更小、更好分享）
-			out_path = mp4_abs
+	_title("录像保存中…（正在转 mp4，%.0f 秒素材）" % (float(_frames) / FPS))
+	var mp4_abs := _unique_path(_dir, "replay_%s" % replay_id, ".mp4")
+	# 【2026-09-29 用户要求「导出的视频没有声音」】把刚录下来的 wav 作为**第二路输入**交给 ffmpeg
+	#   （`-c:a aac` 压进 mp4）；不管转成功还是失败，这段**临时 wav 一律删掉**（用户明确「不需要保留 wav」）。
+	if await _mux(ff, avi_abs, mp4_abs, wav_abs):
+		DirAccess.remove_absolute(avi_abs)   # 转成功就只留 mp4（更小、更好分享）
+		out_path = mp4_abs
+	if wav_abs != "":
+		DirAccess.remove_absolute(wav_abs)
 	_title("")            # 成品出来了：清掉"录像保存中…"
 	# 收工提示（此刻抓帧早已结束 ⇒ 不会录进视频）：让"保存中…"有一个明确的结束。
 	# ⚠️ 这里**不再自动打开文件夹**：保存位置由 `ReplayPanel.show_saved_popup()` 弹框给出，
 	#   用户想打开就点弹框里的「打开文件夹」（用户 2026-09-28 要求"弹出保存录像位置"）。
-	#   【2026-09-28 用户要求】没找到 ffmpeg 时给一句明确提示（他给的原话）—— 那种情况下只有 `.avi`，
-	#   放不出 mp4 是"缺工具"而不是坏了。
+	#   （"没找到 ffmpeg"那条分支已经在上面**直接返回**了：那种情况什么都不保存，走不到这里。）
 	if _mux_aborted:
 		_ui_notice("已中止保存（avi 原文件保留）")
 		log_msg("已中止保存（avi 原文件保留）。")
-	elif ff == "":
-		_ui_notice("保存录像功能需要下载 ffmpeg 软件")
-		log_msg("保存录像功能需要下载 ffmpeg 软件。")
 	else:
 		_ui_notice("录像已保存")
 		log_msg("录像已保存。")
@@ -466,9 +500,59 @@ func _avi_finish() -> void:
 func _fcc(s: String) -> PackedByteArray:
 	return s.to_ascii_buffer()
 
-# ---- ffmpeg（可选：有就转 mp4，没有就留 avi）----
+# ---- 录音（Master 总线 → 临时 wav → 转码时并进 mp4）----
 
-## 找 ffmpeg（有就转 mp4，没有就留 avi）。顺序：项目内 `tools/` → 项目根下的 `ffmpeg*` 目录 →
+## 【2026-09-29 用户要求「导出的视频没有声音」】开始录 Master 总线上的声音。
+## 挂在 **Master** 上 ⇒ 背景音乐 + 英雄台词 + 技能音效**全录**（用户确认「要」，没有要求排除 BGM）。
+## ⚠️ 录的是**总线输出**（含玩家设的音量），"观众在扬声器里听到什么"就录到什么。
+## ⚠️ 不用 `OS.execute` 之类外部程序：`AudioEffectRecord` 是引擎自带的，headless/无音频设备时静默降级
+##   （`get_recording()` 返回 null ⇒ 这次录像不带音轨，不报错、不中断录制）。
+func _audio_start(wav_abs: String) -> void:
+	_wav_abs = ""
+	var bus := AudioServer.get_bus_index(AUDIO_BUS)
+	if bus < 0:
+		log_msg("录音启动失败：找不到 %s 总线 —— 这次录像不会带音轨。" % AUDIO_BUS)
+		return
+	var fx := AudioEffectRecord.new()
+	AudioServer.add_bus_effect(bus, fx)   # ⚠️ 这个 API 不返回序号：效果器是**追加在末尾**的
+	_rec_fx = fx
+	_rec_bus = bus
+	_wav_abs = wav_abs
+	fx.set_recording_active(true)
+
+## 停录 + 落成 wav，返回 wav 的绝对路径（没录到声音/写不出则空串）。
+## ⚠️ 效果器**必须摘掉**：不摘的话下次录制会在总线上再叠一个（而且一直挂着白耗性能）。
+func _audio_stop() -> String:
+	var fx := _rec_fx
+	_rec_fx = null
+	if fx == null:
+		return ""
+	fx.set_recording_active(false)
+	var out := ""
+	var wav: AudioStreamWAV = fx.get_recording()
+	if wav != null and wav.data.size() > 0:
+		var bpf := 2 if wav.format == AudioStreamWAV.FORMAT_16_BITS else 1   # 每采样字节
+		if wav.stereo:
+			bpf *= 2
+		log_msg("录音完成：%.1f 秒（%d Hz，%d 字节）。" % [
+			float(wav.data.size()) / maxf(float(wav.mix_rate * bpf), 1.0), wav.mix_rate, wav.data.size()])
+		if wav.save_to_wav(_wav_abs) == OK and FileAccess.file_exists(_wav_abs):
+			out = _wav_abs
+		else:
+			log_msg("录音落盘失败：%s" % _wav_abs)
+	else:
+		log_msg("录音里没有声音（无音频设备 / headless？）——这次录像不带音轨。")
+	if _rec_bus >= 0:
+		for i in AudioServer.get_bus_effect_count(_rec_bus):
+			if AudioServer.get_bus_effect(_rec_bus, i) == fx:
+				AudioServer.remove_bus_effect(_rec_bus, i)
+				break
+	_rec_bus = -1
+	return out
+
+# ---- ffmpeg（**必须有**：没有就一概不保存，见 `run()`）----
+
+## 找 ffmpeg。**没有它就一概不保存**（见 `run()` —— 用户 2026-09-28 口径）。顺序：项目内 `tools/` → 项目根下的 `ffmpeg*` 目录 →
 ## PATH 里的目录 → winget / chocolatey / scoop / `C:\ffmpeg\bin` 等常见位置。
 ## ⚠️ 【2026-09-28 用户贴的报错】**不要**直接 `OS.execute("ffmpeg", …)` 拿裸名字试 PATH ——
 ##   找不到时 Godot 会打一条红字：`Could not create child process: ffmpeg -version` + `ERR_CANT_FORK`
@@ -500,35 +584,44 @@ func _find_ffmpeg() -> String:
 			"C:/ProgramData/chocolatey/bin/ffmpeg.exe"])
 	var seen := {}
 	for p in cands:
-		var abs: String = String(p)
-		if abs.begins_with("res://"):
-			if not FileAccess.file_exists(abs):
+		# ⚠️ 别叫 `abs`：那会遮住内置函数 `abs()`，Godot 报 SHADOWED_GLOBAL_IDENTIFIER
+		var exe_path: String = String(p)
+		if exe_path.begins_with("res://"):
+			if not FileAccess.file_exists(exe_path):
 				continue
-			abs = ProjectSettings.globalize_path(abs)
-		elif not FileAccess.file_exists(abs):
+			exe_path = ProjectSettings.globalize_path(exe_path)
+		elif not FileAccess.file_exists(exe_path):
 			continue
-		if seen.has(abs):
+		if seen.has(exe_path):
 			continue
-		seen[abs] = true
+		seen[exe_path] = true
 		var out: Array = []
-		if OS.execute(abs, ["-version"], out, true) == 0:
-			return abs
+		if OS.execute(exe_path, ["-version"], out, true) == 0:
+			return exe_path
 	return ""
 
-## 转 mp4。⚠️ 【2026-09-28 用户要求「点击 ESC 后需要提示录像保存中」】**不能再用 `OS.execute()`**：
+## 转 mp4（画面来自中间 avi，**声音来自录音落下的临时 wav**）。⚠️ 【2026-09-28 用户要求「点击 ESC 后需要提示录像保存中」】**不能再用 `OS.execute()`**：
 ##   那个是**阻塞**的，转码几十秒里窗口会变成"无响应"，标题上的"录像保存中…"根本刷不出来
 ##   （Windows 对无响应窗口不重绘标题栏）。所以改成 `OS.create_process()` + 逐帧轮询：
 ##   窗口全程可响应、标题里的秒数一直在走，**按 ESC 还能把转码一并中止**（保留 avi）。
 ## 返回 true = 转码成功且成品非空。
-func _mux(ff: String, in_abs: String, out_abs: String) -> bool:
-	var args := [
-		"-y", "-i", in_abs,
+func _mux(ff: String, in_abs: String, out_abs: String, wav_abs := "") -> bool:
+	var args := ["-y", "-i", in_abs]
+	# 【2026-09-29 用户要求「导出的视频没有声音」】有录音就作为第二路输入：`-c:a aac` 压进 mp4。
+	#   `-shortest` = 以**短的那一路**为准收尾（画面和声音是两次独立计时，尾部差个零点几秒很正常，
+	#   不加这句 mp4 会被音频拖出一条黑尾）。没录到声音（空串 / 文件不在）就照旧出**无声**视频。
+	var has_audio := wav_abs != "" and FileAccess.file_exists(wav_abs)
+	if has_audio:
+		args.append_array(["-i", wav_abs])
+	args.append_array([
 		# 保险：宽高若有奇数（x264 + yuv420p 不吃奇数）就裁掉 1 像素 —— 抓帧那边已经压成偶数了，
 		# 这一句是防"窗口中途改尺寸/其它来源"再踩同一个坑（否则会留下一个 0 字节的 mp4）。
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
 		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", "-movflags", "+faststart",
-		out_abs,
-	]
+	])
+	if has_audio:
+		args.append_array(["-c:a", "aac", "-b:a", AAC_BITRATE, "-ac", "2", "-shortest"])
+	args.append(out_abs)
 	var loc := ProjectSettings.localize_path(out_abs)
 	var pid := OS.create_process(ff, args)
 	if pid <= 0:
@@ -542,10 +635,10 @@ func _mux(ff: String, in_abs: String, out_abs: String) -> bool:
 			break
 		if Time.get_ticks_msec() - t0 > MUX_TIMEOUT_MS:
 			OS.kill(pid)
-			log_msg("转 mp4 超时（%d 秒），保留 avi。" % (MUX_TIMEOUT_MS / 1000))
+			log_msg("转 mp4 超时（%d 秒），保留 avi。" % int(MUX_TIMEOUT_MS / 1000.0))
 			break
 		_title("录像保存中…（正在转 mp4：已 %d 秒，%.0f 秒素材）" % [
-			(Time.get_ticks_msec() - t0) / 1000, float(_frames) / FPS])
+			int((Time.get_ticks_msec() - t0) / 1000.0), float(_frames) / FPS])
 		if is_instance_valid(battle) and battle.is_inside_tree():
 			await battle.get_tree().process_frame
 		else:

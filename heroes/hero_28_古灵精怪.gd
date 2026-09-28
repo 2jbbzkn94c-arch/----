@@ -3,6 +3,11 @@ extends HeroBase
 class_name HeroGremlin
 
 func on_turn_start() -> bool:
+	# 【2026-09-28·用户报「古灵精怪变身的技能音效怎么变成被变身那个人的」】
+	#   `play_skill_sfx()` 是按 `unit.display_name` 查 `HERO_SFX` 的，而 `_transform()` 里有一行
+	#   `u.display_name = def.display_name`（换成变身后英雄的名字）⇒ 放在它**后面**就会查到
+	#   那个人的技能音效。必须在变身**之前**播 —— 那会儿名字还是"古灵精怪"。
+	play_skill_sfx()   # 变身 = 技能发动
 	battle._transform(unit)
 	return true
 

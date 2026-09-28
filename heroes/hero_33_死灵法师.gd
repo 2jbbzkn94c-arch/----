@@ -5,6 +5,7 @@ class_name HeroNecro
 
 func on_turn_start() -> bool:
 	battle._summon_skeletons(unit)
+	play_skill_sfx()   # 召唤即技能发动（阵亡消散那一下不重复响）
 	return true
 
 ## 阵亡：自己召唤的骷髅兵一起消散（骷髅都带召唤者 id summon_owner，逐个淡出离场）

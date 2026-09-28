@@ -53,6 +53,8 @@ const ADDR_SAVE_PATH := "user://net_addrs.cfg"   # 历史地址持久化（关�
 const ADDR_HISTORY_MAX := 8
 
 func _ready() -> void:
+	# 【2026-09-28·用户要求】菜单页背景音乐（原版 BGM_Main）
+	AudioManager.play_music("menu")
 	_load_addrs()
 	_build()
 	NetBus.packet_received.connect(_on_packet)

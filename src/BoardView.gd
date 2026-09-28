@@ -25,6 +25,13 @@ var buff_owner: Dictionary = {}
 var hidden_item_cells: Dictionary = {}
 var gold_left: Dictionary = {}     # cell -> 金矿剩余回合数（右下角小字展示，3→0消失）
 var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可选择在此落位）
+# 【2026-09-28·用户要求「开场时格子一个一个从天上掉下来，然后还有障碍和 buff」】
+#   开场演出的**纵向偏移**（像素；正 = 往下）。三张表分开 ⇒ 三个阶段能各自错开：
+#     `cell_drop`（格子）→ `obstacle_drop`（障碍）→ `item_drop`（增益道具/金矿）。
+#   没登记 = 0（正常位置）；由 `Battle._play_board_intro()` 驱动，演完清空。
+var cell_drop: Dictionary = {}       # cell -> float
+var obstacle_drop: Dictionary = {}   # cell -> float
+var item_drop: Dictionary = {}       # cell -> float
 var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 兜底底色（木纹贴图缺失时才用）
 var _cell_line := Color(0, 0, 0, 0.85)   # 六边形格线：黑色，清楚显示格子边界
 # 【已删 2026-09-19（用户同意）】原 `_side_zone_player` / `_side_zone_enemy` 两个颜色常量：
@@ -43,6 +50,17 @@ const OBSTACLE_TEX := preload("res://assets/美术资源/障碍.png")
 # 墓碑素材（2026-09-25 用户提供 R.I.P. 石碣图；处理见 tools/处理墓碑贴图.ps1：
 #   去白底透明化、裁到碑身边界、**右下角水印被裁框排除**）
 const GRAVE_TEX := preload("res://assets/美术资源/墓碑.png")
+# 【2026-09-29·用户要求「加了个炸弹，替换炸弹」】炸弹标记由**代码画**（黑底橙芯 + 淡红圈，见 `_draw()`）
+#   改成贴图：用户提供的 `assets/图标/炸弹.png`（281×384 竖版，带引线）。放在 `图标/` 而不是 `美术资源/`
+#   是**用户自己放的位置**，照用即可（同目录还有喊话/名片等 UI 图）。
+const BOMB_TEX := preload("res://assets/图标/炸弹.png")
+# 炸弹贴图尺寸：高 = 格高 × 这个系数（与酒桶 `OBSTACLE_H` 0.60 / 墓碑 `GRAVE_H` 0.66 同一套口径 ——
+#   正好落在六边形格子里、不压相邻格；宽按原图比例自动算，不会拉伸变形）。想更大/更小只改这一个数。
+const BOMB_H := 0.62
+# 【2026-09-29·用户报「炸弹暗一点，有点格格不入」】贴图调制色：把炸弹整体压暗一档、略微偏冷，
+#   好和木地板/酒桶那套色调融在一起（做法与地块那层 `TILE_TINT` 相同：只是画的时候乘一层色，**原图不动**）。
+#   调法：三个分量一起调小 = 更暗（0.6 就很暗了）；想偏暖就把蓝分量调低、想偏冷就把红分量调低。
+const BOMB_TINT := Color(0.78, 0.79, 0.82, 1.0)
 # 墓碑尺寸：碑高 = 格高 × 这个系数（与酒桶 OBSTACLE_H 同口径：正好落在六边形格子里、不压相邻格）。
 # 想更大/更小就改这一个数（宽度按原图比例自动算，不会拉伸变形）。
 # ⚠️ 2026-09-25 换成"带花与土"的版本后从 0.60 调到 **0.66**：新图比旧图矮胖
@@ -123,21 +141,24 @@ func _draw() -> void:
 	if grid == null:
 		return
 	for cell in grid.all_cells():
-		var center := board_origin + grid.cell_to_world(cell)
+		var center := board_origin + grid.cell_to_world(cell) + Vector2(0.0, float(cell_drop.get(cell, 0.0)))
 		_draw_cell_tile(cell, center)          # 木纹底（两张图随机铺）
 		var tint: Variant = _cell_tint(cell)
 		if tint != null:
 			_draw_hex_fill(center, grid.hex_size * CELL_R, tint)   # 出生区/高亮：半透明色罩
 		_draw_hex_outline(center, grid.hex_size * CELL_R, _cell_line)
-	# 炸弹标记
+	# 炸弹标记（【2026-09-29·用户要求「加了个炸弹，替换炸弹」】改用贴图 `BOMB_TEX`；
+	#   尺寸口径与酒桶/墓碑一致：高 = 格高 × `BOMB_H`、宽按原图比例。原来这里是程序画的
+	#   "黑底圆 + 橙芯 + 淡红圈"三笔。）
 	for cell in bombs.keys():
-		var center := board_origin + grid.cell_to_world(cell)
-		draw_circle(center, grid.hex_size * 0.32, Color(0.15, 0.15, 0.17, 1.0))
-		draw_circle(center, grid.hex_size * 0.18, Color(1.0, 0.55, 0.2, 1.0))
-		draw_arc(center, grid.hex_size * 0.4, 0, TAU, 16, Color(1.0, 0.4, 0.2, 0.9), 2.0)
+		var center := board_origin + grid.cell_to_world(cell) \
+			+ Vector2(0.0, float(cell_drop.get(cell, 0.0)))
+		var bomb_cell_h := grid.hex_size * sqrt(3.0) * CELL_R
+		_draw_cell_icon(BOMB_TEX, center, bomb_cell_h * BOMB_H, BOMB_TINT)
 	# 障碍物：酒桶素材。桶比格子窄高，按"桶高 = 格高 × OBSTACLE_H"等比放入格中（不拉伸变形）
 	for cell in obstacles.keys():
-		var center := board_origin + grid.cell_to_world(cell)
+		var center := board_origin + grid.cell_to_world(cell) \
+			+ Vector2(0.0, float(cell_drop.get(cell, 0.0)) + float(obstacle_drop.get(cell, 0.0)))
 		var cell_h := grid.hex_size * sqrt(3.0) * CELL_R
 		var bh := cell_h * OBSTACLE_H
 		var bw := bh * float(OBSTACLE_TEX.get_width()) / float(OBSTACLE_TEX.get_height())
@@ -148,7 +169,8 @@ func _draw() -> void:
 	for cell in buff_items.keys():
 		if hidden_item_cells.has(cell):
 			continue   # 【圣诞老人】礼物还在飞：这一格先不画（落地后 Battle 解除隐藏）
-		var center := board_origin + grid.cell_to_world(cell)
+		var center := board_origin + grid.cell_to_world(cell) \
+			+ Vector2(0.0, float(cell_drop.get(cell, 0.0)) + float(item_drop.get(cell, 0.0)))
 		var st: String = buff_items[cell]
 		var tex: Texture2D = null
 		match st:
@@ -309,14 +331,15 @@ func _draw_cell_digit(center: Vector2, txt: String) -> void:
 	draw_string(f, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1))
 
 # 把贴图按原始比例放进"边长 box 的正方形"里，居中画到格子中心（道具/金矿/障碍共用思路）
-func _draw_cell_icon(tex: Texture2D, center: Vector2, box: float) -> void:
+# `tint` = 贴图调制色（默认白色 = 原样画；与地块那层 `TILE_TINT` 一个用法，用来把某张图压暗/调色）
+func _draw_cell_icon(tex: Texture2D, center: Vector2, box: float, tint: Color = Color(1, 1, 1, 1)) -> void:
 	var tw := float(tex.get_width())
 	var th := float(tex.get_height())
 	if tw <= 0.0 or th <= 0.0:
 		return
 	var s := box / maxf(tw, th)
 	var size := Vector2(tw, th) * s
-	draw_texture_rect(tex, Rect2(center - size * 0.5, size), false)
+	draw_texture_rect(tex, Rect2(center - size * 0.5, size), false, tint)
 
 # 六边形顶点（flat-top：平边朝上，顶点在 0/60/…°）
 func _hex_points(center: Vector2, radius: float) -> PackedVector2Array:

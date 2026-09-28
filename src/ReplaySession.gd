@@ -117,8 +117,9 @@ func _count_steps() -> int:
 ##   首发 3 人，中途上过的替补就漏了）。仍然凑不满 8 个也如实显示 —— 那就是这一局真实上过的人。
 ## 纯数据函数（不碰 Battle）：录像落盘时补一次，主菜单遇到老录像的空字段时也用它兜底。
 static func deck_from_data(data: Dictionary, side: int) -> Array:
-	var frames: Array = data.get("frames", [])
-	if frames.is_empty():
+	# ⚠️ 别叫 `frames`：本类第 22 行已经有同名的成员变量，局部变量重名会被 Godot 报 SHADOWED_VARIABLE
+	var rec_frames: Array = data.get("frames", [])
+	if rec_frames.is_empty():
 		return []
 	var want := DataRegistry.Faction.PLAYER if side == GameState.SIDE_PLAYER else DataRegistry.Faction.ENEMY
 	var out: Array = []
@@ -129,7 +130,7 @@ static func deck_from_data(data: Dictionary, side: int) -> Array:
 		seen[hid] = true
 		out.append(hid)
 	# ① 池子/卡组（只要有一段的快照里有，就说明该方本局的名单是这个）
-	for f in frames:
+	for f in rec_frames:
 		var s: Dictionary = (f as Dictionary).get("snap", {})
 		for key in ["player_pool", "enemy_pool", "player_deck", "enemy_deck"]:
 			var is_mine := String(key).begins_with("player")
@@ -140,7 +141,7 @@ static func deck_from_data(data: Dictionary, side: int) -> Array:
 	if out.size() >= 8:
 		return out.slice(0, 8)
 	# ② 实际出过场的人（场上单位 + 已上阵 + 替补席）
-	for f in frames:
+	for f in rec_frames:
 		var s2: Dictionary = (f as Dictionary).get("snap", {})
 		for u in (s2.get("units", []) as Array):
 			var v: Dictionary = (u as Dictionary).get("vars", {})

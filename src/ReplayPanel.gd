@@ -26,7 +26,7 @@ var _speed_btn: Button = null
 var _rec_btn: Button = null       # 「开始录制 / 停止录制」（同一条按钮切换文字）
 var _speed_menu: PanelContainer = null   # 倍速选择框（点倍速按钮弹出，见 `_open_speed_menu()`）
 var _bar: PanelContainer = null   # 控制条本体（宽度按内容自适应，见 `_layout_bar()`）
-var _saved: PanelContainer = null # 停止录制后的"保存位置"弹框
+var _saved: Control = null        # 停止录制后的"保存位置"弹框（铺满屏幕的 CenterContainer 壳 + 里面的框）
 var _saved_file_label: Label = null
 var _saved_dir_label: Label = null
 
@@ -219,22 +219,39 @@ func show_saved_popup(path: String) -> void:
 	var ok := _btn("好", 64.0)
 	ok.pressed.connect(_close_saved_popup)
 	row.add_child(ok)
-	add_child(panel)
-	# 先按内容量一次；超宽才给两行文字限宽（按钮那行是硬下限，不再压）
+	# ⚠️ 这里**不再** `add_child(panel)`：框要挂到下面那个铺满屏幕的 `CenterContainer` 壳里
+	#   （原来先挂到自己身上、壳里是空的 ⇒ 弹框尺寸没人管、位置随缘 —— 用户报"看不到录像信息"的一环）。
+	# 【2026-09-28 用户报「点停止录像后弹框看不到录像信息」·真因】原来两条文字一上来就开 `AUTOWRAP_WORD_SMART`：
+	#   Godot 里"会自动换行的 Label"在**没有宽度约束**时，最小宽度只算一个词、**最小高度 = 按极窄宽度全折行**
+	#   ⇒ 实测弹框算出 `size=(359, 1974)`、`position y=-347`（跑到屏幕外）⇒ 用户什么都看不到。
+	#   现在的口径：**先按"不换行"量一次**（短路径就该是一行、框贴着内容 —— 用户早前报过"留白太多"），
+	#   只有整框超出屏宽时才改成"按屏宽换行"（`custom_minimum_size.x` 给死宽度，高度才是正常几行）。
+	_saved_file_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_saved_dir_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	var max_w := vsize.x - 40.0
 	var msz := panel.get_combined_minimum_size()
-	if msz.x > vsize.x - 40.0:
-		var cap := maxf(vsize.x - 40.0 - 28.0, 240.0)
+	if msz.x > max_w:
+		var cap := maxf(max_w - 28.0, 240.0)
 		_saved_file_label.custom_minimum_size = Vector2(cap, 0)
 		_saved_dir_label.custom_minimum_size = Vector2(cap, 0)
+		_saved_file_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		_saved_dir_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		msz = panel.get_combined_minimum_size()
-	panel.size = Vector2(minf(msz.x, vsize.x - 40.0), msz.y)
-	panel.position = Vector2((vsize.x - panel.size.x) / 2.0, (vsize.y - panel.size.y) / 2.0)
-	_saved = panel
-	AudioManager.play("win")
+	# 【2026-09-28 用户报「点停止录像后弹框看不到录像信息」·第二层真因】手工 `panel.size = ...` 会被
+	#   `PanelContainer`（Container）在布局时按自己的最小尺寸重算 ⇒ 实测 `size` 仍是 `(405, 1974)`、
+	#   位置被顶到屏幕外。改成工程里既有的做法（与录像列表同一套）：**套一个铺满屏幕的 `CenterContainer`**，
+	#   尺寸与居中全交给容器算，不再手工摆位置。
+	var wrap := CenterContainer.new()
+	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(wrap)
+	wrap.add_child(panel)
+	_saved = wrap   # 关闭时整壳一起释放（`_close_saved_popup()`）
+	AudioManager.play("select_actor")   # 【2026-09-28 用户反馈】原来这里放的是胜利音（听着像"结束音效"）⇒ 换成中性 UI 点击声
 
 func _close_saved_popup() -> void:
 	if _saved != null and is_instance_valid(_saved):
-		_saved.queue_free()
+		_saved.queue_free()   # `_saved` 是那个铺满屏幕的 CenterContainer 壳：连框一起释放
 	_saved = null
 	_saved_file_label = null
 	_saved_dir_label = null

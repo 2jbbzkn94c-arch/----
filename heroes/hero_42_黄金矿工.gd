@@ -17,6 +17,7 @@ func on_turn_start() -> bool:
 	if spots.size() == 0:
 		return true   # 整盘没空地可放：技能照常算发动（闪被动边框），只是这一回合没矿
 	battle.place_gold(spots[battle.rng.randi() % spots.size()], unit)
+	play_skill_sfx()   # 【2026-09-28·用户要求「丢金矿要有声」】真的丢下矿才响
 	return true
 
 ## 只有黄金矿工能拾取金矿（其他单位踩到不消费、金矿留在格上继续倒计时）
@@ -27,6 +28,7 @@ func can_pickup_gold() -> bool:
 func on_pickup_gold() -> void:
 	if unit == null or not is_instance_valid(unit):
 		return
+	play_skill_sfx()   # 拾到金矿响一声（与回合开始「丢矿」各一声：时机不同、不重叠）
 	unit.atk += 1
 	unit.perm_atk += 1   # 永久加成，变身重置攻击力时保留
 	unit.max_hp += 3

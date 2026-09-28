@@ -15,4 +15,5 @@ func damage_mult(target: Unit) -> int:
 func on_attack(target: Unit) -> void:
 	# 2倍(目标为全场HP最低)：命中目标处按其英雄主色爆粒子，直观反馈双倍
 	if target != null and is_instance_valid(target) and target.alive and damage_mult(target) == 2:
+		play_skill_sfx()
 		fx_on_target(target)

@@ -41,7 +41,14 @@ const ENEMY_CELLS := [Vector2i(0, 1), Vector2i(2, 1), Vector2i(4, 1)]
 const TEAM_SAVE_PATH := "user://quicktest_teams.cfg"
 
 func _ready() -> void:
+	# 【2026-09-28·用户要求】菜单页背景音乐（原版 BGM_Main）
+	AudioManager.play_music("menu")
 	_build()
+
+## 【2026-09-28·用户要求】点英雄池英雄：先响原版 `Click_SelectActor`，再走原来的选/取消逻辑
+func _on_pool_card_clicked(hid: String) -> void:
+	AudioManager.play("select_actor")
+	_toggle(hid)
 	_build_tooltip()   # 英雄属性框（悬停/点选英雄卡时弹出）
 	set_process_input(true)   # 触屏拖动英雄池
 
@@ -425,7 +432,7 @@ func _build_hex_pool(host: Control) -> void:
 		var cy := r + sq3 * r * (float(row) + (0.5 if col % 2 == 1 else 0.0))
 		var card := HexCard.new(DataRegistry.get_hero(id), id, card_r)
 		card.position = Vector2(cx - card_r, cy - sq3 * card_r * 0.5)
-		card.clicked.connect(_toggle)
+		card.clicked.connect(_on_pool_card_clicked)
 		card.hovered.connect(_on_hex_hovered)   # 悬停弹出英雄属性框（与普通模式选人页同一套格式）
 		host.add_child(card)
 		_btns[id] = card

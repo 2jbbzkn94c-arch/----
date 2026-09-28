@@ -48,7 +48,14 @@ var _help_overlay: Control = null   # 游戏说明弹窗
 var _stats_overlay: Control = null  # 对战统计弹窗
 
 func _ready() -> void:
+	# 【2026-09-28·用户要求】菜单页背景音乐（原版 BGM_Main）
+	AudioManager.play_music("menu")
 	_build()
+
+## 【2026-09-28·用户要求】点英雄池英雄：先响原版 `Click_SelectActor`，再走原来的处理
+func _on_pool_card_clicked(hid: String) -> void:
+	AudioManager.play("select_actor")
+	_on_hex_clicked(hid)
 	set_process_input(true)   # 触摸跟踪（轻点 vs 按住拖动池）
 	if GameState.net_edit_mode:
 		_show_team_view()   # 联机大厅叠层打开：直接进选人页
@@ -591,7 +598,7 @@ func _build_hex_pool(host: Control) -> void:
 		var card := HexCard.new(DataRegistry.heroes[id], id, card_r)
 		card.position = Vector2(cx - card_r, cy - sq3 * card_r * 0.5)
 		card.hovered.connect(_on_hex_hovered)
-		card.clicked.connect(_on_hex_clicked)
+		card.clicked.connect(_on_pool_card_clicked)
 		host.add_child(card)
 		_card_buttons[id] = card
 		max_x = maxf(max_x, cx + r)
@@ -1151,6 +1158,8 @@ func _replay_side_row(ids: Array, align_right: bool, rad: float, rid: String) ->
 	var base := (slot_w - used_w) if align_right else 0.0
 	for i in ids.size():
 		var col := i % per_row
+		# `i / per_row` 就是"第几排"—— 故意取整，消掉编辑器的整数除法警告
+		@warning_ignore("integer_division")
 		var row := i / per_row
 		var cx := base + rad + float(col) * col_step
 		var cy := rad + float(row) * row_step + (row_step * 0.5 if col % 2 == 1 else 0.0)

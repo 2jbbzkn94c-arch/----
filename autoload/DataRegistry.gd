@@ -144,7 +144,7 @@ func battle_unit_value(hero_id: String, ally_ids: Array, enemy_ids: Array, coef:
 #   （实时值在两侧来源不同：真实读 `effective_*()`、模拟读快照/被状态改过的 `eatk`）。
 # ⚠️ `ctx` 由调用方按**存活单位**填（字段名统一，见 `sub_need()` 注释）。
 const SUB_NEED_PRIORITY_BONUS := 20.0    # "满足需求"的优先价：远大于身价极差(≈12) ⇒ 在**预设替补**那条路上
-                                         # "不缺的职能"永远排不到"缺的职能"前面（动态路已先按需求筛过候选）
+										 # "不缺的职能"永远排不到"缺的职能"前面（动态路已先按需求筛过候选）
 const SUB_HEAL_EXTRA: Array[String] = ["hero_16"]   # 波盾：登场全队圣盾 —— 与"治疗"同属"队伍被打疼了"的解
 const SUB_DPS_ATK := 3                   # "算输出"的**表格**基础攻击门槛（= 谁够格补输出）
 # 【2026-09-25 用户拍板 C】"缺输出"的**触发线**从"人头数"改成"总量"，用户定 N = 5：
@@ -1105,6 +1105,8 @@ func _fill_alpha_color(img: Image, w: int, h: int) -> void:
 		var o := idx * 4
 		for d in 4:
 			var nx := x + (1 if d == 0 else (-1 if d == 1 else 0))
+			# `idx / w` 就是行号（`x = idx % w` 是列号）—— 这里**故意取整**，消掉编辑器的整数除法警告
+			@warning_ignore("integer_division")
 			var ny := (idx / w) + (1 if d == 2 else (-1 if d == 3 else 0))
 			if nx < 0 or ny < 0 or nx >= w or ny >= h:
 				continue
@@ -1144,7 +1146,7 @@ func stat_icon(path: String) -> Dictionary:
 			var data0 := img.get_data()
 			var n0 := w * h
 			if n0 > 0:
-				var stride_i := maxi(1, int(n0 / 4096))
+				var stride_i := maxi(1, int(n0 / 4096.0))
 				var samples := 0
 				var trans := 0
 				var i := 0

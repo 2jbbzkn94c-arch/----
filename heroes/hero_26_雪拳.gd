@@ -6,6 +6,7 @@ func on_move() -> void:
 	var enemies: Array = battle._adjacent_enemies(unit)
 	if enemies.size() == 0:
 		return   # 无相邻敌人：技能未生效，不演出
+	play_skill_sfx()
 	fx()
 	for v in enemies:
 		fx_on_target(v)

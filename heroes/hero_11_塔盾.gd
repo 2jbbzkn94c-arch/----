@@ -21,6 +21,7 @@ func absorb_ally_damage(target: Unit, dmg: int) -> int:
 	var g: HexGrid = battle.grid
 	if g.distance(unit.cell, target.cell) != 1:
 		return dmg   # 必须紧邻
+	play_skill_sfx()   # 上面的守卫都过了 = 这一下一定替他扛，响一声
 	# 【2026-09-26 修·用户报「圣盾挡不了塔盾帮队友吸收的伤害」】原来直接扣 hp，绕过了圣盾。
 	#   先问盾：有盾 ⇒ 消耗盾并抵消这次代扛（语义与 Unit.take_damage 里的盾一致），仍替队友挡下这 1 点。
 	if unit.has_status(StatusDB.SHIELD):

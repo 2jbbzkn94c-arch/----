@@ -143,6 +143,9 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		if not last.has("fp") and battle.is_inside_tree():
 			last["fp"] = battle._rec_step_fp()
 	await _gap(STEP_GAP)
+	# 【2026-09-28·用户口径「AI 在没有结束语音之前，玩家不能行动」】兜底：计划里最后一步若是
+	#   不带移动/攻击的步骤（没走 `_wait_action_done`），这里再等一次 —— 保证回合末交还控制权前安静。
+	await _wait_voice_done()
 
 ## 暂停中不推进任何一步（单机暂停用；联机不暂停，故几乎是空转）
 func wait_unpaused() -> void:
@@ -207,6 +210,31 @@ func _wait_action_done() -> void:
 			return   # Battle 已释放：停止等待
 		if not battle.is_inside_tree():
 			return   # 已脱离场景树：停止轮询
+		await battle.get_tree().process_frame
+	# 【2026-09-28·用户口径「AI 在没有结束语音之前，玩家不能行动」】演出结束 ≠ 喊完：
+	#   先让本步的死亡结算落定（阵亡喊话挂在那条链上），再等英雄声音真正播完 ——
+	#   之后才放行下一招，也才轮到回合末把控制权交还玩家。
+	if is_instance_valid(battle) and battle.is_inside_tree() and my_session == battle._session_id:
+		await battle._drain_pending_deaths()
+	await _wait_voice_done()
+
+## 【2026-09-28·用户口径「AI 在没有结束语音之前，玩家不能行动」】等这一步的英雄声音
+##   （喊话 / 攻击音 / 技能音）真正播完再放行。行走音不计（见 `AudioManager._note_voice`）。
+##   · 轮询 `AudioManager.voice_time_left()`（它已按 `Engine.time_scale` 折算 ⇒ 快进不拖）；
+##   · 录像回放（`_replay_mode`）**不等**：那里每一步的节奏另有机制，再叠一层真实音频时长
+##     会把倍速拖平；
+##   · 6 秒兜底：任何异常下都不会卡住回合。
+func _wait_voice_done() -> void:
+	if not is_instance_valid(battle) or not battle.is_inside_tree():
+		return
+	if battle._replay_mode:
+		return
+	var my_session: int = battle._session_id
+	var deadline := Time.get_ticks_msec() + 6000
+	while AudioManager.voice_time_left() > 0.02 and Time.get_ticks_msec() < deadline:
+		if my_session != battle._session_id or not is_instance_valid(battle) \
+				or not battle.is_inside_tree():
+			return
 		await battle.get_tree().process_frame
 
 # 回放中的节奏停顿（可被重开安全打断；process_always=false 故跟随暂停一起停）

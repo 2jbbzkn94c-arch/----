@@ -10,5 +10,6 @@ func on_turn_end() -> bool:
 			battle._heal(v, amt)
 			healed_any = true
 	if healed_any:
+		play_skill_sfx()
 		unit.float_tag_text("治疗", Color(0.45, 0.9, 0.6))   # 施加回复方弹"治疗"
 	return false   # 治疗演出由上面的"治疗"文字承担，不再触发通用"被动"闪烁

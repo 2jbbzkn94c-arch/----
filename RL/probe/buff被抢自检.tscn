@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/probe/buff被抢自检.gd" id="1"]
+
+[node name="BuffDenyCheck" type="Node"]
+script = ExtResource("1")

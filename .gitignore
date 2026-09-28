@@ -65,3 +65,7 @@ RL/probe/_*.log
 
 # APK 逆向工作目录（已移到项目外 D:\Game creating\战旗_原版资源提取）
 /_apk_work/
+
+# TTS 产出的原始配音（大文件，不进库；成品 ogg 在 assets/audio/voice/）
+/Data/Voice/源音频/
+

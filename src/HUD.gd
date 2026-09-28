@@ -819,11 +819,13 @@ func _show_arena_pair(pair: Array) -> void:
 		panel.position = Vector2((vsize.x - 420) / 2.0, (vsize.y - 120) / 2.0)
 		return
 	# 倒计时（选卡上方大字）：剩余秒数由 Battle 每帧递减，超时自动选第 1 张
+	# 【2026-09-29·用户要求「竞技场二选一倒计时字号加大」】52 → **64**、描边 6 → **8**
+	#   （与部署阶段那个大字倒计时**同一套字号/描边**，两处观感一致；配套把面板预留高度也加高，见下面 `ph`）。
 	var timer := Label.new()
-	timer.add_theme_font_size_override("font_size", 52)
+	timer.add_theme_font_size_override("font_size", 64)
 	timer.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
 	timer.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	timer.add_theme_constant_override("outline_size", 6)
+	timer.add_theme_constant_override("outline_size", 8)
 	timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	timer.text = ""
 	wrapbox.add_child(timer)
@@ -888,7 +890,9 @@ func _show_arena_pair(pair: Array) -> void:
 	if DisplayServer.is_touchscreen_available():
 		_setup_arena_touch(pair, host, card_r, click_cb)
 	var pw := total_w + 40.0
-	var ph := card_h + 40.0 + 78.0   # 预留顶部大字倒计时空间
+	# 【2026-09-29】顶部大字倒计时的预留高度 78 → **96**：字号 52 → 64 之后行高约 83px，
+	#   原来的 78 会让大字贴到卡片上（面板高度是这里手算的，不靠容器的 min size 兜底）。
+	var ph := card_h + 40.0 + 96.0   # 预留顶部大字倒计时空间
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
 	# 画面正中央（略偏上，给下方飞入路径留空间）
@@ -1172,6 +1176,11 @@ func _refresh_deck_pick_preview() -> void:
 		c.queue_free()
 	var idx := _deck_pick_slot - 1
 	var ids: Array = _deck_pick_decks[idx] if (idx >= 0 and idx < _deck_pick_decks.size()) else []
+	# 【2026-09-28·用户口径】预览顺序 = 部署时卡池顺序：卡组里带 `<替补>` 的英雄同样排到末尾
+	#   （选定后 `Battle._commit_deck()` 落库时会 `_order_deck(...)`）⇒ 提前用同一把排序，两处一致。
+	#   ⚠️ 只改这份**用于显示**的副本：`_deck_pick_decks` 原样不动（`_order_deck` 返回新数组，不改入参）。
+	if battle != null and is_instance_valid(battle):
+		ids = battle._order_deck(ids)
 	if _deck_pick_start_btn != null:
 		_deck_pick_start_btn.text = "用卡组 %d 出战" % _deck_pick_slot
 	if ids.size() == 0:
@@ -2466,8 +2475,17 @@ func _refresh_controls() -> void:
 		# 【2026-09-27·用户要求「棋盘放大到宽度接近填满」的配套】部署阶段屏底那条带子**让给"开局选人"
 		#   卡片行**：棋盘放大后卡片行只能贴屏底摆（摆在上方就会压住棋盘最下面两行 —— 那正是玩家要
 		#   点绿格放人的地方）。部署期本来也用不到「结束回合」（`disabled` 恒真）⇒ 直接藏起来。
-		_end_btn.visible = battle == null or (battle.state != Battle.State.DEPLOY
-			and battle.state != Battle.State.PLACE_DEPLOY)
+		# 【2026-09-28·用户报「竞技场 2 选 1 结束后，如果是我方先手，一开始就把结束回合按钮显示出来了，
+		#   到我方部署时才消失」】原来只**黑名单**了部署两个态，而"选完人 → 部署"中间还夹着一整段
+		#   `IDLE`（`_oa_finish_to_deploy()` 先置 IDLE 再走 `_begin_deployment()`，那里面还有开场演出 +
+		#   「战斗开始」横幅 + 停一拍）⇒ 那一段按钮一直露着。卡组三选一（`DECK_PICK`）同样是这个毛病。
+		#   ⇒ 改成**白名单**：只有"回合真的在跑"的几个状态才出现（不是本端回合时照旧显示但压暗不可点，
+		#   见上面那句 `disabled`），其余（IDLE / 部署两态 / 竞技场选人 / 卡组三选一 / 已结束）一律藏。
+		var st: int = battle.state if battle != null else -1
+		_end_btn.visible = battle == null \
+			or st == Battle.State.PLAYER_INPUT or st == Battle.State.ANIMATING \
+			or st == Battle.State.ENEMY_TURN or st == Battle.State.SUBSTITUTING \
+			or st == Battle.State.PLACE_SUB or st == Battle.State.PLACE_BOMB
 	if _pause_btn != null:
 		_pause_btn.visible = not GameState.is_online   # 暂停仅单机（联机暂停会与对端不同步）
 	if _surrender_btn != null:

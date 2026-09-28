@@ -43,6 +43,15 @@ func fx_on_target(t: Unit) -> void:
 	t.burst_fx(d.color, "")
 
 ## 己方回合开始时触发。返回 true 表示有技能演出（用于被动闪烁）。
+## 【2026-09-28·用户报「烛火一走路就有音效 / 矿工两声技能声」】播本英雄的 `技能音效`
+##   （`HERO_SFX[英雄名]["skill"]`）。**由英雄脚本自己在"技能确实发动"的那一行调用** ——
+##   不能在 Battle 的钩子入口统一播：钩子被调用 ≠ 技能生效（烛火/雪拳没烫到人会提前 `return`、
+##   黄金矿工压根没有 `on_move`），那样会变成"每次移动/攻击都白响一声"。
+##   没登记技能音效的英雄调了也是静默（`play_hero_sfx` 内部判空）。
+func play_skill_sfx() -> void:
+	if unit != null and is_instance_valid(unit):
+		AudioManager.play_hero_sfx(unit.display_name, "skill")
+
 func on_turn_start() -> bool:
 	return false
 

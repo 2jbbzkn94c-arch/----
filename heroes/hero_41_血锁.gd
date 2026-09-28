@@ -126,6 +126,7 @@ func _pull_with_hook(target: Unit) -> void:
 	var from_cell: Vector2i = target.cell   # 记下目标旧格：钩子朝这里飞
 	if not battle._pull_to(unit, target):
 		return
+	play_skill_sfx()   # 真的把人拉动（或致死拖尸）才响
 	_play_hook_fx(from_cell, target)
 
 # 血锁专属演出：钩爪连链飞出 → 咬住目标 → 收链把目标拖回面前。
