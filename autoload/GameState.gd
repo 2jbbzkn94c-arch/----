@@ -88,6 +88,14 @@ var pick_deck_in_battle := false
 # 自由部署(测试)双控：true 时敌方回合也由本端玩家操控(不再跑 AI)
 var dual_control := false
 
+# 【2026-09-27 用户要求·录像回放】主菜单点了"看录像"后写入录像 id，再重载 Main 场景；
+#   `Battle._ready()` 见到非空就整条开局流程跳过、直接按录像第 0 段快照建局面（见 `_begin_replay_from_store()`）。
+#   退出回放时由 `Battle._replay_quit_now()` 清空（不清的话下次进对战会又跳进回放）。
+var replay_id := ""
+# 【2026-09-28 用户要求】「结束后要回到录像列表界面」：回放退出/演完时置 true，
+#   主菜单 `_ready()` 见到它就**直接打开录像列表**（而不是停在主菜单首页），然后立刻清掉（一次性）。
+var replay_back_to_list := false
+
 # 联机对战：true 时敌方是真人，敌方回合不跑 AI，改为等待对端真人指令（网络层驱动）
 var is_online := false
 # 联机：true = 本机是主机（权威执行方）；false = 客户端（发指令方）

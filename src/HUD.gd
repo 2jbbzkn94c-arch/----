@@ -17,6 +17,10 @@ var _turn_timer_label: Label   # 本端回合剩余时间（对局中我方回�
 var _result_overlay: Control = null
 var _netdown_overlay: CanvasLayer = null   # 联机对局断线提示层
 var _team_panel: PanelContainer = null    # 下方常驻队伍展示（整支卡组，含替补）——替补阶段复用为"选人面板"
+# 下方队伍卡行的半径上限（【2026-09-28】按可用宽度反算后再封顶）：
+#   一行 n 张平顶六边形的总宽 = `2r + (n−1)·1.5r` ⇒ **8 张一行的物理上限 = 视口宽 / 12.5 ≈ 57**
+#   （720 视口）。所以"8 个英雄占满宽度"时每张卡最大就这么大；想明显更大只能改两行（4+4）或让卡重叠。
+const _TEAM_ROW_MAX_R := 56.0
 var _arena_panel: PanelContainer = null   # 竞技场选人面板（2选1）
 var _deck_pick_overlay: Control = null     # 普通模式"选择卡组"面板（进战斗后弹：卡组1/2/3 切换 + 随机英雄）
 # 【2026-09-23】常驻战斗 UI 的根（`_build()` 里那个 Control）：`结束回合/重开/返回选人/暂停` 都在它下面。
@@ -64,14 +68,17 @@ var _ladder_gave_up := false
 var _last_my_text := ""   # 上次刷新的"我方"侧文字（联机=姓名；用于姓名变化时补刷新）
 var _last_op_text := ""   # 上次刷新的"敌方"侧文字（联机=姓名）
 var _end_btn: Button          # 结束回合（仅我方回合可点）
-var _restart_btn: Button      # 重开（联机不需要，隐藏）
-var _back_btn: Button         # 返回（联机=返回大厅，单机=返回选人）
+# 【2026-09-27·用户要求】结束回合按钮换成图片（图缺失时自动退回原来的金色文字按钮）
+const END_TURN_TEX := "res://assets/界面/结束回合.png"
+const END_BTN_IMG_H := 112.0   # 图片按钮的高度（宽按图的比例 ⇒ 112 × 237/209 ≈ 127）
+# 【2026-09-27】底部常驻行现在只有「结束回合」；`_restart_btn` 已随"重开/返回选人整合进暂停面板"移除。
+# 【2026-09-28·用户要求】联机那枚「返回大厅」也删掉 ⇒ 底部行两种模式都只剩「结束回合」；
+#   联机退出改走**右上角「认输」**：先喊一句完整的话给对端，再走认输结算（退出大厅走结算面板的按钮）。
+var _surrender_btn: Button = null   # 【2026-09-28】联机：右上角「认输」（单机恒为 null）
 var _warn_holder: Control = null   # 回合剩余时间不足警告：屏幕边缘浅红闪烁
 var _warn_tween: Tween = null      # 边缘警告呼吸 tween
 var _unit_card_overlay: Control = null   # 右键英雄信息卡（成员持有，避免 lambda 捕获被释放节点）
-var _notice_overlay: Control = null      # 开局"先手"浮框（短暂显示后自动消失）
-var _notice_show_ms := 0                  # 先手提示出现时间（最短展示时间判定用）
-const FIRST_NOTICE_MIN_SECONDS := 3.0     # 先手提示在普通模式下最少展示时长（秒）
+# 【2026-09-27·用户要求】开局"先手"提示整块删除（先文字、后图片都删了）：不再有任何提示 UI。
 # 联机快捷喊话:左下角按钮 + 选言面板 + 顶部气泡
 var _chat_btn: Button = null
 var _chat_panel: PanelContainer = null
@@ -164,7 +171,6 @@ func bind(b: Battle) -> void:
 	battle.unit_dying.connect(_on_unit_dying)
 	battle.team_updated.connect(_refresh_team_panel)
 	battle.deploy_refresh.connect(_show_deploy_panel)
-	battle.first_side_notice.connect(_show_first_side_notice)
 	battle.card_view_requested.connect(show_unit_card)
 	battle.item_view_requested.connect(show_item_info)
 	battle.touch_view_end_requested.connect(_close_unit_card)
@@ -377,7 +383,9 @@ func _close_unit_card() -> void:
 
 # 回合切换横幅：屏幕中央弹出大字号提示（"你的回合"/"敌方回合"），放大浮现、短暂停留后淡出。
 # 仅视觉层，不拦截任何输入（鼠标/触摸照常操作棋盘）。
-func _show_turn_banner(text: String) -> void:
+## `color` / `hold` 都有默认值（对局那条信号路径一个字不改）：回放会传阵营色与更长的停留，
+## 让"这一回合轮到哪一方"更显眼（用户 2026-09-27 要求）。
+func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -> void:
 	if _turn_banner_tween != null and _turn_banner_tween.is_valid():
 		_turn_banner_tween.kill()
 	if _turn_banner != null and is_instance_valid(_turn_banner):
@@ -387,7 +395,7 @@ func _show_turn_banner(text: String) -> void:
 	label.name = "TurnBanner"
 	label.text = text
 	label.add_theme_font_size_override("font_size", 54)
-	label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.45))
+	label.add_theme_color_override("font_color", (color as Color) if color != null else Color(1.0, 0.9, 0.45))
 	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	label.add_theme_constant_override("outline_size", 8)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -396,6 +404,7 @@ func _show_turn_banner(text: String) -> void:
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不拦截点击
 	add_child(label)
 	_turn_banner = label
+
 	var t := create_tween()
 	_turn_banner_tween = t
 	label.modulate.a = 0.0
@@ -404,7 +413,7 @@ func _show_turn_banner(text: String) -> void:
 	# 放大+淡入 → 停留 → 淡出并移除
 	t.tween_property(label, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	t.parallel().tween_property(label, "modulate:a", 1.0, 0.16)
-	t.tween_interval(0.9)
+	t.tween_interval(hold)
 	t.tween_property(label, "modulate:a", 0.0, 0.35)
 	t.tween_callback(func():
 		if is_instance_valid(label):
@@ -426,6 +435,10 @@ func _on_unit_card_overlay_input(ev: InputEvent) -> bool:
 		_close_unit_card()
 		if card_ctl != null and is_instance_valid(card_ctl):
 			card_ctl.accept_event()   # 关键：消费事件，阻止其继续漏给 Battle 的触摸手势
+		# 【2026-09-27 修·用户报「录像里右键英雄会弹出两次属性框」】`accept_event()` 只作用于 Control 树，
+		#   管不住 `Battle._unhandled_input` —— 右键关掉浮层后那个事件还会漏到 Battle，被当成"右键查看"
+		#   又开一张 ⇒ 看着就是弹两次。这里在**视口层**标成已处理，彻底止住。
+		get_viewport().set_input_as_handled()
 		return true
 	return false
 
@@ -477,70 +490,13 @@ func _status_explain_lines(u: Unit) -> Array:
 		out.append("%s：%s" % [label, desc] if desc != "" else label)
 	return out
 
-# 开局"谁先手"提示：常驻悬浮，直到"部署选人面板出现"（部署选人阶段开始）才淡出收起。
-# 点一下提示框也可提前关闭；浮框不拦截棋盘操作。
-func _show_first_side_notice(text: String) -> void:
-	_refresh_round()   # 提示时已进入部署/选人态：顶部立即显示"部署选人/竞技场选人"
-	_close_first_notice()
-	var vsize := get_viewport().get_visible_rect().size
-	var overlay := Control.new()
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(overlay)
-	_notice_overlay = overlay
-	var box := PanelContainer.new()
-	# 面板外观走主题里的"弹出框边框"（theme/panel_frame_dark.png）
-	box.mouse_filter = Control.MOUSE_FILTER_STOP   # 框体可点击关闭，但不挡棋盘
-	box.gui_input.connect(_on_first_notice_input)
-	overlay.add_child(box)
-	var bw := minf(vsize.x - 120, 420)
-	box.size = Vector2(bw, 0)
-	box.position = Vector2((vsize.x - bw) / 2.0, vsize.y * 0.22)
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", 24)
-	label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.55))
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	label.add_theme_constant_override("outline_size", 4)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(label)
-	_notice_show_ms = Time.get_ticks_msec()   # 记录出现时刻：普通模式至少展示 FIRST_NOTICE_MIN_SECONDS
-
-# 先手提示淡出收起（仅当仍存在时执行）
-func _fade_close_first_notice() -> void:
-	if _notice_overlay != null and is_instance_valid(_notice_overlay):
-		var ov: Control = _notice_overlay
-		var tw2 := ov.create_tween()
-		tw2.tween_property(ov, "modulate:a", 0.0, 0.2)
-		tw2.tween_callback(_close_first_notice)
-
-func _deploy_panel_shown_notice_gone() -> void:
-	# 部署选人面板已出现 = 阶段开始；但先手提示至少要展示满最短时长，没看够就延后收起
-	if _notice_overlay == null or not is_instance_valid(_notice_overlay):
-		return
-	var elapsed := float(Time.get_ticks_msec() - _notice_show_ms) / 1000.0
-	if elapsed >= FIRST_NOTICE_MIN_SECONDS:
-		_fade_close_first_notice()
-	else:
-		var wait := FIRST_NOTICE_MIN_SECONDS - elapsed
-		var timer := get_tree().create_timer(wait, false)
-		timer.timeout.connect(_fade_close_first_notice)
-
-func _on_first_notice_input(ev: InputEvent) -> void:
-	if ev is InputEventMouseButton and (ev as InputEventMouseButton).pressed:
-		_close_first_notice()
-
-func _close_first_notice() -> void:
-	if _notice_overlay != null and is_instance_valid(_notice_overlay):
-		_notice_overlay.queue_free()
-	_notice_overlay = null
-
 # 开局部署面板（分步：点选英雄 -> 点击出生格放置）
 var _deploy_overlay: Control = null
 var _deploy_timer_label: Label = null   # 部署轮倒计时（面板上方大字，与竞技场选人一致）
 func _show_deploy_panel() -> void:
+	if _in_replay():
+		_close_deploy_panel()   # 【录像回放】回放里永不显示"开局选人/部署"面板（含那行大字倒计时）
+		return
 	_refresh_round()   # 进入/退出部署阶段都刷新顶部标签（部署期显示"部署选人"）
 	# 非部署阶段则收起
 	if battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY:
@@ -571,41 +527,31 @@ func _show_deploy_panel() -> void:
 	wrapbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrapbox.add_theme_constant_override("separation", 2)
 	panel.add_child(wrapbox)
-	var title := Label.new()
+	# 【2026-09-27·用户要求】原来这里有一行标题「开局选人 · 点选英雄部署 · 我方 x/3 对方 x/3」⇒ **整行删掉**，
+	#   面板直接就是卡池那一行（`side_txt` / 标题 Label / 计数都随之消失）。
 	var placing := battle.state == Battle.State.PLACE_DEPLOY
 	# 当前轮是否轮到本端部署选人
 	var my_pick := _deploy_my_pick()
-	var side_txt := ""
-	if placing:
-		side_txt = "点击我方出生格放置"
-	elif my_pick:
-		side_txt = "点选英雄部署"
-	else:
-		side_txt = "等待对方选择中…"
-	# 下方始终显示本端"我方"的英雄/卡池（不随对方轮切换成对方的英雄）
-	title.text = "开局选人 · %s · 我方 %d/%d  对方 %d/%d" % [
-		side_txt,
-		battle._my_deployed_count(), Battle.DEPLOY_COUNT_BATTLE,
-		battle._opp_deployed_count(), Battle.DEPLOY_COUNT_BATTLE,
-	]
-	title.add_theme_font_size_override("font_size", 15)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrapbox.add_child(title)
 	# 卡池：始终为本端"我方"部署卡池；轮到本端才可点选
 	var ids: Array = battle._my_deploy_pool()
 	var sel := battle._pending_deploy
 	if battle._my_faction() == DataRegistry.Faction.ENEMY:
 		sel = battle._pending_enemy_deploy
 	var pool := _make_hex_pool(ids, _on_deploy_hover, _on_deploy_click, not my_pick or placing, sel, true, 48.0)
+	# 【2026-09-27·用户报「队伍有点压着棋盘 / 太下了挡住结束按钮」】卡池宿主高度要按**交错排布**算：
+	#   单行时奇数列的卡往下错半行 ⇒ 最低那张卡底边 = `r + √3·r`（r=48 ⇒ 131px），
+	#   而 `_make_hex_pool` 给的是 2×行距（166px，多留的空白会把整排卡往上顶）；
+	#   我第一次收紧到 1.15×行距（96px）又**太短** ⇒ 奇数列的卡溢出面板盒、正好压到结束回合按钮上。
+	#   ⇒ 按实际用量收：`r + √3·r` 再留 6px 余量（卡片绝对定位、宿主不裁剪 ⇒ 只影响面板盒）。
+	pool.custom_minimum_size.y = 48.0 * (1.0 + sqrt(3.0)) + 6.0
+	pool.size.y = pool.custom_minimum_size.y
 	wrapbox.add_child(pool)
 	var pw: float = pool.custom_minimum_size.x + 20.0
-	var ph: float = pool.custom_minimum_size.y + 34.0
+	var ph: float = pool.custom_minimum_size.y + 10.0
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
-	# 放在屏底（按钮行下方空区）：避免遮住放大后的棋盘
-	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 76)
+	# 底边固定在按钮行上方 8px。面板本身**透明且不拦鼠标** ⇒ 即便盒底伸到按钮带里也看不见、点不到。
+	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - END_BTN_IMG_H - 18.0 - ph)
 	# 倒计时大字放按钮行上方（棋盘不遮挡时居中感不变）
 	var tlabel := Label.new()
 	tlabel.add_theme_font_size_override("font_size", 48)
@@ -618,8 +564,6 @@ func _show_deploy_panel() -> void:
 	tlabel.size = Vector2(pw, 60)
 	overlay.add_child(tlabel)
 	_deploy_timer_label = tlabel
-	# 部署选人面板已出现 = 阶段开始：先手提示此刻收起（若有）
-	_deploy_panel_shown_notice_gone()
 
 # 本端当前轮是否轮到本端部署选人（主机=玩家轮，客户端=敌轮；单机=仅玩家轮）
 func _deploy_my_pick() -> bool:
@@ -1034,11 +978,12 @@ func _show_deck_pick_panel(decks: Array) -> void:
 		add_child(overlay)
 	_deck_pick_overlay = overlay
 	# 【2026-09-23 用户要求】弹窗背后加一层暗色遮罩（"背景淡化"）：与结算浮层同一套做法
-	#   （全屏 ColorRect，**alpha 越接近 1 越黑**；0.7 = 棋盘还看得见轮廓但明显压暗）。
-	#   原来这里是纯透明 ⇒ 棋盘照旧亮着，弹窗像是"浮"在场上、读卡组信息时很跳。
+	#   （全屏 ColorRect，**alpha 越接近 1 越黑**；0.45 = 棋盘看得清、只是压一层灰）。
+	#   原来这里是纯透明 ⇒ 棋盘照旧亮着，弹窗像是"浮"在场上、读卡组信息时很跳；
+	#   2026-09-28 用户口径「背景透明度」⇒ 由 0.7 调淡到 **0.45**（想更透/更暗只改这一个数）。
 	#   ⚠️ 只负责变暗、不接输入（`MOUSE_FILTER_IGNORE`）：点棋盘仍由 overlay 拦，按钮照旧可点。
 	var dim := ColorRect.new()
-	dim.color = Color(0, 0, 0, 0.7)
+	dim.color = Color(0, 0, 0, 0.45)
 	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	overlay.add_child(dim)
@@ -1047,6 +992,17 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	# ⚠️ 原来这块面板是半透明"透出棋盘"的，换成牌子后变成不透明（弹窗更聚焦）。
 	overlay.add_child(panel)
 	_deck_pick_panel = panel
+	# 【2026-09-28·用户口径「背景透明度」= 要透出棋盘的是**这块牌子本身**】⇒ 把主题那块边框**复制一份**、
+	#   只压低它的 `modulate_color.a`（**主题与其它弹窗一律不动**）：牌子变透，而牌子里的字/卡/按钮
+	#   仍是全不透明（它们不是样式的一部分，只受节点自身影响）。
+	#   想更透/更实只改 `PLATE_ALPHA`：0.45 很透 / 0.65 现在 / 1.0 = 原样不透明。
+	#   ⚠️ 必须在 `add_child` **之后**取样式：主题查找要沿节点树往上找（进树了才拿得到项目主题）。
+	const PLATE_ALPHA := 0.65
+	var base_sb := panel.get_theme_stylebox("panel")
+	if base_sb is StyleBoxTexture:
+		var plate: StyleBoxTexture = (base_sb as StyleBoxTexture).duplicate()
+		plate.modulate_color = Color(1, 1, 1, PLATE_ALPHA)
+		panel.add_theme_stylebox_override("panel", plate)
 	var wrapbox := VBoxContainer.new()
 	wrapbox.add_theme_constant_override("separation", 10)
 	panel.add_child(wrapbox)
@@ -1155,7 +1111,14 @@ func _refresh_deck_pick_preview() -> void:
 	_deck_pick_preview.custom_minimum_size = pool.custom_minimum_size
 	_deck_pick_preview.size = pool.custom_minimum_size
 
-# 一行平顶蜂窝小卡（与编辑页"卡组预览"同款），悬停查看英雄属性
+# 卡组三选一界面的英雄卡块（与编辑页"卡组预览"同一套外观），悬停查看英雄属性
+#   【2026-09-28·用户要求①】「卡组英雄队伍列表放大，8 个英雄占满宽度」：原来固定半径 30（8 个英雄只占半屏）；
+#   【2026-09-28·用户要求②】「六边形改成 2 排、一排 4 个」⇒ 走 `_make_hex_pool` 的**网格模式**
+#     （`single_row = false`：固定 **4 列**、**列优先**填充 ⇒ 8 名正好 4×2；5~8 名都是这个 4×2 蜂窝块）。
+#   【2026-09-28·用户要求③】「太大了，把棋盘都挡住了」⇒ 半径**封顶 56**（沿用"一行版"那个大家都认可的卡大小）：
+#     4 列要铺满宽度得 `r ≈ 96`，那样弹窗高 640、整块把棋盘盖住；封顶后块只有 364×291 ⇒ 弹窗小一圈、两侧透出棋盘。
+#   半径 = `clampf(可用宽 / 6.5, 24, 56)`：窄屏按比例缩，宽屏由 56 兜住。想再小/再大只改这个上限
+#   （48 更紧凑 / 64 更大）。可用宽 = 视口宽 − 80（面板最大宽是 `vsize.x − 24`，这里留出面板左右内边距）。
 func _make_deck_preview_cards(ids: Array) -> Control:
 	var hover_cb := func(hid: String):
 		if hid == "":
@@ -1164,7 +1127,10 @@ func _make_deck_preview_cards(ids: Array) -> Control:
 			_set_score_tooltip_hero(hid)
 	var click_cb := func(_hid: String):
 		pass
-	return _make_hex_pool(ids, hover_cb, click_cb, false, "", true, 30.0)
+	var avail: float = get_viewport().get_visible_rect().size.x - 80.0
+	# 4 列网格（列优先 ⇒ 8 名正好 4×2）；半径封顶 56（见上面函数头注释：96 会挡住棋盘）
+	var rad := clampf(avail / 6.5, 24.0, 56.0)
+	return _make_hex_pool(ids, hover_cb, click_cb, false, "", false, rad)
 
 # 面板尺寸/位置。
 # 【2026-09-23 修·用户报"点击卡组切换后弹窗会左右移动"】宽度/高度**只在第一次调用时量一次**
@@ -1240,6 +1206,9 @@ func _close_deck_pick_panel() -> void:
 func _refresh_team_panel() -> void:
 	if battle == null:
 		return
+	if _in_replay():
+		_close_team_panel()   # 回放里不摆常驻队伍卡（见 `_in_replay()` 的说明）
+		return
 	# 部署期：只显示"开局选人"面板，不显示下方常驻面板（避免重叠）
 	if battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY:
 		_close_team_panel()
@@ -1295,7 +1264,14 @@ func _refresh_team_panel() -> void:
 		click_cb = func(hid: String):
 			battle._on_sub_pick(hid)   # 点击替补英雄：选中并进入落位阶段
 			_refresh_team_panel()      # 立即刷新高亮（_pending_sub），后续动作仍可再点其他英雄
-	var pool := _make_hex_pool(ids, hover_cb, click_cb, false, battle._pending_sub if picking else "", true, 48.0)
+	# 【2026-09-28·用户要求】「卡组英雄队伍列表放大，8 个英雄占满宽度」：这一行原来固定半径 48
+	#   （8 张只占 600/720 ≈ 83%）⇒ 改成**按可用宽度反算**：一行 n 张平顶六边形总宽 = `2r + (n−1)·1.5r`
+	#   ⇒ `r = 可用宽 / (2 + 1.5·(n−1))`；可用宽 = 视口宽 − 面板左右内边距(6+6)与 20 的余量 − 两侧留白。
+	#   ⚠️ 8 张一行的**物理上限**就是 `视口宽 / 12.5`（≈57）⇒ 再大必须改成两行，见下面 `_TEAM_ROW_MAX_R` 注释。
+	var tn := maxi(ids.size(), 1)
+	var tavail: float = maxf(vsize.x - 44.0, 320.0)
+	var trad := minf(_TEAM_ROW_MAX_R, maxf(tavail / (2.0 + float(tn - 1) * 1.5), 18.0))
+	var pool := _make_hex_pool(ids, hover_cb, click_cb, false, battle._pending_sub if picking else "", true, trad)
 	wrapbox.add_child(pool)
 	var pw := pool.custom_minimum_size.x + 20.0
 	var ph := pool.custom_minimum_size.y + 34.0
@@ -1416,49 +1392,79 @@ func _build() -> void:
 	_pause_btn.reset_size()
 	_pause_btn.position = Vector2(vsize.x - _pause_btn.size.x - 6.0, 60.0)
 
-	# 按钮：结束回合 / 重开 / 返回选人（用明确的绝对坐标放置，避免锚点+坐标混搭导致错位）
+	# 【2026-09-28·用户要求】联机：**右上角「认输」**（与「暂停」同一个角落/尺寸 —— 联机没有暂停，
+	#   两个按钮互斥显示，见 `_refresh_controls()`）。点一下先喊一句完整的话给对端，再走认输结算。
+	_surrender_btn = Button.new()
+	_surrender_btn.text = "认输"
+	_surrender_btn.add_theme_font_size_override("font_size", 15)
+	_surrender_btn.custom_minimum_size = Vector2(50, 30)
+	_surrender_btn.pressed.connect(_on_surrender_pressed)
+	root.add_child(_surrender_btn)
+	_surrender_btn.reset_size()
+	_surrender_btn.position = Vector2(vsize.x - _surrender_btn.size.x - 6.0, 60.0)
+
+	# 底部常驻按钮行：**只剩「结束回合」**（居中）。「重开 / 返回选人」整合进暂停面板（2026-09-27 用户要求）；
+	#   联机的「返回大厅」也已删（2026-09-28 用户要求）⇒ 两种模式的底部行现在一样，联机退出走右上角「认输」。
 	var btn_row := HBoxContainer.new()
-	btn_row.position = Vector2((vsize.x - 390) / 2.0, vsize.y - 56 - 10)
-	btn_row.size = Vector2(390, 56)
+	btn_row.position = Vector2((vsize.x - 390) / 2.0, vsize.y - END_BTN_IMG_H - 10)
+	btn_row.size = Vector2(390, END_BTN_IMG_H)
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	btn_row.add_theme_constant_override("separation", 20)
 	root.add_child(btn_row)
 
+	var end_tex := load(END_TURN_TEX) as Texture2D
 	var end_btn := Button.new()
-	end_btn.text = "结束回合"
 	end_btn.custom_minimum_size = Vector2(190, 52)
 	end_btn.add_theme_font_size_override("font_size", 19)
-	var end_sb := StyleBoxFlat.new()
-	end_sb.bg_color = Color(0.75, 0.55, 0.15, 1.0)
-	end_sb.corner_radius_top_left = 12
-	end_sb.corner_radius_top_right = 12
-	end_sb.corner_radius_bottom_left = 12
-	end_sb.corner_radius_bottom_right = 12
-	end_sb.set_border_width_all(2)
-	end_sb.border_color = Color(1.0, 0.9, 0.5)
-	end_btn.add_theme_stylebox_override("normal", end_sb)
 	end_btn.add_theme_color_override("font_color", Color(0.1, 0.08, 0.02))
+	if end_tex != null:
+		# 图 = 按钮本体（文案画在图里）⇒ 清空 text；四个状态共用这张图（悬停更亮 / 按下更暗 / 禁用压暗）。
+		# **不能只改 normal**：不改的话悬停·按下·禁用会掉回主题默认样式（灰蓝方块），看着像换了个按钮。
+		end_btn.text = ""
+		end_btn.custom_minimum_size = Vector2(
+				END_BTN_IMG_H * float(end_tex.get_width()) / float(end_tex.get_height()), END_BTN_IMG_H)
+		end_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var end_states := {
+			"normal": Color(1.0, 1.0, 1.0, 1.0),
+			"hover": Color(1.10, 1.10, 1.10, 1.0),
+			"pressed": Color(0.84, 0.84, 0.84, 1.0),
+			"disabled": Color(0.55, 0.55, 0.58, 0.85),
+		}
+		for state in end_states.keys():
+			var sb := StyleBoxTexture.new()
+			sb.texture = end_tex
+			sb.modulate_color = end_states[state]
+			end_btn.add_theme_stylebox_override(String(state), sb)
+	else:
+		# 图缺失：保持原来的金色文字按钮（安全退回，不影响可玩性）
+		end_btn.text = "结束回合"
+		var end_sb := StyleBoxFlat.new()
+		end_sb.bg_color = Color(0.75, 0.55, 0.15, 1.0)
+		end_sb.corner_radius_top_left = 12
+		end_sb.corner_radius_top_right = 12
+		end_sb.corner_radius_bottom_left = 12
+		end_sb.corner_radius_bottom_right = 12
+		end_sb.set_border_width_all(2)
+		end_sb.border_color = Color(1.0, 0.9, 0.5)
+		end_btn.add_theme_stylebox_override("normal", end_sb)
 	end_btn.pressed.connect(_on_end_turn)
+	# 【2026-09-27·用户要求】结束回合**不要骰子**悬停效果（按钮本体就是那张图）。
+	#   `detach()` 会打 `no_dice` 标记 ⇒ 之后重新入树/重建也不会再挂上来；重复调用无副作用。
+	UiDice.detach(end_btn)
 	btn_row.add_child(end_btn)
 	_end_btn = end_btn
 
-	var restart_btn := Button.new()
-	restart_btn.text = "重开"
-	restart_btn.custom_minimum_size = Vector2(70, 52)
-	restart_btn.add_theme_font_size_override("font_size", 15)
-	restart_btn.pressed.connect(_on_restart)
-	btn_row.add_child(restart_btn)
-	_restart_btn = restart_btn
-
-	var back_btn := Button.new()
-	back_btn.text = "返回选人"
-	back_btn.custom_minimum_size = Vector2(90, 52)
-	back_btn.add_theme_font_size_override("font_size", 15)
-	back_btn.pressed.connect(_on_back_to_menu)
-	btn_row.add_child(back_btn)
-	_back_btn = back_btn
-
-	_set_round_text(1, true)
+	# 【2026-09-27 用户报「刚进录像会有黄色字体弹出，被蓝方回合盖住」】建顶栏时就分清是不是回放局：
+	#   回放局一进来就直接写"第 N 回合 · 蓝方/红方回合"，**不留那一帧**黄色对局文案（`_set_round_text(1, true)`
+	#   会先写成"第 1 回合 · 你的回合"，回放里那句话既不对、又会被随后的横幅盖住 → 一闪而过看着很脏）。
+	if GameState.replay_id != "":
+		_round_label.text = "第 %d 回合 · %s" % [GameState.round_number,
+			"蓝方回合" if GameState.active_side == GameState.SIDE_PLAYER else "红方回合"]
+		_round_label.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
+		_top_fit_key = ""
+		_fit_top_center()
+	else:
+		_set_round_text(1, true)
 	_refresh_controls()
 	_build_edge_warning(root, vsize)
 
@@ -1685,6 +1691,11 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 		if _chat_bubble == bubble:
 			_chat_bubble = null)
 
+## 【2026-09-27·录像回放】刷新顶部"第 N 回合 · 蓝方/红方回合"。回放里没有 `round_changed`／
+## `active_side_changed` 这些信号（`_refresh_round()` 因此不会自己重画），换段/跳段后由 Battle 喊一次。
+func refresh_round_label() -> void:
+	_set_round_text(GameState.round_number, true)
+
 func _set_round_text(round_num: int, _player_side: bool) -> void:
 	# 联机视角：本端操作的是"我方"，另一方是"敌方"。用 battle._my_side() 判断本端是否当前行动方。
 	var my_turn := true
@@ -1697,7 +1708,7 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 	# 非回合阶段（开局部署/竞技场选人/替补中）不声称"你的回合/敌方回合"：
 	# 否则对方先部署/先手时顶部仍错误显示"你的回合"。
 	var phase_txt := ""
-	if battle != null and is_instance_valid(battle):
+	if battle != null and is_instance_valid(battle) and not _in_replay():
 		if battle.state == Battle.State.ARENA_DRAFT:
 			phase_txt = "竞技场选人"
 		elif battle.state == Battle.State.DECK_PICK:
@@ -1707,6 +1718,16 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 		elif battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB:
 			phase_txt = "替补"
 	var side := phase_txt if phase_txt != "" else ("你的回合" if my_turn else "敌方回合")
+	if _in_replay():
+		# 回放：说"蓝方/红方"（用户要求），且按**正在播的那一段**判（`active_side` 是录像里的值，不能用）
+		var rs: int = battle.replay_side_of(battle._replay_frame)
+		if rs < 0:
+			# 【2026-09-28 用户报「部署阶段的提示有问题」】部署那一帧（side = -1）不是任何一方的回合
+			side = "部署"
+			my_turn = true
+		else:
+			my_turn = rs == GameState.SIDE_PLAYER
+			side = "蓝方回合" if my_turn else "红方回合"
 	_round_label.text = "第 %d 回合 · %s" % [round_num, side]
 	var normal_color := Color(0.5, 0.85, 1.0) if my_turn else Color(1.0, 0.5, 0.5)
 	_round_label.add_theme_color_override("font_color", normal_color)
@@ -1812,9 +1833,6 @@ func _refresh_round() -> void:
 # GameState 回合信号回调（对象方法，便于释放时自动断开）
 func _on_round_changed(_r: int) -> void:
 	_refresh_round()
-	# 先手提示常驻到"对局正式开始"：进入战斗后第一个回合信号到达时收起
-	if GameState.match_running and not GameState.match_over:
-		_close_first_notice()
 
 # 阵亡计数图标（骷髅）= 已阵亡，空心圆 = 尚未阵亡
 # 【2026-09-23 改·用户要求】"标志出现"的时机 = **卡面飞行的卡片落地那一刻**，不是死亡瞬间：
@@ -2031,7 +2049,36 @@ func _set_edge_warning(on: bool) -> void:
 # 1) 结束回合：仅当本端操作方 == 当前行动方且处于我方输入状态时可点（非我方回合禁用）；
 # 2) 重开：联机（含联机竞技场）不需要，隐藏；
 # 3) 返回：联机返回大厅，单机返回选人界面。
+## 本局是否在放录像（`Battle._replay_mode`）。回放里战场按钮全部收起 —— 用户 2026-09-27 报
+## 「怎么录像功能可以点击下方的按钮」：回放本来就不该有"结束回合/重开/返回选人"这些入口，
+## 退出回放走回放控制条自己的「返回」。
+## 【录像回放】进回放时把"临时提示"一次清干净：回合横幅（含还在淡出的）、部署面板、常驻队伍面板。
+## 由 `Battle._replay_begin()` 调用；对局路径不调（一个字不变）。
+func clear_transient_ui() -> void:
+	if _turn_banner_tween != null and _turn_banner_tween.is_valid():
+		_turn_banner_tween.kill()
+	if _turn_banner != null and is_instance_valid(_turn_banner):
+		_turn_banner.queue_free()
+	_turn_banner = null
+	_close_deploy_panel()
+	_close_team_panel()
+
+func _in_replay() -> bool:
+	# ⚠️ 除了 `Battle._replay_mode`，还要看 `GameState.replay_id`：回放分支里 **HUD 先建、`_replay_mode` 后置**
+	#   （`_replay_begin()` 的顺序），中间那段空窗期里 `state` 还是录像里残留的 `DEPLOY` ⇒ 部署面板会被建出来
+	#   （用户报的"黄字、什么部署什么的"就是这么漏的，实测：`_show_deploy_panel：replay=false state=4`）。
+	return GameState.replay_id != "" \
+			or (battle != null and is_instance_valid(battle) and bool(battle._replay_mode))
+
 func _refresh_controls() -> void:
+	if _in_replay():
+		if _end_btn != null:
+			_end_btn.visible = false
+		if _surrender_btn != null:
+			_surrender_btn.visible = false
+		if _pause_btn != null:
+			_pause_btn.visible = false   # 回放用控制条的「暂停/继续」（对局暂停是 tree.paused，会把回放一起冻住）
+		return
 	var my_turn := false
 	if battle != null:
 		if GameState.dual_control:
@@ -2041,16 +2088,19 @@ func _refresh_controls() -> void:
 			my_turn = battle.state == Battle.State.PLAYER_INPUT and GameState.active_side == battle._my_side()
 	if _end_btn != null:
 		_end_btn.disabled = not my_turn
-	if _restart_btn != null:
-		# 【天梯】不给"重开"（用户要求）：重开会把本局作废，与"输了才结束本轮"的口径冲突；
-		#   天梯里要退出/结束都走暂停键那两个按钮。
-		_restart_btn.visible = not GameState.is_online and GameState.ladder_mode == ""
 	if _pause_btn != null:
 		_pause_btn.visible = not GameState.is_online   # 暂停仅单机（联机暂停会与对端不同步）
-	if _back_btn != null:
-		# 【天梯】也不给"返回选人"（同上）；天梯的退出 = 暂停 → 保存并退出 / 放弃
-		_back_btn.visible = GameState.ladder_mode == ""
-		_back_btn.text = "返回大厅" if GameState.is_online else "返回选人"
+	if _surrender_btn != null:
+		# 【2026-09-28·用户要求】「认输」只在联机显示（与「暂停」同一角落、互斥）：
+		#   联机没有暂停，退出入口就从底部那枚「返回大厅」换成这里。
+		_surrender_btn.visible = GameState.is_online
+
+# 【2026-09-28·用户要求】联机认输：先喊**完整的一句**给对端（本端也回显气泡），再走认输结算。
+func _on_surrender_pressed() -> void:
+	if battle == null or not is_instance_valid(battle):
+		return
+	_send_chat(battle.SURRENDER_LINE)
+	battle.surrender_online()
 
 # 属性浮层实时跟随鼠标，并收敛到屏幕内（避免被底部/右侧挡住）
 # 触屏长按查看时 _tooltip_pin_rect 非空：固定显示在目标卡上方，不跟随手指（避免被手指遮挡）。
@@ -2138,8 +2188,8 @@ func _on_pause_pressed() -> void:
 	resume.custom_minimum_size = Vector2(240, 50)
 	resume.pressed.connect(_on_resume_pressed)
 	vb.add_child(resume)
-	# 【2026-09-24 用户要求·天梯模式】天梯里**没有**「重开」和「返回选人」按钮（顶部常驻重开已隐藏、
-	#   结算面板也不给返回），退出与结束都在这里：**保存并退出** / **放弃本次天梯**。
+	# 【2026-09-27·用户要求】「重开 / 返回选人」已整合进暂停面板（底部常驻行只剩结束回合）：
+	#   单机普通模式给这两个；**天梯**仍只给「保存并退出 / 放弃本次天梯」（重开会作废本局，口径冲突）。
 	if GameState.ladder_mode != "":
 		var save_quit := Button.new()
 		save_quit.text = "保存并退出"
@@ -2155,6 +2205,22 @@ func _on_pause_pressed() -> void:
 		vb.add_child(give_up)
 		# 【2026-09-24 用户要求】原来按钮下面还有一块小字（"天梯普通模式 · 第 N 局 · 当前连胜 M 场" + 两行按钮说明）
 		#   ⇒ 已删；暂停面板现在就三行：继续游戏 / 保存并退出 / 放弃本次天梯。
+	else:
+		var p_restart := Button.new()
+		p_restart.text = "重开"
+		p_restart.add_theme_font_size_override("font_size", 20)
+		p_restart.custom_minimum_size = Vector2(240, 50)
+		p_restart.pressed.connect(_on_restart)
+		vb.add_child(p_restart)
+		var p_back := Button.new()
+		# 【2026-09-27·用户要求】普通模式暂停里的这个按钮 = **返回主菜单**（文案原写"返回选人"，
+		#   但 `_on_back_to_menu` 走的就是 `change_scene_to_file(Menu.tscn)`、落点是主菜单页
+		#   —— Menu 的组队页只有 `net_edit_mode` 才会直接进 ⇒ 这里只是把文案改成与实际一致）。
+		p_back.text = "返回主菜单"
+		p_back.add_theme_font_size_override("font_size", 20)
+		p_back.custom_minimum_size = Vector2(240, 50)
+		p_back.pressed.connect(_on_back_to_menu)
+		vb.add_child(p_back)
 	panel.reset_size()
 	var pw: float = clampf(maxf(panel.get_combined_minimum_size().x, 300.0), 300.0, maxf(vsize.x - 40.0, 300.0))
 	var ph: float = panel.get_combined_minimum_size().y

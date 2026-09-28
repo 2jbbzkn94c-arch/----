@@ -54,6 +54,25 @@ var grave_moved := false  # 暗域占据死亡格时：墓碑已回退到暗域�
 
 var hex_radius := 44.0
 
+# 【2026-09-28·用户口径】棋子内部的**图层契约**：
+#   · **0 = 背景**：`_hex`（阵营色六边形）与 `_art_hex`（人物图）；
+#   · `FRAME_Z`（相对）**= 框/标识**：选中金框、被动光环、行动(红橙)描边、治疗/变身粒子环；
+#   · `MARKER_Z`（相对）**= 前景标记**：状态字 / 攻击图标+数字 / 血量图标+数字；
+#   · `ACTION_Z`（**绝对**）**= 行动点**：可移动绿点 / 可攻击红点 / 旧的 ● 单点（见下面的例外说明）；
+#   · 附体魂线（在 `Battle.gd` 里 `_possess_link_view.z_index = 13`）压在标记之上。
+#   ⇒ 顺序：背景 < 框 < 标记 < 魂线 < 行动点。依据：
+#     ① 2026-09-28 用户报「高亮框压到攻击/血量上」——图标贴到六边形斜边时会被选中金框切一道 ⇒ 标记必须在框之上；
+#     ② 用户口径「标记要在背景之上、附体射线之下」⇒ 魂线仍压在标记之上（比选中棋子的 10+MARKER_Z 高一档）；
+#     ③ 行动点（绿/红/●）**例外**：它画在六边形**顶部内侧**（`0.58r`）而不是外面 —— 六边形外面那块空隙
+#        会被"上邻的特性字"吃掉（字挂在上邻牌面下沿 `0.72r~1.0r`，换算到我们头顶 ≈ `0.53r~0.73r`），
+#        用户 2026-09-28 两次口径「不要被上面英雄的特性挡住」「下面点啊」⇒ 位置下移、层再给到最高。
+#   调层只改这三个常量 + Battle 里那一个值；`_build_visual()` 末尾按名单统一套 `MARKER_Z`。
+const FRAME_Z := 1
+const MARKER_Z := 2
+# 行动点专用：**绝对**层（配合 `z_as_relative = false`）⇒ 任何棋子自己的东西都盖不住它
+# （选中抬到 10 的棋子最高也才 12），也高于魂线(13)；仍低于礼物(20)/远程射线(30)/飘字(120)。
+const ACTION_Z := 14
+
 var _hex: Polygon2D
 var _art_hex: Polygon2D          # 【2026-09-27】人物本体那一层（贴在纯色六边形之上；没出图的英雄为 null 效果）
 var _art: Texture2D = null       # 英雄卡面图（`DataRegistry.hero_card_art`）；null = 还没出图 ⇒ 保持原来的纯色棋子
@@ -62,7 +81,7 @@ var _atk_label: Label
 var _hp_label: Label
 var _status_label: Label
 var _debuff_label: Label   # 减益小字(紫)：毒/伤/麻/冻/默/晕/附
-var _shield_label: Label   # 圣盾小字(金)：盾
+var _shield_aura: ShieldAura = null   # [圣盾] 金黄透明罩（演出节点，类在本文件末尾）
 var _tags_label: Label
 var _passive_border: Line2D
 var _passive_tween: Tween
@@ -102,6 +121,7 @@ func _init(def: DataRegistry.HeroDef, faction_ := 0, cell_ := Vector2i.ZERO, rad
 func _ready() -> void:
 	z_index = 2
 	_build_visual()
+	_refresh_shield_aura()   # 开局就带 [圣盾] 的（波盾全队盾 / 开局圣盾道具）也要有罩
 
 func _build_visual() -> void:
 	var fs := hex_radius / 39.0   # 字号缩放系数：棋子随 hex_size 放大时文字等比放大（基准 48*0.82≈39）
@@ -129,11 +149,14 @@ func _build_visual() -> void:
 	# 名字行（**只在"这张卡还没有卡面图"时建**，规则见 `_update_name_label`）
 	_update_name_label()
 
-	# 数值图标簇：左下=攻击.png、右下=爱心.png，数字居中压在图标内（先加图标、后加文字）
-	var num_icon_w := hex_radius * 0.7   # 剑（攻击）的框大小
-	var hp_icon_w := num_icon_w * 1.0   # 爱心单独放大：比剑大 10%；想更大就加大系数并配合把 hp_c.x 往左调
-	var atk_c := Vector2(-hex_radius * 0.34, hex_radius * 0.6)
-	var hp_c := Vector2(hex_radius * 0.36, hex_radius * 0.6)   # 爱心中心（大爱心需稍左移避免出右边框）
+	# 数值图标簇：【2026-09-27·用户要求「攻击和血量图标分别往左上和右上移动」】原来是左下/右下，
+	#   会压在人物身上 ⇒ 现在摆在**上排两侧**（左=攻击、右=爱心），中间留给人物。
+	#   ⚠️ y 取 −0.52r 是"还在六边形内"的极限：六边形在高度 y 处的半宽 = r − y/√3，
+	#   而图标框半宽 = 0.35r ⇒ 0.52r/√3 = 0.30r ⇒ 0.70r > 0.69r，刚好不探出斜边。
+	var num_icon_w := hex_radius * 0.55   # 剑（攻击）的框大小
+	var hp_icon_w := num_icon_w * 1.3   # 爱心单独放大：比剑大 10%；想更大就加大系数并配合把 hp_c.x 往左调
+	var atk_c := Vector2(-hex_radius * 0.7, hex_radius * 0.3)
+	var hp_c := Vector2(hex_radius * 0.7, hex_radius * 0.3)   # 爱心中心（大爱心需稍左移避免出右边框）
 	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图。
 	# 位置/尺寸记到成员上，变身改了词条或攻击类型后 update_atk_icon() 才能就地换图不跑位。
 	_atk_icon_center = atk_c
@@ -148,7 +171,7 @@ func _build_visual() -> void:
 	_atk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_atk_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_atk_label.size = Vector2(num_icon_w, num_icon_w * 0.8)
-	_atk_label.position = atk_c - _atk_label.size / 2.0 + Vector2(0, num_icon_w * 0.06)
+	_atk_label.position = atk_c - _atk_label.size / 2.0 + Vector2(0, -num_icon_w * 0.1)
 	_atk_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
 	_atk_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
 	_atk_label.add_theme_constant_override("outline_size", maxi(4, int(5.0 * fs)))
@@ -177,30 +200,31 @@ func _build_visual() -> void:
 	if _skill_tags() != "":
 		_ensure_tags_label()
 
-	# 增益状态标签（坚固 金色，居中）；减益紫(debuff_label) + 盾金(shield_label) 分开
+	# 增益状态标签（坚固 金色，居中）+ 减益紫(debuff_label) 分开；[圣盾] 不画字（表现是那圈金黄罩）
 	_status_label = Label.new()
 	_status_label.add_theme_font_size_override("font_size", int(11.0 * fs))
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_status_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
+	_status_label.position = Vector2(-hex_radius, hex_radius * 0.44)
 	_status_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
 	_status_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
 	add_child(_status_label)
 	_debuff_label = Label.new()
 	_debuff_label.add_theme_font_size_override("font_size", int(11.0 * fs))
 	_debuff_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_debuff_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
+	_debuff_label.position = Vector2(-hex_radius, hex_radius * 0.44)
 	_debuff_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
 	_debuff_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
 	_debuff_label.visible = false
-	_shield_label = Label.new()
-	_shield_label.add_theme_font_size_override("font_size", int(11.0 * fs))
-	_shield_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_shield_label.position = Vector2(-hex_radius, -hex_radius * 0.15)
-	_shield_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
-	_shield_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
-	_shield_label.visible = false
 	add_child(_debuff_label)
-	add_child(_shield_label)
+
+	# 【2026-09-28·用户口径】前景标记层（常量 `MARKER_Z`，见文件头图层契约）：名字 / 词条 / 攻击图标+数字 /
+	#   血量图标+数字 / 状态字都摆在**这一层**——压在背景（`_hex`/`_art_hex`）和框（`FRAME_Z`）之上、
+	#   附体魂线之下。这里最后一次性设，免得以后往这段里加标记时忘了设 z
+	#   （变身时补建的攻击图标在 `update_atk_icon()` 里自己设）。
+	for c: CanvasItem in get_children():
+		if c == _hex or c == _art_hex:
+			continue
+		c.z_index = MARKER_Z
 
 # 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
 # 保持长宽比缩放到"外接框边长=box"内（宽高谁大以谁定基准），并把主体中心精确放到 center。
@@ -242,6 +266,7 @@ func update_atk_icon() -> void:
 		return   # 目标贴图缺失：保持现状，不做半截替换
 	if spr == null:
 		made.name = "AtkIcon"
+		made.z_index = MARKER_Z   # 前景标记层：补建的图标也要在背景之上、附体魂线之下（见常量说明）
 		add_child(made)
 		if _atk_label != null:
 			move_child(made, _atk_label.get_index())   # 与 _init 的加入次序一致：图标在数字下面
@@ -273,10 +298,16 @@ func _hex_points(r: float) -> PackedVector2Array:
 		pts.append(Vector2(cos(a), sin(a)) * r)
 	return pts
 
+# 【2026-09-27·用户要求】棋子六边形的阵营底色**透明度**：
+#   原来 alpha = 1.0 ⇒ 六边形把木纹整块盖死；卡面图上线后下面还垫着一层实心色，看着很重。
+#   只改**底色这一层**（`_hex.color`）——卡面贴图（`_art_hex`）不受影响，仍是不透明的原色。
+#   想更透就往下调（0.40 ≈ 很透 / 0.70 ≈ 只压一层淡色），只改这一个常量。
+const FACTION_FILL_ALPHA := 0.55
+
 func _faction_color(f: int) -> Color:
 	if f == DataRegistry.Faction.PLAYER:
-		return Color(0.25, 0.55, 0.9, 1.0)
-	return Color(0.85, 0.32, 0.28, 1.0)
+		return Color(0.25, 0.55, 0.9, FACTION_FILL_ALPHA)
+	return Color(0.85, 0.32, 0.28, FACTION_FILL_ALPHA)
 
 # Battle 在造成重击(如嬉皮死神双倍)前调用：本次受击的伤害数字用紫粉放大样式
 func set_big_hit_style() -> void:
@@ -409,7 +440,7 @@ func _build_name_label() -> void:
 	_label.text = display_name
 	_label.add_theme_font_size_override("font_size", int(12.0 * fs))
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_label.position = Vector2(-hex_radius, -hex_radius * 0.5)
+	_label.position = Vector2(-hex_radius, -hex_radius * 0.10)
 	_label.size = Vector2(hex_radius * 2.0, 15.0 * fs)
 	_label.add_theme_color_override("font_color", Color.WHITE)
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
@@ -419,6 +450,8 @@ func _build_name_label() -> void:
 # 把人物本体贴到棋子六边形上：等比放大到**顶到六边形上下边**，UV 按同一条比例算 ⇒
 #   贴图恰好填满这个多边形（Polygon2D 按多边形裁剪）；`_art == null` 时摘掉贴图、退回纯色棋子。
 #   不会出现"边缘拉伸"：抠图四周留了 2% 全透明边，越界采样钳到的是透明像素。
+#   【2026-09-28·用户要求】再叠一层**个别英雄的取景微调**（`DataRegistry.HERO_ART_FIT`：zoom/dx/dy）——
+#   放大后被多边形裁掉的部分就是"不需要完全显示"的长武器，`dx/dy` 用来把人物挪正。
 func _apply_hex_art() -> void:
 	if _art_hex == null:
 		return
@@ -435,8 +468,12 @@ func _apply_hex_art() -> void:
 	if ts.x <= 0.0 or ts.y <= 0.0:
 		return
 	var fit := minf((hex_radius * 2.0) / ts.x, (sqrt(3.0) * hex_radius) / ts.y)
+	# 【2026-09-28·用户要求】个别英雄的取景微调（放大 / 平移）—— 表在 `DataRegistry.HERO_ART_FIT`，
+	#   与卡面 `HexCard._draw()` 共用；没登记的英雄 = 1.0 / 0 / 0（原样）。`dx`/`dy` 以棋子半径为单位。
+	var adj: Dictionary = DataRegistry.hero_art_fit(display_name)
+	fit *= float(adj.get("zoom", 1.0))
 	var dsz := ts * fit
-	var dpos := -dsz * 0.5
+	var dpos := -dsz * 0.5 + Vector2(float(adj.get("dx", 0.0)), float(adj.get("dy", 0.0))) * hex_radius
 	var uv := PackedVector2Array()
 	for p in _art_hex.polygon:
 		uv.append(Vector2((p.x - dpos.x) / dsz.x * ts.x, (p.y - dpos.y) / dsz.y * ts.y))
@@ -464,7 +501,7 @@ func _ensure_tags_label() -> void:
 	var tag_label := Label.new()
 	tag_label.add_theme_font_size_override("font_size", int(10.0 * fs))
 	tag_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tag_label.position = Vector2(-hex_radius, -hex_radius * 0.84)
+	tag_label.position = Vector2(-hex_radius, hex_radius * 0.72)
 	tag_label.size = Vector2(hex_radius * 2.0, hex_radius * 0.34)
 	# 绿字+深色描边：特性标签(嘲/疾/渗/勤/候)，不撞本方蓝/敌方红/紫减益/金黄盾
 	tag_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.45))
@@ -543,17 +580,18 @@ func mortar_ignores_taunt() -> bool:
 	return mortar_active() and not ranged_adjacent
 
 func _update_status_label() -> void:
-	# 在单位牌面下加状态小字(减益紫 + 增益金 + 独立盾字)，单字/分组/顺序全部查 StatusDB，
+	# 在单位牌面下加状态小字(减益紫 + 增益金)，单字/分组/顺序全部查 StatusDB，
 	# 本函数不再出现任何状态名硬编码。
+	# 【2026-09-28·用户要求】[圣盾] **不画牌面小字**：它的表现是棋子上那圈金黄罩（见 `_refresh_shield_aura()`）
+	#   ⇒ 这里显式跳过 shield 组，否则会落进 `_` 变成紫字减益。
 	var dtxt := ""
 	var gtxt := ""
-	var shtxt := ""
 	for key in StatusDB.keys():
 		if not has_status(key):
 			continue
 		match StatusDB.group_of(key):
 			"shield":
-				shtxt += StatusDB.glyph(key)
+				pass
 			"buff":
 				gtxt += StatusDB.glyph(key)
 			_:
@@ -564,9 +602,27 @@ func _update_status_label() -> void:
 		if _debuff_label:
 			_debuff_label.text = dtxt
 			_debuff_label.visible = dtxt != ""
-		if _shield_label:
-			_shield_label.text = shtxt
-			_shield_label.visible = shtxt != ""
+	# 【2026-09-28·新增·用户要求】[圣盾] 的"金黄透明罩"跟着同一处状态刷新走（挂盾就出现、被消费/解除就收）
+	_refresh_shield_aura()
+
+# 【2026-09-28·用户要求】[圣盾] 罩：`StatusDB.SHIELD` 在身时，棋子外面套一个**金黄半透明的罩**、整圈一闪一闪。
+#   唯一入口是本函数（由 `_update_status_label()` 在每次状态变化后调用）+ `_ready()`（开局就带盾的）。
+#   ⚠️ 纯演出：不读不改任何战斗状态；headless（RL 跑批 / 无窗口自检）**不建节点** ⇒ 跑批零开销、逐位不变。
+func _refresh_shield_aura() -> void:
+	var want := alive and has_status(StatusDB.SHIELD)
+	if want and _shield_aura == null:
+		if DisplayServer.get_name() == "headless" or not is_inside_tree():
+			return
+		_shield_aura = ShieldAura.new()
+		_shield_aura.radius = hex_radius
+		_shield_aura.z_index = FRAME_Z   # 框/光环层：压在人物图之上、攻血数字与状态字之下
+		add_child(_shield_aura)
+		_shield_aura.modulate.a = 0.0    # 上罩时轻轻淡入，别硬闪
+		var t := _shield_aura.create_tween()
+		t.tween_property(_shield_aura, "modulate:a", 1.0, 0.22)
+	if _shield_aura != null and is_instance_valid(_shield_aura):
+		_shield_aura.visible = want
+		_shield_aura.set_process(want)   # 收罩后不再每帧重画（再挂盾时这里会重新打开）
 
 # 受击震屏：仅抖动六边形本体，不影响单位移动坐标
 func _shake() -> void:
@@ -622,7 +678,7 @@ func heal_fx() -> void:
 		var s := (2.6 + randf() * 2.0) * k
 		var dot := Polygon2D.new()
 		dot.polygon = PackedVector2Array([Vector2(-s, -s), Vector2(s, -s), Vector2(s, s), Vector2(-s, s)])
-		dot.z_index = 14
+		dot.z_index = FRAME_Z
 		dot.color = HEAL_COLOR.lerp(Color(0.78, 1.0, 0.62), randf() * 0.6)
 		var from := Vector2((randf() - 0.5) * hex_radius * 1.5, hex_radius * (0.3 + randf() * 0.4))
 		dot.position = from
@@ -675,7 +731,7 @@ func burst_fx(color: Color, text: String) -> void:
 	ring.points = _hex_points(hex_radius + 3.0)
 	ring.closed = true
 	ring.width = 5.0
-	ring.z_index = 14
+	ring.z_index = FRAME_Z
 	ring.default_color = color
 	ring.position = Vector2.ZERO
 	add_child(ring)
@@ -688,7 +744,7 @@ func burst_fx(color: Color, text: String) -> void:
 		var ang := deg_to_rad(60.0 * i + 30.0)
 		var dot := Polygon2D.new()
 		dot.polygon = PackedVector2Array([Vector2(-3, -3), Vector2(3, -3), Vector2(3, 3), Vector2(-3, 3)])
-		dot.z_index = 14
+		dot.z_index = FRAME_Z
 		dot.color = color
 		dot.position = Vector2.ZERO
 		add_child(dot)
@@ -715,7 +771,7 @@ func flash_passive(with_text := true) -> void:
 		_passive_border.points = _hex_points(hex_radius + 2.0)
 		_passive_border.closed = true
 		_passive_border.width = 4.0
-		_passive_border.z_index = 15
+		_passive_border.z_index = FRAME_Z
 		_passive_border.default_color = Color(1.0, 0.92, 0.35)
 		_passive_border.modulate.a = 0.0
 		add_child(_passive_border)
@@ -778,7 +834,7 @@ func set_highlight_ring(on: bool) -> void:
 		_sel_border.points = _hex_points(hex_radius + 2.0)
 		_sel_border.closed = true
 		_sel_border.width = 3.5 * (hex_radius / 54.0)   # 金边线宽随棋盘放大
-		_sel_border.z_index = 16
+		_sel_border.z_index = FRAME_Z
 		_sel_border.default_color = Color(1.0, 0.85, 0.3)
 		add_child(_sel_border)
 	_sel_border.visible = true
@@ -802,7 +858,7 @@ func set_acting_ring(on: bool) -> void:
 		_acting_border.points = _hex_points(hex_radius + 5.0)
 		_acting_border.closed = true
 		_acting_border.width = 5.0 * (hex_radius / 54.0)   # 线宽随棋盘放大，比选中边粗
-		_acting_border.z_index = 17
+		_acting_border.z_index = FRAME_Z
 		_acting_border.default_color = Color(1.0, 0.42, 0.22)
 		_acting_border.modulate.a = 0.0
 		add_child(_acting_border)
@@ -827,15 +883,19 @@ func set_action_marker(show_dot: bool) -> void:
 		_action_dot.add_theme_constant_override("outline_size", 3)
 		_action_dot.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_action_dot.size = Vector2(24, 24)
-		_action_dot.position = Vector2(-12, -hex_radius - 16)
+		_action_dot.position = Vector2(-12, -hex_radius * 0.58)   # 六边形顶部内侧（见 set_action_markers 的说明）
+		_action_dot.z_as_relative = false
+		_action_dot.z_index = ACTION_Z   # 行动点例外层（见文件头契约③）：谁的东西都盖不住它
 		add_child(_action_dot)
 	_action_dot.visible = show_dot
 
-# 分离的行动标识：可移动=绿色，可攻击=红色。整体在六边形正上方居中显示。
+# 分离的行动标识：可移动=绿色，可攻击=红色。整体在六边形**顶部内侧**居中显示（位置/层见下面那几行说明）。
 func set_action_markers(has_move: bool, has_attack: bool) -> void:
 	if _marker_host == null:
 		_marker_host = Control.new()
 		_marker_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_marker_host.z_as_relative = false
+		_marker_host.z_index = ACTION_Z   # 行动点例外层（见文件头契约③）：谁的东西都盖不住它
 		add_child(_marker_host)
 		_move_dot = _make_dot(Color(0.3, 0.95, 0.35))
 		_attack_dot = _make_dot(Color(1.0, 0.3, 0.25))
@@ -843,11 +903,17 @@ func set_action_markers(has_move: bool, has_attack: bool) -> void:
 		_marker_host.add_child(_attack_dot)
 	_move_dot.visible = has_move
 	_attack_dot.visible = has_attack
-	# 居中：容器宽 = 可见点数*24 并对齐 hex 顶边中点；绿(移动)占左格、红(攻击)占右格，
-	# 只亮红时红点单独在容器中央（即 hex 中央上方）。
+	# 居中：容器宽 = 可见点数*24 并对齐 hex 顶部内侧的中点；绿(移动)占左格、红(攻击)占右格，
+	# 只亮红时红点单独在容器中央（即 hex 顶部内侧正中）。
 	var n := (1 if has_move else 0) + (1 if has_attack else 0)
 	_marker_host.size = Vector2(n * 24, 24)
-	_marker_host.position = Vector2(-_marker_host.size.x / 2.0, -hex_radius - 18)
+	# 【2026-09-28·用户两次口径「可行动提示点被上面英雄的特性字挡住」→「下面点啊，不要被上面英雄的特性挡住」】
+	#   位置：**六边形顶部内侧**（`0.58r`），不再挂在六边形**外面** —— 外面那块空隙会被同列上邻的特性字
+	#   吃掉（行距 √3·r，上邻的字挂它牌面下沿 `0.72r~1.0r` ⇒ 换算到我们头顶就是 `0.53r~0.73r`），
+	#   0.58r 处正好在那行字下面（r≈73 时留 ~9px），也在本棋子人物头顶之上、不压攻血数字与状态字。
+	#   层：仍走 `ACTION_Z` 的**绝对层**做保险（`z_as_relative = false`）⇒ 任何情况下都不会被别的棋子盖住。
+	#   想再低/再高（更靠中间）只改这一个系数：`0.50` 更居中、`0.66` 更贴顶。
+	_marker_host.position = Vector2(-_marker_host.size.x / 2.0, -hex_radius * 1.05)
 	_move_dot.position = Vector2(0, 0)
 	_attack_dot.position = Vector2(24 if has_move else 0, 0)
 
@@ -862,3 +928,40 @@ func _make_dot(col: Color) -> Label:
 	d.size = Vector2(24, 24)
 	d.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return d
+
+# 【2026-09-28·新增·用户要求】[圣盾] 演出：一个**金黄半透明的罩**罩住棋子，整圈**一闪一闪**。
+#   · 只在有 `StatusDB.SHIELD` 时存在/可见 —— 建与收都在 `Unit._refresh_shield_aura()`；
+#   · 画在 `FRAME_Z`（框/光环层，见文件头图层契约）⇒ 压在六边形底色与人物图**之上**、攻血数字与状态字**之下**；
+#   · headless（RL 跑批 / 无窗口自检）**不建这个节点** ⇒ 零绘制开销、跑批行为逐位不变；
+#   · 所有视觉旋钮在这个类顶部：`R_MUL` 罩多大 / `FILL_A` 罩面多透 / `RIM_A` 边圈多亮 / `RIM_W` 边圈多粗 /
+#     `BLINK` 闪多快 / `BLINK_MIN` 暗下来时还剩多少亮度。位置/角度全用固定算式，不占随机源。
+class ShieldAura extends Node2D:
+	const R_MUL := 1.04       # 罩半径 = 棋子半径 × 该值（1.0 = 正好外接六边形）
+	const FILL_A := 0.10      # 罩面金黄透明度（越小越像一层气泡）
+	const RIM_A := 0.55       # 边圈基础亮度（会被闪烁调制）
+	const RIM_W := 3.2        # 边圈线宽（按棋子半径等比放大）
+	const BLINK := 3.4        # 闪烁快慢（越大闪得越快；一整个明暗周期 ≈ 2π / 该值 秒）
+	const BLINK_MIN := 0.25   # 最暗时保留的亮度比例（0 = 直接灭掉，1 = 不闪）
+	var radius := 44.0
+	var _t := 0.0
+
+	func _process(delta: float) -> void:
+		_t += delta
+		queue_redraw()
+
+	func _draw() -> void:
+		var k := radius / 44.0                       # 随棋子尺寸等比缩放（基准 radius 44）
+		var r := radius * R_MUL
+		var gold := Color(1.0, 0.84, 0.32)
+		var bl := 0.5 + 0.5 * sin(_t * BLINK)        # 0~1 闪烁相位
+		bl = pow(bl, 1.5)                            # 亮得尖、暗得柔 ⇒ 读起来是"闪"而不是"呼吸"
+		var glow := BLINK_MIN + (1.0 - BLINK_MIN) * bl
+		# 罩面：三层同心圆叠出"中间透、边上亮"的气泡感（整层跟着一起明暗）
+		draw_circle(Vector2.ZERO, r, Color(gold.r, gold.g, gold.b, FILL_A * glow))
+		draw_arc(Vector2.ZERO, r * 0.82, 0.0, TAU, 48, Color(1.0, 0.90, 0.50, FILL_A * 0.9 * glow), 6.0 * k, true)
+		draw_arc(Vector2.ZERO, r * 0.94, 0.0, TAU, 56, Color(1.0, 0.88, 0.45, FILL_A * 1.4 * glow), 5.0 * k, true)
+		# 金色边圈：外发光 + 主圈两层，整圈一起一闪一闪
+		draw_arc(Vector2.ZERO, r, 0.0, TAU, 64, Color(gold.r, gold.g, gold.b, RIM_A * 0.35 * glow), (RIM_W + 4.0) * k, true)
+		draw_arc(Vector2.ZERO, r, 0.0, TAU, 64, Color(gold.r, gold.g, gold.b, RIM_A * glow), RIM_W * k, true)
+		# 左上角高光弧（气泡反光）跟着一起闪
+		draw_arc(Vector2.ZERO, r * 0.88, PI * 1.02, PI * 1.42, 18, Color(1.0, 1.0, 0.92, 0.30 * glow), 3.0 * k, true)

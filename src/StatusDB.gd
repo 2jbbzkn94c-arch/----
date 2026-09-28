@@ -29,8 +29,9 @@ const WIND := "wind"
 
 # ---- 定义表 ----
 #   label              两字中文名（HUD 文本/属性框/战斗日志都用它）
-#   glyph              牌面单字（Unit 的减益紫字 / 增益金字 / 独立盾字）
-#   group              "debuff"=紫字减益 / "buff"=金字增益 / "shield"=独立金色盾字
+#   glyph              牌面单字（Unit 的减益紫字 / 增益金字）
+#   group              "debuff"=紫字减益 / "buff"=金字增益 / "shield"=**不画牌面小字**
+#                      （[圣盾] 的表现改成棋子外面那圈金黄罩，见 `Unit.ShieldAura` —— 2026-09-28 用户要求去掉「盾」字）
 #   negative           负面：施加时被圣盾挡下、被负墟免疫；正面不算
 #   clear_on_turn_end  是否随"该方回合结束"自动解除
 #                      （猛毒是永久毒 → false；坚固由装甲堡垒自己 on_turn_start 管 → false）
@@ -45,7 +46,7 @@ const DEFS := {
 	POSSESS: { "label": "附体", "glyph": "附", "group": "debuff", "negative": true,  "clear_on_turn_end": true,  "order": 70 },
 	THORN:   { "label": "荆棘", "glyph": "荆", "group": "debuff", "negative": true,  "clear_on_turn_end": true,  "order": 80 },
 	SOLID:   { "label": "坚固", "glyph": "固", "group": "buff",   "negative": false, "clear_on_turn_end": false, "order": 90 },
-	SHIELD:  { "label": "圣盾", "glyph": "盾", "group": "shield", "negative": false, "clear_on_turn_end": false, "order": 100 },
+	SHIELD:  { "label": "圣盾", "glyph": "盾", "group": "shield", "negative": false, "clear_on_turn_end": false, "order": 100 },   # 「盾」字不画在牌面上（表现 = 金黄罩）
 	# 【2026-09-26 用户要求】风语者的移动光环不再借「疾行」的招牌（与**本来就有<疾行>**的队友撞车、看不出是谁给的）
 	#   ⇒ 单开一个状态 [风语]：牌面金字「风」。⚠️ `clear_on_turn_end = true` 是刻意的 ——
 	#   `Battle._clear_statuses()` 同一个循环里就把 `move_buff` 清零 ⇒ 状态与该数值**同生共死**

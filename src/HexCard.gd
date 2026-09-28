@@ -10,6 +10,10 @@ var def: DataRegistry.HeroDef
 var selected := false
 var disabled_draw := false   # 灰暗显示（非本人回合）
 var radius := 45.0
+# 【2026-09-28 用户要求】「录像列表就不需要显示血量攻击和特性了」⇒ 这两个开关给**只看"是谁"**的场合用：
+#   关闭后卡面只剩六边形（种族底色）+ 人物卡面图（没出图的英雄仍画名字），不画攻/血图标与词条标签。
+var show_stats := true       # 攻/血图标 + 数字
+var show_tags := true        # 词条标签（嘲/疾/渗/勤/候）
 
 var _label: Label            # 卡面**名字**行（只在"这张卡还没有卡面图"时才建，见 `_build_overlay`）
 var _art: Texture2D = null   # 英雄卡面图（人物本体）；null = 该英雄还没出图 ⇒ 退回纯色六边形
@@ -48,8 +52,8 @@ func _build_name_label(c: Vector2) -> void:
 	_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	_label.add_theme_constant_override("outline_size", 2)
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# 名字整体略下移（原顶部 -0.72r → -0.66r），更贴近卡面中上部视觉重心
-	_label.position = c + Vector2(-radius, -radius * 0.5)
+	# 【2026-09-27】名字（只给"还没出图"的英雄）挪到**卡面中部**：上排现在是攻/血图标、下排是词条
+	_label.position = c + Vector2(-radius, -radius * 0.10)
 	_label.size = Vector2(radius * 2.0, radius * 0.52)
 	add_child(_label)
 
@@ -62,7 +66,7 @@ func _build_overlay() -> void:
 		_build_name_label(c)
 	# 词条标签（嘲/疾/渗/勤/候）：顶部小字，与棋盘棋子一致；无词条则省略
 	var tags := _card_tags()
-	if tags != "":
+	if tags != "" and show_tags:
 		var tagl := Label.new()
 		tagl.text = tags
 		tagl.add_theme_font_size_override("font_size", int(clampf(radius * 0.2, 9.0, 20.0)))
@@ -73,18 +77,24 @@ func _build_overlay() -> void:
 		tagl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 		tagl.add_theme_constant_override("outline_size", 2)
 		tagl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		tagl.position = c + Vector2(-radius, -radius * 0.84)
+		# 【2026-09-27·用户要求】词条标签从"卡面顶部"挪到**最下面**（原来顶部会挡人物头部）
+		tagl.position = c + Vector2(-radius, radius * 0.6)
 		tagl.size = Vector2(radius * 2.0, radius * 0.3)
 		add_child(tagl)
-	# 数值图标：左下=攻击.png，右下=爱心.png；数字压在图标主体中心，图标放大到数字完全在内
-	var icon_w := clampf(radius * 0.7, 24.0, 96.0)
+	# 数值图标：【2026-09-27·用户要求】攻击 → **左上**、血量 → **右上**（原在左下/右下，压着人物身体）；
+	#   数字压在图标主体中心，图标放大到数字完全在内。y 取 −0.52r：六边形在该高度的半宽 ≈0.70r，
+	#   而图标框半宽 ≈0.35r ⇒ 刚好不探出斜边。
+	if not show_stats:
+		return   # 只看"是谁"的场合（录像列表）：攻/血一概不画，卡面只剩六边形 + 人物图（见成员开关）
+	var icon_w := clampf(radius * 0.6, 24.0, 96.0)
+	var atk_icon_w := icon_w * 0.8   # ← 只改攻击图标（剑/弩/齿轮）；1.0 = 和爱心一样大
 	var num_fs := int(clampf(icon_w * 0.56, 12.0, 44.0))
-	var atk_c := c + Vector2(-radius * 0.32, radius * 0.5)
-	var hp_c := c + Vector2(radius * 0.36, radius * 0.5)
+	var atk_c := c + Vector2(-radius * 0.4, radius * 0.55)
+	var hp_c := c + Vector2(radius * 0.4, radius * 0.55)
 	# 攻击图标：后勤角色用齿轮图，其次远程用弩图，最后近战用原剑图
 	var atk_icon_path := DataRegistry.ICON_ATK_LOGISTICS if def.skills.has(DataRegistry.Skill.LOGISTICS) else (
 		DataRegistry.ICON_ATK_RANGED if def.attack_type == DataRegistry.AttackType.RANGED else DataRegistry.ICON_ATK)
-	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, icon_w)
+	var atk_icon := _make_stat_icon(atk_icon_path, atk_c, atk_icon_w)
 	var hp_icon := _make_stat_icon(DataRegistry.ICON_HEART, hp_c, icon_w)
 	if atk_icon == null and hp_icon == null:
 		# 素材缺失兜底：另起一行只报数值（**不动名字行** —— 有卡面图的卡本来就没名字）
@@ -213,8 +223,12 @@ func _draw() -> void:
 		var ts := _art.get_size()
 		if ts.x > 0.0 and ts.y > 0.0:
 			var fit := minf((radius * 2.0) / ts.x, (sqrt(3.0) * radius) / ts.y)
+			# 【2026-09-28·用户要求】个别英雄的取景微调（放大 / 平移）—— 表在 `DataRegistry.HERO_ART_FIT`，
+			#   与棋盘棋子共用；没登记的英雄 = 1.0 / 0 / 0（原样）。`dx`/`dy` 以卡半径为单位（+x 右 / +y 下）。
+			var adj: Dictionary = DataRegistry.hero_art_fit(def.display_name)
+			fit *= float(adj.get("zoom", 1.0))
 			var dsz := ts * fit
-			var dpos := c - dsz * 0.5
+			var dpos := c - dsz * 0.5 + Vector2(float(adj.get("dx", 0.0)), float(adj.get("dy", 0.0))) * radius
 			var uvs := PackedVector2Array()
 			for p in pts:
 				uvs.append(Vector2((p.x - dpos.x) / dsz.x, (p.y - dpos.y) / dsz.y))

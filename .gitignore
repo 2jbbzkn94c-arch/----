@@ -62,3 +62,6 @@ RL/probe/_*.log
 /PICTURE/
 
 /ffmpeg-*/
+
+# APK 逆向工作目录（已移到项目外 D:\Game creating\战旗_原版资源提取）
+/_apk_work/

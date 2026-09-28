@@ -3,6 +3,9 @@ extends Control
 ## 选卡界面（对战前派遣英雄上阵）。
 ## 玩家从卡池中挑选 3 名英雄（参照《酒馆纷争》轮流派遣），敌方自动随选 3 名。
 
+## 【2026-09-28】录像列表要用的纯数据工具：从录像本体里取"某一方实际用过的英雄"（索引缺字段时兜底）
+const ReplaySessionScript := preload("res://src/ReplaySession.gd")
+
 var _selected: Array[String] = []
 var _card_buttons: Dictionary = {}   # hero_id -> Button
 var _start_btn: Button
@@ -30,12 +33,16 @@ const CARD_GAP_SCALE := 0.96   # 选人池卡牌绘制半径/间距半径：1.0=
 # 源文件在 assets/美术资源/背景/（*.svg 用 tools/RenderCover 出 PNG；*.jpg 是直接投放的位图）。
 # 缺图自动退回纯色底（WoodFloor）。
 const COVER_BG_CANDIDATES := [
+	# 【2026-09-27·用户新封面】主界面背景。1024×1024 方图，而屏幕是 720×1280 竖屏 ⇒ 按"铺满裁切"
+	#   （`STRETCH_KEEP_ASPECT_COVERED`）显示时**左右会各裁掉约 21%**（只看得见中间 ~58% 宽）。
+	#   想让主体别被裁：把画面主体放中间竖向一条，或换成竖版图（≈720×1280）。
+	"res://assets/界面/封面.png",
 	"res://assets/美术资源/背景/界面背景_六角地砖.jpg",   # 六角地砖 + 灯笼/骰子/剑盾（暗调，UI 界面用）
 	"res://assets/美术资源/背景/酒桌封面.png",   # 方案B：酒桌俯视，桌面刻着六边形棋盘
 	"res://assets/美术资源/背景/酒馆封面.png",   # 方案A：酒馆内景·吧台
 ]
 
-const RULES_TEXT := "《酒馆纷争》玩法说明\n\n一、目标与胜负\n· 你和对手各有一支队伍：3 名首发上场，其余在替补席待命。\n· 一方累计阵亡 3 名英雄（含替补）即判负。\n· 若同一时刻双方都达到 3 名阵亡（同归于尽），判对方负、你获胜。\n\n二、开局流程\n· 普通模式：先在编辑页组成阵容并保存到卡组槽（选 5-8 名，前 3 名首发、其余替补）；开战后在战斗内弹出“选择卡组”，从 3 个已存卡组里挑一个出战（也可点「随机英雄」）→ 再轮流上首发。\n· 竞技场模式：开局进入“2 选 1 选人”，你挑 4 次、敌方也会把没选的英雄给你（每队最终各 8 名），再轮流上首发。\n· 开局会提示本局先手：先手方先上首发，开战后也先行动。\n\n三、回合怎么进行\n· 每人一回合内：只能移动和攻击一次（攻击后即不能再移动）；“后勤”单位不能主动攻击。\n· 先手方行动完 → 对方行动 → 双方都完成才算满 1 回合。\n· 点击「结束回合」结束自己的回合；每回合限时 90 秒，超时自动结束。\n\n四、阵亡与替补\n· 英雄阵亡留下墓碑；替补只能落在自己出生区或本方墓碑（不能落对方墓碑）。\n· 同时死多人时会逐个替补。\n· 第 11 回合起进入“烧血”阶段：每当你方回合结束结算一次，扣血 = 当前回合数 - 10\n  （第 11 回合扣 1、第 12 回合扣 2……），拖得越久越快。\n"
+const RULES_TEXT := "《酒馆纷争》玩法说明\n\n一、目标与胜负\n· 你和对手各有一支队伍：3 名首发上场，其余在替补席待命。\n· 一方累计阵亡 3 名英雄（含替补）即判负。\n· 若同一时刻双方都达到 3 名阵亡（同归于尽），判对方负、你获胜。\n\n二、开局流程\n· 普通模式：先在编辑页组成阵容并保存到卡组槽（选 5-8 名，前 3 名首发、其余替补）；开战后在战斗内弹出“选择卡组”，从 3 个已存卡组里挑一个出战（也可点「随机英雄」）→ 再轮流上首发。\n· 竞技场模式：开局进入“2 选 1 选人”，你挑 4 次、敌方也会把没选的英雄给你（每队最终各 8 名），再轮流上首发。\n· 开局随机决定先手：先手方先上首发，开战后也先行动。\n\n三、回合怎么进行\n· 每人一回合内：只能移动和攻击一次（攻击后即不能再移动）；“后勤”单位不能主动攻击。\n· 先手方行动完 → 对方行动 → 双方都完成才算满 1 回合。\n· 点击「结束回合」结束自己的回合；每回合限时 90 秒，超时自动结束。\n\n四、阵亡与替补\n· 英雄阵亡留下墓碑；替补只能落在自己出生区或本方墓碑（不能落对方墓碑）。\n· 同时死多人时会逐个替补。\n· 第 11 回合起进入“烧血”阶段：每当你方回合结束结算一次，扣血 = 当前回合数 - 10\n  （第 11 回合扣 1、第 12 回合扣 2……），拖得越久越快。\n"
 
 var _help_overlay: Control = null   # 游戏说明弹窗
 var _stats_overlay: Control = null  # 对战统计弹窗
@@ -45,22 +52,48 @@ func _ready() -> void:
 	set_process_input(true)   # 触摸跟踪（轻点 vs 按住拖动池）
 	if GameState.net_edit_mode:
 		_show_team_view()   # 联机大厅叠层打开：直接进选人页
+	# 【2026-09-28 用户要求】「结束后要回到录像列表界面」：回放退出/演完时置的一次性标志
+	#   ⇒ 菜单一建好就**直接打开录像列表**（不用再点一次「录像回放」）。读后立刻清掉。
+	if GameState.replay_back_to_list:
+		GameState.replay_back_to_list = false
+		_open_replays()
+
+# 【2026-09-27·用户实机「向左一点取，右边有些线条弄进来了」】封面"看得见画面哪一段"的横向取景：
+#   0 = 贴最左、0.5 = 居中（原来的固定行为）、1 = 贴最右。只影响"铺满裁切"裁掉哪一边，
+#   不动缩放、不影响其它候选图（竖版图横向没有溢出，这个值对它无效果）。
+const COVER_VIEW_X := 0.30
 
 # 封面背景图：等比裁切铺满整屏（候选都缺图时返回 null，由纯色底兜底）
-func _make_cover_bg() -> TextureRect:
+# 返回一个**裁剪容器**（不再是裸 TextureRect）：里面那张图按"铺满"放大后可能比屏幕宽，
+#   容器把超出屏幕的部分裁掉，取景位置由 `COVER_VIEW_X` 决定。
+func _make_cover_bg() -> Control:
 	for path in COVER_BG_CANDIDATES:
 		if not ResourceLoader.exists(path):
 			continue
 		var tex := load(path) as Texture2D
 		if tex == null:
 			continue
-		var cover_rect := TextureRect.new()
-		cover_rect.texture = tex
-		cover_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-		cover_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		cover_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		cover_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		return cover_rect
+		var vs := get_viewport().get_visible_rect().size
+		var holder := Control.new()
+		holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.clip_contents = true
+		var rect := TextureRect.new()
+		rect.texture = tex
+		rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rect.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		var tw := float(tex.get_width())
+		var th := float(tex.get_height())
+		if tw <= 0.0 or th <= 0.0:
+			return null
+		var sc := maxf(vs.x / tw, vs.y / th)   # "铺满"缩放：取宽高两个方向里更大的那个比例
+		rect.size = Vector2(tw * sc, th * sc)
+		# 横向：按 COVER_VIEW_X 取景（0=最左 / 0.5=居中）；纵向：方图在竖屏上没有溢出，居中即可
+		rect.position = Vector2((vs.x - rect.size.x) * COVER_VIEW_X, (vs.y - rect.size.y) * 0.5)
+		holder.add_child(rect)
+		return holder
 	return null
 
 # 竖向渐变遮罩：中段（按钮列/卡池背后）压暗保可读性，顶部标题与底部吧台留亮，
@@ -362,6 +395,7 @@ func _build_main_menu() -> void:
 	add_mode_btn.call("自由部署（测试）", _go_test_deploy)
 	add_mode_btn.call("游戏说明", _open_help)
 	add_mode_btn.call("对战统计", _open_stats)
+	add_mode_btn.call("录像回放", _open_replays)   # 【2026-09-27 用户要求】单机对局自动录像，这里看
 	add_mode_btn.call("复制诊断信息", _copy_diagnostics)
 	var quit_btn := Button.new()
 	quit_btn.text = "退出游戏"
@@ -854,9 +888,13 @@ func _refresh_deck_slots() -> void:
 
 # 与替补队伍面板同款布局：所选卡组一行平顶蜂窝小卡（悬停看属性）
 func _build_deck_preview(ids: Array) -> void:
+	# 【2026-09-28·用户要求】「卡组英雄队伍列表放大，8 个英雄占满宽度」：半径**按可用宽度反算**
+	#   （与录像列表同一套口径）—— 一行 n 张平顶六边形的总宽 = `2r + (n−1)·1.5r`
+	#   ⇒ 反解 `r = 可用宽 / (2 + 1.5·(n−1))`。封顶由 46 抬到 **56**：8 人时反算得 r≈51
+	#   ⇒ 行宽正好铺满可用宽（原来被 46 卡住、只占 ~90%）；人数很少时才由封顶兜住。
 	var avail: float = get_viewport().get_visible_rect().size.x - 80.0
 	var n := maxi(ids.size(), 1)
-	var r: float = minf(46.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
+	var r: float = minf(56.0, maxf(avail / (2.0 + float(n - 1) * 1.5), 18.0))
 	var sq3 := sqrt(3.0)
 	var col_step := 1.5 * r
 	var row_step := sq3 * r
@@ -876,6 +914,287 @@ func _build_deck_preview(ids: Array) -> void:
 		card.hovered.connect(_on_hex_hovered)
 		card.clicked.connect(_on_deck_card_clicked)   # 点小卡 = 从卡组里去掉这个英雄
 		_deck_host.add_child(card)
+
+# ==================== 【2026-09-27 用户要求·录像回放】录像库列表 ====================
+# 口径：单机对局的录像自动落盘（见 `Battle._rec_begin()` / `_rec_finish()`、`src/ReplaySession.gd`），
+#   这里只负责"列出来 + 点开看"。列表行 = 时间 · 模式 · 胜负 · 双方英雄 · 半回合数 · 时长。
+var _replay_overlay: Control = null
+
+func _open_replays() -> void:
+	if _replay_overlay != null and is_instance_valid(_replay_overlay):
+		_replay_overlay.queue_free()
+		_replay_overlay = null
+	var vsize := get_viewport().get_visible_rect().size
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_replay_overlay = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.7)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	# 【2026-09-28 用户报「这个录像框左右不居中」】弹框原来直接挂在全屏遮罩上 ⇒ 位置就是 (0,0)（贴左上角）。
+	#   套一层全屏 `CenterContainer` ⇒ 左右/上下都居中；遮罩照旧吞点击（`ov` 是 STOP）。
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "录像回放"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var list: Array = ReplayStore.list()
+	if list.is_empty():
+		var empty := Label.new()
+		empty.text = "还没有录像"
+		empty.add_theme_font_size_override("font_size", 18)
+		empty.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
+		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vb.add_child(empty)
+	else:
+		var scroll := ScrollContainer.new()
+		# 列表区高度：一行 = 标题行 + 放大后的六边形，比原来高 ⇒ 视口压到 0.5 屏，其余靠滚动
+		scroll.custom_minimum_size = Vector2(minf(vsize.x * 0.86, 620.0), minf(vsize.y * 0.5, 560.0))
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		vb.add_child(scroll)
+		# 【2026-09-28 用户要求】「把六边形放大，填满」：半径**按列表可用宽度反算**，两侧正好铺满一行：
+		#   一行 = 我方 6.5r + VS 24 + 敌方 6.5r + 两处 10px 间距 ⇒ r = (可用宽 − 44) / 13。
+		#   可用宽 = 列表宽 − 录像框左右内边距（各 `REPLAY_ROW_PAD`）。窄窗口时自然会小下去（下限 20）。
+		var rad := clampf((minf(vsize.x * 0.86, 620.0) - REPLAY_ROW_PAD * 2.0 - 44.0) / 13.0, 20.0, 48.0)
+		var host := VBoxContainer.new()
+		host.add_theme_constant_override("separation", 8)
+		host.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(host)
+		for r in list:
+			host.add_child(_replay_row(r as Dictionary, rad))
+	var cancel := Button.new()
+	cancel.text = "返回"
+	cancel.custom_minimum_size = Vector2(0, 48)
+	cancel.add_theme_font_size_override("font_size", 22)
+	cancel.pressed.connect(func(): _close_replays())
+	vb.add_child(cancel)
+
+func _close_replays() -> void:
+	if _replay_overlay != null and is_instance_valid(_replay_overlay):
+		_replay_overlay.queue_free()
+	_replay_overlay = null
+
+## 一条录像的框：**第一排"时间 · 模式 · 胜负" + 删除按钮**，下面是**填满整行的双方六边形**。
+## 【2026-09-28 用户要求】① 时间/模式/胜负在**最上方**；② 六边形放大到**填满**；
+##   ③ **点整个框就进回放**（不再要求点描述按钮）—— 框上挂 `gui_input` + 手型光标，
+##   删除按钮自己会消费点击、不会连带进回放；④ 删除按钮**挪到第一排**（原来单独占最下面一行）。
+## 卡面取自索引里的双方卡组（`player` / `enemy`，整副最多 8 张）。
+const REPLAY_ROW_PAD := 20.0   # 录像框左右内边距（主题 `panel_frame_dark.png` 的 content margin）
+
+func _replay_row(r: Dictionary, rad: float) -> Control:
+	# 【2026-09-27 用户报「英雄卡面没有在对应录像的那个框里」】原来每行只是"卡面 + 文字按钮"两段，
+	#   **没有行框**，卡面看着就悬在标题下方 ⇒ 每一条录像现在套一个**带边框的卡片框**（走主题的
+	#   `panel_frame_dark.png` 弹出框边框），卡面与文字按钮都装在里面。
+	var id := String(r.get("id", ""))
+	var frame := PanelContainer.new()
+	frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# 【2026-09-28 用户要求】「选择的时候是选整个录像框」：整框可点 = 进回放
+	frame.mouse_filter = Control.MOUSE_FILTER_STOP
+	frame.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	frame.gui_input.connect(func(ev): _on_replay_frame_input(ev, id))
+	# 【2026-09-28 用户要求】鼠标移到录像框上要**高亮**（整框可点，却没有悬停反馈）：
+	#   悬停时把"面板框"换成金色描边 + 淡金底；内外边距**照抄原框**（不然内容会跳位）。
+	#   ⚠️ 原框样式要等进了树才取得到（建行时还在树外）⇒ 第一次悬停时现取一次，存进这个字典。
+	var hover_st := {}
+	frame.mouse_entered.connect(func(): _replay_frame_hover(frame, hover_st, true))
+	frame.mouse_exited.connect(func(): _replay_frame_hover(frame, hover_st, false))
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 4)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	frame.add_child(col)
+	# ① 第一排：时间 · 模式 · 胜负（居中）+ 删除（右）
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	head.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var title := Label.new()
+	title.text = _replay_title_text(r)
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head.add_child(title)
+	var del := Button.new()
+	del.text = "删除"
+	del.add_theme_font_size_override("font_size", 16)
+	del.custom_minimum_size = Vector2(72, 36)
+	del.pressed.connect(func():
+		ReplayStore.remove(id)
+		_open_replays())   # 重建列表（删完刷新）
+	UiDice.detach(del)
+	head.add_child(del)
+	col.add_child(head)
+	# ② 下面：双方六边形（半径由 `_open_replays()` 按列表宽度反算 ⇒ 铺满整行）
+	# 【2026-09-28 用户报「录像列表里不显示对方卡组」】索引里某一方为空（老录像 / 敌方走配方档时，
+	#   `GameState.enemy_deck` 全程是空的）⇒ 现场读一次这条录像，用"第 0 段快照里实际用过的英雄"兜底
+	#   （只在缺的时候读，一行最多一次；补的是显示，不动录像文件本身）。
+	var mine = r.get("player", [])
+	var foe = r.get("enemy", [])
+	if (mine as Array).is_empty() or (foe as Array).is_empty():
+		var data: Dictionary = ReplayStore.load_replay(id)
+		if not data.is_empty():
+			if (mine as Array).is_empty():
+				mine = ReplaySessionScript.deck_from_data(data, GameState.SIDE_PLAYER)
+			if (foe as Array).is_empty():
+				foe = ReplaySessionScript.deck_from_data(data, GameState.SIDE_ENEMY)
+	var grid := _replay_hero_grid(mine, foe, rad, id)
+	if grid != null:
+		var center := CenterContainer.new()
+		center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		center.add_child(grid)
+		col.add_child(center)
+	return frame
+
+## 点录像框 = 进回放（只认左键按下；删除按钮会自己消费点击，不会漏到这里）。
+func _on_replay_frame_input(ev: InputEvent, id: String) -> void:
+	if ev is InputEventMouseButton:
+		var mb := ev as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			_play_replay(id)
+
+## 录像框悬停高亮：`on = true` 换成金色描边 + 淡金底，`false` 换回主题原框。
+## `st` 是每行自己的状态字典（存原框样式与高亮样式，第一次调用时现建）。
+func _replay_frame_hover(frame: Control, st: Dictionary, on: bool) -> void:
+	if frame == null or not is_instance_valid(frame):
+		return
+	if not st.has("base"):
+		var base: StyleBox = frame.get_theme_stylebox("panel")
+		st["base"] = base
+		var hb := StyleBoxFlat.new()
+		hb.bg_color = Color(1.0, 0.85, 0.5, 0.10)
+		hb.set_border_width_all(2)
+		hb.border_color = Color(1.0, 0.85, 0.5, 0.95)
+		hb.set_corner_radius_all(6)
+		# 边距照抄原框：否则悬停那一瞬间内容会整体挪一下
+		hb.content_margin_left = base.get_margin(SIDE_LEFT)
+		hb.content_margin_right = base.get_margin(SIDE_RIGHT)
+		hb.content_margin_top = base.get_margin(SIDE_TOP)
+		hb.content_margin_bottom = base.get_margin(SIDE_BOTTOM)
+		st["hover"] = hb
+	frame.add_theme_stylebox_override("panel", st["hover"] if on else st["base"])
+
+## 一条录像的"双方上阵英雄卡面"：**左边我方 · 中间 VS · 右边敌方**
+## （用户 2026-09-28 要求；此前是"上面 4 个、下面 4 个"，用户原话：「把六边形排好，然后左边是我方，
+## 中间是 VS，右边是对方的队伍」）。每侧排出**整副卡组**（最多 8 张，4 个一排、蜂窝错位，见 `_replay_side_row()`）。
+## 两侧宿主**同一个固定宽度** ⇒ 人数不满时 VS 仍居中、两侧都贴紧 VS。
+## 用 HUD 卡池同一套 `HexCard`（英雄卡面），只作展示：不弹属性浮层、不可点。
+## ⚠️ 卡面摆位口径：`HexCard._draw()` **以控件框中心**画六边形、框高 = √3r
+##   ⇒ 控件框要往上抬 `row_step / 2`，六边形中心才落在格心上（HUD 卡池同一摆法）。
+func _replay_hero_grid(mine, foe, rad: float, rid: String) -> Control:
+	var mine_ids := _replay_ids_of(mine, 8)
+	var foe_ids := _replay_ids_of(foe, 8)
+	if mine_ids.is_empty() and foe_ids.is_empty():
+		return null
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(_replay_side_row(mine_ids, true, rad, rid))    # 我方：靠右（贴 VS）
+	var vs := Label.new()
+	vs.text = "VS"
+	vs.add_theme_font_size_override("font_size", 20)
+	vs.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+	vs.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	vs.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(vs)
+	row.add_child(_replay_side_row(foe_ids, false, rad, rid))    # 敌方：靠左（贴 VS）
+	return row
+
+## 索引里的英雄 id 列表（跳过认不出的，最多 `maxn` 个）。
+func _replay_ids_of(src, maxn: int) -> Array:
+	var ids: Array = []
+	if not (src is Array):
+		return ids
+	for hid in src:
+		if ids.size() >= maxn:
+			break
+		if DataRegistry.get_hero(String(hid)) != null:
+			ids.append(String(hid))
+	return ids
+
+## 一侧的队伍：**整副卡组**（最多 8 张），**平顶六边形蜂窝**（边贴边，不留缝也不重叠）。
+## 几何口径（`HexCard` 画的是平顶六边形：宽 2r、高 √3r，顶点在正左/正右）：
+##   相邻列中心距 `1.5r`、**相邻列上下错开 `√3r/2`**、同一列上下间距 `√3r` ⇒ 这样才是"边贴边"。
+##   ⚠️ 曾经按"每排 4 个、排间水平错半格"摆（那是尖顶六边形的口径）⇒ 同一排里相邻两个中心只差
+##   1.5r 而宽度要 2r ⇒ **叠在一起**、排与排之间又留缝（用户 2026-09-28 报「六边形没有接在一起」）。
+##   现在：第 i 张 → 列 `i % 4`、排 `i / 4`，`x = 1.5r × 列`、`y = √3r × 排 (+ √3r/2 当列为奇数)`。
+## 宿主宽度固定按 4 列算 ⇒ 两侧同宽、人数不同时中间的 VS 也不跑位；
+## `align_right` = 这一侧靠右排（我方），把不足的那点余量留在左边。
+func _replay_side_row(ids: Array, align_right: bool, rad: float, rid: String) -> Control:
+	var host := Control.new()
+	host.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var col_step := 1.5 * rad          # 蜂窝：相邻列水平间距
+	var row_step := sqrt(3.0) * rad    # 蜂窝：同一列上下间距（= 相邻列垂直错位 × 2）
+	var per_row := 4
+	var rows: int = maxi(int(ceil(float(ids.size()) / float(per_row))), 1)
+	var slot_w := 2.0 * rad + float(per_row - 1) * col_step
+	# 内容高 = 排数 × √3r + √3r/2（最上面那排的奇数列出头半格）
+	host.custom_minimum_size = Vector2(slot_w, float(rows) * row_step + row_step * 0.5 + 4.0)
+	host.size = host.custom_minimum_size
+	var used_w := 2.0 * rad + float(maxi(mini(ids.size(), per_row), 1) - 1) * col_step
+	var base := (slot_w - used_w) if align_right else 0.0
+	for i in ids.size():
+		var col := i % per_row
+		var row := i / per_row
+		var cx := base + rad + float(col) * col_step
+		var cy := rad + float(row) * row_step + (row_step * 0.5 if col % 2 == 1 else 0.0)
+		var card := HexCard.new(DataRegistry.get_hero(String(ids[i])), String(ids[i]), rad)
+		# 【2026-09-28 用户要求】「录像列表就不需要显示血量攻击和特性了」⇒ 卡面只留六边形 + 人物图
+		#   （必须在 `add_child()` 之前设：`HexCard._build_overlay()` 是在 `_ready()` 里建的）。
+		card.show_stats = false
+		card.show_tags = false
+		# 【2026-09-28 用户要求】「录像框鼠标移到英雄上要弹出属性框」⇒ 卡面**恢复接鼠标**（`STOP`）：
+		#   悬停走菜单里同一套属性浮层（`_on_hex_hovered` → `_show_detail`，跟选人页/卡组小卡同款），
+		#   点它则**照旧进这一条录像**（`clicked` 在这里接成进回放，与"点整个框"同一个结果）。
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		card.hovered.connect(_on_hex_hovered)
+		card.clicked.connect(func(_hid): _play_replay(rid))
+		card.position = Vector2(cx - rad, cy - row_step / 2.0)
+		card.disabled_draw = false
+		host.add_child(card)
+	return host
+
+## 【2026-09-27 用户要求】文字行里**不再写英雄名字**（名字改由六边形卡面表示）。
+## 【2026-09-28 用户要求】框里只留**最上方**这一行"时间 · 模式 · 胜负"；
+##   原来底部那行"N 段 · X 分 XX 秒"按用户要求整条删掉（`_replay_sub_text()` 已随之删除）。
+func _replay_title_text(r: Dictionary) -> String:
+	var win := "胜" if bool(r.get("win", false)) else "负"
+	return "%s · %s · %s" % [_replay_time_text(int(r.get("ts", 0))), String(r.get("mode", "对局")), win]
+
+## 时间戳（unix 秒）→ "MM-DD HH:MM"。
+## 算法取自 `Time.get_datetime_dict_from_unix_time()` 得到的 UTC 时刻，再按本机时区偏移换算。
+func _replay_time_text(ts: int) -> String:
+	if ts <= 0:
+		return "—"
+	var d := Time.get_datetime_dict_from_unix_time(ts + int(Time.get_time_zone_from_system().get("bias", 0)) * 60)
+	return "%02d-%02d %02d:%02d" % [int(d.get("month", 0)), int(d.get("day", 0)),
+		int(d.get("hour", 0)), int(d.get("minute", 0))]
+
+## 进回放：写入录像 id 后重载 Main 场景（`Battle._ready()` 见到它就整条开局流程跳过）。
+func _play_replay(id: String) -> void:
+	if id == "":
+		return
+	_close_replays()
+	GameState.reset_online()
+	GameState.ladder_mode = ""
+	GameState.replay_id = id
+	get_tree().change_scene_to_file("res://scenes/Main.tscn")
 
 func _go_test_deploy() -> void:
 	GameState.ladder_mode = ""   # 离开天梯标记（自由部署是沙箱，不记连胜、不落盘）

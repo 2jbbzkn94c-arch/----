@@ -53,6 +53,23 @@ func _run() -> void:
 		_u(E, "hero_16", Vector2i(4, 2), 20, 20, 5, 3, 1, MELEE, [], "我方丙"),
 		_u(P, "hero_18", Vector2i(2, 0), 20, 20, 6, 3, 1, MELEE, [], "长剑"),
 	])
+	# C 对手红帽的扑街自爆（2026-09-27 加）：她血低到"一碰就死"时，**挨着她的我方单位**要多记 13
+	_panel(ai, "C1 红帽血5(一碰就死)·两人挨着她 + 一人离两格", [
+		_u(E, "hero_26", Vector2i(2, 3), 26, 26, 5, 3, 1, MELEE, [], "我方甲"),
+		_u(E, "hero_23", Vector2i(1, 4), 20, 20, 5, 3, 1, MELEE, [], "我方乙"),
+		_u(E, "hero_16", Vector2i(4, 2), 20, 20, 5, 3, 1, MELEE, [], "我方丙"),
+		_u(P, "hero_40", Vector2i(2, 4), 5, 13, 4, 3, 1, MELEE, [], "红帽"),
+	])
+	_panel(ai, "C2 红帽血20(打不死)·同样站位", [
+		_u(E, "hero_26", Vector2i(2, 3), 26, 26, 5, 3, 1, MELEE, [], "我方甲"),
+		_u(E, "hero_23", Vector2i(1, 4), 20, 20, 5, 3, 1, MELEE, [], "我方乙"),
+		_u(P, "hero_40", Vector2i(2, 4), 20, 20, 4, 3, 1, MELEE, [], "红帽"),
+	])
+	_panel(ai, "C3 红帽血5 但被沉默 ⇒ 不炸", [
+		_u(E, "hero_26", Vector2i(2, 3), 26, 26, 5, 3, 1, MELEE, [], "我方甲"),
+		_u(E, "hero_23", Vector2i(1, 4), 20, 20, 5, 3, 1, MELEE, [], "我方乙"),
+		_u(P, "hero_40", Vector2i(2, 4), 5, 13, 4, 3, 1, MELEE, [], "红帽", {"silenced": true}),
+	])
 	print("AOE|END")
 	get_tree().quit(0)
 
@@ -84,12 +101,15 @@ func _fmt(o: Dictionary) -> String:
 	return ("(" + "＋".join(bits) + ")") if bits.size() > 0 else "∅"
 
 func _u(fn: int, hero: String, cell: Vector2i, hp: int, max_hp: int, atk: int,
-		mv: int, rng: int, typ: int, skills: Array, nm: String) -> Dictionary:
-	return {
+		mv: int, rng: int, typ: int, skills: Array, nm: String, extra: Dictionary = {}) -> Dictionary:
+	var d := {
 		"fn": fn, "hero": hero, "cell": cell, "hp": hp, "max_hp": max_hp,
 		"atk": atk, "eatk": atk, "move": mv, "emove": mv,
 		"atk_range": rng, "atk_type": typ, "skills": skills, "name": nm,
 	}
+	for k in extra.keys():
+		d[String(k)] = extra[k]
+	return d
 
 func _mk_ai(inject: Dictionary):
 	var ai = FORK.new(_grid)

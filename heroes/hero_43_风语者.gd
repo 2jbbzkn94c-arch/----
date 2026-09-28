@@ -18,6 +18,14 @@ func _remember_aura(who: Unit) -> void:
 	if who == null or not is_instance_valid(who):
 		return
 	for k in _aura_given.keys():
+		# 【2026-09-28 修·录像回放报「Invalid type in utility function "instance_from_id()".
+		#   Cannot convert argument 1 from String to int」】本字典的键是**整数实例 id**，而录像快照
+		#   （`Battle._dump_script_vars()`）要走 JSON ⇒ **整数键回来会变成字符串**（"12345"）。
+		#   键不是整数就一律当"失效记录"清掉：它本来就是**录制那一局**的实例 id，
+		#   在回放这一局里必然无效（回放会重新登记自己的 id）。不清就会每次开回合报一行红字。
+		if not (k is int):
+			_aura_given.erase(k)
+			continue
 		var u := instance_from_id(k) as Unit
 		if u == null or not is_instance_valid(u):
 			_aura_given.erase(k)   # 顺手清掉已释放单位的记录

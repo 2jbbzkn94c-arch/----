@@ -1,0 +1,2087 @@
+{
+ "说明": "原版《酒馆纷争》英雄动作→特效/音效 配置，由 APK 资源逆向还原。特效名为原版预制体名；音效文件在音效根目录下；挂点为角色身上的空节点。",
+ "音效根目录": "D:/资源/音效_英雄",
+ "挂点": {
+  "Effect_Top": "头顶",
+  "Effect_Mid": "身体中部",
+  "Effect_Bottom": "脚下",
+  "Effect_Blood": "出血点",
+  "Effect_Weapon": "武器",
+  "Effect_Weapon_L": "左手",
+  "Effect_Weapon_R": "右手",
+  "Effect_Weapon2": "副手"
+ },
+ "通用特效": {
+  "Effect_Attack": "通用普攻",
+  "Effect_Cast": "通用施法",
+  "Effect_Die": "通用死亡",
+  "Effect_Defence": "通用防御",
+  "Effect_Exchange": "交换",
+  "Effect_Light": "光效",
+  "Effect_Open": "开启",
+  "Effect_PageTurn": "翻页"
+ },
+ "动作分类": {
+  "Hurt": "受击",
+  "Hurt2": "受击第二档（重击）",
+  "MeleeAttack": "近战普攻",
+  "RangedAttack": "远程普攻",
+  "MeleeSkill": "近战技能",
+  "RangedSkill": "远程技能",
+  "Triggered": "被动触发",
+  "Triggered_Cast": "触发施法",
+  "Arranged": "布阵/入场",
+  "CounterMeleeAttack": "反击",
+  "FirstShow": "首次登场",
+  "Walk": "移动",
+  "Skill": "技能",
+  "Die": "死亡"
+ },
+ "英雄": {
+  "Archdruid": {
+   "项目hero_id": "hero_08",
+   "特效": {
+    "Hurt": "Effect_Archdruid_Hurt",
+    "Hurt2": "Effect_Archdruid_Hurt2",
+    "RangedAttack": "Effect_Archdruid_RangedAttack",
+    "Triggered": "Effect_Archdruid_Triggered"
+   },
+   "音效": {
+    "Dead": [
+     "Archdruid_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Archdruid_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Archdruid_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Archdruid_RangedAttack_Hit.wav"
+    ],
+    "Triggered": [
+     "Archdruid_Triggered.wav"
+    ],
+    "Walk": [
+     "Archdruid_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Archdruid_Attack_01.wav",
+    "VO_Archdruid_Attack_02.wav",
+    "VO_Archdruid_Line_01.wav",
+    "VO_Archdruid_Line_02.wav",
+    "VO_Archdruid_Move_01.wav",
+    "VO_Archdruid_Move_02.wav",
+    "VO_Archdruid_Skill_01.wav",
+    "VO_Archdruid_Skill_02.wav"
+   ]
+  },
+  "Avenger": {
+   "项目hero_id": "hero_23",
+   "特效": {
+    "Hurt": "Effect_Avenger_Hurt",
+    "Hurt2": "Effect_Avenger_Hurt2",
+    "CounterMeleeAttack": "Effect_Avenger_CounterMeleeAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Avenger_MeleeAttack.wav"
+    ]
+   },
+   "语音": [
+    "VO_Avenger_Attack_01.wav",
+    "VO_Avenger_Attack_02.wav",
+    "VO_Avenger_Die_01.wav",
+    "VO_Avenger_Line_01.wav",
+    "VO_Avenger_Line_02.wav",
+    "VO_Avenger_Line_03.wav",
+    "VO_Avenger_Move_01.wav",
+    "VO_Avenger_Move_02.wav"
+   ]
+  },
+  "Axe": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Axe_Hurt",
+    "Hurt2": "Effect_Axe_Hurt2",
+    "MeleeAttack": "Effect_Axe_MeleeAttack",
+    "Arranged": "Effect_Axe_Arranged"
+   },
+   "音效": {
+    "Arranged": [
+     "Axe_Arranged.wav"
+    ],
+    "Dead": [
+     "Axe_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Axe_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Axe_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "BetterLuck": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "main": [
+     "BetterLuck.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Bomb": {
+   "项目hero_id": "hero_35",
+   "特效": {
+    "Hurt": "Effect_Bomb_Hurt",
+    "Hurt2": "Effect_Bomb_Hurt2",
+    "MeleeAttack": "Effect_Bomb_MeleeAttack",
+    "RangedAttack": "Effect_Bomb_RangedAttack",
+    "Triggered": "Effect_Bomb_Triggered"
+   },
+   "音效": {
+    "Dead": [
+     "Bomb_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Bomb_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Bomb_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Bomb_RangedAttack_Hit.wav"
+    ],
+    "Triggered": [
+     "Bomb_Triggered.wav"
+    ],
+    "Walk": [
+     "Bomb_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Bomb_Attack_01.wav",
+    "VO_Bomb_Attack_02.wav",
+    "VO_Bomb_Line_01.wav",
+    "VO_Bomb_Line_02.wav",
+    "VO_Bomb_Line_03.wav",
+    "VO_Bomb_Move_01.wav",
+    "VO_Bomb_Move_02.wav"
+   ]
+  },
+  "Cacique": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Cacique_Hurt",
+    "Hurt2": "Effect_Cacique_Hurt2",
+    "MeleeAttack": "Effect_Cacique_MeleeAttack",
+    "Arranged": "Effect_Cacique_Arranged"
+   },
+   "音效": {
+    "Arranged": [
+     "Cacique_Arranged.wav"
+    ],
+    "Dead": [
+     "Cacique_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Cacique_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Cacique_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Candle": {
+   "项目hero_id": "hero_17",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Candle_Attack_01.wav",
+    "VO_Candle_Attack_02.wav",
+    "VO_Candle_Line_01.wav",
+    "VO_Candle_Line_02.wav",
+    "VO_Candle_Move_01.wav",
+    "VO_Candle_Move_02.wav"
+   ]
+  },
+  "Chip": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Chip_Attack_01.wav",
+    "VO_Chip_Attack_02.wav",
+    "VO_Chip_Die_01.wav",
+    "VO_Chip_Line_01.wav",
+    "VO_Chip_Line_02.wav",
+    "VO_Chip_Move_01.wav",
+    "VO_Chip_Move_02.wav"
+   ]
+  },
+  "Cleric": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Cleric_Hurt",
+    "Hurt2": "Effect_Cleric_Hurt2",
+    "RangedAttack": "Effect_Cleric_RangedAttack",
+    "Triggered": "Effect_Cleric_Triggered"
+   },
+   "音效": {
+    "Dead": [
+     "Cleric_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Cleric_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Cleric_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Cleric_RangedAttack_Hit.wav"
+    ],
+    "Triggered": [
+     "Cleric_Triggered.wav"
+    ],
+    "Walk": [
+     "Cleric_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Commander": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Commander_Hurt",
+    "Hurt2": "Effect_Commander_Hurt2",
+    "MeleeAttack": "Effect_Commander_MeleeAttack",
+    "Triggered_Cast": "Effect_Commander_Triggered_Cast"
+   },
+   "音效": {
+    "Dead": [
+     "Commander_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Commander_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Commander_Triggered.wav"
+    ],
+    "Walk": [
+     "Commander_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Darkzone": {
+   "项目hero_id": "hero_27",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Darkzone_Attack_01.wav",
+    "VO_Darkzone_Attack_02.wav",
+    "VO_Darkzone_Die.wav",
+    "VO_Darkzone_Move_01.wav",
+    "VO_Darkzone_Move_02.wav",
+    "VO_Darkzone_line_01.wav",
+    "VO_Darkzone_line_02.wav"
+   ]
+  },
+  "Doom": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Doom_Hurt",
+    "Hurt2": "Effect_Doom_Hurt2",
+    "Triggered": "Effect_Doom_Triggered",
+    "Triggered2": "Effect_Doom_Triggered2"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Doom_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Doom_Triggered.wav"
+    ],
+    "Walk": [
+     "Doom_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Doomsday": {
+   "项目hero_id": "hero_31",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Doomsday_Die_01.wav",
+    "VO_Doomsday_Line_01.wav",
+    "VO_Doomsday_Line_02.wav",
+    "VO_Doomsday_Line_03.wav",
+    "VO_Doomsday_Move_01.wav",
+    "VO_Doomsday_Move_02.wav",
+    "VO_Doomsday_Skill_01.wav",
+    "VO_Doomsday_Skill_02.wav"
+   ]
+  },
+  "Electromancer": {
+   "项目hero_id": "hero_38",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Electromancer_Die_01.wav",
+    "VO_Electromancer_Die_02.wav",
+    "VO_Electromancer_Move_01.wav",
+    "VO_Electromancer_Move_02.wav",
+    "VO_Electromancer_Skill_01.wav",
+    "VO_Electromancer_Skill_02.wav",
+    "VO_Electromancer_Skill_03.wav",
+    "VO_Electromancer_line_01.wav",
+    "VO_Electromancer_line_02.wav",
+    "VO_Electromancer_line_03.wav"
+   ]
+  },
+  "FirstHero": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "Appear": [
+     "FirstHero_Appear.wav"
+    ],
+    "Disappear": [
+     "FirstHero_Disappear.wav"
+    ],
+    "Stay": [
+     "FirstHero_Stay.wav"
+    ]
+   },
+   "语音": []
+  },
+  "FlamePriest": {
+   "项目hero_id": "hero_19",
+   "特效": {},
+   "音效": {
+    "Tutorial_01": [
+     "FlamePriest_Tutorial_01.wav"
+    ],
+    "Tutorial_02": [
+     "FlamePriest_Tutorial_02.wav"
+    ],
+    "Tutorial_03": [
+     "FlamePriest_Tutorial_03.wav"
+    ],
+    "Tutorial_04": [
+     "FlamePriest_Tutorial_04.wav"
+    ]
+   },
+   "语音": [
+    "VO_FlamePriest_Attack_01.wav",
+    "VO_FlamePriest_Attack_02.wav",
+    "VO_FlamePriest_Line_01.wav",
+    "VO_FlamePriest_Line_02.wav",
+    "VO_FlamePriest_Move_01.wav",
+    "VO_FlamePriest_Move_02.wav",
+    "VO_FlamePriest_Skill_01.wav",
+    "VO_FlamePriest_Skill_02.wav"
+   ]
+  },
+  "Frost": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Frost_Hurt",
+    "Hurt2": "Effect_Frost_Hurt2",
+    "MeleeAttack": "Effect_Frost_MeleeAttack",
+    "Triggered_Cast": "Effect_Frost_Triggered_Cast"
+   },
+   "音效": {
+    "Dead": [
+     "Frost_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Frost_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Frost_Triggered.wav"
+    ],
+    "Walk": [
+     "Frost_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "GiantBlade": {
+   "项目hero_id": "hero_12",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_GiantBlade_Attack_01.wav",
+    "VO_GiantBlade_Attack_02.wav",
+    "VO_GiantBlade_Line_01.wav",
+    "VO_GiantBlade_Line_02.wav",
+    "VO_GiantBlade_Line_03.wav",
+    "VO_GiantBlade_Move_01.wav",
+    "VO_GiantBlade_Move_02.wav"
+   ]
+  },
+  "GiantBladeNew": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "01_SprintHeroes": [
+     "GiantBladeNew_01_SprintHeroes.wav"
+    ],
+    "02_BetterLuck": [
+     "GiantBladeNew_02_BetterLuck.wav"
+    ],
+    "03_AdmireCourage": [
+     "GiantBladeNew_03_AdmireCourage.wav"
+    ],
+    "04_NoImpossible": [
+     "GiantBladeNew_04_NoImpossible.wav"
+    ],
+    "05_LetMeShowYou": [
+     "GiantBladeNew_05_LetMeShowYou.wav"
+    ]
+   },
+   "语音": []
+  },
+  "GoldNugget": {
+   "项目hero_id": "hero_42",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_GoldNugget_Attack_01.wav",
+    "VO_GoldNugget_Attack_02.wav",
+    "VO_GoldNugget_Death_01.wav",
+    "VO_GoldNugget_Line_01.wav",
+    "VO_GoldNugget_Line_02.wav",
+    "VO_GoldNugget_Move_01.wav",
+    "VO_GoldNugget_Move_02.wav",
+    "VO_GoldNugget_Skill_01.wav",
+    "VO_GoldNugget_Skill_02.wav"
+   ]
+  },
+  "Gun": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Gun_Hurt",
+    "Hurt2": "Effect_Gun_Hurt2",
+    "RangedAttack": "Effect_Gun_RangedAttack"
+   },
+   "音效": {
+    "Dead": [
+     "Gun_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Gun_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Gun_RangedAttack.wav"
+    ],
+    "Walk": [
+     "Gun_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Hammer": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Hammer_Hurt",
+    "Hurt2": "Effect_Hammer_Hurt2",
+    "MeleeAttack": "Effect_Hammer_MeleeAttack",
+    "MeleeSkill": "Effect_Hammer_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Hammer_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Hammer_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Hammer_MeleeSkill.wav"
+    ],
+    "Walk": [
+     "Hammer_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Hammerhead": {
+   "项目hero_id": "hero_37",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Hammerhead_Attack_01.wav",
+    "VO_Hammerhead_Attack_02.wav",
+    "VO_Hammerhead_Die_01.wav",
+    "VO_Hammerhead_Die_02.wav",
+    "VO_Hammerhead_Move_01.wav",
+    "VO_Hammerhead_Move_02.wav",
+    "VO_Hammerhead_line_01.wav",
+    "VO_Hammerhead_line_02.wav"
+   ]
+  },
+  "Helenka": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Helenka_Attack_01.wav",
+    "VO_Helenka_Attack_02.wav",
+    "VO_Helenka_Die_01.wav",
+    "VO_Helenka_Line_01.wav",
+    "VO_Helenka_Line_02.wav",
+    "VO_Helenka_Move_01.wav",
+    "VO_Helenka_Move_02.wav"
+   ]
+  },
+  "HippieReaper": {
+   "项目hero_id": "hero_30",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_HippieReaper_Attack_01.wav",
+    "VO_HippieReaper_Attack_02.wav",
+    "VO_HippieReaper_Line_01.wav",
+    "VO_HippieReaper_Line_02.wav",
+    "VO_HippieReaper_Move_01.wav",
+    "VO_HippieReaper_Move_02.wav"
+   ]
+  },
+  "Hook": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Hook_Hurt",
+    "Hurt2": "Effect_Hook_Hurt2",
+    "MeleeAttack": "Effect_Hook_MeleeAttack",
+    "MeleeSkill": "Effect_Hook_MeleeSkill"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Hook_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Hook_MeleeSkill.wav"
+    ],
+    "MeleeSkill_Hit": [
+     "Hook_MeleeSkill_Hit.wav"
+    ],
+    "Walk": [
+     "Hook_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Hunter": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Hunter_Hurt",
+    "Hurt2": "Effect_Hunter_Hurt2",
+    "RangedAttack": "Effect_Hunter_RangedAttack",
+    "RangedSkill": "Effect_Hunter_RangedSkill"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Hunter_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Hunter_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Hunter_RangedAttack_Hit.wav"
+    ],
+    "RangedSkill": [
+     "Hunter_RangedSkill.wav"
+    ],
+    "RangedSkill_Hit": [
+     "Hunter_RangedSkill_Hit.wav"
+    ]
+   },
+   "语音": [
+    "VO_Hunter_Attack_02.wav",
+    "VO_Hunter_Attack_03.wav",
+    "VO_Hunter_Die_02.wav",
+    "VO_Hunter_Die_03.wav",
+    "VO_Hunter_Line_01.wav",
+    "VO_Hunter_Line_02.wav",
+    "VO_Hunter_Line_03.wav",
+    "VO_Hunter_Move_01.wav",
+    "VO_Hunter_Move_02.wav"
+   ]
+  },
+  "Imp": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Imp_Hurt",
+    "Hurt2": "Effect_Imp_Hurt2",
+    "MeleeAttack": "Effect_Imp_MeleeAttack",
+    "Triggered_Cast": "Effect_Imp_Triggered_Cast",
+    "Triggered_Cast2": "Effect_Imp_Triggered_Cast2"
+   },
+   "音效": {
+    "Dead": [
+     "Imp_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Imp_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Imp_Triggered.wav"
+    ],
+    "Walk": [
+     "Imp_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Kage": {
+   "项目hero_id": "hero_07",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Kage_Attack_01.wav",
+    "VO_Kage_Attack_02.wav",
+    "VO_Kage_Die_01.wav",
+    "VO_Kage_Line_01.wav",
+    "VO_Kage_Line_02.wav",
+    "VO_Kage_Move_01.wav",
+    "VO_Kage_Move_02.wav"
+   ]
+  },
+  "Knight": {
+   "项目hero_id": "hero_24",
+   "特效": {
+    "Hurt": "Effect_Knight_Hurt",
+    "Hurt2": "Effect_Knight_Hurt2",
+    "MeleeAttack": "Effect_Knight_MeleeAttack",
+    "Triggered": "Effect_Knight_Triggered",
+    "Walk": "Effect_Knight_Walk"
+   },
+   "音效": {
+    "CounterMeleeAttack": [
+     "Knight_CounterMeleeAttack.wav"
+    ],
+    "Dead": [
+     "Knight_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Knight_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Knight_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "LongSword": {
+   "项目hero_id": "hero_18",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_LongSword_Attack_01.wav",
+    "VO_LongSword_Attack_02.wav",
+    "VO_LongSword_Line_01.wav",
+    "VO_LongSword_Line_02.wav",
+    "VO_LongSword_Move_01.wav",
+    "VO_LongSword_Move_02.wav"
+   ]
+  },
+  "Longhorn": {
+   "项目hero_id": "hero_32",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Longhorn_Attack_01.wav",
+    "VO_Longhorn_Attack_02.wav",
+    "VO_Longhorn_Line_01.wav",
+    "VO_Longhorn_Line_02.wav",
+    "VO_Longhorn_Move_01.wav",
+    "VO_Longhorn_Move_02.wav"
+   ]
+  },
+  "Medic": {
+   "项目hero_id": "hero_06",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Medic_Attack_01.wav",
+    "VO_Medic_Attack_02.wav",
+    "VO_Medic_Line_01.wav",
+    "VO_Medic_Line_02.wav",
+    "VO_Medic_Move_01.wav",
+    "VO_Medic_Move_02.wav"
+   ]
+  },
+  "Mercy": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Mercy_Hurt",
+    "Hurt2": "Effect_Mercy_Hurt2",
+    "RangedAttack": "Effect_Mercy_RangedAttack",
+    "Triggered": "Effect_Mercy_Triggered"
+   },
+   "音效": {
+    "Dead": [
+     "Mercy_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Mercy_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Mercy_RangedAttack.wav"
+    ],
+    "Triggered": [
+     "Mercy_Triggered.wav"
+    ],
+    "Walk": [
+     "Mercy_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Merlin": {
+   "项目hero_id": "hero_36",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Merlin_Attack_01.wav",
+    "VO_Merlin_Attack_02.wav",
+    "VO_Merlin_Death_01.wav",
+    "VO_Merlin_Line_01.wav",
+    "VO_Merlin_Line_02.wav",
+    "VO_Merlin_Line_03.wav",
+    "VO_Merlin_Move_01.wav",
+    "VO_Merlin_Move_02.wav"
+   ]
+  },
+  "Morph": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Morph_Hurt",
+    "Hurt2": "Effect_Morph_Hurt2",
+    "Triggered": "Effect_Morph_Triggered"
+   },
+   "音效": {
+    "Triggered": [
+     "Morph_Triggered.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Morphling": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Morphling_Attack_01.wav",
+    "VO_Morphling_Attack_02.wav",
+    "VO_Morphling_Die_01.wav",
+    "VO_Morphling_Line_01.wav",
+    "VO_Morphling_Line_02.wav",
+    "VO_Morphling_Line_03.wav",
+    "VO_Morphling_Move_01.wav",
+    "VO_Morphling_Move_02.wav"
+   ]
+  },
+  "Musketeer": {
+   "项目hero_id": "hero_09",
+   "特效": {},
+   "音效": {
+    "Tutorial_01": [
+     "Musketeer_Tutorial_01.wav"
+    ],
+    "Tutorial_02": [
+     "Musketeer_Tutorial_02.wav"
+    ],
+    "Tutorial_03": [
+     "Musketeer_Tutorial_03.wav"
+    ]
+   },
+   "语音": [
+    "VO_Musketeer_Attack_01.wav",
+    "VO_Musketeer_Attack_02.wav",
+    "VO_Musketeer_Death_01.wav",
+    "VO_Musketeer_Line_01.wav",
+    "VO_Musketeer_Line_02.wav",
+    "VO_Musketeer_Line_03.wav",
+    "VO_Musketeer_Move_01.wav",
+    "VO_Musketeer_Move_02.wav"
+   ]
+  },
+  "Necro": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Necro_Hurt",
+    "Hurt2": "Effect_Necro_Hurt2",
+    "Triggered": "Effect_Necro_Triggered"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Necro_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Necro_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Necro_RangedAttack_Hit.wav"
+    ],
+    "Triggered": [
+     "Necro_Triggered.wav"
+    ],
+    "Walk": [
+     "Necro_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Necromancer": {
+   "项目hero_id": "hero_33",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Necromancer_Attack_01.wav",
+    "VO_Necromancer_Attack_02.wav",
+    "VO_Necromancer_Death_01.wav",
+    "VO_Necromancer_Line_01.wav",
+    "VO_Necromancer_Line_02.wav",
+    "VO_Necromancer_Move_01.wav",
+    "VO_Necromancer_Move_02.wav",
+    "VO_Necromancer_Skill_01.wav",
+    "VO_Necromancer_Skill_02.wav"
+   ]
+  },
+  "Ninja": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Ninja_Hurt",
+    "Hurt2": "Effect_Ninja_Hurt2",
+    "RangedAttack": "Effect_Ninja_RangedAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Ninja_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Ninja_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Ninja_RangedAttack_Hit.wav"
+    ],
+    "Walk": [
+     "Ninja_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "NoImpossible": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "main": [
+     "NoImpossible.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Nugget": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Nugget_Hurt",
+    "Hurt2": "Effect_Nugget_Hurt2",
+    "MeleeAttack": "Effect_Nugget_MeleeAttack",
+    "Triggered": "Effect_Nugget_Triggered"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Nugget_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Nugget_Triggered.wav"
+    ],
+    "Walk": [
+     "Nugget_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Nun": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Nun_Hurt",
+    "Hurt2": "Effect_Nun_Hurt2",
+    "MeleeAttack": "Effect_Nun_MeleeAttack",
+    "Triggered": "Effect_Nun_Triggered"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Nun_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Nun_Triggered.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Pegleg": {
+   "项目hero_id": "hero_13",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Pegleg_Attack_01.wav",
+    "VO_Pegleg_Attack_02.wav",
+    "VO_Pegleg_Die_01.wav",
+    "VO_Pegleg_Move_01.wav",
+    "VO_Pegleg_Move_02.wav",
+    "VO_Pegleg_Tutorial_01.wav",
+    "VO_Pegleg_Tutorial_02.wav",
+    "VO_Pegleg_line_01.wav",
+    "VO_Pegleg_line_02.wav"
+   ]
+  },
+  "Phantom": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Phantom_Hurt",
+    "Hurt2": "Effect_Phantom_Hurt2",
+    "MeleeAttack": "Effect_Phantom_MeleeAttack",
+    "MeleeSkill": "Effect_Phantom_MeleeSkill",
+    "Skill": "Effect_Phantom_Skill"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Phantom_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Phantom_MeleeSkill.wav"
+    ],
+    "Walk": [
+     "Phantom_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Proton": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Proton_Attack_01.wav",
+    "VO_Proton_Attack_02.wav",
+    "VO_Proton_Die_01.wav",
+    "VO_Proton_Die_02.wav",
+    "VO_Proton_Line01.wav",
+    "VO_Proton_Line02.wav",
+    "VO_Proton_Line03.wav",
+    "VO_Proton_Move_01.wav",
+    "VO_Proton_Move_02.wav"
+   ]
+  },
+  "Puppet": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Puppet_Hurt",
+    "Hurt2": "Effect_Puppet_Hurt2",
+    "RangedAttack": "Effect_Puppet_RangedAttack",
+    "Triggered": "Effect_Puppet_Triggered"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Puppet_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Puppet_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Puppet_RangedAttack_Hit.wav"
+    ],
+    "Triggered": [
+     "Puppet_Triggered.wav"
+    ],
+    "Walk": [
+     "Puppet_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Puppeteer": {
+   "项目hero_id": "hero_05",
+   "特效": {},
+   "音效": {
+    "Dead": [
+     "Puppeteer_Dead.wav"
+    ]
+   },
+   "语音": [
+    "VO_Puppeteer_Attack_01.wav",
+    "VO_Puppeteer_Attack_02.wav",
+    "VO_Puppeteer_Line_01.wav",
+    "VO_Puppeteer_Line_02.wav",
+    "VO_Puppeteer_Move_01.wav",
+    "VO_Puppeteer_Move_02.wav",
+    "VO_Puppeteer_Skill_01.wav",
+    "VO_Puppeteer_Skill_03.wav"
+   ]
+  },
+  "Ranger": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Ranger_Hurt",
+    "Hurt2": "Effect_Ranger_Hurt2",
+    "RangedAttack": "Effect_Ranger_RangedAttack",
+    "RangedSkill": "Effect_Ranger_RangedSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Ranger_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Ranger_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Ranger_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Ranger_RangedAttack_Hit.wav"
+    ],
+    "RangedSkill": [
+     "Ranger_RangedSkill.wav"
+    ],
+    "RangedSkill_Hit": [
+     "Ranger_RangedSkill_Hit.wav"
+    ],
+    "Walk": [
+     "Ranger_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Rat": {
+   "项目hero_id": "hero_04",
+   "特效": {
+    "Hurt": "Effect_Rat_Hurt",
+    "Hurt2": "Effect_Rat_Hurt2",
+    "MeleeAttack": "Effect_Rat_MeleeAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Rat_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Rat_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Reaper": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Reaper_Hurt",
+    "Hurt2": "Effect_Reaper_Hurt2",
+    "MeleeAttack": "Effect_Reaper_MeleeAttack",
+    "MeleeSkill": "Effect_Reaper_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Reaper_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Reaper_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Reaper_MeleeSkill.wav"
+    ],
+    "Skill": [
+     "Reaper_Skill.wav"
+    ],
+    "Walk": [
+     "Reaper_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Redcap": {
+   "项目hero_id": "hero_40",
+   "特效": {
+    "Hurt": "Effect_Redcap_Hurt",
+    "Hurt2": "Effect_Redcap_Hurt2",
+    "MeleeAttack": "Effect_Redcap_MeleeAttack"
+   },
+   "音效": {
+    "Dead": [
+     "Redcap_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Redcap_MeleeAttack.wav"
+    ],
+    "Skill": [
+     "Redcap_Skill.wav"
+    ],
+    "Walk": [
+     "Redcap_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Redcap_Attack_01.wav",
+    "VO_Redcap_Attack_02.wav",
+    "VO_Redcap_Line_01.wav",
+    "VO_Redcap_Line_02.wav",
+    "VO_Redcap_Move_01.wav",
+    "VO_Redcap_Move_02.wav",
+    "VO_Redcap_Skill_01.wav",
+    "VO_Redcap_Skill_02.wav"
+   ]
+  },
+  "Rogue": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Rogue_Hurt",
+    "Hurt2": "Effect_Rogue_Hurt2",
+    "MeleeAttack": "Effect_Rogue_MeleeAttack",
+    "MeleeSkill": "Effect_Rogue_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Rogue_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Rogue_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Rogue_MeleeSkill.wav"
+    ],
+    "Skill": [
+     "Rogue_Skill.wav"
+    ],
+    "Walk": [
+     "Rogue_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Santa": {
+   "项目hero_id": "hero_02",
+   "特效": {
+    "Hurt": "Effect_Santa_Hurt",
+    "Hurt2": "Effect_Santa_Hurt2",
+    "MeleeAttack": "Effect_Santa_MeleeAttack",
+    "Triggered": "Effect_Santa_Triggered"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Santa_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Santa_Triggered.wav"
+    ],
+    "Walk": [
+     "Santa_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Santa_Attack_01.wav",
+    "VO_Santa_Attack_02.wav",
+    "VO_Santa_Death_01.wav",
+    "VO_Santa_Line_01.wav",
+    "VO_Santa_Line_02.wav",
+    "VO_Santa_Move_01.wav",
+    "VO_Santa_Move_02.wav",
+    "VO_Santa_SKill_01.wav",
+    "VO_Santa_SKill_02.wav"
+   ]
+  },
+  "Shark": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Shark_Hurt",
+    "Hurt2": "Effect_Shark_Hurt2",
+    "MeleeAttack": "Effect_Shark_MeleeAttack"
+   },
+   "音效": {
+    "CounterMeleeAttack": [
+     "Shark_CounterMeleeAttack.wav"
+    ],
+    "MeleeAttack": [
+     "Shark_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "Shark_Triggered.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Shelter": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Shelter_Hurt",
+    "Hurt2": "Effect_Shelter_Hurt2",
+    "MeleeAttack": "Effect_Shelter_MeleeAttack",
+    "Arranged": "Effect_Shelter_Arranged",
+    "Arranged2": "Effect_Shelter_Arranged2"
+   },
+   "音效": {
+    "Arranged": [
+     "Shelter_Arranged.wav"
+    ],
+    "Arranged_Hit": [
+     "Shelter_Arranged_Hit.wav"
+    ],
+    "MeleeAttack": [
+     "Shelter_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Shelter_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "ShieldBot": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_ShieldBot_Hurt",
+    "Hurt2": "Effect_ShieldBot_Hurt2",
+    "MeleeAttack": "Effect_ShieldBot_MeleeAttack",
+    "Arranged": "Effect_ShieldBot_Arranged"
+   },
+   "音效": {
+    "Arranged": [
+     "ShieldBot_Arranged.wav"
+    ],
+    "CounterMeleeAttack": [
+     "ShieldBot_CounterMeleeAttack.wav"
+    ],
+    "MeleeAttack": [
+     "ShieldBot_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "ShieldBot_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Silence": {
+   "项目hero_id": "hero_34",
+   "特效": {
+    "Hurt": "Effect_Silence_Hurt",
+    "Hurt2": "Effect_Silence_Hurt2",
+    "RangedAttack": "Effect_Silence_RangedAttack",
+    "RangedSkill": "Effect_Silence_RangedSkill"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Silence_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Silence_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Silence_RangedAttack_Hit.wav"
+    ],
+    "RangedSkill": [
+     "Silence_RangedSkill.wav"
+    ],
+    "RangedSkill_Hit": [
+     "Silence_RangedSkill_Hit.wav"
+    ]
+   },
+   "语音": [
+    "VO_Silence_Attack_01.wav",
+    "VO_Silence_Attack_03.wav",
+    "VO_Silence_Die_01.wav",
+    "VO_Silence_Die_02.wav",
+    "VO_Silence_Move_01.wav",
+    "VO_Silence_Move_02.wav",
+    "VO_Silence_line_01.wav",
+    "VO_Silence_line_02.wav",
+    "VO_Silence_line_03.wav"
+   ]
+  },
+  "Sir": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Sir_Attack_01.wav",
+    "VO_Sir_Attack_02.wav",
+    "VO_Sir_Line_01.wav",
+    "VO_Sir_Line_02.wav",
+    "VO_Sir_Move_01.wav",
+    "VO_Sir_Move_02.wav",
+    "VO_Sir_Walk_01.wav",
+    "VO_Sir_Walk_02.wav"
+   ]
+  },
+  "Skeleton": {
+   "项目hero_id": "summon_skeleton",
+   "特效": {
+    "Hurt": "Effect_Skeleton_Hurt",
+    "FirstShow": "Effect_Skeleton_FirstShow"
+   },
+   "音效": {
+    "01_Grrr": [
+     "Skeleton_01_Grrr.wav"
+    ],
+    "Dead": [
+     "Skeleton_Dead.wav"
+    ],
+    "FirstShow": [
+     "Skeleton_FirstShow.wav"
+    ],
+    "MeleeAttack": [
+     "Skeleton_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Skeleton_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Skeleton_Attack_01.wav",
+    "VO_Skeleton_Attack_02.wav",
+    "VO_Skeleton_Move_01.wav",
+    "VO_Skeleton_Move_02.wav"
+   ]
+  },
+  "SkullHunter": {
+   "项目hero_id": "hero_39",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_SkullHunter_Attack_01.wav",
+    "VO_SkullHunter_Attack_02.wav",
+    "VO_SkullHunter_Line_01.wav",
+    "VO_SkullHunter_Line_02.wav",
+    "VO_SkullHunter_Move_01.wav",
+    "VO_SkullHunter_Move_02.wav"
+   ]
+  },
+  "Smaple": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "Rogue_MeleeAttack": [
+     "Smaple_Rogue_MeleeAttack.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Snake": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Snake_Hurt",
+    "Hurt2": "Effect_Snake_Hurt2",
+    "MeleeAttack": "Effect_Snake_MeleeAttack",
+    "MeleeSkill": "Effect_Snake_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Snake_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Snake_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Snake_MeleeSkill.wav"
+    ],
+    "Walk": [
+     "Snake_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "SnakeLady": {
+   "项目hero_id": "hero_03",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_SnakeLady_Attack_01.wav",
+    "VO_SnakeLady_Attack_02.wav",
+    "VO_SnakeLady_Line_01.wav",
+    "VO_SnakeLady_Line_02.wav",
+    "VO_SnakeLady_Move_01.wav",
+    "VO_SnakeLady_Move_02.wav"
+   ]
+  },
+  "SnowFlare": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_SnowFlare_Attack_01.wav",
+    "VO_SnowFlare_Attack_02.wav",
+    "VO_SnowFlare_Line_01.wav",
+    "VO_SnowFlare_Line_02.wav",
+    "VO_SnowFlare_Move_01.wav",
+    "VO_SnowFlare_Move_02.wav"
+   ]
+  },
+  "SolarStrike": {
+   "项目hero_id": "hero_29",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_SolarStrike_Attack_01.wav",
+    "VO_SolarStrike_Attack_02.wav",
+    "VO_SolarStrike_Line_01.wav",
+    "VO_SolarStrike_Line_02.wav",
+    "VO_SolarStrike_Move_01.wav",
+    "VO_SolarStrike_Move_02.wav"
+   ]
+  },
+  "Supernova": {
+   "项目hero_id": "hero_21",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_Supernova_Attack_01.wav",
+    "VO_Supernova_Attack_02.wav",
+    "VO_Supernova_Line_01.wav",
+    "VO_Supernova_Line_02.wav",
+    "VO_Supernova_Move_01.wav",
+    "VO_Supernova_Move_02.wav"
+   ]
+  },
+  "SupernovaNew": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "01_FeelthePower": [
+     "SupernovaNew_01_FeelthePower.wav"
+    ],
+    "02_CrushWeaklings": [
+     "SupernovaNew_02_CrushWeaklings.wav"
+    ],
+    "03_NotDoneSkull": [
+     "SupernovaNew_03_NotDoneSkull.wav"
+    ],
+    "04_NiceTry": [
+     "SupernovaNew_04_NiceTry.wav"
+    ],
+    "05_VictoryMine": [
+     "SupernovaNew_05_VictoryMine.wav"
+    ],
+    "06_CursesBeatMe": [
+     "SupernovaNew_06_CursesBeatMe.wav"
+    ],
+    "07_IGiveUp": [
+     "SupernovaNew_07_IGiveUp.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Swordsman": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Swordsman_Hurt",
+    "Hurt2": "Effect_Swordsman_Hurt2",
+    "MeleeSkill": "Effect_Swordsman_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Swordsman_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Swordsman_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Swordsman_MeleeSkill.wav"
+    ],
+    "MeleeSkill_Hit": [
+     "Swordsman_MeleeSkill_Hit.wav"
+    ],
+    "Walk": [
+     "Swordsman_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Sylvia": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "Dead": [
+     "Sylvia_Dead.wav"
+    ]
+   },
+   "语音": [
+    "VO_Sylvia_Attack_01.wav",
+    "VO_Sylvia_Attack_02.wav",
+    "VO_Sylvia_Line_01.wav",
+    "VO_Sylvia_Line_02.wav",
+    "VO_Sylvia_Line_03.wav",
+    "VO_Sylvia_Move_01.wav",
+    "VO_Sylvia_Move_02.wav"
+   ]
+  },
+  "Tauren": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Tauren_Hurt",
+    "Hurt2": "Effect_Tauren_Hurt2",
+    "MeleeAttack": "Effect_Tauren_MeleeAttack",
+    "MeleeSkill": "Effect_Tauren_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Tauren_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Tauren_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Tauren_MeleeSkill.wav"
+    ],
+    "Walk": [
+     "Tauren_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Tesla": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Tesla_Hurt",
+    "Hurt2": "Effect_Tesla_Hurt2",
+    "Triggered": "Effect_Tesla_Triggered"
+   },
+   "音效": {
+    "Triggered": [
+     "Tesla_Triggered.wav"
+    ],
+    "Walk": [
+     "Tesla_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "TinyShadow": {
+   "项目hero_id": "hero_15",
+   "特效": {},
+   "音效": {
+    "Tutorial_01": [
+     "TinyShadow_Tutorial_01.wav"
+    ],
+    "Tutorial_02": [
+     "TinyShadow_Tutorial_02.wav"
+    ],
+    "Tutorial_03": [
+     "TinyShadow_Tutorial_03.wav"
+    ],
+    "Tutorial_04": [
+     "TinyShadow_Tutorial_04.wav"
+    ],
+    "Tutorial_05": [
+     "TinyShadow_Tutorial_05.wav"
+    ]
+   },
+   "语音": [
+    "VO_TinyShadow_Attack_01.wav",
+    "VO_TinyShadow_Attack_02.wav",
+    "VO_TinyShadow_Line_01.wav",
+    "VO_TinyShadow_Line_02.wav",
+    "VO_TinyShadow_Move_01.wav",
+    "VO_TinyShadow_Move_02.wav"
+   ]
+  },
+  "TowerShield": {
+   "项目hero_id": "hero_11",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_TowerShield_Attack_01.wav",
+    "VO_TowerShield_Attack_02.wav",
+    "VO_TowerShield_Line_01.wav",
+    "VO_TowerShield_Line_02.wav",
+    "VO_TowerShield_Move_01.wav",
+    "VO_TowerShield_Move_02.wav"
+   ]
+  },
+  "Turtle": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Turtle_Hurt",
+    "Hurt2": "Effect_Turtle_Hurt2",
+    "MeleeAttack": "Effect_Turtle_MeleeAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Turtle_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Turtle_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Vampire": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Vampire_Hurt",
+    "Hurt2": "Effect_Vampire_Hurt2",
+    "MeleeAttack": "Effect_Vampire_MeleeAttack",
+    "MeleeSkill": "Effect_Vampire_MeleeSkill",
+    "FirstShow": "Effect_Vampire_FirstShow"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Vampire_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Vampire_MeleeSkill.wav"
+    ]
+   },
+   "语音": [
+    "VO_Vampire_Attack_02.wav",
+    "VO_Vampire_Attack_03.wav",
+    "VO_Vampire_Die_01.wav",
+    "VO_Vampire_Die_02.wav",
+    "VO_Vampire_Line_01.wav",
+    "VO_Vampire_Line_02.wav",
+    "VO_Vampire_Line_03.wav",
+    "VO_Vampire_Move_01.wav",
+    "VO_Vampire_Move_02.wav"
+   ]
+  },
+  "WarHammer": {
+   "项目hero_id": "hero_25",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_WarHammer_Attack_01.wav",
+    "VO_WarHammer_Attack_02.wav",
+    "VO_WarHammer_Line_01.wav",
+    "VO_WarHammer_Line_02.wav",
+    "VO_WarHammer_Move_01.wav",
+    "VO_WarHammer_Move_02.wav"
+   ]
+  },
+  "Warrior": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Warrior_Hurt",
+    "Hurt2": "Effect_Warrior_Hurt2",
+    "MeleeAttack": "Effect_Warrior_MeleeAttack",
+    "MeleeSkill": "Effect_Warrior_MeleeSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Warrior_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Warrior_MeleeAttack.wav"
+    ],
+    "MeleeSkill": [
+     "Warrior_MeleeSkill.wav"
+    ],
+    "Walk": [
+     "Warrior_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Whirlwind": {
+   "项目hero_id": "",
+   "特效": {},
+   "音效": {
+    "Tutorial_01": [
+     "Whirlwind_Tutorial_01.wav"
+    ],
+    "Tutorial_02": [
+     "Whirlwind_Tutorial_02.wav"
+    ],
+    "Tutorial_03": [
+     "Whirlwind_Tutorial_03.wav"
+    ]
+   },
+   "语音": []
+  },
+  "WhiteRanger": {
+   "项目hero_id": "hero_10",
+   "特效": {},
+   "音效": {},
+   "语音": [
+    "VO_WhiteRanger_Attack_01.wav",
+    "VO_WhiteRanger_Attack_02.wav",
+    "VO_WhiteRanger_Line_01.wav",
+    "VO_WhiteRanger_Line_02.wav",
+    "VO_WhiteRanger_Move_01.wav",
+    "VO_WhiteRanger_Move_02.wav"
+   ]
+  },
+  "WindWhisper": {
+   "项目hero_id": "hero_43",
+   "特效": {
+    "Hurt": "Effect_WindWhisper_Hurt",
+    "Hurt2": "Effect_WindWhisper_Hurt2",
+    "RangedAttack": "Effect_WindWhisper_RangedAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "WindWhisper_MeleeAttack.wav"
+    ],
+    "Triggered": [
+     "WindWhisper_Triggered.wav"
+    ],
+    "Walk": [
+     "WindWhisper_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_WindWhisper_Attack_01.wav",
+    "VO_WindWhisper_Attack_03.wav",
+    "VO_WindWhisper_Die_01.wav",
+    "VO_WindWhisper_Line_01.wav",
+    "VO_WindWhisper_Line_02.wav",
+    "VO_WindWhisper_Line_03.wav",
+    "VO_WindWhisper_Move_01.wav",
+    "VO_WindWhisper_Move_02.wav"
+   ]
+  },
+  "Wizard": {
+   "项目hero_id": "",
+   "特效": {
+    "Hurt": "Effect_Wizard_Hurt",
+    "Hurt2": "Effect_Wizard_Hurt2",
+    "RangedAttack": "Effect_Wizard_RangedAttack",
+    "RangedSkill": "Effect_Wizard_RangedSkill"
+   },
+   "音效": {
+    "Dead": [
+     "Wizard_Dead.wav"
+    ],
+    "MeleeAttack": [
+     "Wizard_MeleeAttack.wav"
+    ],
+    "RangedAttack": [
+     "Wizard_RangedAttack.wav"
+    ],
+    "RangedAttack_Hit": [
+     "Wizard_RangedAttack_Hit.wav"
+    ],
+    "RangedSkill": [
+     "Wizard_RangedSkill.wav"
+    ],
+    "RangedSkill_Hit": [
+     "Wizard_RangedSkill_Hit.wav"
+    ],
+    "Walk": [
+     "Wizard_Walk.wav"
+    ]
+   },
+   "语音": []
+  },
+  "Woodcutter": {
+   "项目hero_id": "hero_01",
+   "特效": {
+    "Hurt": "Effect_Woodcutter_Hurt",
+    "Hurt2": "Effect_Woodcutter_Hurt2",
+    "MeleeAttack": "Effect_Woodcutter_MeleeAttack"
+   },
+   "音效": {
+    "MeleeAttack": [
+     "Woodcutter_MeleeAttack.wav"
+    ],
+    "Walk": [
+     "Woodcutter_Walk.wav"
+    ]
+   },
+   "语音": [
+    "VO_Woodcutter_Attack_01.wav",
+    "VO_Woodcutter_Attack_02.wav",
+    "VO_Woodcutter_Death_01.wav",
+    "VO_Woodcutter_Line_01.wav",
+    "VO_Woodcutter_Line_02.wav",
+    "VO_Woodcutter_Move_01.wav",
+    "VO_Woodcutter_Move_02.wav"
+   ]
+  }
+ },
+ "项目映射": {
+  "hero_01": {
+   "中文名": "伐木工",
+   "原版标识": "Woodcutter",
+   "置信": "高"
+  },
+  "hero_02": {
+   "中文名": "圣诞老人",
+   "原版标识": "Santa",
+   "置信": "高"
+  },
+  "hero_03": {
+   "中文名": "毒蛇淑女",
+   "原版标识": "SnakeLady",
+   "置信": "高"
+  },
+  "hero_04": {
+   "中文名": "鼠队长",
+   "原版标识": "Rat",
+   "置信": "高"
+  },
+  "hero_05": {
+   "中文名": "傀儡师",
+   "原版标识": "Puppeteer",
+   "置信": "高"
+  },
+  "hero_06": {
+   "中文名": "医护兵",
+   "原版标识": "Medic",
+   "置信": "高"
+  },
+  "hero_07": {
+   "中文名": "影丸",
+   "原版标识": "Kage",
+   "置信": "高"
+  },
+  "hero_08": {
+   "中文名": "德鲁伊",
+   "原版标识": "Archdruid",
+   "置信": "高"
+  },
+  "hero_09": {
+   "中文名": "火枪手",
+   "原版标识": "Musketeer",
+   "置信": "高"
+  },
+  "hero_10": {
+   "中文名": "白游侠",
+   "原版标识": "WhiteRanger",
+   "置信": "高"
+  },
+  "hero_11": {
+   "中文名": "塔盾",
+   "原版标识": "TowerShield",
+   "置信": "高"
+  },
+  "hero_12": {
+   "中文名": "巨剑",
+   "原版标识": "GiantBlade",
+   "置信": "高"
+  },
+  "hero_13": {
+   "中文名": "独脚龟",
+   "原版标识": "Pegleg",
+   "置信": "高"
+  },
+  "hero_15": {
+   "中文名": "小阴影",
+   "原版标识": "TinyShadow",
+   "置信": "高"
+  },
+  "hero_17": {
+   "中文名": "烛火",
+   "原版标识": "Candle",
+   "置信": "高"
+  },
+  "hero_18": {
+   "中文名": "长剑",
+   "原版标识": "LongSword",
+   "置信": "高"
+  },
+  "hero_19": {
+   "中文名": "烈焰祭司",
+   "原版标识": "FlamePriest",
+   "置信": "高"
+  },
+  "hero_21": {
+   "中文名": "超新星",
+   "原版标识": "Supernova",
+   "置信": "高"
+  },
+  "hero_23": {
+   "中文名": "复仇者",
+   "原版标识": "Avenger",
+   "置信": "高"
+  },
+  "hero_24": {
+   "中文名": "大骑士",
+   "原版标识": "Knight",
+   "置信": "高"
+  },
+  "hero_25": {
+   "中文名": "战锤",
+   "原版标识": "WarHammer",
+   "置信": "高"
+  },
+  "hero_27": {
+   "中文名": "暗域",
+   "原版标识": "Darkzone",
+   "置信": "高"
+  },
+  "hero_29": {
+   "中文名": "太阳斩",
+   "原版标识": "SolarStrike",
+   "置信": "高"
+  },
+  "hero_30": {
+   "中文名": "嬉皮死神",
+   "原版标识": "HippieReaper",
+   "置信": "高"
+  },
+  "hero_31": {
+   "中文名": "末日",
+   "原版标识": "Doomsday",
+   "置信": "高"
+  },
+  "hero_32": {
+   "中文名": "长角",
+   "原版标识": "Longhorn",
+   "置信": "高"
+  },
+  "hero_33": {
+   "中文名": "死灵法师",
+   "原版标识": "Necromancer",
+   "置信": "高"
+  },
+  "hero_34": {
+   "中文名": "沉默术士",
+   "原版标识": "Silence",
+   "置信": "高"
+  },
+  "hero_35": {
+   "中文名": "炸弹人",
+   "原版标识": "Bomb",
+   "置信": "高"
+  },
+  "hero_36": {
+   "中文名": "梅林",
+   "原版标识": "Merlin",
+   "置信": "高"
+  },
+  "hero_37": {
+   "中文名": "锤头鲨",
+   "原版标识": "Hammerhead",
+   "置信": "高"
+  },
+  "hero_38": {
+   "中文名": "涌电技师",
+   "原版标识": "Electromancer",
+   "置信": "高"
+  },
+  "hero_39": {
+   "中文名": "猎颅者",
+   "原版标识": "SkullHunter",
+   "置信": "高"
+  },
+  "hero_40": {
+   "中文名": "红帽",
+   "原版标识": "Redcap",
+   "置信": "高"
+  },
+  "hero_42": {
+   "中文名": "黄金矿工",
+   "原版标识": "GoldNugget",
+   "置信": "高"
+  },
+  "hero_43": {
+   "中文名": "风语者",
+   "原版标识": "WindWhisper",
+   "置信": "高"
+  },
+  "summon_skeleton": {
+   "中文名": "骷髅兵",
+   "原版标识": "Skeleton",
+   "置信": "高"
+  }
+ },
+ "待确认映射": {
+  "hero_14": {
+   "中文名": "古拉博士",
+   "候选": [
+    "Proton"
+   ]
+  },
+  "hero_16": {
+   "中文名": "波盾",
+   "候选": [
+    "ShieldBot",
+    "Snake"
+   ]
+  },
+  "hero_20": {
+   "中文名": "赏金猎人",
+   "候选": [
+    "GoldNugget",
+    "Sir",
+    "Hook"
+   ]
+  },
+  "hero_22": {
+   "中文名": "圣光",
+   "候选": [
+    "SolarStrike",
+    "Cleric",
+    "Nun"
+   ]
+  },
+  "hero_26": {
+   "中文名": "雪拳",
+   "候选": [
+    "SnowFlare",
+    "Frost"
+   ]
+  },
+  "hero_28": {
+   "中文名": "古灵精怪",
+   "候选": [
+    "Chip",
+    "Morph",
+    "Morphling"
+   ]
+  },
+  "hero_41": {
+   "中文名": "血锁",
+   "候选": [
+    "Vampire",
+    "Chip"
+   ]
+  },
+  "hero_44": {
+   "中文名": "负墟",
+   "候选": [
+    "Darkzone",
+    "Doom"
+   ]
+  },
+  "hero_45": {
+   "中文名": "坠炮手",
+   "候选": [
+    "Bomb",
+    "Gun",
+    "Tesla"
+   ]
+  },
+  "hero_46": {
+   "中文名": "宿魂",
+   "候选": [
+    "Chip",
+    "Phantom"
+   ]
+  },
+  "hero_47": {
+   "中文名": "共鸣者",
+   "候选": [
+    "Tesla",
+    "Sir"
+   ]
+  },
+  "hero_48": {
+   "中文名": "装甲堡垒",
+   "候选": [
+    "Shelter",
+    "ShieldBot",
+    "Turtle"
+   ]
+  },
+  "hero_49": {
+   "中文名": "荆棘树人",
+   "候选": [
+    "Woodcutter",
+    "Archdruid"
+   ]
+  }
+ }
+}

@@ -1016,6 +1016,38 @@ func hero_card_art(display_name: String) -> Texture2D:
 	_hero_art[display_name] = found
 	return found
 
+# 【2026-09-28·用户要求】个别英雄的卡面**取景微调**（人物本体在六边形里的缩放/位置）。
+#   键 = 中文名（与 `assets/英雄卡面/<名>_人物.png` 同名）；只登记"看图不对"的那几个，
+#   没登记的英雄走默认（zoom 1.0 / dx 0 / dy 0）⇒ **原样、逐像素不变**。
+#   · `zoom` 1.0 = 把整张图等比放进六边形；>1 = 放大 ⇒ 超出六边形的部分被裁掉（长武器可以裁掉，用户认可）；
+#     <1 = **缩小** ⇒ 人物在六边形里留出一圈边（偏大的那几个用这个）；
+#   · `dx` / `dy`：**以六边形半径 r 为单位**（+x 右、+y 下）⇒ 0.06 = 往右挪 6% 半径；棋子与卡面自动等比；
+#   · 放大项的 `dy` 一般按"图底边对齐卡底边"推（`−√3·(zoom−1)/2`）⇒ **只裁顶部、不裁脚**（头顶是长武器的那些）；
+#     **头顶就是人**（兜帽/帽子，没有武器伸出去）的英雄留 `dy = 0` ⇒ 四边等裁，别把脑袋切掉。
+#   · 棋子（`Unit._apply_hex_art()`）与卡面（`HexCard._draw()`）**共用这张表** ⇒ 改一处两边一起变。
+const HERO_ART_FIT := {
+	# —— 偏小 ⇒ 放大 ——
+	"大骑士":  { "zoom": 1.22, "dy": -0.19 },   # 太小 + 长枪占满画幅 ⇒ 放大，把枪尖裁掉
+	"圣诞老人": { "zoom": 1.10, "dy": -0.09 },   # 偏小 ⇒ 略放大（同样只裁顶部）
+	"嬉皮死神": { "zoom": 1.12, "dy": -0.10 },   # 偏小；头顶是镰刀 ⇒ 只裁镰刀、不裁人
+	"猎颅者":  { "zoom": 1.15, "dy": -0.13 },   # 人物只占画幅 83%（全场最小之一）⇒ 放大，只裁顶部
+	"末日":    { "zoom": 1.10 },                 # 偏小；兜帽顶到画幅上沿 ⇒ 四边等裁（dy 留 0，别切头）
+	# —— 偏左/偏右 ⇒ 横移 ——
+	"塔盾":    { "dx": 0.06 },                   # 偏左 ⇒ 右移
+	"复仇者":  { "dx": -0.20 },                  # 偏右 ⇒ 左移
+	"太阳斩":  { "dx": 0.17 },                   # 偏左 ⇒ 右移
+	"古拉博士": { "dx": 0.10 },                   # 偏左 ⇒ 右移
+	# —— 偏大 ⇒ 缩小（0.90 = 缩到九成；哪个还要更小就单独把这个数往下调）——
+	"火枪手":  { "zoom": 0.90 },
+	"红帽":    { "zoom": 0.90 },
+	"共鸣者":  { "zoom": 0.90 },
+	"小阴影":  { "zoom": 0.90 },
+}
+
+## 取某英雄卡面的取景微调（没登记的英雄返回空字典 = 原样）
+func hero_art_fit(display_name: String) -> Dictionary:
+	return HERO_ART_FIT.get(display_name, {})
+
 func _load_tex_any(path: String) -> Texture2D:
 	if ResourceLoader.exists(path):
 		var t := load(path) as Texture2D
@@ -1102,6 +1134,25 @@ func stat_icon(path: String) -> Dictionary:
 				img.clear_mipmaps()
 			var w := img.get_width()
 			var h := img.get_height()
+			# 【2026-09-27·用户换了新图标（`assets/图标/*`，本身已是透明底）】★ 不能再无条件抠近白：
+			#   老图标是"图案 + 近白实底"（所以要抠）；新图标已经抠好，而"近白"规则会把图标里的
+			#   **白色部分（刀身 / 高光 / 白甲）一起打穿**。判据 = 图里是否**已经有成规模的透明区**
+			#   （抽样里 ≥5% 是 alpha<0.08）⇒ 有 = 作者已抠好，跳过抠白；没有 = 老素材，照旧抠。
+			#   抽样最多 4096 个点 ⇒ 开销可忽略。
+			var has_alpha := false
+			var data0 := img.get_data()
+			var n0 := w * h
+			if n0 > 0:
+				var stride_i := maxi(1, int(n0 / 4096))
+				var samples := 0
+				var trans := 0
+				var i := 0
+				while i < n0:
+					samples += 1
+					if data0[i * 4 + 3] < 20:
+						trans += 1
+					i += stride_i
+				has_alpha = samples > 0 and trans * 20 > samples
 			var minx := w
 			var miny := h
 			var maxx := -1
@@ -1109,7 +1160,7 @@ func stat_icon(path: String) -> Dictionary:
 			for y in h:
 				for x in w:
 					var c := img.get_pixel(x, y)
-					if c.r > 0.90 and c.g > 0.86 and c.b > 0.82:
+					if not has_alpha and c.r > 0.90 and c.g > 0.86 and c.b > 0.82:
 						img.set_pixel(x, y, Color(0, 0, 0, 0))
 					elif c.a > 0.5:
 						if x < minx:

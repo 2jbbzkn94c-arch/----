@@ -253,7 +253,11 @@ class GiftFly:
 # 我方蓝 / 敌方红，与棋子描边同一套颜色）。
 # 为什么单独做一个节点、还每帧重画：单位在演出里会移动（前冲/被击退/瞬移），只有每帧取**单位当前坐标**
 # 重画，线才会跟着人走；BoardView 是"需要时才重绘"，追踪移动会拖影。
-# z_index = 1 ⇒ 压在棋盘(0)之上、棋子(2/10)之下，不挡人也不被人挡。
+# 【2026-09-27·用户报「宿魂的连线被盖在六边形背景下面」】z_index 1 → 3 → 【2026-09-28】**13**：
+#   棋子本体（六边形底色 + 人物图）在 z=2、选中还抬到 10 ⇒ 线在它们下面会被整块盖住；
+#   用户口径「状态字/攻击/血量标记要在背景之上、**附体射线之下**」⇒ 棋子前景标记（`Unit.MARKER_Z`，
+#   相对 +2 ⇒ 实际 4 / 选中 12）必须在线的下面，故取 13（比选中棋子的标记高一档）。
+#   棋子内部的框/光环（相对 +1）比标记还低 ⇒ 线也在它们之上。线宽见 `_draw()`。
 class PossessLinkView:
 	extends Node2D
 	var links: Array = []   # 每项 = { "from": Vector2, "to": Vector2, "color": Color }
@@ -266,11 +270,12 @@ class PossessLinkView:
 			if (b - a).length() < 1.0:
 				continue   # 两点几乎重合（被附体者就是自己那种异常）：不画
 			# 三层叠出"魂线"：外发光 → 主线 → 两端小环（目标端再点一个白芯）
-			draw_line(a, b, Color(c.r, c.g, c.b, c.a * 0.20), 11.0, true)
-			draw_line(a, b, Color(c.r, c.g, c.b, c.a), 3.5, true)
-			draw_circle(a, 5.0, Color(c.r, c.g, c.b, c.a))
-			draw_circle(b, 6.5, Color(c.r, c.g, c.b, c.a))
-			draw_circle(b, 3.0, Color(1.0, 1.0, 1.0, c.a * 0.9))
+			# 【2026-09-27·用户要求"线条再加粗点"】主线 3.5 → **6.0**、外发光 11 → **16**
+			draw_line(a, b, Color(c.r, c.g, c.b, c.a * 0.22), 16.0, true)
+			draw_line(a, b, Color(c.r, c.g, c.b, c.a), 6.0, true)
+			draw_circle(a, 6.0, Color(c.r, c.g, c.b, c.a))
+			draw_circle(b, 7.5, Color(c.r, c.g, c.b, c.a))
+			draw_circle(b, 3.4, Color(1.0, 1.0, 1.0, c.a * 0.9))
 
 # 障碍受击冲击波：白色扩散圆环（障碍物被攻击时的命中演出）
 class RingFlash:
@@ -294,6 +299,46 @@ var _ai_mutex := Mutex.new()       # 保护 _ai_plan/_ai_done 跨线程读写
 var _enemy_refs: Array = []        # 敌方回放的单位引用表（计划里的 idx 是这张表的下标）
 var _enemy_plan_running := false   # 当前是否正在回放敌方计划（中途落位的替补据此补一步）
 var _enemy_replay: EnemyReplay = null   # 敌方计划回放器（演出+节奏+等待兜底，见 EnemyReplay.gd）
+# 【2026-09-27 用户要求·录像回放】录制/回放态的成员定义与实现统一放在文件末尾
+# 「录像回放」段（见 `_replay_begin()` / `_rec_begin()`），这里只声明类型。
+const ReplaySessionScript := preload("res://src/ReplaySession.gd")
+const ReplayPanelScript := preload("res://src/ReplayPanel.gd")
+const ReplayExporterScript := preload("res://src/ReplayExporter.gd")   # 【2026-09-28】导出视频（抓帧 + ffmpeg）
+var _rec = null                       # 录制器（`ReplaySessionScript`；正在录时非 null，回放时不用）
+var _deploy_steps_buf: Array = []     # 部署逐手账本（**跨"录像登记"存在**：登记晚于铺场时也不丢）
+var _rec_think_ms := 0                # 本次 AI 搜索耗掉多少毫秒：只用来从"这一段的时长"里把思考时间扣掉
+var _rec_think_t0 := 0                # 本次 AI 搜索的开始时刻（毫秒计时点）
+var _rec_on := false                  # 正在录制
+var _rec_id := ""                     # 上一局录像 id（结算面板"看录像"用）
+var _replay_mode := false             # 正在回放：屏蔽输入、不跑 AI、不判胜负、不记账
+var _replay_data: Dictionary = {}     # 录像内容 {meta, frames}（主菜单选中的那一份）
+var _replay_loop_running := false     # 回放主循环是否在跑（避免重复起）
+var _replay_seeking := false          # 正在"快进重演"（主循环此时不要动步骤）
+var _replay_seek_to := -1             # 已请求跳段：主循环看到它就先做快进重演，再做下一步
+var _replay_seek_seq := 0             # 已处理完的跳段次数（外部/探针据此确认"我这次请求落地了"）
+var _replay_seek_done := -1           # 最近一次处理完的跳段目标段（-1 = 还没跳过段）
+var _hud = null                       # 本局的 HUD（`_setup_hud()` 里记住；回放换段直接用它报横幅）
+var _replay_seek_pause := true        # 跳段落地后是否暂停（见 `replay_seek_frame()`）
+var _replay_hold_seq := 0             # 回合横幅"停一拍"的"代"：换代 = 旧的等待当场作废（见 `_replay_enter_frame()`）
+var _replay_banner_seq := 0           # 回合横幅的"换代令牌"（跳段/换段时作废上一次的等待，见 `_replay_banner_lead()`）
+var _replay_banner_frame := -1        # 已经报过横幅的那一段（同一段不重复报，见 `_replay_enter_frame()`）
+var _replay_instant := false          # 正在"重演（非真输入）"：`_dispatch_player_op()` 的闸门
+var _replay_skip_wait := false        # 刚重演的那一步没有演出 ⇒ `_replay_wait_action()` 直接放行（撤下用）
+var _replay_exporting := false        # 【2026-09-28】正在导出视频（`ReplayExporter`）：期间不自动回列表
+var _replay_export = null             # 导出器实例（导出中按 ESC 要能喊停它）
+var _replay_deploy_seq := 0           # 部署逐手动画的"代"：清场/重演时 +1 ⇒ 旧的这趟当场作废
+var _replay_local_faction := -1       # 【2026-09-28·联机录像】回放里"我方"是哪一方（-1 = 按默认：蓝/玩家）
+var _replay_ready := false            # 回放开场流程（含部署逐手动画）是否跑完 —— 导出器要先等它
+var _replay_skills_defer := -1        # 【2026-09-28】本段"回合开始技"要顺延到段内步骤之后才跑（实战顺序：先补位后技能）
+var _replay_wait_cap_ms := 3000       # 本步"等演出"的兜底上限（替补落位给小一点，见 `REPLAY_SUB_WAIT_CAP`）
+# 【探针观测位】不参与任何生产逻辑：给 `RL/probe/录像回放自检.gd` 数"这一趟到底重演了几招"。
+var _obs_target := 0
+var _obs_n := 0
+var _replay_paused := false           # 暂停中（播放循环在此等待）
+var _replay_speed := 1.0              # 倍速（1 / 2 / 4）
+var _replay_panel = null              # 回放控制条（src/ReplayPanel.gd；懒加载）
+var _replay_frame := 0                # 当前半回合下标（段的序号）
+var _replay_step := 0                 # 当前段内已重演到第几招
 var _ending_side := false   # 正在"结束回合/结算扣血"流程中：期间阵亡不立即替补（推迟到本方下回合
 var _rematch_requested := false   # 客户端已请求"再来一局"（防重复发请求）
 var _rematch_started := false     # 主机已发起联机重开（防重入，重载场景后新实例自动重置）
@@ -472,6 +517,27 @@ const AI_LOW_TIER_WEIGHTS_PATH := {
 #   为什么得靠它：换没换 AI、权重文件有没有读进去，从游戏表现上**看不出来**（权重改坏也只是一样地打）。
 #   不想要：把 _NIGHTMARE_DEBUG 改 false（只关日志），或删本行 + _make_battle_ai() 里那行 print。
 const _NIGHTMARE_DEBUG := true
+# 【2026-09-27·录像回放】回放里的回合横幅停留时长（秒）：对局用 HUD 自己的 0.9s，回放给足 1.5s
+const REPLAY_BANNER_HOLD := 1.5
+# 【2026-09-27 用户要求】「录像先提示哪方回合，然后再开始动」＋「蓝方回合出来之后等消失，再开始动」
+#   ⇒ 每进一段先亮横幅，**等它整条演出播完**（放大 0.16 + 停留 `REPLAY_BANNER_HOLD` 1.5 + 淡出 0.35
+#   ≈ 2.0s，见 `HUD._show_turn_banner()`）再演第一招。对局里是"横幅 + 回合开始技同时走"，
+#   回放没有那些技能，所以这里补一个明确的"读提示"的时间。
+const REPLAY_BANNER_LEAD := 2.0
+# 【2026-09-27 用户要求】「一方行动完之后可以马上结束回合，另一方可以先等一会，让观众看一下局势再行动」
+#   ⇒ 一方行动演完后、下一方开口之前，留这么久的"观察时间"（段时长不足这个数时按这个数兜底）。
+const REPLAY_REST := 1.5
+# 【2026-09-28】撤下这一步的"看清"时间：撤下没有演出，但也别一步闪过（原来会白等 `_replay_wait_action()`
+#   的 3 秒兜底窗口，"连撤 3 个人"就是 3 段空白，用户看成了卡死）。
+#   ⚠️ 走的是 `_gap_plain()` ⇒ 受倍速影响（4× 时只剩 0.1s）、**不跟随暂停**（与换段那拍同一把尺）。
+const REPLAY_WITHDRAW_GAP := 0.4
+# 【2026-09-28 用户要求】「录像里我方的间隔时间拉长点，现在太快了」：玩家侧每一步演完之后**再补这一拍**
+#   （`_replay_loop()` 的步骤分支；只加在玩家侧）。口径与其它回放停顿一致：走 `_gap_plain()`
+#   ⇒ 受倍速影响（4× 时 0.15s、0.5× 时 1.2s）、**不跟随暂停**。要调快慢就改这一个数。
+const REPLAY_PLAYER_GAP := 0.6
+# 【2026-09-28】替补落位那一步的兜底等待上限（毫秒）：落位只有一段"冒出来"的小演出，且真有登场技时会
+#   由 `action_finished` 提前放行 ⇒ 兜底不用给满 3 秒（原来每落一个替补都白等 3 秒，连着两次就像卡住）。
+const REPLAY_SUB_WAIT_CAP := 1200
 
 # 敌方回放的节奏（起手/英雄之间/招式之间的停顿）随回放器搬到 src/EnemyReplay.gd：
 # HERO_GAP / STEP_GAP / TELL_GAP —— 嫌敌回合太慢就调那里的 HERO_GAP。
@@ -513,6 +579,9 @@ func _exit_tree() -> void:
 
 func _ready() -> void:
 	_enemy_replay = EnemyReplay.new(self)   # 敌方计划回放器（无状态，重开不必重建）
+	# 【2026-09-27·录像】本局录像登记要在**任何"上人"之前**（自由部署测试路径在 `_place_units()` 里就开局了）；
+	#   `reset_match()`（重开）那边单独再登记一次。回放局在末尾被 `_rec_begin()` 自己跳过。
+	_rec_begin()
 	NetBus.packet_received.connect(_on_net_packet)   # 联机收指
 	NetBus.disconnected.connect(_on_net_disconnected)   # 联机对局中：对端退断线 -> 本端也退出回大厅
 	# 新的一局：回合号先归零再进入开局阶段。
@@ -550,9 +619,11 @@ func _ready() -> void:
 	if battle_bg != null:
 		add_child(battle_bg)
 	add_child(board_view)
-	# 【2026-09-21·附体魂线】连线视图：压在棋盘之上、棋子之下（见 PossessLinkView 的说明）
+	# 【2026-09-21·附体魂线】连线视图：z_index **13** ⇒ 压在棋盘(0)、棋子本体(2，选中 10)、棋子的
+	# 框/光环（`Unit.FRAME_Z`，相对 +1）与**前景标记**（`Unit.MARKER_Z`，相对 +2 ⇒ 实际 4/选中 12）之上
+	# （见 PossessLinkView 的说明）
 	_possess_link_view = PossessLinkView.new()
-	_possess_link_view.z_index = 1
+	_possess_link_view.z_index = 13
 	add_child(_possess_link_view)
 	# 【演出·大伤害震屏】专用相机：anchor=固定左上 + position=0 时视野与"没有相机"逐像素一致，
 	# 平时 offset 恒为 0（画面完全不变），只有大伤害时抖一下 offset。
@@ -620,12 +691,31 @@ func _ready() -> void:
 			_begin_deck_pick()     # 普通模式新流程：先弹"选择卡组"面板，选完再部署
 		else:
 			_begin_deployment()
+	# 【2026-09-27 用户要求·录像回放】主菜单选了"看录像"进来：整条开局流程都跳过，
+	#   直接按录像第 0 段快照建局面 + 挂回放控制条（见文件末尾「录像回放」段）。
+	#   ⚠️ 必须放在 `_ready()` 末尾：棋盘/board_view/HUD 都是上面那些行建的，早于它们进去会拿到 null 的 board_view。
+	if GameState.replay_id != "":
+		_begin_replay_from_store()
 
 # 每帧刷新"仍有行动英雄"的顶部标识（仅本端我方回合、且仅本端我方单位显示）
 func _process(dt: float) -> void:
 	# 出生区色罩（我方淡蓝 / 敌方淡红）只在**部署英雄阶段**亮；部署完由木纹接管，整局不再染色
 	if board_view != null:
-		board_view.set_spawn_zones(state == State.DEPLOY or state == State.PLACE_DEPLOY)
+		var zones_on := state == State.DEPLOY or state == State.PLACE_DEPLOY
+		board_view.set_spawn_zones(zones_on)
+		# 【2026-09-28·用户报「部署阶段，英雄的蓝色底色和出生区有重叠」】把"有棋子的格"推给棋盘：
+		#   那些格不画出生区色罩 —— 否则半透明的阵营蓝与出生区蓝叠成双层蓝，看着像糊在一起。
+		#   ⚠️ **每帧都推**（不再只在部署阶段推）：回放部署段靠这张表决定"哪些格不铺罩"（见 `deploy_zone`），
+		#   而回放的 `state` 是 ANIMATING/IDLE ⇒ 只在部署阶段推的话，回放里这张表永远是空的。
+		#   `set_occupied()` 内部自带"没变化就不重绘"的判断，所以每帧推不产生额外重绘。
+		var occ: Array = []
+		for u in units:
+			if u != null and is_instance_valid(u) and u.alive:
+				occ.append(u.cell)
+		board_view.set_occupied(occ)
+		# 【2026-09-28·用户口径「替补的时候才亮的色」】墓碑的阵营底色只在替补/落位阶段亮
+		#   （那时墓碑正是可选落点）；平时碑就是一块灰石头。`set_grave_faction()` 自带变化判断。
+		board_view.set_grave_faction(state == State.SUBSTITUTING or state == State.PLACE_SUB)
 	_refresh_possess_links()   # 附体魂线：每帧按单位当前位置重画（跟着演出走）
 	# 开局选人限时：本端三轮共用一个共享预算；预算耗尽 -> 自动随机补人（每次补一人，换回本侧轮继续补到满
 	if state == State.DEPLOY or state == State.PLACE_DEPLOY:
@@ -719,6 +809,28 @@ func send_quick_chat(text: String) -> void:
 	if text == "" or not GameState.is_online or not NetBus.is_online:
 		return
 	NetBus.send_all(JSON.stringify({ "type": "chat", "text": text }))
+
+# 【2026-09-28·用户要求·联机认输】点「认输」= 先喊这句**完整的话**给对端（由 HUD 发 + 本端回显），
+#   再按下面的 `surrender_online()` 结算。文案要动就改这一个常量。
+const SURRENDER_LINE := "我认输了，这局你赢了"
+
+## 【2026-09-28·用户要求】联机认输（本端按的）：广播一个 `surrender` 包，让对端知道本局是怎么结束的，
+##   然后判**对方胜**。为什么结算只走这一条路：胜负只有 `GameState.end_match()` + `_emit_match_result()`
+##   这一套（与 `_check_win()` 完全相同），在 HUD 里另写一份会漏掉记账/结算面板/天梯钩子。
+func surrender_online() -> void:
+	if not GameState.is_online or state == State.ENDED or GameState.match_over:
+		return
+	if NetBus.is_online:
+		NetBus.send_all(JSON.stringify({ "type": "surrender" }))
+	_apply_surrender(_opp_side())
+
+# 认输结算（两端共用）：winner = 全局赢家阵营；对端收到 `surrender` 包时传 `_my_side()`
+func _apply_surrender(winner: int) -> void:
+	GameState.end_match(winner)
+	state = State.ENDED
+	_clear_selection()
+	log_message.emit("对局结束：%s认输。" % ("对方" if winner == _my_side() else "我方"))
+	_emit_match_result(winner)
 
 # ---- 普通模式新流程：进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）----
 # 玩家在编辑页已把队伍存进卡组槽；这里只做"选择已保存的卡组"，不提供英雄编辑。
@@ -1761,8 +1873,8 @@ signal card_view_requested(unit: Unit)   # 右键查看卡面
 signal item_view_requested(type: String, owner_faction: int)  # 右键查看道具作用（owner_faction = 归属阵营，-1 = 中立/双方可捡）
 signal touch_view_end_requested           # 触屏长按查看后松手：请求 HUD 关闭属性浮层
 
-# 开局先手提示（单机）：先= 部署上首发先+ 开战先行动。短暂浮~1s 自动消失，不阻塞流程
-signal first_side_notice(text: String)   # 请求 HUD 显示"本局先手"浮框
+# 【2026-09-27·用户要求】开局"先手"提示整块删除（`first_side_notice` 信号 + HUD 那套 UI 都去了）。
+#   `_first_side` 这个**机制**本身不变：先手方仍然决定"谁先部署首发、谁先行动"。
 
 # 普通模式新流程：进入战斗后弹"选择卡组"面板，让玩家从 3 个已存卡组里选一个（或点随机英雄）
 signal deck_pick_requested(decks: Array)   # 3 个已存卡组：Array[Array[hero_id]]，空槽为 []
@@ -1782,6 +1894,9 @@ func reset_match(redraft := false) -> void:
 	_ai_used = false
 	_ending_side = false
 	_stats_recorded = false   # 重开算新的一局：允许再次记账
+	# 【2026-09-27·录像】重开：上一条录像就地作废（没到结算就不落盘），新的一条在末尾登记
+	_rec = null
+	_rec_on = false
 	_clear_selection()   # 清掉选中单位 + 可移可攻击高亮：否则"点击英雄后重开"会把旧可行动范围带到新一局
 	# 清场上单
 	for u in units:
@@ -1862,6 +1977,7 @@ func reset_match(redraft := false) -> void:
 		_place_obstacles()
 		_spawn_opening_items()   # 重开新局：开局道具同步重新刷新
 		_begin_deployment()
+	_rec_begin()   # 【2026-09-27·录像】重开 = 新的一条录像（上一局若没走到结算，这一条直接丢弃）
 
 # 单机开局先手：每局随机一次并弹框告知后再选人/上首发
 # 联机：用种子奇偶定先手，两端必然一致（不依赖两rng 调用是否对齐）
@@ -1875,11 +1991,7 @@ func _prepare_first_side() -> void:
 	else:
 		_deploy_side = rng.randi() % 2
 	_first_side = GameState.SIDE_PLAYER if _deploy_side == 0 else GameState.SIDE_ENEMY
-	if DisplayServer.get_name() == "headless":
-		return   # 无窗口测试：不提示直接继
-	# 单机/联机都提示："我方/敌方"按本端阵营视角表
-	var who := "我方" if _first_side == _my_side() else "敌方"
-	first_side_notice.emit("本局先手：%s" % who)   # HUD 短暂浮框 ~1s 自动消失，不阻塞流程
+	# 【2026-09-27·用户要求】开局"先手"提示已整块删除 ⇒ 这里只决定先手，不再发任何提示。
 
 func _begin_deployment() -> void:
 	state = State.DEPLOY   # 先进入部署态：顶部标签显示"部署选人"而不是旧回合
@@ -1966,11 +2078,17 @@ func _on_enemy_deploy_pick(hero_id: String) -> void:
 
 # 高亮敌方出生区（敌轮放位提示；我方出生区保持淡蓝
 func _show_enemy_deploy_zones(enemy_color: Color) -> void:
+	# ⚠️ 【2026-09-28·用户报「英雄的底色还是和出生区有重叠」】**有棋子的格不铺色罩** —— 真正的病灶在这里：
+	#   出生区色罩是走 `_preview_cells` → `_apply_highlights()` 这条**高亮**通道画的（`_cell_tint` 里高亮优先于
+	#   `show_spawn_zones`），所以只堵 `show_spawn_zones` 那条路没用：部署到一半时已上场的英雄就站在出生格里，
+	#   棋子那层半透明阵营蓝与这层蓝叠成一片。双方色罩都在**源头**过一遍占用表。
 	var pc := {}
 	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
-		pc[c] = enemy_color
+		if not occupancy.has(c):
+			pc[c] = enemy_color
 	for c in _spawn_cells(DataRegistry.Faction.PLAYER):
-		pc[c] = Color(0.2, 0.6, 0.95, 0.45)
+		if not occupancy.has(c):
+			pc[c] = Color(0.2, 0.6, 0.95, 0.45)
 	_preview_cells = pc
 	_apply_highlights()
 
@@ -1985,13 +2103,10 @@ func _try_place_deploy(cell: Vector2i) -> bool:
 	_pending_deploy = ""
 	player_deployed.append(hid)
 	player_pool.erase(hid)   # 上阵后才从卡池扣
-	# 演出登场
-	var u := _spawn_unit(hid, DataRegistry.Faction.PLAYER, cell)
-	u.modulate.a = 0.0
-	u.scale = Vector2(0.2, 0.2)
-	var t := create_tween()
-	t.tween_property(u, "modulate:a", 1.0, 0.35)
-	t.parallel().tween_property(u, "scale", Vector2.ONE, 0.35)
+	# 【2026-09-27 真凶】原来这里是"内联造人"，**绕过了 `_deploy_spawn_at()`** —— 而录像逐手记账
+	#   （`_rec_note_deploy_step`）与"冒出来"演出都在那个函数里 ⇒ 玩家这 3 手**从来没进录像**
+	#   （用户那条 00:02 录像里只有敌方 3 手就是这个）。现在统一走 `_deploy_spawn_at()`。
+	_deploy_spawn_at(DataRegistry.Faction.PLAYER, hid, cell)
 	AudioManager.play("select")
 	# 联机：把这次部署广播给对端（对端apply_deployment，保证两端一致）
 	if GameState.is_online and NetBus.is_online:
@@ -2011,12 +2126,12 @@ func _try_place_enemy_deploy(cell: Vector2i) -> bool:
 	_pending_enemy_deploy = ""
 	enemy_deployed.append(hid)
 	enemy_pool.erase(hid)
-	var u := _spawn_unit(hid, DataRegistry.Faction.ENEMY, cell)
-	u.modulate.a = 0.0
-	u.scale = Vector2(0.2, 0.2)
-	var t := create_tween()
-	t.tween_property(u, "modulate:a", 1.0, 0.35)
-	t.parallel().tween_property(u, "scale", Vector2.ONE, 0.35)
+	# 【2026-09-28 修·用户报「怎么联机模式录像的部署阶段又不是一个一个上的了」】这里原来是**内联造人**
+	#   （自己 `_spawn_unit()` + 手写淡入），**绕过了 `_deploy_spawn_at()`** —— 而"部署逐手记账
+	#   （`_rec_note_deploy_step`）+ 冒出来演出"都在那个函数里 ⇒ 联机客户端这一端的**红方那几手从来没进录像**
+	#   （与玩家那 3 手的老 bug 同源，见 `_try_place_deploy()`）。回放里就变成"我方逐手上、对方一次性出现"。
+	#   统一走 `_deploy_spawn_at()`：记账 + 造人 + 淡入一次到位，两端口径一致。
+	_deploy_spawn_at(DataRegistry.Faction.ENEMY, hid, cell)
 	AudioManager.play("select")
 	if GameState.is_online and NetBus.is_online:
 		NetBus.send_all(JSON.stringify({ "type": "deploy", "faction": DataRegistry.Faction.ENEMY, "hero": hid, "cell": [cell.x, cell.y] }))
@@ -2028,12 +2143,10 @@ func _try_place_enemy_deploy(cell: Vector2i) -> bool:
 func apply_deployment(faction: int, hero_id: String, cell: Vector2i) -> void:
 	if not grid.in_bounds(cell) or occupancy.has(cell):
 		return
-	var u := _spawn_unit(hero_id, faction, cell)
-	u.modulate.a = 0.0
-	u.scale = Vector2(0.2, 0.2)
-	var t := create_tween()
-	t.tween_property(u, "modulate:a", 1.0, 0.35)
-	t.parallel().tween_property(u, "scale", Vector2.ONE, 0.35)
+	# 【2026-09-28 修·用户报「怎么联机模式录像的部署阶段又不是一个一个上的了」】对端落的每一手也走
+	#   `_deploy_spawn_at()`（原来这里是内联造人 ⇒ **录像里对端那几手一手都没记上**，
+	#   回放部署段就只剩"自己一侧逐手、另一侧到快照里一次性出现"）。记账 + 造人 + 淡入同一套。
+	_deploy_spawn_at(faction, hero_id, cell)
 	# 记录部署状态（供统收尾）——用同一deployed 列表
 	if faction == DataRegistry.Faction.PLAYER:
 		player_deployed.append(hero_id)
@@ -2095,11 +2208,15 @@ func _show_deploy_spawn_hint() -> void:
 
 # 高亮双方出生区：我方player_color，敌方出生区固定红色（部署全程保留，放位阶段不消失）
 func _show_deploy_zones(player_color: Color) -> void:
+	# ⚠️ 【2026-09-28·用户报「英雄的底色还是和出生区有重叠」】有棋子的格不铺色罩（与
+	#   `_show_enemy_deploy_zones()` 同一处道理）：这层是走**高亮**通道画的，堵 `show_spawn_zones` 那条路没用。
 	var pc := {}
 	for c in _spawn_cells(DataRegistry.Faction.PLAYER):
-		pc[c] = player_color
+		if not occupancy.has(c):
+			pc[c] = player_color
 	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
-		pc[c] = Color(0.95, 0.35, 0.3, 0.5)   # 敌方出生区红
+		if not occupancy.has(c):
+			pc[c] = Color(0.95, 0.35, 0.3, 0.5)   # 敌方出生区红
 	_preview_cells = pc
 	_apply_highlights()
 
@@ -2436,6 +2553,7 @@ func _enemy_deploy() -> void:
 		_deploy_after_pick()
 
 func _deploy_spawn_at(faction: int, hero_id: String, cell: Vector2i) -> void:
+	_rec_note_deploy_step(faction, hero_id, cell)
 	var u := _spawn_unit(hero_id, faction, cell)
 	u.modulate.a = 0.0
 	u.scale = Vector2(0.2, 0.2)
@@ -2469,10 +2587,19 @@ func _deploy_after_pick() -> void:
 # 部署轮到本端真人操作时：屏幕中央弹横幅（与回合横幅同一通道/样式）。
 # 预算耗尽后进入自动上人（deploy_budget_active=false），不再需要真人操作，不弹。
 func _deploy_banner_if_my_turn() -> void:
+	# 【录像回放】回放里不报任何部署提示（用户报过"黄字、什么部署什么的"）。
+	# ⚠️ 这里同时看 `GameState.replay_id`：**回放分支是先建 HUD、后置 `_replay_mode`**，
+	#   中间那段空窗期里 `state` 还是录像里残留的 `DEPLOY` ⇒ 只看 `_replay_mode` 会漏（实测就是这么漏的）。
+	if _replay_mode or GameState.replay_id != "":
+		return
 	if _my_deploy_turn() and deploy_budget_active:
 		turn_banner.emit("轮到你部署队伍")
 
 func _begin_after_deploy() -> void:
+	# 【2026-09-27 用户要求】录像里也要有**部署阶段的画面**：在这里（双方首发都站好、对战还没开始）
+	#   取一份快照存进录像的 `deploy_snap`；回放时它作为**第 0 段**先演一遍（`_replay_begin()` 插到最前），
+	#   于是"开局双方怎么摆的"在录像里看得见。
+	_rec_note_deploy(_snap_take(GameState.SIDE_PLAYER))
 	# 其余进入替补
 	player_roster = player_pool.duplicate()
 	enemy_roster = enemy_pool.duplicate()
@@ -2487,9 +2614,17 @@ func _begin_after_deploy() -> void:
 	_notify_team()          # 通知 HUD 显示下方队伍卡组
 
 func _setup_hud() -> void:
+	# 【2026-09-28 用户报「录像里右键英雄，弹出的属性框点两次关闭才能关完」】本函数原来**无条件新建**，
+	#   而回放那条路 `_ready()` 的正常分支已经建过一次、`_replay_begin()` 又建一次 ⇒ **两个 HUD 叠着**
+	#   （实测：CanvasLayer 数 = 2、`card_view_requested` 连接数 = 2、右键一次弹出 **2 张**属性框，
+	#   点外只关掉最上面那张 ⇒ 要关两次）。这里保证**同时只有一个 HUD**：旧的先释放。
+	if _hud != null and is_instance_valid(_hud):
+		_hud.queue_free()
+		_hud = null
 	var hud := HUD.new()
 	hud.bind(self)
 	add_child(hud)
+	_hud = hud   # 【2026-09-27·录像回放】留住引用：回放换段要直接喊 HUD 的回合横幅（见 `_replay_enter_frame()`）
 
 # ---- 战斗背景贴图 ----
 # 候选按顺序取【第一个能加载的】；全缺图 ⇒ 返回 null ⇒ 只剩 WoodFloor 纯色底（不影响启动/联机）。
@@ -2901,12 +3036,39 @@ func _begin_side(side: int) -> void:
 	#   ⇒ 正常退出、崩溃、强杀，下次进来都从"最近一次回合开始"继续（口径见 `autoload/LadderStore.gd`）。
 	#   单机天梯之外零开销（`_ladder_active()` 第一行就返回）。
 	_ladder_autosave(side)
-	_ending_side = false   # 新回合开始：解除"回合标记（含客方提交结束后的等待窗口
+	_rec_frame(side)   # 【2026-09-27·录像】开一段：半回合起点快照（在补位/毒伤/回合开始技之前，与天梯存档同一时点）
 	# 【2026-09-21 用户要求】**回合切换提醒先弹出来**，再走后面的账目结算与回合开始技演出。
 	#   原来横幅在 `_begin_side()` **末尾**才 emit ⇒ 圣诞老人的礼物都飞完了提示才出现（用户实机反馈），
 	#   所以挪到最前面。文案口径与原末尾那三处完全一致（见 `_turn_banner_text`）。
 	turn_banner.emit(_turn_banner_text(side))
 	AudioManager.play("turn")
+	# 账 + 补位起手（与回放共用同一段，见 `_side_begin_stage()`）
+	if await _side_begin_stage(side):
+		return   # 本端补位面板接管：回合开始技顺延到补位完成后（`_resume_after_sub()`）
+	# —— 回合开始技（圣诞放道具/矿工放金矿等,内含 rng）——
+	# 联机关键：两端的技能触发必须发生在"行动方补位全部完成"之后、且两端同一时点执行。
+	# 若行动方还有待补,上面 1514 分支已 defer(先补位、后技能,return);此处只剩两种情况:
+	#   1) 行动方=本端且无待补 → 本端执行技能,并广播 side_skills 让等待端在同一时机执行;
+	#   2) 行动方≠本端(等待端) → 不自行执行,等 side_skills 广播到达后再执行(与行动端补位后的时点一致)。
+	if GameState.is_online:
+		if side == _my_side():
+			if GameState.is_host:
+				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
+			else:
+				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
+			await _run_side_skills(side)
+		else:
+			_waiting_side_skills_round = GameState.round_number   # 等行动端广播后执行技能
+		return
+	await _run_side_skills(side)   # 单机:直接执行
+
+## 回合开始的"账"（**实战与回放共用同一段**，用户 2026-09-28 要求「所有的演出都和实战一样」）：
+##   清回合旗标 → 还原变身 → 重置各单位回合态 → 阵营跨回合账 → 先补位起手。
+## 调用时机两边一致：**都在快照之后**（实战 `_rec_frame()` / 回放 `_restore_snapshot()`），
+## 所以这一整段的重放既补上了"演出"，也让盘面回到"当时的真实局面"。
+## 返回 true = 本端补位面板已接管（回合开始技顺延到补位完成，调用方不要再跑技能段）。
+func _side_begin_stage(side: int) -> bool:
+	_ending_side = false   # 新回合开始：解除"回合标记（含客方提交结束后的等待窗口
 	_turn_expired = false   # 新回合开始：清除上个回合的超时待提交标记
 	state = State.ANIMATING   # 回合开始技能逐个演出期间锁定输入
 	_in_begin_phase = true   # 演出期内阵亡先排队，结束再弹替补面板（避免面板插入回合开始流程）
@@ -2953,7 +3115,10 @@ func _begin_side(side: int) -> void:
 	# 打开替补面板并把"回合开始技"顺延到全部补位完成后再触发（见 _resume_after_sub）。
 	# 必须走 _try_begin_next_sub 消费 1 个名额（否则落位完成后 more_subs 误判还有名额 → 重复弹面板）。
 	var begin_fn := side_faction(side)
-	if _is_manual_sub_faction(begin_fn) and _pending_subs_of(begin_fn) > 0 and _roster_of(begin_fn).size() > 0:
+	# ⚠️ 回放里**不走"先补位"这条**：那边没人点面板，补位由录像里的 `sub` 步骤演出来
+	#   （见 `_apply_replay_step()`），走这条会把本段的回合开始技整个跳过（演出就没了）。
+	if not _replay_mode and _is_manual_sub_faction(begin_fn) \
+			and _pending_subs_of(begin_fn) > 0 and _roster_of(begin_fn).size() > 0:
 		# 先启动本端回合倒计时：等替补期间超时也能自动替补并结束回合（不会永久卡在面板）
 		turn_time_left = TURN_TIME_LIMIT
 		peer_turn_time_left = 0.0
@@ -2969,7 +3134,7 @@ func _begin_side(side: int) -> void:
 		_defer_side_skills = true
 		_defer_side = side
 		_try_begin_next_sub(begin_fn)
-		return
+		return true
 	# 单机敌方（AI）待补位：先自动落位，再统一触发技能（联机敌方为对端真人，按其补位节奏同步）
 	# 自由部署双控时敌方也归本端玩家手动点选，故不跑 AI 补位。
 	if not GameState.is_online and side != _my_side() and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
@@ -2977,22 +3142,7 @@ func _begin_side(side: int) -> void:
 		_start_placing_subs = true
 		_place_enemy_sub()
 		_start_placing_subs = false
-	# —— 回合开始技（圣诞放道具/矿工放金矿等,内含 rng）——
-	# 联机关键：两端的技能触发必须发生在"行动方补位全部完成"之后、且两端同一时点执行。
-	# 若行动方还有待补,上面 1514 分支已 defer(先补位、后技能,return);此处只剩两种情况:
-	#   1) 行动方=本端且无待补 → 本端执行技能,并广播 side_skills 让等待端在同一时机执行;
-	#   2) 行动方≠本端(等待端) → 不自行执行,等 side_skills 广播到达后再执行(与行动端补位后的时点一致)。
-	if GameState.is_online:
-		if side == _my_side():
-			if GameState.is_host:
-				NetBus.send_all(JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
-			else:
-				NetBus.send_to(1, JSON.stringify({ "type": "side_skills", "side": side, "round": GameState.round_number }))
-			await _run_side_skills(side)
-		else:
-			_waiting_side_skills_round = GameState.round_number   # 等行动端广播后执行技能
-		return
-	await _run_side_skills(side)   # 单机:直接执行
+	return false
 
 # 回合开始技执行段（含演出、入场上/下文的计时/横幅）。
 # 两端在同一触发点执行:行动方补位完成后(或无需补位时)由行动端广播 side_skills,两端同跑,
@@ -3020,13 +3170,31 @@ func _run_side_skills(side: int) -> void:
 	#   刚上场的替补（锤头鲨）"没看见"这份伤害、拿不到 +1（用户反馈）。
 	#   放在本函数 = **替补全部落位之后**，且与金矿倒计时/回合开始技同一时点（联机两端同跑，不会分叉）。
 	_tick_statuses(side)   # 猛毒等：场上所有中毒单位各结算 1 点（与哪一方开始回合无关）
+	# 【2026-09-27 修·用户报「敌方回合开场被毒死 → 没替补，反倒到我方回合他才替补」】
+	#   病灶①：`Unit.die()` 是**延迟 0.3s 才 emit `died`**（卡面破碎升天演出的时序要求，`Unit.gd::die()`）
+	#     ⇒ 毒死那一刻 `_pending_enemy_sub` 还没记上，紧接着的补位检查必然落空。
+	#     ⇒ 这里先**等阵亡结算落账**再往下走（`_drain_pending_deaths` 逐帧等，2.5s 兜底，没死人时立即返回）。
+	await _drain_pending_deaths()
+	if gen != _session_id:
+		return   # 等待期间这一局被重开：下面的补位/技能都不能再往新局上落
 	# 【2026-09-26 修·用户报「AI 的复仇者在 AI 回合开始时被毒死，却没上替补」】
 	#   毒死发生在「回合开始先补位」之后（本函数开头那一段），而此处 _in_begin_phase 仍为 true
 	#   （要到下面才置 false）⇒ 阵亡处理只把名额记进 _pending_enemy_sub，没有当场落位 ⇒ 这一回合没替补。
 	#   这里在毒伤结算之后立刻补一次，与死因无关（毒 / 反击 / 自爆一视同仁）。
 	#   ⚠️ 只补敌方：玩家侧仍走原本那条（回合开始统一开替补面板），避免在敌方回合中途插入玩家选人流程。
 	_start_placing_subs = true   # 与「先补位」那一段同一套：本次落位跳过即时光环补发（本回合开始技会统一发）
-	if _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
+	#   病灶②（同日修）：这段补位原来**不分先后手** ⇒ 敌方欠的名额会一直挂到**我方回合开始**才被补掉
+	#     （用户原话「反倒是到我方回合，他替补了」）⇒ 现在**只在敌方回合**补；我方回合开始时，敌方阵亡的
+	#     名额留到敌方回合开始（`_begin_side` 里那一段）再补，落位即能出手、不用白挨一整轮。
+	# 【2026-09-28 修·用户报「我联机模式，我上人，对方也会自动跟着上人」】
+	#   ⚠️ 上面这条只对**单机/AI 敌方**成立：联机时敌方是对端真人，他的替补由他自己点。
+	#   而本函数在联机是**两端同跑**的（行动端本地跑一次、等待端收到 `side_skills` 广播再跑一次）
+	#   ⇒ 主机端跑到这里时 `_is_manual_sub_faction(敌方)` 恒为 false（那是"对端的阵营"）
+	#   ⇒ 主机会**替对手把替补自动摆上场**（对端面板还没点），两队人数就此分叉。
+	#   原来只判"是不是本端手动方"，漏了"联机时一律不替对端落位"这一条。
+	if not GameState.is_online and side_faction(side) == DataRegistry.Faction.ENEMY \
+			and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
+			and _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
 		_place_enemy_sub()
 	_start_placing_subs = false
 	# 金矿倒计时：每个完整回合（回合号变化）只减一次，两端同一时点同步执行
@@ -3047,6 +3215,17 @@ func _run_side_skills(side: int) -> void:
 	for u in units:
 		if u.alive and u.faction == side_faction(side):
 			u.refresh_stats()
+	# 【2026-09-28 修·用户报「录制的时候，傀儡师的移动动画没了。我要所有的演出都和实战一样」】
+	#   这一段（毒伤 tick / 补位 / 金矿账 / 各英雄回合开始技 / 变身还原）在实战里**发生在快照之后**
+	#   ⇒ 录像快照里没有它 ⇒ 回放必须在同一时点**原样重跑一遍**（`_side_begin_stage()` + 本函数），
+	#   否则傀儡师推人、死灵召唤、圣诞放道具、毒伤飘字这些"没有对应指令步骤"的演出全是空白，
+	#   下一个快照一到人就**瞬移**过去（用户看到的就是"移动动画没了"）。
+	#   但本函数末尾这几行是"交给玩家/AI"的**实机流程**，回放里一律不能走：
+	#   行动顺序由录像步骤驱动，抢输入态会让 AI 回合插进来、限时也会开始倒数。
+	if _replay_mode:
+		_in_begin_phase = false
+		state = State.ANIMATING
+		return
 	_in_begin_phase = false   # 演出结束：此间积压的阵亡已在队列中，下面统一开面板
 	# 本端是否操作这一方：是我方回-> 进入我方输入；否则（对方回合）等AI
 	if side == _my_side():
@@ -3072,8 +3251,10 @@ func _run_side_skills(side: int) -> void:
 			peer_turn_time_left = TURN_TIME_LIMIT
 		# 敌方若有上一回合阵亡待替补：按阵亡数量在出生区自动落位，再开始敌方回
 		# （自由部署双控的敌方归本端玩家手动点选，不在此自动落位）
-		if not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) and _pending_enemy_sub > 0 \
-				and (enemy_roster.size() > 0 or _dynamic_sub_active()):
+		# 【2026-09-28 同上·联机不替对端落位】联机时这里跑在**等待端**（本端不是行动方），
+		#   而"对端阵营"同样满足 `not _is_manual_sub_faction` ⇒ 会替对端自动上人（用户报的那条）。
+		if not GameState.is_online and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
+				and _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
 			_place_enemy_sub()
 		if GameState.dual_control:
 			# 自由部署双控：敌方回合也由本端操控(不跑 AI)
@@ -3106,7 +3287,14 @@ func side_faction(side: int) -> int:
 	return DataRegistry.Faction.PLAYER if side == GameState.SIDE_PLAYER else DataRegistry.Faction.ENEMY
 
 # 【2026-09-21】回合横幅文案（三处旧 emit 的口径合并到这里，只在 `_begin_side()` 开头弹一次）
-func _turn_banner_text(side: int) -> String:
+## 回合横幅文案。`blue_red` = 用"蓝方/红方"点名（**只在回放里开**，用户 2026-09-27 要求：
+## 「看录像的时候，回合切换不明显，需要提示蓝方回合还是红方回合」）—— 对局里本端就是"你/敌方"，
+## 说"蓝方/红方"反而绕，所以对局文案一个字不动。
+func _turn_banner_text(side: int, blue_red: bool = false) -> String:
+	if blue_red:
+		# 【2026-09-28 用户要求】横幅**只报"哪方回合"，不带"第 N 回合"** —— 回合号顶栏一直在报，
+		#   横幅再挂一遍是重复（用户：「提示回合切换的时候，只需要提示哪方回合，不用提示第几回合」）。
+		return "蓝方回合" if side == GameState.SIDE_PLAYER else "红方回合"
 	if side == _my_side():
 		return "你的回合"
 	return "敌方回合（你操控）" if GameState.dual_control else "敌方回合"
@@ -3114,6 +3302,11 @@ func _turn_banner_text(side: int) -> String:
 # ---- 视角辅助（联机：主机=玩家蓝，客户敌方/红；单机=玩家方）----
 # 本端人类操作的是哪一方
 func _my_faction() -> int:
+	# 【2026-09-28·联机录像】回放里用**录制者**的视角：客户端录的那份，"我方"应当是红方
+	#   （录制时 `meta.rec_side = "enemy"`）。⚠️ 只改视角、**不动 `GameState.is_online`**
+	#   （那个标志会牵动联机分支，比如 `for_enemy` 的判定 ⇒ 会把回放每步的"演完放行"弄丢）。
+	if _replay_mode and _replay_local_faction >= 0:
+		return _replay_local_faction
 	if GameState.is_online and not GameState.is_host:
 		return DataRegistry.Faction.ENEMY
 	return DataRegistry.Faction.PLAYER
@@ -3200,11 +3393,16 @@ func _trigger_turn_start_all(faction: int) -> void:
 		if u == null or not is_instance_valid(u):
 			continue
 		if u.alive and u.faction == faction:
+			# 【2026-09-27 修·用户报「古灵精怪有些就弹被动」】"有没有专属飘字"要按**施放者身份**判：
+			#   古灵精怪的 `on_turn_start()` 里就变身了，返回后 `u.hero_id` 已经是**变身后那个英雄**
+			#   ⇒ 变到"没有专属飘字的英雄"时，这里会误判成"该英雄没有飘字"从而补一个「被动」
+			#   （用户看到的"有些就弹被动"）。进函数前先记下身份，判据用它。
+			var fx_id: String = u.hero_id
 			if _trigger_turn_start(u):
 				# 【2026-09-23 深夜·用户报「风语者开局被动怎么会弹两个字样」】`_trigger_turn_start()` 里已经
 				#   走过 `burst_fx(..., 专属飘字)`（风语者 = 「风语」）⇒ 这里再飘"被动"就是两个字样叠一起。
 				#   所以：**该英雄有专属飘字时只闪边框**，没有专属飘字的才补"被动"。
-				u.flash_passive(String(DataRegistry.hero_fx(u.hero_id).get("text", "")) == "")
+				u.flash_passive(String(DataRegistry.hero_fx(fx_id).get("text", "")) == "")
 				if not is_inside_tree():
 					return   # 已脱离场景树（点击重开/reload/切场景）：安全退出
 				await get_tree().create_timer(0.35, false).timeout
@@ -3296,6 +3494,8 @@ func _settle_side_round_damage(side: int) -> void:
 
 # ---- 胜负：一方累3 名英雄阵亡即判负 ----
 func _check_win() -> bool:
+	if _replay_mode:
+		return false   # 【2026-09-27·录像】回放不判胜负：也不记账、不弹结算面板（判负只是录像里的事实）
 	if GameState.no_death_limit:
 		return _check_no_limit_end()
 	# 一方累计阵3 人就判负（含替补阵亡）。用本端视角化计数：我方阵亡=判负，对方阵判胜
@@ -3364,6 +3564,7 @@ func _emit_match_result(winner_side: int) -> void:
 	if not GameState.no_death_limit:
 		_record_stats(local_win)
 	_ladder_on_match_result(local_win)   # 【天梯】连胜记账 / 失败即结束本轮（非天梯无操作）
+	_rec_finish(local_win)   # 【2026-09-27·录像】本局录像落盘（非单机/回放中自动跳过）
 	match_result.emit(local_win)
 	if GameState.is_online and GameState.is_host:
 		NetBus.send_all(JSON.stringify({ "type": "match_end", "winner": winner_side }))
@@ -3389,6 +3590,14 @@ func _alive_count(faction: int) -> int:
 
 # ---- 输入处理（全局鼠标点击---
 func _unhandled_input(event: InputEvent) -> void:
+	# 【2026-09-28】导出视频期间：**ESC = 中止导出**。那会儿控制条是收起来的（免得录进画面），
+	#   不给个出口的话用户只能干等或者关游戏。已录的部分照常收尾成文件。
+	if _replay_exporting and event is InputEventKey and (event as InputEventKey).pressed \
+			and (event as InputEventKey).keycode == KEY_ESCAPE:
+		if _replay_export != null:
+			_replay_export.stop()
+		get_viewport().set_input_as_handled()
+		return
 	# 调试键（敌方回合测试替补用，仅在非本端回合生效）：
 	#   F7 = 敌方回合，我方与敌方【所有】存活英雄各扣 20；
 	#   F8 = 敌方回合，只给我方前 2 名存活英雄各扣 20；
@@ -3415,6 +3624,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	# 右键查看卡面 / 生成物作用（任意时刻
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		# 【2026-09-27 用户报「录像里右键英雄会弹出两次属性框」】属性浮层开着时，右键**既**被浮层
+		#   当成"点外关闭"消费掉、**又**漏到了这里 ⇒ 关一次、又开一次，看着就是"弹两次"
+		#   （浮层那侧 `accept_event()` 只管 Control 树，管不住 `_unhandled_input`）。
+		#   这里直接吞掉：浮层开着期间的右键一律不处理（与"点外关闭"同一手势）。
+		if _unit_card_open:
+			return
 		var cell := grid.world_to_cell(get_global_mouse_position() - board_view.board_origin)
 		var u = occupancy.get(cell, null)
 		if buff_items.has(cell):
@@ -3976,6 +4191,13 @@ func _build_highlight_colors() -> Dictionary:
 	return colors
 
 func _apply_highlights() -> void:
+	# 【2026-09-27 用户报「为什么回放里会显示英雄能攻击的对象，黄色的」】回放**不画任何操作高亮**：
+	#   黄格=可攻击对象、绿格=可移动，那是"给你操作"用的提示；回放里没有操作，画出来只会误导
+	#   （探针/实测里它是 `_select()`→`_compute_ranges()` 那条路顺手画上的）。
+	if _replay_mode:
+		if board_view:
+			board_view.set_highlights({})
+		return
 	if board_view:
 		board_view.set_highlights(_build_highlight_colors())
 
@@ -3986,6 +4208,18 @@ func _apply_highlights() -> void:
 #   {"type":"select","u":int}                           # 选中 units[u]
 # 客户端不直接执行，只发指令给主机；主机执行后广播结果
 func apply_command(cmd: Dictionary) -> void:
+	# 【2026-09-28 用户要求·联机也录】记账放在"**应用**"这一层：一条指令在两端**各应用一次**
+	#   ⇒ 两端各记一次、不重不漏（原来记在玩家**提交**处 ⇒ 联机时对端的行动完全录不到）。
+	#   为什么以前不敢放这儿：`apply_command()` 也是回放的重演入口 —— 但回放时 `_rec_on = false`
+	#   （`_rec_step()` 自己会挡掉），所以安全。
+	#   `select` 是纯 UI 选中，不入流水（口径与原来一致）；敌方 AI 那一侧走 `EnemyReplay` 直接调
+	#   `_do_move/_do_attack`（不经本函数）⇒ 单机录像里仍然只有一条 `plan` 流水，不会翻倍。
+	var ct := String(cmd.get("type", ""))
+	if ct != "select":
+		_rec_step({
+			"type": ct, "u": int(cmd.get("u", -1)),
+			"to": cmd.get("to", null), "t": int(cmd.get("t", -1)), "cell": cmd.get("cell", null),
+		})
 	var u_idx := int(cmd.get("u", -1))
 	var u: Unit = units[u_idx] if u_idx >= 0 and u_idx < units.size() else null
 	match String(cmd.get("type", "")):
@@ -4014,9 +4248,10 @@ func apply_command(cmd: Dictionary) -> void:
 				_apply_bomb_cmd(u, bc)
 
 # 攻击障碍物的完整副作用（两端重演一致）：扣行动 + 伤害 + AOE/穿透技+ 收尾
-func _do_attack_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
+func _do_attack_obstacle(u: Unit, cell: Variant, for_enemy: bool = false) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
+	cell = _fix_cell(cell)   # 录像重演：格子可能是字符串（同上）
 	if not obstacles.has(cell):
 		_obstacle_noop(for_enemy)
 		return
@@ -4085,6 +4320,8 @@ func _impact_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 func _obstacle_noop(for_enemy: bool) -> void:
 	if for_enemy and not GameState.is_online:
 		action_finished.emit()
+		return
+	_replay_release()   # 回放：空动作同样要放行，别让这一步白停 3 秒
 
 # 障碍受击的收尾（2026-09-23 新增）：口径与 `_finish_attack` 完全一致 —— 敌方回放/跑批靠
 # `action_finished` 判断"这一招演完了"，而打障碍这条路径原来**从不发**这个信号，于是三方
@@ -4100,6 +4337,7 @@ func _finish_obstacle_hit(for_enemy: bool) -> void:
 			action_finished.emit()
 		return
 	_after_player_action()
+	_replay_release()   # 回放：玩家侧敲障碍也"演完就放行"
 
 # 障碍受击火花：障碍格闪现一圈白色冲击波后消散
 func _obstacle_hit_fx(cell: Vector2i) -> void:
@@ -4142,10 +4380,15 @@ func submit_attack_obstacle(unit_idx: int, cell: Vector2i) -> bool:
 
 # 单机：本地执行。联机客户端：发主机（不本地执行）。联机主机：本地执行 + 广播
 func _dispatch_player_op(cmd: Dictionary) -> bool:
+	# 【2026-09-27·录像】回放里禁止任何玩家输入落到引擎上（回放只认录像里的流水）
+	if _replay_mode or _replay_instant:
+		return false
 	# 硬门控：当前行动 == 本端可操作方"才能提交行动（防止后手方走提交路径行动）
 	# 自由部署双控:当前行动方都由本端操控
 	if GameState.active_side != _operable_side():
 		return false
+	# 【2026-09-28·联机也录】记账**不在这里**了 —— 挪到 `apply_command()`（见那里的说明）：
+	#   联机时对端的行动根本不经这条路，记在这儿会漏一半；挪到"应用"那一层，两端各记一次。
 	if not GameState.is_online:
 		apply_command(cmd)
 		return true
@@ -4260,6 +4503,12 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			if chat_txt != "":
 				peer_message.emit(chat_txt)
 			return
+		if t == "surrender":
+			# 【2026-09-28·用户要求】对端点了「认输」⇒ 本端胜（认输那句完整的话走上面的 chat 包单独送达、
+			#   照常弹气泡；这里只管结算）。已经结算过就不重复。
+			if state != State.ENDED and not GameState.match_over:
+				_apply_surrender(_my_side())
+			return
 		if t == "begin_side":
 			# 主机权威公布"当前行动回合：客户端据此同步 active_side/round 并执_begin_side
 			# 主机本地已在 _end_side 里执行过 _begin_side，忽略自己的广播（broadcast 不回环，仍防御）
@@ -4325,6 +4574,9 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 			if state != State.ENDED:
 				state = State.ENDED
 				_clear_selection()
+				# 【2026-09-28·联机也录】客户端这条路是直接 emit 的（不走 `_emit_match_result()`）
+				#   ⇒ 录像要在**这里**收尾，否则客户端那一端的录像永远不落盘。
+				_rec_finish(winner == _my_side())
 				match_result.emit(winner == _my_side())
 			return
 		# 主机：收到客户端指令 -> 执行 + 广播；客户端：收到主机广-> 重演同一条指
@@ -4336,14 +4588,18 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 
 # 数组字面[x,y] -> Vector2i
 func _v2(a) -> Vector2i:
-	if a is Array and (a as Array).size() >= 2:
-		return Vector2i(int(a[0]), int(a[1]))
-	return Vector2i.ZERO
+	# 【2026-09-27·录像】原来只吃 [x, y] 数组。录像从 JSON 读回来时格子是字符串 `"(2, 5)"`
+	#   （`Vector2i` 存进 JSON 就成字符串）⇒ 回放里 AI 计划/指令里的 `move` 会在这里报
+	#   `Cannot convert argument 2 from String to Vector2i` 而**整招作废**（探针实测：敌方走位全没生效）。
+	if a is Array or a is Vector2i or a is Vector2 or a is String:
+		return _fix_cell(a)
+	return Vector2i(-99, -99)   # 认不出的值：给个"非法格"（调用方的防御分支会拦掉），别当成 (0,0) 真走一步
 
 # ---- 移动 ----
-func _do_move(u: Unit, target_cell: Vector2i, for_enemy: bool) -> void:
+func _do_move(u: Unit, target_cell: Variant, for_enemy: bool) -> void:
 	if u == null or not is_instance_valid(u):   # 防御：单位已释放则跳过
 		return
+	target_cell = _fix_cell(target_cell)   # 录像重演：格子可能是 "(1, 3)"（见 `_v2()` 的说明）
 	# 新规则：攻击后不能再移动（攻击是本回合最后动作；含联机对端指令兜底拦截）
 	if u.attacked_this_turn:
 		return
@@ -4607,8 +4863,19 @@ func _finish_move(u: Unit, for_enemy: bool) -> void:
 	if _pending_bomb_unit == u:
 		state = State.PLACE_BOMB
 		_begin_bomb_place(u)
+		_replay_release()   # 回放：这一步到此为止（对局里这行什么都不做）
 		return
 	_continue_after_move(u)
+	_replay_release()
+
+## 【2026-09-28 用户要求·回放】"这一步演完了"的放行信号（**只在回放里发**）。
+## 对局里玩家侧的收尾从不发 `action_finished`（玩家自己点下一步，不需要谁等信号），可回放里玩家侧
+## 也是这样重演的 ⇒ 每一步只能吃满 `_replay_wait_action()` 的兜底：普通招 **3.0s**、替补 1.2s、
+## 撤下 0.4s ⇒ 用户看到"各个英雄之间间隔不一样"。补一句"演完就放行"后，玩家侧与敌方同一口径：
+## 间隔 = 该动作动画的真实时长。**对局/联机路径一个字不变**（`_replay_mode` 才发）。
+func _replay_release() -> void:
+	if _replay_mode:
+		action_finished.emit()
 
 # 移动后的通用收尾：还能攻击则继续选中该单位，否则进入回合结束判断
 func _continue_after_move(u: Unit) -> void:
@@ -4932,8 +5199,13 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 		return
 	# 攻击后本回合行动结束：不再允许"攻击后还能移动"（规则：攻击过=行动完）
 	_after_player_action()
+	_replay_release()   # 回放：玩家侧这一步也"演完就放行"（见该函数的说明）
 
 func _after_player_action() -> void:
+	# 【2026-09-27·录像回放】回放里不恢复"玩家输入态"：`_process` 一到 PLAYER_INPUT 就会给单位画
+	#   绿色"可移动"/红色"可攻击"的行动标识（回放里没有操作，那些标记都是误导；用户也报过类似的黄格问题）。
+	if _replay_mode:
+		return
 	# 替补面板已开/待落位期间：不在这里恢复玩家输入（否则面板开着还能点其它英雄行动）。
 	# 恢复交给替补落位完成后的 _resume_after_sub() 统一处理。
 	if _sub_faction != -1 or state == State.SUBSTITUTING or state == State.PLACE_SUB:
@@ -5225,9 +5497,14 @@ func _trigger_on_move(u: Unit) -> void:
 func _trigger_turn_start(u: Unit) -> bool:
 	if not u.skill_allowed():   # 沉默：无法触发回合开始技能
 		return false
+	# 【2026-09-27 修·用户报「古灵精怪变成锤头鲨后，会弹锤头字样」】飘字要按**施放者身份**取：
+	#   古灵精怪的 `on_turn_start()` 里第一件事就是 `_transform()`，它**会把 `u.hero_id` 换成变身后那个英雄**
+	#   ⇒ 返回后再读 `u.hero_id` 取到的是新形态的标签（锤头鲨 =「锤头」），而这一手明明是古灵精怪放的
+	#   （应为「变身」）。⇒ 进函数时先把身份记下来，弹字用记下的那个。
+	var fx_id := u.hero_id
 	var played := _hero(u).on_turn_start()
 	if played:
-		u.burst_fx(DataRegistry.hero_fx(u.hero_id).color, DataRegistry.hero_fx(u.hero_id).text)
+		u.burst_fx(DataRegistry.hero_fx(fx_id).color, DataRegistry.hero_fx(fx_id).text)
 	return played
 
 # 回合结束时（该阵营）的角色技
@@ -6365,7 +6642,13 @@ func _dynamic_sub_pick() -> Dictionary:
 func _try_begin_next_sub(fn: int = -1) -> void:
 	if GameState.match_over:
 		return   # 对局已结束：不再弹替补界
-	# fn 省略=本端阵营（旧调用/测试不变）；自由部署双控下可传敌方，弹"敌方替补列表"
+	if _replay_mode:
+		# 【2026-09-28 修·用户报「主动撤下的英雄还是在场上 / 撤下的人没消失」】回放里的替补
+		#   **只由录像里的 `sub` 步骤演**（见 `_apply_replay_step`）。原来这里会调
+		#   `_replay_auto_sub()` 自己再落一个 ⇒ 和那条 `sub` 步骤一起落下**两个同名额的替补**
+		#   （同一个英雄在场上出现两份、多出凭空冒出来的人）。这里只把待补名额清掉，不落位。
+		_set_pending_subs_of(fn if fn >= 0 else _my_faction(), 0)
+		return
 	var f := fn if fn >= 0 else _my_faction()
 	if _pending_subs_of(f) <= 0 or _roster_of(f).size() <= 0:
 		return
@@ -6563,10 +6846,13 @@ func _on_sub_pick(hero_id: String) -> void:
 		var gd = graves[c]
 		var my_grave: bool = typeof(gd) != TYPE_DICTIONARY or int(gd.get("fn", -1)) == _sub_faction
 		if my_grave and not pc.has(c):
-			pc[c] = Color(0.75, 0.6, 0.35, 0.8)   # 本方墓碑格：土黄
+			# 【2026-09-28·用户口径「墓碑高亮要和替补方底色一样」】原来是土黄（0.75,0.6,0.35）——
+			#   压在灰石碑上看着发灰；现在直接按**替补方**的阵营色（我方蓝 / 敌方红，与部署出生区同一组色）。
+			pc[c] = Color(0.2, 0.6, 0.95, 0.7) if _sub_faction == DataRegistry.Faction.PLAYER \
+					else Color(0.95, 0.35, 0.3, 0.65)
 	_preview_cells = pc
 	_apply_highlights()
-	action_info.emit("选择 %s 的登场位置（绿格=出生地，土黄色=本方阵亡墓碑处）。" % DataRegistry.get_hero(hero_id).display_name)
+	action_info.emit("选择 %s 的登场位置（绿格=出生地，阵营色=本方阵亡墓碑处）。" % DataRegistry.get_hero(hero_id).display_name)
 
 func _try_place_sub(cell: Vector2i) -> bool:
 	if _pending_sub == "":
@@ -6588,6 +6874,8 @@ func _try_place_sub(cell: Vector2i) -> bool:
 	var hid := _pending_sub
 	var fn := _sub_faction
 	_pending_sub = ""
+	# 【2026-09-28·联机也录】替补落位的记账挪进 `_place_sub()`（"应用"那一层）：联机时客户端不本地落位、
+	#   等主机广播才落 ⇒ 记在这儿会漏掉客户端那一端。这里不再记。
 	# 联机：主机权威。客户端只发指令（不本地执行），主机执行+广播，客户端收到再重演
 	if GameState.is_online and not GameState.is_host:
 		_apply_sub_ui_cleanup(fn)
@@ -6642,7 +6930,18 @@ func _grant_sub_aura(u: Unit) -> void:
 			_hero(s).on_ally_entered(u)
 			break
 
-func _place_sub(fn: int, hero_id: String, cell: Vector2i, clear_side: int = -1) -> void:
+func _place_sub(fn: int, hero_id: String, cell: Variant, clear_side: int = -1) -> void:
+	cell = _fix_cell(cell)   # 录像重演：格子可能是字符串（同上）
+	# 【2026-09-28·联机也录】替补落位就在这里记账（"应用"那一层）：单机/主机/客户端（收到广播重演）
+	#   三条路最后都会走到这个函数 ⇒ 各记一次、不重不漏。回放的 `_apply_replay_step()` 也调它，
+	#   但那时 `_rec_on = false`（`_rec_step()` 自己挡）⇒ 不会边回放边写录像。
+	_rec_step({ "type": "sub", "fn": fn, "hero": hero_id, "cell": [cell.x, cell.y] })
+	# 【2026-09-27】落点被占时改到出生区空位：否则新替补会**叠在原单位身上**（用户报的"覆盖"）。
+	if occupancy.has(cell):
+		var alt := _free_sub_cell_for(fn)
+		if alt.x == -99:
+			return   # 没地方落：放弃这次（名额由调用方处理，别硬塞）
+		cell = alt
 	var roster := _roster_of(fn)
 	roster.erase(hero_id)
 	var nu := _spawn_unit(hero_id, fn, cell)
@@ -6752,6 +7051,8 @@ func _resume_after_sub() -> void:
 # 主动撤下（提交入口，仅本端操作时调用）：校验后执行，联机走网令同步。
 # 可撤下的阵营 = 本端当前可操作方（自由部署双控时敌方回合也能撤下敌方英雄）。
 func _withdraw_unit(u: Unit) -> void:
+	if _replay_mode:
+		return
 	if state != State.PLAYER_INPUT:
 		return
 	if u == null or not u.alive or u.faction != _operable_faction():
@@ -6762,6 +7063,8 @@ func _withdraw_unit(u: Unit) -> void:
 	if DataRegistry.summons.has(u.hero_id):
 		action_info.emit("%s是召唤物，不能撤下。" % u.display_name)
 		return
+	# 【2026-09-28·联机也录】撤下的记账挪进 `_apply_withdraw()`（"应用"那一层）：联机时客户端只发指令、
+	#   等主机广播才真正撤下 ⇒ 记在这儿会漏掉客户端那一端。这里不再记。
 	if not GameState.is_online:
 		_apply_withdraw(u)
 		return
@@ -6782,6 +7085,9 @@ func _withdraw_unit(u: Unit) -> void:
 func _apply_withdraw(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
+	# 【2026-09-28·联机也录】撤下的记账放在"应用"这一层（单机 / 联机主机 / 客户端收到广播重演，三条路都到这儿）。
+	#   下标必须**在移除之前**取（执行后 `units.find(u)` 只会得到 -1）。
+	_rec_step({ "type": "withdraw", "fn": u.faction, "hero": u.hero_id, "u": units.find(u) })
 	# 召唤物撤下 = 直接消失，且**不给替补名额**：_on_unit_died 对召唤物会提前 return
 	# （不立碑/不计胜负/不补位），若这里继续走下面的补位逻辑就会凭空多出一个替补名额。
 	if DataRegistry.summons.has(u.hero_id):
@@ -7098,6 +7404,8 @@ func _load_nightmare_weights() -> Dictionary:
 
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
+	if _replay_mode:
+		return   # 【2026-09-27·录像】回放不跑 AI 搜索：敌方那一段照录像里的计划重演
 	var my_session := _session_id   # 记录本次回放所属会话，重开后会
 	# 【别写成 get_tree() == null】节点在"重开/切场景/退出"时会被**先移出场景树、再释放**：
 	# 夹在这一帧里的协程恢复后调 get_tree()，引擎会报 `Parameter "data.tree" is null`（node.h:559，
@@ -7127,6 +7435,10 @@ func _run_enemy_turn() -> void:
 	_ai_used = false
 	ai.abort_requested = false   # 【2026-09-23】新一次搜索：清掉上一轮可能留下的中断请求
 	_ai_worker_ai = ai
+	# 【2026-09-27·用户要求】「回放的时候是会把思考时间也复制进去吗？不需要」⇒ 搜索**开始前**打一个点，
+	#   搜索结束后把这段时长交给录制器（`_rec_step` 里那个 `_rec_think_ms`）：它把这一步算成
+	#   "上一个动作结束 → 搜索开始" ⇒ **思考多久都不进录像的时长**（回放里敌方那一回合只按招式本身的速度播）。
+	_rec_think_t0 = Time.get_ticks_msec()
 	_ai_thread = Thread.new()
 	_ai_thread.start(_enemy_ai_worker.bind(ai, snap))
 	# 主线程等待期间每帧让出（UI 照常刷新/可点击查看），直到线程完成
@@ -7186,9 +7498,19 @@ func _enemy_ai_worker(ai: RefCounted, snap: Dictionary) -> void:
 # 回放执行 AI 计划：主体在 EnemyReplay（逐招执行 + 等动画 + 节奏停顿）；
 # 这里只负责"回放期间"的登记——把引用表挂到成员上，中途落位的替补才能补登记+补一步
 # （见 _plan_enemy_late_sub）。
-func _replay_enemy_plan(plan: Array, refs: Array, my_session: int) -> void:
+func _replay_enemy_plan(plan: Array, refs: Array, my_session: int = -1) -> void:
 	if _enemy_replay == null:
 		_enemy_replay = EnemyReplay.new(self)   # 保险：异常构造（没走 _ready）时补建
+	if my_session < 0:
+		my_session = _session_id   # 【2026-09-27·录像】回放侧调用（不传会话号：就是当前这一局）
+	if _rec_on and not _replay_mode:
+		# 【2026-09-27·用户要求】把"搜索耗时"从这一段的时长里扣掉（思考时间不进回放）
+		_rec_think_ms = _rec_think_t0   # 传的是"搜索开始那一刻"的绝对时钟（见 `ReplaySession.note_step()` 的说明）
+		# 【2026-09-27·录像】敌方这一段的流水 = AI 计划里**实际执行过**的每一招。
+		# 为什么不在搜索完就记：计划会被后续事件改写 —— 中途替补落位的补手由
+		# `_plan_enemy_late_sub()` **追加到 plan 尾部**（见那里），只在执行时逐招记才不会漏。
+		_ai_plan = plan
+		_rec_step({ "type": "plan", "u": -1, "plan": plan })
 	_enemy_refs = refs
 	_enemy_plan_running = true
 	await _enemy_replay.run(plan, refs, my_session)
@@ -7214,6 +7536,982 @@ func _drain_pending_deaths() -> void:
 			return   # 场景已释放/已重开/超时：安全退出
 		await get_tree().process_frame
 
+
+# ==================== 【2026-09-27 用户要求·录像回放】录制 / 回放 ====================
+# 用户原话：「你做一个录像回放功能吧。可以暂停，可以到上下回合，可以倍速」。
+#
+# 口径：
+#   · 只录**单机**对局（联机对端是真人，本端没有对端的完整流水；自由部署/测试局不录）。
+#   · 录"每半回合一份快照 + 这一方的招式流水"：玩家侧记指令，敌方侧记 AI 计划里**实际执行过**的招
+#     （含中途替补落位 ⇒ 替补补的那一手也带上，回放时序号仍然对得上）。
+#   · 回放 = 取第 i 段快照重建局面 + 重演第 i 段流水，然后换下一段；因此**能回到任意半回合**。
+#   · 倍速 = `Engine.time_scale`（动画/停顿一起变快）；暂停 = 播放循环里等一个标志位
+#     （不用 `tree.paused`：那会把 HUD/面板一起冻住，按钮都点不动）。
+#
+# 与天梯存档的关系：复用同一份快照打包（`_snap_take()`，天梯那边是 `_ladder_snapshot()` 的壳），
+#   但两份文件互不相干（天梯 = `user://ladder.cfg`，录像 = `user://replays/*.json`）。
+
+## 录像模式入口（主菜单写入 `GameState.replay_id` 后重载 Main 场景）。
+func _begin_replay_from_store() -> void:
+	var d: Dictionary = ReplayStore.load_replay(GameState.replay_id)
+	if d.is_empty():
+		push_warning("录像读取失败：%s" % GameState.replay_id)
+		GameState.replay_id = ""
+		get_tree().change_scene_to_file("res://scenes/Menu.tscn")
+		return
+	_replay_begin(d)
+
+
+## 录像模式入口体：`_ready()` 分流进来（见 `_begin_replay_from_store()`）。
+func _replay_begin(data: Dictionary) -> void:
+	_replay_mode = true
+	_replay_ready = false   # 开场就位标志：末尾才置真（导出器要等它，见 `replay_is_ready()`）
+	_replay_data = data
+	# 回放期间 `_rec` 一律指"这份录像"（`note_step` 只往 `frames` 尾部追加，这里只读、不会被写）
+	_rec_on = false
+	_rec = ReplaySessionScript.new()
+	_rec.meta = (data.get("meta", {}) as Dictionary).duplicate(true)
+	_rec.frames = data.get("frames", [])
+	_replay_frame = 0
+	_replay_step = 0
+	_replay_skills_defer = -1
+	_replay_paused = false
+	_replay_speed = 1.0
+	Engine.time_scale = 1.0
+	GameState.is_online = false
+	GameState.dual_control = false
+	GameState.no_death_limit = false
+	GameState.ladder_mode = ""
+	GameState.arena_mode = false
+	GameState.pick_deck_in_battle = false
+	GameState.is_host = false
+	# 【2026-09-28·联机录像】按**录制者**的视角回放：联机客户端录的那份，"我方"是红方
+	#   （`_my_faction()` 会读这个；棋盘翻转也跟着它，跟当时看到的画面一致）。
+	_replay_local_faction = DataRegistry.Faction.ENEMY \
+			if String(_rec.meta.get("rec_side", "player")) == "enemy" else DataRegistry.Faction.PLAYER
+	if grid != null:
+		grid.view_flip = _replay_local_faction == DataRegistry.Faction.ENEMY
+	# 【2026-09-28】复用 `_ready()` 里已经建好的那个 HUD（原来无条件再建一个 ⇒ **两个 HUD 叠着**：
+	#   右键一次弹两张属性框、要关两次，见 `_setup_hud()` 的说明）。真没有才补建。
+	if _hud == null or not is_instance_valid(_hud):
+		_setup_hud()
+	# 【保险·2026-09-27】进回放先把屏幕上可能残留的"对局提示"清干净（回合横幅/部署面板/队伍面板）：
+	#   回放分支里 HUD 建得比 `_replay_mode` 早，那一刻 `state` 还是录像里残留的阶段态，
+	#   万一有哪条路漏了个提示出来，这里也一并抹掉 —— 观众不该在录像里看到"轮到你部署队伍"这类字。
+	if _hud != null and is_instance_valid(_hud):
+		_hud.clear_transient_ui()
+	var frames: Array = _replay_data.get("frames", [])
+	if frames.is_empty():
+		_replay_quit_now()
+		return
+	# 【2026-09-27】录像里有"部署画面"就先插成第 0 段（`side = -1` 的哨兵：面板显示"部署"）
+	var deploy_snap: Dictionary = _replay_data.get("meta", {}).get("deploy_snap", {})
+	if not deploy_snap.is_empty():
+		frames.insert(0, { "side": -1, "snap": deploy_snap, "steps": [], "clip": 0.0 })
+		_rec.frames = frames
+		_replay_data["frames"] = frames
+	# 【2026-09-28 用户报「怎么部署阶段，下面的状态栏不出现」】控制条**先建**：
+	#   原来它建在部署逐手动画之后（下面那几行）⇒ 部署那一段（横幅 2s + 6 手 ≈4s）屏幕上根本没有控制条，
+	#   "暂停/返回"都按不到。建在这里 = 一进回放就能看到、就能操作；部署动画照旧在它上面播。
+	if _replay_panel == null or not is_instance_valid(_replay_panel):
+		_replay_panel = ReplayPanelScript.new(self)
+		add_child(_replay_panel)
+	# 局面由第一段快照建：之后每一段"换段"时同样重建（`_replay_end_frame()`）
+	_restore_snapshot((frames[0] as Dictionary).get("snap", {}))
+	state = State.ANIMATING
+	if _replay_frame == 0 and int((frames[0] as Dictionary).get("side", 0)) < 0:
+		# 【2026-09-28 用户报「怎么部署都结束了，还弹出开局部署」】顺序必须是**先横幅、再动画**：
+		#   原来先 `_replay_deploy_frame()` 演完、末尾那次 `_replay_enter_frame(true)` 才弹横幅。
+		_replay_deploy_clear()   # 部署段从空盘开始（横幅那一拍里不该已经站着 6 个人）
+		await _replay_enter_frame(true)
+		await _replay_deploy_frame()
+	_refresh_board()
+	_sync_ranged_adjacent()
+	if _replay_panel != null and is_instance_valid(_replay_panel):
+		_replay_panel.refresh()   # 部署段走完：读数/按钮状态跟着刷一遍
+	# 【用户 2026-09-27 报「刚点进录像，蓝方就动起来了」】进来先**停在开头**：先亮"蓝方/红方回合"横幅，
+	#   横幅整条演完（`REPLAY_BANNER_LEAD`）才把播放权交给主循环 —— 不这样的话横幅还在屏幕上、
+	#   头一招已经跟着演掉了（循环是一起就开跑的）。
+	_replay_paused = true
+	_replay_start()
+	if not (int((frames[0] as Dictionary).get("side", 0)) < 0):
+		await _replay_enter_frame(true)   # 没有"部署段"时才在这里报开段横幅（有部署段已在上面报过）
+		# 第 0 段同样是"回合开始那套在快照之后"（老录像没有部署段）⇒ 演出也在这里补跑一遍
+		await _replay_side_begin(0)
+	_replay_paused = false   # 横幅读完了：允许往下播（想停就按控制条的「暂停」）
+	# 【2026-09-28 用户报「部署阶段点击导出，部署上人还是会乱」】开场到此才算**就位**：
+	#   上面那段（含部署逐手动画）跑完之前点「导出」，导出那边会 seek 回第 0 段 ⇒ 和还在跑的
+	#   开场动画抢盘面（两趟同时上人）。导出器现在会先等这个标志（见 `ReplayExporter.run()`）。
+	_replay_ready = true
+	if _CONSOLE_AI_LOG:
+		print("[录像] 开始回放：%d 段 · %d 招 · %.1f 秒" % [
+			frames.size(), int((_replay_data.get("meta", {}) as Dictionary).get("steps", 0)),
+			float((_replay_data.get("meta", {}) as Dictionary).get("dur", 0.0))])
+
+# ---- 播放控制（控制条按钮调这几个）----
+
+func replay_set_paused(p: bool) -> void:
+	_replay_paused = p
+	if _replay_panel != null and is_instance_valid(_replay_panel):
+		_replay_panel.refresh()
+
+## 【2026-09-28 用户要求】控制条「导出」按钮：把这一条录像导出成视频（抓帧 → 有 ffmpeg 就合成 mp4）。
+## 导出期间：**不自动回列表**（见 `_replay_auto_back()`）、控制条由导出器自己藏起来、倍速归 1×。
+func replay_export_video() -> void:
+	if not _replay_mode or _replay_exporting:
+		return   # 已在导出中：忽略重复点击
+	_replay_exporting = true
+	_replay_export = ReplayExporterScript.new(self)
+	var mp4: String = await _replay_export.run(GameState.replay_id)
+	var ex = _replay_export
+	_replay_export = null
+	_replay_exporting = false
+	if _hud != null and is_instance_valid(_hud):
+		if mp4 != "":
+			_hud._show_turn_banner("已导出视频：%s" % mp4.get_file(), Color(0.5, 0.95, 0.6), 3.0)
+			log_message.emit("录像已导出：%s" % mp4)
+		elif int(ex.frame_count()) > 0:
+			_hud._show_turn_banner("已导出 %d 帧的 avi" % ex.frame_count(), Color(1.0, 0.85, 0.5), 3.0)
+			log_message.emit("已导出 avi（没找到 ffmpeg 所以没转 mp4）：%s" % ex.out_dir())
+		else:
+			_hud._show_turn_banner("导出已取消", Color(1.0, 0.85, 0.5), 2.0)
+
+## 导出中？（控制条按钮据此禁用/忽略；`_replay_auto_back()` 也据此不切场景）
+func replay_is_exporting() -> bool:
+	return _replay_exporting
+
+## 回放开场就位了没（见 `_replay_begin()` 末尾）：导出器要先等它，别和开场那段部署动画抢盘面。
+func replay_is_ready() -> bool:
+	return _replay_ready
+
+func replay_set_speed(s: float) -> void:
+	# 【2026-09-28 用户要求】倍速档位加 **0.5×**（循环 1× → 2× → 4× → 0.5× → 1×）⇒ 下限从 1.0 放到 0.5。
+	_replay_speed = clampf(s, 0.5, 8.0)
+	Engine.time_scale = _replay_speed
+	if _replay_panel != null and is_instance_valid(_replay_panel):
+		_replay_panel.refresh()
+
+## 跳到第 i 段（半回合）：越界自动钳到 [0, 段数-1]。
+## 只登记请求，真正的推进由 `_replay_loop()` 做（避免按钮与循环同时往同一段里塞步骤）。
+## `pause` = 跳完在"那一回合开头"停住（默认；用户点了「上/下回合」就是要看那一回合，
+## 不该马上又播过去）。点「继续」后从这一段的头一招接着演。
+func replay_seek_frame(i: int, pause: bool = true) -> void:
+	if not _replay_mode or _replay_frame_count() <= 0:
+		return
+	_replay_seek_pause = pause
+	_replay_seek_to = clampi(i, 0, _replay_frame_count() - 1)
+	_replay_skills_defer = -1   # 跳段 = 换代：本段还没跑的"顺延回合开始技"作废（新落点会自己重跑一遍）
+	# 主循环演到末段就收工了 ⇒ 这时点跳段必须把循环叫起来（否则请求没人处理，画面卡在末段）
+	if not _replay_loop_running:
+		_replay_paused = false
+		_replay_start()
+
+func replay_frame_count() -> int:
+	return _replay_frame_count()
+
+func replay_side_of(i: int) -> int:
+	if _rec == null:
+		return GameState.SIDE_PLAYER
+	return _rec.side_of(i)
+
+## 第 i 段是第几回合（回合号不随快照存：按"玩家侧的段数"推——`_first_side` 决定谁先手）。
+func replay_round_of(i: int) -> int:
+	if _rec == null:
+		return 1
+	var mine := 0
+	for k in range(clampi(i + 1, 0, _rec.frame_count())):
+		if _rec.side_of(k) == GameState.SIDE_PLAYER:
+			mine += 1
+	if _first_side == GameState.SIDE_PLAYER:
+		return maxi(mine, 1)
+	return maxi(mine + (1 if i >= 0 and _rec.side_of(i) == GameState.SIDE_ENEMY else 0), 1)
+
+## 返回主菜单（退出回放）。
+func replay_quit() -> void:
+	_replay_quit_now()
+
+func _replay_quit_now() -> void:
+	Engine.time_scale = 1.0
+	_replay_mode = false
+	_replay_loop_running = false
+	_replay_skills_defer = -1
+	_rec = null
+	_replay_data = {}
+	GameState.replay_id = ""
+	# 【2026-09-28 用户要求】「结束后要回到录像列表界面」：不管是从末段自动退、还是点控制条「返回」，
+	#   回主菜单后**直接打开录像列表**（`Menu._ready()` 读这个一次性标志），方便接着看下一条。
+	GameState.replay_back_to_list = true
+	GameState.reset_online()
+	get_tree().change_scene_to_file("res://scenes/Menu.tscn")
+
+func _replay_frame_count() -> int:
+	if _rec == null:
+		return 0
+	return _rec.frame_count()
+
+# ---- 回放主循环 ----
+
+func _replay_start() -> void:
+	if _replay_loop_running:
+		return
+	_replay_loop_running = true
+	_replay_loop()
+
+## 回放主循环：**唯一**的推进者（按钮只写标志位/请求，不自己抢步骤）。
+## 执行顺序：跳段请求 → 暂停 → 越界收工 → 本段没招了就换段 → 演一招。
+## "先提示哪方回合、再开始动"由 `_replay_enter_frame()` 里的 `await` 保证（它内部先亮横幅、再停一拍）。
+func _replay_loop() -> void:
+	while _replay_mode and is_inside_tree():
+		if _replay_seeking:
+			await get_tree().process_frame   # 正在快进重演：等它落地（它自己会归零这个标志）
+			continue
+		if _replay_seek_to >= 0:
+			var t := _replay_seek_to
+			_replay_seek_to = -1
+			_replay_seeking = true
+			_replay_hold_seq += 1   # 换代：还可能挂着的那次"停一拍"当场作废
+			if t > _replay_frame:
+				await _replay_fast_forward(t)   # 往后：就地快进
+			else:
+				await _replay_rewind(t)         # 往前：回到第 0 段重建后再快进
+			_replay_seeking = false
+			# 【2026-09-28】跳到**部署段**（第 0 段）走与"进回放"同一条路：先清人（别停在"全员已站好"
+			#   的静态画面上），报完横幅再逐手重演（见 `_replay_deploy_clear()`）。
+			var at_deploy := _replay_frame == 0 and int((_frames()[0] as Dictionary).get("side", 0)) < 0
+			if at_deploy:
+				_replay_deploy_clear()
+			_replay_paused = true                # 报横幅那一拍先停住（"先提示、再开打"）
+			await _replay_enter_frame(true)      # `force`：跳段落地这一次一定要报（不受"同一段不重复报"影响）
+			if at_deploy:
+				await _replay_deploy_frame()
+			_replay_paused = _replay_seek_pause   # 看完那一拍：按用户点的是「看」还是「继续」定
+			_replay_seek_done = _replay_frame   # 外部确认"我这次跳段落地了"（整趟同帧跑完，看不见中间态）
+			_replay_seek_seq += 1
+			if _replay_panel != null and is_instance_valid(_replay_panel):
+				_replay_panel.refresh()
+			continue
+		if _replay_paused:
+			await get_tree().process_frame
+			continue
+		if _replay_frame < 0 or _replay_frame >= _replay_frame_count():
+			break   # 越界（末段也演完了）：停下等玩家点"返回/重看"（不自动退出）
+		var steps: Array = (_frames()[_replay_frame] as Dictionary).get("steps", [])
+		if _replay_step >= steps.size():
+			if _replay_frame + 1 > _replay_frame_count() - 1:
+				# 【2026-09-28 用户报「主动撤下 3 个人后，没有提示哪方胜，就卡住了」】末段演完**必须报结果**：
+				#   原来这里直接 break ⇒ 回放停在终局画面上，谁也不说谁赢了（看着就是"卡住"）。
+				_replay_show_result()
+				# 【2026-09-28 用户要求】「结束后要回到录像列表界面」：结果横幅读完 → 自动回录像列表。
+				await _replay_auto_back()
+				break   # 兜底：`_replay_auto_back()` 若因异常没能切场景，也照旧停在终局画面
+			# 【2026-09-28 用户要求】观察时间**挪到"回合开始"那一边**了（见 `_replay_end_frame()`）：
+			#   一方演完就**立刻**换段，不再在这里停 —— 原来停在这儿，观众看到的是"上一段已经打完的
+			#   静止画面"，而现在停在新一段的开局局面上，才是"看清局势再动手"。
+			await _replay_end_frame()   # 换下一段：重建局面 → 观察 1.5s → 报横幅（内部推进 `_replay_frame`）
+			if _replay_panel != null and is_instance_valid(_replay_panel):
+				_replay_panel.refresh()
+			continue
+		var st: Dictionary = steps[_replay_step]
+		_replay_step += 1
+		await _apply_replay_step(st)
+		await _replay_wait_action(_replay_wait_cap_ms)
+		# 【2026-09-28 用户要求】「我方的间隔时间拉长点，现在太快了」：玩家侧演完再补一拍
+		#   （只在玩家侧；敌方那一段内部有自己的节奏，见 `EnemyReplay` 的 0.7/0.25/0.3）。
+		if replay_side_of(_replay_frame) == GameState.SIDE_PLAYER:
+			await _gap_plain(REPLAY_PLAYER_GAP)
+	_replay_loop_running = false
+
+## "观察时间"秒数（用户 2026-09-28 报「一方行动完之后怎么过了挺久才换到另一方」）：
+## **固定 `REPLAY_REST`（1.5s）** —— 原来取"这一段自己的实测时长"，玩家/敌方想得久，回放就真等那么久。
+func _rest_seconds() -> float:
+	return REPLAY_REST
+
+## 观察时间的等待本体：**跟随暂停**（用户按暂停就停在那一刻看局势），跳段/换代时当场作废。
+func _replay_rest(sec: float) -> void:
+	var seq := _replay_hold_seq
+	var t := 0.0
+	while t < sec:
+		if not _replay_mode or not is_inside_tree() or _replay_seeking or seq != _replay_hold_seq:
+			return
+		if not _replay_paused:
+			t += get_process_delta_time()
+		await get_tree().process_frame
+
+## 演完一段 → 进下一段 → 重建局面 → **观察 1.5s** → 报"蓝方/红方回合"。
+## ⚠️ 【2026-09-28 用户报「一方行动完之后要等个几秒钟才切换」】这里**不再按 `clip` 停一拍**：
+##   原来换段前要等 `REPLAY_REST`(1.5s) **＋ `clip`**（= 那一方在真实对局里行动花了多久，
+##   用户那条录像 F0 的 `clip` 就有 6.07s）⇒ 换段总共要等 3~8 秒。`clip` 那一拍已整段删除。
+## ⚠️ 【2026-09-28 用户要求】「观察时间请放在回合开始」⇒ 1.5s 从"上一段演完之后"挪到**这里**：
+##   先换段、把新一方的开局局面摆好，停 1.5s 让观众看清局势，再报横幅、再开打。
+func _replay_end_frame() -> void:
+	if _replay_frame_count() <= 0 or _replay_frame < 0 or _replay_frame >= _replay_frame_count():
+		return
+	if not _replay_mode or not is_inside_tree():
+		return
+	# 本段"顺延的回合开始技"（实战顺序：先补位 → 后技能；回放里补位由本段步骤演出来）：
+	# 跑在这里 = 本段步骤演完之后、下一段快照之前 —— 与实战的先后完全一致。
+	if _replay_skills_defer >= 0:
+		var dside := _replay_skills_defer
+		_replay_skills_defer = -1
+		await _run_side_skills(dside)
+		if not _replay_mode or not is_inside_tree():
+			return
+	_replay_frame += 1
+	_replay_step = 0
+	if _replay_frame > _replay_frame_count() - 1:
+		# 末段之后：钳回末段，然后收工。
+		# 【2026-09-27 用户报「被蓝方回合字体盖住 / 黄字一闪」】这里**不再报横幅** ——
+		#   报一次会立刻被同一个 CanvasLayer 里的新标签盖住，看着就是"黄字一闪"，纯粹是脏帧。
+		_replay_frame = _replay_frame_count() - 1
+		return
+	_restore_snapshot((_frames()[_replay_frame] as Dictionary).get("snap", {}))
+	_replay_banner_frame = -1   # 局面已换 ⇒ 上一次的横幅记录作废（下面一定会报新的）
+	# 【2026-09-28 用户要求】回合开始的观察时间：新局势摆好 → 停 1.5s（跟随暂停、跳段作废）→ 再报横幅
+	await _replay_rest(_rest_seconds())
+	if not _replay_mode or not is_inside_tree():
+		return
+	await _replay_enter_frame()
+	# 【2026-09-28 修·用户报「傀儡师的移动动画没了。我要所有的演出都和实战一样」】
+	#   实战里"毒伤 tick / 补位 / 变身还原 / 各英雄回合开始技"全都发生在**本段快照之后**
+	#   （快照在 `_begin_side()` 开头、这套在其后）⇒ 录像里没有对应指令步骤，回放必须原样重跑一遍
+	#   （见 `_replay_side_begin()`）。放在横幅之后 = 与实战同一顺序（提示 → 演出）。
+	await _replay_side_begin(_replay_frame)
+
+## 【2026-09-28·用户要求「我要所有的演出都和实战一样」】回放里补跑"实战中发生在快照之后"的那一段：
+##   清账/还原变身（`_side_begin_stage()`）+ 毒伤 tick + 补位 + 金矿账 + 各英雄回合开始技（`_run_side_skills()`）。
+##   傀儡师回合开始把敌人推走就是这一段（`hero_05` 的 `on_turn_start()` → `_random_step()` 带 0.35s 补间），
+##   原来回放整段跳过 ⇒ 那些人在下一段快照里**瞬移**，用户看到的就是"移动动画没了"。
+##   随机数不用重掷：快照连 `rng_state` 一起存了，恢复到的是**技能动手之前**的那个状态 ⇒ 重跑出来的结果与当时逐比特相同。
+## 实战顺序是「手动补位 → 回合开始技」；回放里补位由录像步骤演（在本段之内），
+##   所以那种情况把技能段记到 `_replay_skills_defer`，等这一段步骤演完再跑（见 `_replay_end_frame()`）。
+func _replay_side_begin(idx: int) -> void:
+	if not _replay_mode or not is_inside_tree():
+		return
+	var side := replay_side_of(idx)
+	if side < 0:
+		return   # 部署段：没有"回合开始的账"
+	var fn := side_faction(side)
+	var defer := _is_manual_sub_faction(fn) and _pending_subs_of(fn) > 0 and _roster_of(fn).size() > 0
+	await _side_begin_stage(side)
+	if not _replay_mode or not is_inside_tree():
+		return
+	if defer:
+		_replay_skills_defer = side
+		return
+	await _run_side_skills(side)
+
+## 部署段开场第一步：**先把人清掉**（部署段的快照是"部署完成那一刻"的，6 个人都在）。
+## 【2026-09-28 用户报「开局部署阶段，所有英雄都会出现，然后消失，接着进入轮流部署」】——
+##   进来先 `_restore_snapshot()` 摆一遍、横幅那 2 秒里全员亮相，随后 `_replay_deploy_frame()` 又清空重演
+##   ⇒ 观感就是"全员出现 → 消失 → 再逐手上人"。现在建完局面（回合数/账本/障碍照建）就立刻清人，
+##   部署段全程只有"一手一手冒出来"。（点「开局 / 上回合」跳回部署段时同样先清。）
+## 立即撤掉一个单位（回放部署段"同格换人"用）：与 `_clear_all_units()` 同一套 —— **必须 `free()`**，
+## 不能 `queue_free()`（排队释放要等一帧，旧棋子会和新棋子叠在一起）。
+func _remove_unit_now(u: Unit) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	occupancy.erase(u.cell)
+	units.erase(u)
+	if selected == u:
+		selected = null
+	u.free()
+
+## 【2026-09-28·用户报「录像的部署段，部署英雄的格子蓝色底色会更深一点」】回放部署段也把出生区色罩铺上
+## （与实机部署同一套配色），并且**有棋子的格不铺** ⇒ 整片出生区是同一种蓝，站着英雄的格子不会再多出一层。
+## 为什么不能直接用实机那条路：实机是 `_preview_cells` → `_apply_highlights()`，而回放里那个函数**强制清空高亮**
+## ⇒ 回放必须走 `BoardView.deploy_zone` 这条独立通道（`_replay_deploy_frame()` 每上一人就重铺一次）。
+func _show_replay_deploy_zone() -> void:
+	if board_view == null:
+		return
+	var pc := {}
+	for c in _spawn_cells(DataRegistry.Faction.PLAYER):
+		if not occupancy.has(c):
+			pc[c] = Color(0.2, 0.6, 0.95, 0.55)
+	for c in _spawn_cells(DataRegistry.Faction.ENEMY):
+		if not occupancy.has(c):
+			pc[c] = Color(0.95, 0.35, 0.3, 0.5)
+	board_view.set_deploy_zone(pc)
+
+func _replay_deploy_clear() -> void:
+	# 【2026-09-28 用户报「在部署阶段点击录像，部署人物会乱掉」】清场 = 换代：把**还在跑的那趟逐手动画**
+	#   当场作废（`_replay_deploy_frame()` 每手都核对这个号）。不加这一手的话：玩家在逐手上人途中点
+	#   「开局/上回合」⇒ 新的那趟开始上人，**旧的那趟也没停**（它的中断条件 `_replay_seek_to >= 0`
+	#   在请求被消费后就不再成立）⇒ 两趟同时 `_spawn_unit()` ⇒ 人物重复/错位。
+	_replay_deploy_seq += 1
+	_clear_all_units()
+	if board_view != null:
+		board_view.set_deploy_zone({})   # 色罩由 `_replay_deploy_frame()` 每上一人重铺（见该函数）
+	_refresh_board()
+
+## 【用户 2026-09-27】部署那一段的动画：清空盘面，然后按录像里记下的顺序**逐手**让英雄冒出来
+## （`_deploy_spawn_at()` 记的 `deploy_steps`）。没有逐手明细（老录像）就停在"部署完成"的静态画面上。
+func _replay_deploy_frame() -> void:
+	var seq := _replay_deploy_seq   # 【2026-09-28】本趟的"代"：清场/重演时 +1 ⇒ 旧的这趟当场作废
+	var seek_seq := _replay_seek_seq   # 跳段落地的序号：跳走了就别再往下演
+	var steps: Array = (_replay_data.get("meta", {}) as Dictionary).get("deploy_steps", [])
+	if steps.is_empty():
+		return
+	# ⚠️ 【2026-09-28 用户报「怎么红方先部署的，在录像里是蓝方先上」】**照录像真实顺序演**。
+	#   这里曾经把两方强行穿插成"我方先"（当时是为了掩盖"玩家那 3 手没录上"的 bug，见
+	#   `_try_place_deploy()` 的修复）⇒ 真实先手是红方时也会演成蓝方先上。现在记账两方都全，
+	#   录像里记的顺序就是当时的真实顺序 ⇒ 一个字都不重排。
+	_clear_all_units()
+	_refresh_board()
+	_show_replay_deploy_zone()   # 出生区色罩铺上（有棋子的格不铺，见该函数说明）
+	# 【2026-09-28 修·用户报「8:02 那条录像，怎么部署阶段上了个血锁，后面又变成百变」】
+	#   串局的根因在**录制侧**（`_rec_note_deploy_step()` 把上一局的部署手塞回了常驻缓冲，下一次
+	#   `_rec_begin()` 又整批灌进下一局 —— 已修）。但**已经录坏的老录像里那一手还在**：它在部署段
+	#   先占住格子（随后被"同格换人"那条撤掉换成真身，观感就是"先上个血锁、后面又变成百变"）。
+	#   这里做两道**同时成立**才跳过的闸门（单靠"英雄不在名单里"太凶：卡组名单不全时会吞掉整个一侧）：
+	#   ① 这一手用的格子**后面还有别人接手**（串局残留的确定特征：真身紧随其后、同格）
+	#   ② 这个英雄**两边卡组名单里都没有**（名单全空 = 老录像没记卡组 ⇒ 一律不启用本闸门）
+	var ok_decks := {}
+	for pair in [[DataRegistry.Faction.PLAYER, "player_deck", GameState.SIDE_PLAYER],
+			[DataRegistry.Faction.ENEMY, "enemy_deck", GameState.SIDE_ENEMY]]:
+		var ids: Array = ((_replay_data.get("meta", {}) as Dictionary).get(String(pair[1]), []) as Array).duplicate()
+		if ids.is_empty():
+			ids = ReplaySessionScript.deck_from_data(_replay_data, int(pair[2]))   # 列表那套兜底：从快照里取
+		ok_decks[int(pair[0])] = ids
+	var all_ids: Array = []
+	for v in ok_decks.values():
+		for h in (v as Array):
+			if not all_ids.has(h):
+				all_ids.append(h)
+	var cell_reused := {}
+	for i in steps.size():
+		var c0 := str((steps[i] as Dictionary).get("cell"))
+		for j in range(i + 1, steps.size()):
+			if str((steps[j] as Dictionary).get("cell")) == c0:
+				cell_reused[i] = true
+				break
+	var si := -1
+	for st in steps:
+		si += 1
+		# 中断条件：退出回放 / 又收到跳段请求 / 已不在部署段 / 已被新的一趟接管 ⇒ 这一手不再往下演。
+		# ⚠️ 原来只判了前两条 ⇒ 玩家在逐手上人途中点「下回合」（跳段请求被消费掉之后第一条就不成立了）
+		#   会变成"跳段在演别的段、这趟还在往盘面上塞人" ⇒ 用户报的「部署人物会乱掉」。
+		if not _replay_mode or _replay_seek_to >= 0 or not is_inside_tree() \
+				or seq != _replay_deploy_seq or seek_seq != _replay_seek_seq or _replay_frame != 0:
+			return
+		var d: Dictionary = st
+		var hid := String(d.get("hero", ""))
+		var fn := int(d.get("fn", DataRegistry.Faction.PLAYER))
+		if not all_ids.is_empty() and cell_reused.has(si) and not all_ids.has(hid):
+			continue   # 不属于本局（老录像的串局残留）：不演，格子留给真身
+		if DataRegistry.get_hero(hid) == null:
+			continue
+		var dcell := _v2(d.get("cell"))
+		# 【2026-09-28·用户报·部署段显示的是"被换掉的那个英雄"】同一格后面又记了一手（现场换人重放）⇒
+		#   **以后记的为准**：先把旧的撤掉再上新的。原来这里遇到"格已占"直接 `continue` ⇒ 那一段会一直
+		#   显示先记的那个（用户那条录像 `rp1790553809` 里 `(0,1)` 先记 hero_41、后记 hero_28 ⇒ 演成 hero_41）。
+		if occupancy.has(dcell):
+			_remove_unit_now(occupancy[dcell])
+		_spawn_unit(hid, fn, dcell)
+		_show_replay_deploy_zone()   # 刚站上一人 ⇒ 那一格收掉色罩（整片出生区保持同一种蓝）
+		# 一手一停（跟随暂停；跳段时当场停）。换边那次多停一拍 —— 用户报过"一方一下就把 3 个出了"：
+		# 0.25s/手 + 0.35s 上场动画挤在一起，观感就是"一串"。现在 0.5s/手、换边 0.9s。
+		var nxt_fn := fn
+		var k := steps.find(st)
+		if k + 1 < steps.size():
+			nxt_fn = int((steps[k + 1] as Dictionary).get("fn", fn))
+		await _gap_real(0.9 if nxt_fn != fn else 0.5)   # 固定墙钟：倍速只加快战斗，不压缩部署逐手
+	_replay_step = 0
+	_refresh_board()
+	_show_replay_deploy_zone()
+	_notify_team()
+
+## 进段：**同步**亮出"蓝方/红方回合"横幅（调用方一返回就能读到它），再停 `REPLAY_BANNER_LEAD` 秒
+## 才允许演这一段的头一招 —— 用户 2026-09-27 要求：「录像先提示哪方回合，然后再开始动」。
+## 用"逐帧累计 dt×time_scale"停：暂停时停住不推进、倍速时跟着快（与 `_gap_plain` 同一把尺）。
+## 换代令牌（`_replay_hold_seq`）保证跳段时旧的那次等待当场作废，不会拖住新的一段。
+func _replay_enter_frame(force: bool = false) -> void:
+	if not force and _replay_banner_frame == _replay_frame:
+		return   # 这一段已经报过（同一段不重复报）
+	_replay_banner_frame = _replay_frame
+	_replay_hold_seq += 1
+	var seq := _replay_hold_seq
+	GameState.round_number = replay_round_of(_replay_frame)
+	var side := replay_side_of(_replay_frame)
+	var txt := ""
+	if side < 0:
+		# 【2026-09-28 用户要求】去掉"共 N 手"；改成**先手方**提示（用户报「开局的时候没提示哪方先手」）
+		txt = "开局部署 · %s先手" % ("蓝方" if _first_side == GameState.SIDE_PLAYER else "红方")
+	else:
+		txt = _turn_banner_text(side, true)   # 正常回合：蓝方/红方回合
+	var col := Color(1.0, 0.85, 0.45) if side < 0 else \
+			(Color(0.45, 0.7, 1.0) if side == GameState.SIDE_PLAYER else Color(1.0, 0.42, 0.38))
+	if _hud != null and is_instance_valid(_hud):
+		_hud.refresh_round_label()   # 顶栏跟着换段走（回放里没有信号驱动它）
+		_hud._show_turn_banner(txt, col, REPLAY_BANNER_HOLD)
+	# 这一拍里**不放行播放**（`_replay_paused` 保持调用方给的值：跳段落地那次就是 true）⇒ 横幅能在没有招式
+	# 干扰的情况下被读完。计时用**真实秒**（与 `_gap_plain` 同一把尺）：倍速只该加快"招式演出"，
+	# 不该把"读提示"的时间一起压掉。
+	var t := 0.0
+	while t < REPLAY_BANNER_LEAD:
+		if not _replay_mode or not is_inside_tree() or seq != _replay_hold_seq or _replay_seeking:
+			return   # 已换代（跳段/换段）/已退出：这一拍作废
+		await get_tree().process_frame
+		t += get_process_delta_time()
+
+## 快进重演到第 target 段（往后：就地演完当前段剩余步骤，逐段推进）。
+## 为什么要重演而不是"直接摆快照"：快照只在"半回合开始"落一份（见文件头），要精确到段只能重演；
+## 把 `Engine.time_scale` 拉高后演出照常播、墙钟极短（跑批用的也是同一招）。
+func _replay_fast_forward(target: int) -> void:
+	var keep := Engine.time_scale
+	Engine.time_scale = maxf(keep, 60.0)
+	while _replay_frame < target and _replay_mode and is_inside_tree():
+		var steps: Array = (_frames()[_replay_frame] as Dictionary).get("steps", [])
+		if _replay_step >= steps.size():
+			await _replay_end_frame()
+			continue
+		var st: Dictionary = steps[_replay_step]
+		_replay_step += 1
+		await _apply_replay_step(st)
+		await _replay_wait_action(_replay_wait_cap_ms)
+	Engine.time_scale = keep
+
+## 倒回第 target 段（往前：只能从第 0 段重建再快进过去）
+func _replay_rewind(target: int) -> void:
+	_restore_snapshot((_frames()[0] as Dictionary).get("snap", {}))
+	_replay_frame = 0
+	_replay_step = 0
+	await _replay_fast_forward(target)
+
+func _apply_replay_step(st: Dictionary) -> void:
+	if _obs_target > 0:
+		_obs_n += 1   # 【探针观测】见 `_obs_target` 的说明（记在这里 ⇒ 主循环与快进重演都算上）
+	var ty := String(st.get("type", ""))
+	_replay_wait_cap_ms = 3000   # 每步重置兜底上限（下面按步骤类型收紧）
+	# 主动撤下：从录像里重演（按英雄 id 找当前场上那个单位 —— 快照重建后下标可能对不上）
+	if ty == "withdraw":
+		var wh := String(st.get("hero", ""))
+		for u in units:
+			if u != null and is_instance_valid(u) and u.alive and u.hero_id == wh:
+				_replay_withdraw(u)
+				break
+		# 撤下没有任何演出 ⇒ 别让 `_replay_wait_action()` 白等 3 秒兜底；只留一小拍让人看清"人没了"。
+		_replay_skip_wait = true
+		await _gap_plain(REPLAY_WITHDRAW_GAP)
+		return
+	# `plan` 是协程（EnemyReplay.run 的 await 必须由这里接住）⇒ 单独走，不能塞进下面的 instant 闸门
+	if ty == "plan":
+		var refs: Array = units.duplicate()
+		await _replay_enemy_plan(st.get("plan", []), refs)
+		return
+	_replay_instant = true     # 重演期间不许任何玩家输入挤进引擎（闸门见 `_dispatch_player_op()`）
+	match ty:
+		"sub":
+			_place_sub(int(st.get("fn", 0)), String(st.get("hero", "")), _v2(st.get("cell")), -1)
+			_replay_wait_cap_ms = REPLAY_SUB_WAIT_CAP   # 落位只有小演出 ⇒ 兜底别给满 3 秒
+		_:
+			apply_command(st)
+	_replay_instant = false
+
+## 回放里的主动撤下：**只把这个人抬下场**（不立碑、不发动阵亡技），替补流程一概不碰 ——
+## 【2026-09-28 修·用户报「主动撤下的人还是在场上」】原来这里调 `_apply_withdraw()`，而那条路
+##   会**连开两次替补**（`_on_unit_died()` 里一次 + 撤下收尾再算一次，因为回放里 `state` 不是
+##   `SUBSTITUTING` 拦不住第二次）⇒ 一撤下就凭空多出两个替补（场上同一个英雄两份），而录像里
+##   真记着的那条 `sub` 步骤又落一次 ⇒ 越演越乱、"被撤下的人还站在场上"。
+##   现在：撤下=纯离场；替补**只由录像里的 `sub` 步骤演**（见 `_try_begin_next_sub()` 的回放分支）。
+func _replay_withdraw(u: Unit) -> void:
+	if u == null or not is_instance_valid(u) or not u.alive:
+		return
+	log_message.emit("%s 被主动撤下（视为阵亡）。" % u.display_name)
+	_charge_pending.erase(u)
+	if occupancy.get(u.cell) == u:
+		occupancy.erase(u.cell)
+	if selected == u:
+		_clear_selection()
+	u.alive = false
+	_hero(u).on_withdrawn()   # 离场清理（风语者收移动光环…）：与实战同一钩子，**不发动**阵亡技能
+	var fn := u.faction
+	units.erase(u)
+	if not DataRegistry.summons.has(u.hero_id):
+		if fn == DataRegistry.Faction.PLAYER:
+			player_dead += 1
+		else:
+			enemy_dead += 1
+	u.call_deferred("queue_free")
+	_refresh_board()
+
+## 【2026-09-28 用户报「主动撤下 3 个人后，没有提示哪方胜，就卡住了」】回放演完报一次本局结果：
+## 录像里 `meta.win` = "本端（蓝方）赢没赢"（`ReplaySession.end()` 记的）⇒ 报「蓝方获胜 / 红方获胜」。
+## 只报这一条横幅：回放**不判胜负**（`_check_win()` 的回放分支直接返回 false）⇒ 不弹结算面板、不记账。
+## 每跑到一次末段末尾都会报（`上回合` 退回再看一遍也照报），所以不需要"只报一次"的标志位。
+func _replay_show_result() -> void:
+	if _replay_panel == null:
+		return   # 回放还没建起来（异常路径）：不报
+	var blue_win := bool((_rec.meta if _rec != null else {}).get("win", false))
+	var col := Color(0.45, 0.7, 1.0) if blue_win else Color(1.0, 0.42, 0.38)
+	var txt := "蓝方获胜" if blue_win else "红方获胜"
+	if _hud != null and is_instance_valid(_hud):
+		# 终局提示停得比回合横幅久一点（读完结果再淡出）：2 × `REPLAY_BANNER_HOLD` = 3.0s
+		_hud._show_turn_banner(txt, col, REPLAY_BANNER_HOLD * 2.0)
+
+## 【2026-09-28 用户要求】「结束后要回到录像列表界面」：末段演完报完结果横幅，等它读完就**自动回录像列表**。
+## 用 `_replay_rest()` 那套等待（跟随暂停：观众按了暂停就先别把人踢走），跳段/退出时当场作废。
+## 中途退出仍走控制条「返回」—— 它同样回列表（`_replay_quit_now()` 会置 `GameState.replay_back_to_list`）。
+func _replay_auto_back() -> void:
+	if _replay_exporting:
+		return   # 【2026-09-28】导出视频中：**别切场景**（切了导出就断了），让它停在终局画面
+	await _replay_rest(REPLAY_BANNER_HOLD * 2.0 + 0.5)
+	if not _replay_mode or not is_inside_tree():
+		return
+	_replay_quit_now()
+
+## 等这一招的演出播完（与敌方回放同一口径：信号 + 3 秒兜底，避免异常路径卡死回放）。
+## 指挥类步骤（select/换段/撤下）没有演出 ⇒ 立即返回（见 `_replay_skip_wait`）。
+func _replay_wait_action(cap_ms: int = 3000) -> void:
+	if _replay_skip_wait:
+		# 【2026-09-28 用户报「主动撤下 3 个人后…就卡住了」】撤下没有演出可等 ⇒ 原来白等满 3 秒兜底窗口，
+		#   连撤 3 个人就是 3 段"什么都没发生"的停顿，看着像卡死。
+		_replay_skip_wait = false
+		return
+	var mine := _session_id
+	var done := [false]
+	action_finished.connect(func(): done[0] = true, CONNECT_ONE_SHOT)
+	# 兜底窗口按倍速折算（60× 快进 ⇒ ≈50ms）：否则"快进"每一步都要真实等满 3 秒，比常速还慢
+	var limit := Time.get_ticks_msec() + int(maxf(float(cap_ms) / maxf(Engine.time_scale, 0.001), 30.0))
+	while not done[0] and Time.get_ticks_msec() < limit:
+		if not _replay_mode or mine != _session_id or not is_inside_tree():
+			return
+		if _replay_paused:
+			await get_tree().process_frame
+			continue
+		await get_tree().process_frame
+
+## 回放里的换段停顿（不跟随暂停：见 `_replay_end_frame()` 的说明）。
+## 停顿用的"回放秒"：`get_process_delta_time()` 已经含 `Engine.time_scale`（引擎口径），
+## 所以**这里不能再乘一次** —— 原来的 `× time_scale` 让实际停顿时长变成 设定值 ÷ 倍速²，
+## 4× 倍速下只剩 1/16（部署 6 手 0.25 秒全冲过去，看着就是"一方一下把 3 个都出了"）。
+func _gap_plain(sec: float) -> void:
+	var t := 0.0
+	while t < sec:
+		if not _replay_mode or not is_inside_tree():
+			return
+		await get_tree().process_frame
+		t += get_process_delta_time()
+
+## 真实墙钟停顿（**不受倍速影响**）：部署逐手动作用它 —— "看清每一手"比"跟着倍速"重要。
+## 用 `Time.get_ticks_msec()`（系统毫秒，与 `Engine.time_scale` 无关）算截止时刻；暂停时也照常计时
+## （部署那一拍不该被暂停卡住）。`Engine.get_process_delta_time()` 是**静态**函数、读不到引擎的
+## real-delta（解析期就报 `Static function ... not found`），所以这里用系统时钟。
+func _gap_real(sec: float) -> void:
+	var deadline := Time.get_ticks_msec() + int(maxf(sec, 0.0) * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if not _replay_mode or not is_inside_tree():
+			return
+		await get_tree().process_frame
+
+## 回放里的停顿（跟随暂停：暂停时不推进）。
+func _gap_replay(sec: float) -> void:
+	var t := 0.0
+	while t < sec:
+		if not _replay_mode or not is_inside_tree():
+			return
+		await get_tree().process_frame
+		if not _replay_paused:
+			t += get_process_delta_time()
+
+func _frames() -> Array:
+	return _replay_data.get("frames", [])
+
+# ---- 快照（打包与恢复与天梯同一份实现，见 `_ladder_snapshot()` / `_ladder_restore()`）----
+
+func _snap_take(side: int) -> Dictionary:
+	var us: Array = []
+	var idx := {}   # Unit -> 快照下标（附体绑定按下标存，避免依赖 Unit.id 唯一）
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		idx[u] = us.size()
+		us.append({ "vars": _dump_script_vars(u), "bhex": _dump_script_vars(u.behavior) })
+	var possess: Array = []
+	for t in _possess_links.keys():
+		var c = _possess_links[t]
+		if t is Unit and c is Unit and idx.has(t) and idx.has(c):
+			possess.append([int(idx[t]), int(idx[c])])
+	return {
+		"side": side, "round": GameState.round_number,
+		"first_side": _first_side, "deploy_side": _deploy_side, "deck_pick_match": _deck_pick_match,
+		"arena_mode": GameState.arena_mode, "no_death_limit": GameState.no_death_limit,
+		"ai_difficulty": GameState.ai_difficulty,
+		"player_deck": GameState.player_deck.duplicate(), "enemy_deck": GameState.enemy_deck.duplicate(),
+		"enemy_recipe": GameState.enemy_recipe.duplicate(true),
+		"player_pool": player_pool.duplicate(), "enemy_pool": enemy_pool.duplicate(),
+		"player_deployed": player_deployed.duplicate(), "enemy_deployed": enemy_deployed.duplicate(),
+		"player_roster": player_roster.duplicate(), "enemy_roster": enemy_roster.duplicate(),
+		"player_dead": player_dead, "enemy_dead": enemy_dead,
+		"pending_player_subs": _pending_player_subs, "pending_enemy_sub": _pending_enemy_sub,
+		"pending_sub": _pending_sub, "gold_tick_round": _gold_tick_round,
+		"opening_items_spawned": _opening_items_spawned,
+		"deploy_done": _deploy_done(), "deploy_left": deploy_budget_left,
+		# rng.state 是 64 位无符号整数，JSON 直接存会**溢出失真**（存档走 cfg 没这问题，录像要走 JSON）
+		# ⇒ 存十进制字符串，恢复时再 `int()` 回来（`var` 是 Variant，天梯那边读到的仍是数字）。
+		"rng_state": str(rng.state),
+		"units": us,
+		"bombs": bombs.duplicate(), "obstacles": obstacles.duplicate(), "buff_items": buff_items.duplicate(),
+		"buff_owner": buff_owner.duplicate(), "gift_hidden": _gift_hidden_cells.duplicate(),
+		"graves": graves.duplicate(), "gold_left": gold_left.duplicate(), "possess": possess,
+	}
+
+## 按快照重建局面（与 `_ladder_restore()` 同一套：先建节点、再把字段盖回去）。
+## 回放用；天梯续档走 `_ladder_restore()`（它在恢复后再跑 `_begin_side()` 续上回合）。
+func _restore_snapshot(snap: Dictionary) -> void:
+	if snap.is_empty():
+		return
+	# 0) 回放要"换段重建"：先把上一段的单位节点清掉（天梯续档时场上本来就是空的 ⇒ 空转）
+	_clear_all_units()
+	# 1) 棋盘实体（**原地改**：`board_view` 拿的是这几个字典的引用，换对象它就不跟着画了）
+	#    ⚠️ 录像是从 JSON 读回来的：`Vector2i` 会被写成 `"(1, 4)"` 这样的字符串 ⇒ 必须归一化回格子
+	#    （天梯走 cfg，读到的是 Vector2i 本身 ⇒ `_fix_cell()` 原样返回，行为不变）。
+	_fill_cells(bombs, _snap_cells(snap.get("bombs", {})))
+	_fill_cells(obstacles, _snap_cells(snap.get("obstacles", {})))
+	_fill_cells(buff_items, _snap_cells(snap.get("buff_items", {})))
+	_fill_cells(buff_owner, _snap_cells(snap.get("buff_owner", {})))
+	_fill_cells(_gift_hidden_cells, _snap_cells(snap.get("gift_hidden", {})))
+	_fill_cells(graves, _snap_cells(snap.get("graves", {})))
+	_fill_cells(gold_left, _snap_cells(snap.get("gold_left", {})))
+	# 2) 账本
+	player_pool = (snap.get("player_pool", []) as Array).duplicate()
+	enemy_pool = (snap.get("enemy_pool", []) as Array).duplicate()
+	player_deployed = (snap.get("player_deployed", []) as Array).duplicate()
+	enemy_deployed = (snap.get("enemy_deployed", []) as Array).duplicate()
+	player_roster = (snap.get("player_roster", []) as Array).duplicate()
+	enemy_roster = (snap.get("enemy_roster", []) as Array).duplicate()
+	player_dead = int(snap.get("player_dead", 0))
+	enemy_dead = int(snap.get("enemy_dead", 0))
+	_pending_player_subs = int(snap.get("pending_player_subs", 0))
+	_pending_enemy_sub = int(snap.get("pending_enemy_sub", 0))
+	_pending_sub = String(snap.get("pending_sub", ""))
+	_gold_tick_round = int(snap.get("gold_tick_round", -1))
+	_opening_items_spawned = bool(snap.get("opening_items_spawned", true))
+	deploy_budget_left = float(snap.get("deploy_left", DEPLOY_BUDGET_SECONDS))
+	_first_side = int(snap.get("first_side", GameState.SIDE_PLAYER))
+	_deploy_side = int(snap.get("deploy_side", GameState.SIDE_PLAYER))
+	_deck_pick_match = bool(snap.get("deck_pick_match", false))
+	_first_side_decided = true
+	rng.state = int(str(snap.get("rng_state", rng.state)))
+	# 3) GameState（卡组/配方/回合/行动方）
+	GameState.set_decks(snap.get("player_deck", []), snap.get("enemy_deck", []))
+	GameState.enemy_recipe = (snap.get("enemy_recipe", {}) as Dictionary).duplicate(true)   # set_decks 会清它 ⇒ 放在后面
+	GameState.arena_mode = bool(snap.get("arena_mode", false))
+	GameState.no_death_limit = bool(snap.get("no_death_limit", false))
+	GameState.ai_difficulty = int(snap.get("ai_difficulty", GameState.ai_difficulty))
+	GameState.round_number = int(snap.get("round", 1))
+	GameState.active_side = int(snap.get("side", GameState.SIDE_PLAYER))
+	GameState.match_over = false
+	GameState.match_running = true
+	# 4) 单位：先按快照的（英雄, 阵营, 格）造节点，再把字段盖回去
+	var recs: Array = snap.get("units", [])
+	var spawned: Array = []
+	for rec in recs:
+		var d: Dictionary = (rec as Dictionary).get("vars", {})
+		var u := _spawn_unit_raw(String(d.get("hero_id", "")), int(d.get("faction", 0)), _fix_cell(d.get("cell", Vector2i.ZERO)))
+		if u == null:
+			spawned.append(null)
+			continue
+		_apply_script_vars(u, d)
+		_apply_script_vars(u.behavior, (rec as Dictionary).get("bhex", {}))
+		u.alive = true
+		u.position = board_view.cell_world_center(u.cell)
+		u.refresh_stats()
+		spawned.append(u)
+	# 5) 附体绑定（按快照下标找回）
+	_possess_links.clear()
+	for pr in (snap.get("possess", []) as Array):
+		var pair: Array = pr
+		if pair.size() != 2:
+			continue
+		var i0 := int(pair[0])
+		var i1 := int(pair[1])
+		if i0 >= 0 and i1 >= 0 and i0 < spawned.size() and i1 < spawned.size():
+			var t = spawned[i0]
+			var c = spawned[i1]
+			if t != null and c != null:
+				_possess_links[t] = c
+	# 【录像回放】状态归位：快照里的 `state` 不存，但**进回放那一刻 Battle 自己的 state 还停在
+	#   "建 HUD 时看到的值"**（`_replay_begin()` 里 `_setup_hud()` 在最前）⇒ 一律收回到 IDLE，
+	#   免得部署面板/部署提示那一套被"残留的部署态"叫起来。
+	if _replay_mode:
+		state = State.IDLE
+	if board_view != null:
+		board_view.set_deploy_zone({})   # 换段：部署段那层出生区色罩收掉（回放只有部署段铺它）
+	_refresh_board()
+	_notify_team()
+
+## 清空场上单位节点（换段重建前调用）。只清节点/占位，不动地形字典。
+func _clear_all_units() -> void:
+	# ⚠️ 必须**立即** `free()`，不能 `queue_free()`：换段重建是"清空 → 同帧造新棋子"，
+	#   排队释放要等一帧 ⇒ 旧棋子还挂在屏幕上，与新棋子叠在一起（用户报"后手一次掏出 3 个"就是这个：
+	#   实测 `enter frame=2` 那一刻 `units.size()` 冲到 12）。这里都在引擎主循环里调用（非信号/物理回调），
+	#   立即释放安全。
+	for u in units:
+		var lu: Unit = u   # ⚠️ 必须显式标 `Unit`：`Array` 自带 `free()`，写 `u.free()` 会被解析成
+		if lu != null and is_instance_valid(lu):
+			lu.free()      #    `Array.free()`（什么都不做、也不报错）—— 实测就是这个把旧棋子全留下了
+	units.clear()
+	occupancy.clear()
+	selected = null
+	_preview_cells = {}
+	_charge_pending.clear()
+	_possess_links.clear()
+
+# ---- 录制（对局侧）----
+
+## 开局登记一份录像（模式/难度/卡组/先手）：`reset_match()` 与 `_ready()` 各调一次。
+func _rec_begin() -> void:
+	# 【2026-09-28 用户要求】联机**也录**了（原来是 `or GameState.is_online` 直接跳过）：
+	#   联机两端都会逐条应用同一串指令 ⇒ 本端拿得到完整流水（`apply_command()` 那一层记账）。
+	#   仍不录的只有：回放自己（`_replay_mode`）。
+	if _replay_mode:
+		_rec = null
+		_rec_on = false
+		_rec_id = ""
+		return
+	# 【2026-09-27 真因】部署逐手账本 `_deploy_steps_buf` 是**常驻**的（铺场可能早于本函数）：
+	#   这里把已经落过的那些手**灌进新录像**，再清空缓冲（后续每一手由 `_rec_note_deploy_step()` 继续记）。
+	var carried: Array = _deploy_steps_buf.duplicate(true)
+	_deploy_steps_buf = []
+	_rec = ReplaySessionScript.new()
+	_rec_on = true
+	_rec_id = ""
+	_rec.begin({
+		"ts": int(Time.get_unix_time_from_system()),
+		"mode": _rec_mode_name(), "diff": GameState.ai_difficulty,
+		"player_deck": GameState.player_deck.duplicate(), "enemy_deck": GameState.enemy_deck.duplicate(),
+		"first_side": GameState.SIDE_PLAYER, "rounds": 1, "win": false, "dur": 0.0,
+		"deploy_steps": carried,
+		# 【2026-09-28·联机】录制者是哪一方：联机客户端录的那份要按红方视角回放（否则"我方"会显示成蓝方）
+		"rec_side": "player" if _my_faction() == DataRegistry.Faction.PLAYER else "enemy",
+		"rec_online": GameState.is_online,
+	})
+
+## 录像里的模式名（列表里显示；口径与主菜单入口一致）。
+func _rec_mode_name() -> String:
+	# ⚠️ 自由部署（测试）**优先判**：它靠"预置放置"进局，而自由部署页可以带着天梯/竞技场标记进来
+	#   （`Menu._go_test_deploy()` 只清 `ladder_mode`）⇒ 若把天梯判在前面，沙箱局会被记成"天梯普通"。
+	if GameState.player_placement.size() > 0 or GameState.enemy_placement.size() > 0:
+		return "自由部署"
+	# 【2026-09-28·联机】联机局单独标一个名字（列表里一眼看得出来）
+	if GameState.is_online:
+		return "联机"
+	if GameState.ladder_mode == "normal":
+		return "天梯普通"
+	if GameState.ladder_mode == "arena":
+		return "天梯竞技场"
+	if GameState.arena_mode:
+		return "竞技场"
+	if _deck_pick_match or GameState.pick_deck_in_battle:
+		return "普通模式"
+	return "对局"
+
+## 【段 = 半回合】开新段：side 即将行动。必须在"回合开始技能/毒伤"**之前**取快照 ——
+## 回放时这一段的步骤正是"从这一刻起"的流水（敌方段的步骤由 AI 计划给出，见 `EnemyReplay.run`）。
+func _rec_frame(side: int) -> void:
+	if not _rec_on or _rec == null or _replay_mode:
+		return
+	_rec_think_ms = 0
+	_rec.meta["first_side"] = _first_side
+	_rec.meta["rounds"] = maxi(int(_rec.meta.get("rounds", 1)), GameState.round_number)
+	_rec.meta["mode"] = _rec_mode_name()   # 模式/卡组都在**部署完成**时才定下来 ⇒ 每次开段刷新一遍
+	_rec.meta["diff"] = GameState.ai_difficulty
+	_rec.meta["player_deck"] = GameState.player_deck.duplicate()
+	_rec.meta["enemy_deck"] = GameState.enemy_deck.duplicate()
+	_rec.begin_frame(side, _snap_take(side))
+
+## 部署完成那一刻的画面（用户 2026-09-27：「录像里也没有部署阶段时候的画面」）。
+## 存进 `meta.deploy_snap`；回放时 `_replay_begin()` 把它插成第 0 段先演一遍。
+func _rec_note_deploy(snap: Dictionary) -> void:
+	if not _rec_on or _rec == null or _replay_mode:
+		return
+	_rec.meta["deploy_snap"] = snap
+
+## 部署的**逐手明细**（用户 2026-09-27：「有部署提示，但没有部署动画」⇒ 要按顺序重演上人过程）：
+## 每上一手记一条 `{fn, hero, cell}`，回放时按这个顺序逐手演"人从地里冒出来"。
+## ⚠️ 回放那一步用的是 `_spawn_unit()`（带场效果 + 登场技），与录像里"当时真的上了一手"同一条路。
+func _rec_note_deploy_step(faction: int, hero_id: String, cell: Vector2i) -> void:
+	if _replay_mode:
+		return   # 回放自己重演部署不算"录制"
+	if hero_id == "" or cell.x == -99:
+		return
+	# 【2026-09-27 真因】`_rec_begin()` 在 `_ready()` 里晚于开局铺场 ⇒ **先手方（若是我方）那 3 手
+	#   在录像登记之前就落完了**，直接写 `_rec.meta` 会丢（实测用户那条录像只记到敌方的 3 手）。
+	#   ⇒ 还没开录时先落进常驻缓冲区 `_deploy_steps_buf`，`_rec_begin()` 时再整批灌进录像。
+	# 【2026-09-28 修·用户报「8:02 那条录像，部署阶段先上了个血锁，后面又变成百变」】**串局真因**：
+	#   原来**两个分支都会走** —— 已开录时既写进本条录像，**又顺手塞回缓冲区**；而缓冲区在下一次
+	#   `_rec_begin()` 里会被整批灌进**下一局**的 `deploy_steps` ⇒ 上一局的部署手跑到下一局录像的开头。
+	#   表现：回放部署段先冒出上一局的英雄（血锁 @(0,1)）占住格子，随后这一局的真身（古灵精怪 @(0,1)）
+	#   因"格子已被占"整手跳过 ⇒ 观感就是"先上个血锁，下一段又变成百变"。
+	#   ⇒ 已开录就**只写本条录像**（缓冲只服务"开录之前那几手"）。两条路各自只记一次，不重不漏。
+	var rec := { "fn": faction, "hero": hero_id, "cell": [cell.x, cell.y] }
+	if _rec_on and _rec != null:
+		var arr: Array = _rec.meta.get("deploy_steps", [])
+		arr.append(rec)
+		_rec.meta["deploy_steps"] = arr
+		return
+	_deploy_steps_buf.append(rec)
+
+## 记一招（玩家指令 / 替补落位 / 敌方实际执行的一步）。
+func _rec_step(step: Dictionary) -> void:
+	if not _rec_on or _rec == null or _replay_mode:
+		return
+	# 部署/选人阶段不算"招式"（那时 `_rec` 还没登记，走到这里说明是自由部署路径的早期调用）
+	if _rec.frame_count() <= 0:
+		return
+	if not _rec.has_frames():
+		return
+	_rec.note_step(step, _rec_think_ms)
+	_rec_think_ms = 0
+
+## 结算收尾：录像落盘（`ReplayStore`），供主菜单"录像回放"读。
+func _rec_finish(win: bool) -> void:
+	if not _rec_on or _rec == null or _replay_mode:
+		return
+	_rec_on = false
+	if not _rec.has_frames():
+		_rec = null
+		return
+	_rec.meta["rounds"] = maxi(int(_rec.meta.get("rounds", 1)), GameState.round_number)
+	var data: Dictionary = _rec.end(win)
+	# 【2026-09-28 用户报「录像列表里不显示对方卡组」】索引里的"某一方阵容"兜底：
+	#   敌方走**配方/队伍池**时 `GameState.enemy_deck` 全程为空（配方是部署时才从池子里挑人）
+	#   ⇒ 索引里 `enemy` 空、列表那一列就空着。这里用**第 0 段快照里实际用过的英雄**补上。
+	var meta: Dictionary = data.get("meta", {})
+	for pair in [[GameState.SIDE_PLAYER, "player_deck"], [GameState.SIDE_ENEMY, "enemy_deck"]]:
+		if (meta.get(String(pair[1]), []) as Array).size() > 0:
+			continue
+		var got: Array = ReplaySessionScript.deck_from_data(data, int(pair[0]))
+		if not got.is_empty():
+			meta[String(pair[1])] = got
+	var id: String = ReplayStore.save(data)
+	_rec_id = id
+	_rec = null
+	if id != "" and _CONSOLE_AI_LOG:
+		print("[录像] 已保存：%s（%d 段 · %d 招）" % [id, int((data.get("meta", {}) as Dictionary).get("frames", 0)),
+			int((data.get("meta", {}) as Dictionary).get("steps", 0))])
+
+## 【2026-09-28 用户报「天梯中途退出重进后，录像从重进那里开始」】把"已经录到这一刻的录像"打包进天梯快照
+## （`_ladder_snapshot()` 调）⇒ 续档时 `_rec_resume()` 接回来，整局仍是一条**从开局演起**的完整录像。
+## 只是内存里的一份深拷贝，不落盘：中途退出**不会**在录像列表里留下半截条目（落盘仍在结算的 `_rec_finish()`）。
+func _rec_pack() -> Dictionary:
+	if not _rec_on or _rec == null or _replay_mode:
+		return {}
+	if not _rec.has_frames() and (_rec.meta.get("deploy_steps", []) as Array).is_empty():
+		return {}   # 一段没开、一手部署也没落：没有可接的东西
+	return { "meta": _rec.meta.duplicate(true), "frames": _rec.frames.duplicate(true) }
+
+## 续档时把上面那份接回录制器（`_ladder_restore()` 调）：meta/frames 全接上，之后 `_rec_frame()` /
+## `_rec_step()` 照常往下记 ⇒ 同一条录像里有退出前和退出后的全部段落。
+func _rec_resume(data: Dictionary) -> void:
+	if data.is_empty() or not _rec_on or _rec == null:
+		return
+	_rec.resume(data)
+	# 部署手已经在接回来的 meta 里了 ⇒ 清空常驻缓冲，免得下一次 `_rec_begin()` 又把它们灌第二遍
+	# （"接着部署"路径随后落的每一手仍会正常追加到 `_rec.meta["deploy_steps"]`）。
+	_deploy_steps_buf = []
+	if _CONSOLE_AI_LOG:
+		print("[录像] 续档接上：%d 段" % _rec.frame_count())
 
 # ==================== 【2026-09-24 用户要求·天梯模式】中局存档 / 恢复 ====================
 # 口径（用户原话）：「天梯模式可以保存退出，退出后再进来，载入退出前回合开始状态，而不是对局重新开始；
@@ -7257,45 +8555,15 @@ func _ladder_on_match_result(local_win: bool) -> void:
 			Stats.current_streak(key), Stats.best_streak(key)])
 
 # ---- 快照 ----
+# 【2026-09-27】打包主体搬到 `_snap_take(side)`：**录像的每一段快照与天梯中局存档从此是同一份实现**
+#   （原来只此一处；录像也要按段存快照 ⇒ 就地抽出来共用，天梯这边补一个 `ver` 字段的壳）。
 func _ladder_snapshot(side: int) -> Dictionary:
-	var us: Array = []
-	var idx := {}   # Unit -> 快照下标（附体绑定按下标存，避免依赖 Unit.id 唯一）
-	for u in units:
-		if u == null or not is_instance_valid(u) or not u.alive:
-			continue
-		idx[u] = us.size()
-		us.append({
-			"vars": _dump_script_vars(u),
-			"bhex": _dump_script_vars(u.behavior),
-		})
-	var possess: Array = []
-	for t in _possess_links.keys():
-		var c = _possess_links[t]
-		if t is Unit and c is Unit and idx.has(t) and idx.has(c):
-			possess.append([int(idx[t]), int(idx[c])])
-	return {
-		"ver": LADDER_SNAP_VER, "side": side, "round": GameState.round_number,
-		"first_side": _first_side, "deploy_side": _deploy_side, "deck_pick_match": _deck_pick_match,
-		"arena_mode": GameState.arena_mode, "no_death_limit": GameState.no_death_limit,
-		"ai_difficulty": GameState.ai_difficulty,
-		"player_deck": GameState.player_deck.duplicate(), "enemy_deck": GameState.enemy_deck.duplicate(),
-		"enemy_recipe": GameState.enemy_recipe.duplicate(true),
-		"player_pool": player_pool.duplicate(), "enemy_pool": enemy_pool.duplicate(),
-		"player_deployed": player_deployed.duplicate(), "enemy_deployed": enemy_deployed.duplicate(),
-		"player_roster": player_roster.duplicate(), "enemy_roster": enemy_roster.duplicate(),
-		"player_dead": player_dead, "enemy_dead": enemy_dead,
-		"pending_player_subs": _pending_player_subs, "pending_enemy_sub": _pending_enemy_sub,
-		"pending_sub": _pending_sub, "gold_tick_round": _gold_tick_round,
-		"opening_items_spawned": _opening_items_spawned,
-		# 【2026-09-25 修】这一局部署完没完 + 部署读秒还剩多少：没完的档续档时**接着部署**（见 `_resume_deploy_phase()`），
-		#   不能再当成"回合开始"直接开打（用户实测：部署期退出再进来，人没选够就直接开打了）。
-		"deploy_done": _deploy_done(), "deploy_left": deploy_budget_left,
-		"rng_state": rng.state,
-		"units": us,
-		"bombs": bombs.duplicate(), "obstacles": obstacles.duplicate(), "buff_items": buff_items.duplicate(),
-		"buff_owner": buff_owner.duplicate(), "gift_hidden": _gift_hidden_cells.duplicate(),
-		"graves": graves.duplicate(), "gold_left": gold_left.duplicate(), "possess": possess,
-	}
+	var s := _snap_take(side)
+	s["ver"] = LADDER_SNAP_VER
+	# 【2026-09-28 用户报「天梯中途退出重进后，录像从重进那里开始」】快照顺带带上"到这一刻为止的录像"
+	#   ⇒ 续档时接回去接着录，整局仍是一条**从开局演起**的完整录像（落盘仍在结算那一步）。
+	s["rec"] = _rec_pack()
+	return s
 
 # 通用字段转储：只取"脚本自己声明的成员变量"里**可序列化**的那几种类型（对象/节点引用一律跳过）。
 # ⇒ 52 个英雄脚本里只有 3 个带对象级状态（锤头鲨 `bonus` / 风语者 `_aura_given` / 负墟 `_last_frame`），
@@ -7331,6 +8599,31 @@ func _apply_script_vars(obj, d) -> void:
 	for nm in (d as Dictionary).keys():
 		obj.set(String(nm), (d as Dictionary)[nm])
 
+## 录像的快照来自 JSON：格子从 `Vector2i` 变成 `"(1, 4)"`。这里把"键"和"值"都归一化回格子。
+## 天梯存档走 cfg（存的是 Vector2i）⇒ `_fix_cell()` 原样返回，这条路径行为逐位不变。
+func _snap_cells(src) -> Dictionary:
+	var out: Dictionary = {}
+	if not (src is Dictionary):
+		return out
+	for k in (src as Dictionary).keys():
+		out[_fix_cell(k)] = (src as Dictionary)[k]
+	return out
+
+func _fix_cell(v) -> Vector2i:
+	if v is Vector2i:
+		return v
+	if v is Vector2:
+		return Vector2i(int((v as Vector2).x), int((v as Vector2).y))
+	if v is Array and (v as Array).size() >= 2:
+		return Vector2i(int((v as Array)[0]), int((v as Array)[1]))
+	if v is String:
+		var t := (v as String).strip_edges()
+		t = t.trim_prefix("(").trim_suffix(")")
+		var parts := t.split(",")
+		if parts.size() >= 2:
+			return Vector2i(int(parts[0].strip_edges()), int(parts[1].strip_edges()))
+	return Vector2i.ZERO
+
 func _fill_cells(dst: Dictionary, src) -> void:
 	dst.clear()
 	if src is Dictionary:
@@ -7364,72 +8657,12 @@ func _ladder_restore() -> void:
 	var snap: Dictionary = LadderStore.snapshot()
 	if snap.is_empty():
 		return
-	# 1) 棋盘实体（**原地改**：`board_view` 拿的是这几个字典的引用，换对象它就不跟着画了）
-	_fill_cells(bombs, snap.get("bombs", {}))
-	_fill_cells(obstacles, snap.get("obstacles", {}))
-	_fill_cells(buff_items, snap.get("buff_items", {}))
-	_fill_cells(buff_owner, snap.get("buff_owner", {}))
-	_fill_cells(_gift_hidden_cells, snap.get("gift_hidden", {}))
-	_fill_cells(graves, snap.get("graves", {}))
-	_fill_cells(gold_left, snap.get("gold_left", {}))
-	# 2) 账本
-	player_pool = (snap.get("player_pool", []) as Array).duplicate()
-	enemy_pool = (snap.get("enemy_pool", []) as Array).duplicate()
-	player_deployed = (snap.get("player_deployed", []) as Array).duplicate()
-	enemy_deployed = (snap.get("enemy_deployed", []) as Array).duplicate()
-	player_roster = (snap.get("player_roster", []) as Array).duplicate()
-	enemy_roster = (snap.get("enemy_roster", []) as Array).duplicate()
-	player_dead = int(snap.get("player_dead", 0))
-	enemy_dead = int(snap.get("enemy_dead", 0))
-	_pending_player_subs = int(snap.get("pending_player_subs", 0))
-	_pending_enemy_sub = int(snap.get("pending_enemy_sub", 0))
-	_pending_sub = String(snap.get("pending_sub", ""))
-	_gold_tick_round = int(snap.get("gold_tick_round", -1))
-	_opening_items_spawned = bool(snap.get("opening_items_spawned", true))
-	deploy_budget_left = float(snap.get("deploy_left", DEPLOY_BUDGET_SECONDS))
-	_first_side = int(snap.get("first_side", GameState.SIDE_PLAYER))
-	_deploy_side = int(snap.get("deploy_side", GameState.SIDE_PLAYER))
-	_deck_pick_match = bool(snap.get("deck_pick_match", false))
-	_first_side_decided = true
-	rng.state = int(snap.get("rng_state", rng.state))
-	# 3) GameState（卡组/配方/回合/行动方）—— 后续的替补挑人也要读它，所以必须一起恢复
-	GameState.set_decks(snap.get("player_deck", []), snap.get("enemy_deck", []))
-	GameState.enemy_recipe = (snap.get("enemy_recipe", {}) as Dictionary).duplicate(true)   # set_decks 会清它 ⇒ 放在后面
-	GameState.arena_mode = bool(snap.get("arena_mode", false))
-	GameState.no_death_limit = bool(snap.get("no_death_limit", false))
-	GameState.ai_difficulty = int(snap.get("ai_difficulty", LadderStore.LOCKED_DIFFICULTY))
-	GameState.round_number = int(snap.get("round", 1))
-	GameState.active_side = int(snap.get("side", GameState.SIDE_PLAYER))
-	GameState.match_over = false
-	GameState.match_running = true
-	# 4) 单位：先按快照的（英雄, 阵营, 格）造节点，再把字段盖回去
-	var recs: Array = snap.get("units", [])
-	var spawned: Array = []
-	for rec in recs:
-		var d: Dictionary = (rec as Dictionary).get("vars", {})
-		var u := _spawn_unit_raw(String(d.get("hero_id", "")), int(d.get("faction", 0)), d.get("cell", Vector2i.ZERO))
-		if u == null:
-			spawned.append(null)
-			continue
-		_apply_script_vars(u, d)
-		_apply_script_vars(u.behavior, (rec as Dictionary).get("bhex", {}))
-		u.alive = true
-		u.position = board_view.cell_world_center(u.cell)
-		u.refresh_stats()
-		spawned.append(u)
-	# 5) 附体绑定（按快照下标找回）
-	_possess_links.clear()
-	for pr in (snap.get("possess", []) as Array):
-		var pair: Array = pr
-		if pair.size() != 2:
-			continue
-		var i0 := int(pair[0])
-		var i1 := int(pair[1])
-		if i0 >= 0 and i1 >= 0 and i0 < spawned.size() and i1 < spawned.size():
-			var t = spawned[i0]
-			var c = spawned[i1]
-			if t != null and c != null:
-				_possess_links[t] = c
+	# 0) 【2026-09-28 用户报「天梯中途退出重进后，录像从重进那里开始」】先把存档里带着的"半截录像"
+	#    接回录制器（`_rec_begin()` 已经在 `_ready()` 里建好了新录制器）⇒ 后面接着录，整局一条完整录像。
+	_rec_resume(snap.get("rec", {}))
+	# 1~5 步（棋盘实体 / 账本 / GameState / 单位 / 附体绑定）搬进 `_restore_snapshot(snap)`：
+	#   【2026-09-27】录像回放的"换段重建"要的是同一套 ⇒ 抽出去共用，这里只留天梯自己的续档收尾。
+	_restore_snapshot(snap)
 	# 6) 【2026-09-25 修】这一局**还没部署完**（在部署阶段退出，可能只上了 1~2 人）⇒ 不能当"回合开始"续：
 	#    那样会带着没选够的队伍把部署阶段整个跳过、直接开打（用户实测报的就是这个）。
 	#    改成**接着部署**：快照里已上阵的人已经照原格还原，卡池/已上阵名单/读秒也都在 ⇒ 剩下的照常选。

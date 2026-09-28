@@ -8298,22 +8298,29 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		total = _displace_total_max(sim, t, cell, out)
 	return total
 
-## 【2026-09-26·用户拍板】"按对手实际有的 AoE 形状罚扎堆" —— **第一批只做两种**
-##   （用户从四选一里挑的；红帽自爆 / 炸弹人地雷同族暂缓）：
+## 【2026-09-26·用户拍板】"按对手实际有的 AoE 形状罚扎堆" —— 目前三种**形状**：
 ##   ① **白游侠 hero_10 散射**（`heroes/hero_10_白游侠.gd:16`，`on_attack` 与 `on_attack_dead` 都触发）：
 ##      对**被打目标的同阵营相邻单位**（`Battle._same_side_adjacent` = `grid.distance == 1`、**不查视线**）
 ##      各造成一次 `unit.effective_atk()` 并附带[冰冻]。
 ##   ② **长剑 hero_18 剑气穿透**（`heroes/hero_18_长剑.gd:43` → `Battle._pierce_line()`）：
 ##      沿"攻击者 → 目标"的**轴向**、从目标**身后第一格**一路穿到出界，路径上**所有敌人**各吃一次
 ##      `unit.effective_atk()`（**穿墙穿人、不挡后面**）。
-## 两条都是"**它打我队友，我因为站在旁边 / 身后而多挨的那一下**"⇒ 给本单位记一笔 rider。
+##   ③ 【2026-09-27·用户报「AI 不会处理玩家的红帽」】**对手红帽 hero_40 的扑街自爆**
+##      （`heroes/hero_40_红帽.gd:6` `on_died`）：对**相邻的所有单位**（含她自己的队友）造成 **13 点**伤害。
+##      ⚠️ 触发门 = 她死的那一刻**未被[沉默]/[眩晕]**（`:8` 的 `skill_allowed` 同款）。
+##      ⚠️ **只在"她这一回合真的可能死"时才算**（`_redcap_blast_threat()` = 她的血 ≤ **我方对她的最大单击**）
+##         —— 否则"她把血打满时旁边站个人也吃 13"就太离谱。这条正是用户报的病：
+##         AI 会把她"哐哐打到危险线下面"，而旧账里**给她送自爆窗口这件事一分不花**。
+## 三条都是"**它出手/倒下时，我因为站位而多挨的那一下**"⇒ 给本单位记一笔 rider。
+##   ④ **炸弹人 hero_35 地雷** 仍未做（同族暂缓）。
 ## ⚠️ 每个对手每回合只出一次手 ⇒ 多个"候选主目标"之间取 **max**、不叠加。
 ## ⚠️ 伤害侧照抄真实调用 `take_damage(effective_atk(), ignore_shield=false, is_attack=false, …)`：
 ##   **盾能挡**（交给 `inst` 那条统一裁决）· **重伤 +1** · **坚固不减**（传 `is_attack = false`）· 塔盾照减。
 ##   `effective_atk()` 是**满额攻击力**（不吃"远程被贴身压 1"）⇒ 用 `_echo_atk_now()`，
 ##   再加敌方回合开始那道团队 +1（与 ② 同款）。
 ## ⚠️ 未计价：散射附带的 [冰冻] 状态（状态不进这把尺子，要单独做）。
-## 开销：场上没有这两只时第一圈就 `continue` ⇒ 零额外开销；判据全在 O(单位数²) 的小圈里。
+## 开销：场上没有这三种时第一圈就 `continue` ⇒ 零额外开销；判据全在 O(单位数²) 的小圈里
+##   （红帽那条多一次 `_redcap_blast_threat()`，内部先用几何距离预筛再问 `_threat_can_hit()`）。
 func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 	var out: Array = []
 	var budget := 0
@@ -8322,9 +8329,20 @@ func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		if a == null or not a.alive or a.fn == t.fn:
 			continue
 		if a.silenced or a.stunned:
-			continue                       # 真实 `_trigger_on_attack` 要过 `skill_allowed()`
-		var kind := 1 if a.hero_id == "hero_10" else (2 if a.hero_id == "hero_18" else 0)
+			continue                       # 真实 `_trigger_on_attack` / `on_died` 都要过 `skill_allowed()`
+		var kind := 1 if a.hero_id == "hero_10" else (2 if a.hero_id == "hero_18" else (3 if a.hero_id == "hero_40" else 0))
 		if kind == 0:
+			continue
+		# ③ 对手红帽：**她这一回合真的可能死**才算自爆（判据 = 她的血 ≤ 我方对她的最大单击），
+		#    并且本单位得**与她相邻**（自爆范围 = 她那一格的 6 邻格，含她自己的队友）。
+		if kind == 3:
+			if not _redcap_blast_threat(sim, a):
+				continue
+			if grid.distance(a.cell, cell) != 1:
+				continue
+			var b13 := _hit_after_target_mods(sim, t, cell, REDCAP_BLAST_DMG, false)
+			if b13 > 0.0:
+				out.append(["%s自爆" % a.name, b13])
 			continue
 		var raw := _echo_atk_now(sim, a) + float(_sim_turn_start_atk_bonus(sim, a))
 		if raw <= 0.0:
@@ -8346,6 +8364,35 @@ func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		if best > 0.0:
 			out.append(["%s%s" % [a.name, "散射" if kind == 1 else "剑气"], best])
 	return out
+
+## 【2026-09-27·用户报「AI 不会处理玩家的红帽 —— 怎么给他哐哐打到危险线下面，让他下回合可以自爆」】
+##   "**她这一回合有没有可能死**" —— 判据 = 她的血 ≤ **我方某个单位对她的最大单击**
+##   （算法与挨打合计① 同一套，只是方向反过来：`_threat_hit_value()` + `_sim_mult_at()` +
+##   `_hit_after_target_mods()`，取最大值）。
+##   为什么要它当门：红帽的 13 点自爆是**死亡触发**，她满血时站在她旁边毫无风险
+##   ⇒ 只有"一碰就死"的状态才按会炸计。⚠️ 这是**上界口径**（与全引擎的威胁估计一致）：
+##   "我们能打死她"里既含"我们主动杀"、也把"她下回合自己撞死"并进同一个判据。
+##   开销：先用**几何距离 ≤ 移动力＋射程**预筛（O(1)），只有名义上够得着的我方单位才付 `_threat_can_hit()`。
+func _redcap_blast_threat(sim: Sim, her: SimUnit) -> bool:
+	if her == null or not her.alive or her.hp <= 0:
+		return false
+	for i in sim.units.size():
+		var a: SimUnit = sim.units[i]
+		if a == null or not a.alive or a.fn == her.fn:
+			continue
+		if a.skills.has(DataRegistry.Skill.LOGISTICS):
+			continue                       # 后勤没有普攻（`_threat_can_hit()` 同一道门）
+		var range_at := a.atk_range
+		if grid.distance(a.cell, her.cell) > range_at + _threat_emove_next(sim, a):
+			continue                       # 几何预筛（路网距离 ≥ 几何距离 ⇒ 安全）
+		if not _threat_can_hit(sim, a, her.cell, her):
+			continue
+		var d := walk_dist(sim, a.cell, her.cell)
+		var raw := _threat_hit_value(sim, a, d, false, her.cell, her) + float(_sim_turn_start_atk_bonus(sim, a))
+		raw *= float(_sim_mult_at(sim, a, her, her.cell))
+		if _hit_after_target_mods(sim, her, her.cell, raw) >= float(her.hp):
+			return true
+	return false
 
 ## AoE 形状判据（与上面两条真规则逐字对应）：本单位所在的 `cell` 会不会被"打在 `primary` 上的那一下"波及。
 ##   ① 白游侠（远程）：只看**主目标的 6 邻格**（与它自己站哪无关）⇒ 纯几何、O(1)。

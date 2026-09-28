@@ -6,6 +6,14 @@ extends Node2D
 var grid: HexGrid
 var board_origin := Vector2.ZERO
 var _highlights: Dictionary = {}  # cell -> Color
+var occupied_cells: Dictionary = {}  # cell -> true：有棋子的格（出生区色罩不在这些格上画，见 `_cell_tint`）
+# 【2026-09-28·用户报「录像的部署段，部署英雄的格子蓝色底色会更深一点」】出生区色罩的**专用通道**：
+#   实机部署走 `Battle._preview_cells`（高亮），而回放里 `_apply_highlights()` 会把高亮强制清空 ⇒ 回放照着
+#   `deploy_zone` 这条独立通道铺罩（见 `Battle._show_replay_deploy_zone()`），并且**有棋子的格不铺**
+#   ⇒ 部署段整片出生区是同一种蓝，站着英雄的格子不会再多出一层。
+var deploy_zone: Dictionary = {}     # cell -> Color
+# 墓碑阵营底色开关（【2026-09-28】只在替补/落位阶段亮，见 `GRAVE_BG_*` 的说明）
+var show_grave_faction := false
 var bombs: Dictionary = {}        # cell -> true（炸弹人的陷阱）
 var obstacles: Dictionary = {}     # cell -> 耐久（障碍物）
 var buff_items: Dictionary = {}    # cell -> "atk"/"move"（增益道具）
@@ -40,6 +48,14 @@ const GRAVE_TEX := preload("res://assets/美术资源/墓碑.png")
 # ⚠️ 2026-09-25 换成"带花与土"的版本后从 0.60 调到 **0.66**：新图比旧图矮胖
 #   （含花与土 283×298，碑身只占上面 ~85%）⇒ 0.66 让碑身看起来和上一版差不多大。
 const GRAVE_H := 0.66
+# 【2026-09-28·用户要求】「给墓碑增加背景，哪方的就显示什么颜色」：碑下铺一格**半透明阵营色**六边形
+#   （我方蓝 / 敌方红，与棋子阵营底色同一组色；灰度石碑压在上面 ⇒ 一眼看出这块碑归谁）。
+#   【同日第二/三次口径】「底色太亮了，而且不要有蓝色边框」⇒ alpha `0.55 → 0.30`、**去掉那圈描边**；
+#   「替补的时候才亮的色」⇒ 平时**不画**，只有替补/落位阶段（`SUBSTITUTING` / `PLACE_SUB`）才亮 ——
+#   由 `Battle._process()` 推 `set_grave_faction(on)`（那时墓碑正是可选落点，标出归属才有意义）。
+#   要更淡/更浓只改这两个 alpha（`0.2` 很淡 / `0.5` 偏亮）。
+const GRAVE_BG_PLAYER := Color(0.25, 0.55, 0.9, 0.30)
+const GRAVE_BG_ENEMY := Color(0.85, 0.32, 0.28, 0.30)
 # 「增益道具 / 金矿」图标的方框边长 = 六边形外接半径 × 这个系数（贴图按原比例放进方框、居中）。
 const ITEM_ICON_BOX := 0.75
 # 【2026-09-25 用户要求「将金矿大小变大」】金矿单独用更大的方框：0.75 → **1.05**
@@ -176,7 +192,24 @@ func _draw() -> void:
 		var cell_h := grid.hex_size * sqrt(3.0) * CELL_R
 		var gh := cell_h * GRAVE_H
 		var gw := gh * float(GRAVE_TEX.get_width()) / float(GRAVE_TEX.get_height())
+		# 【2026-09-28·用户要求】碑的底色 = 阵亡者所属阵营（我方蓝 / 敌方红）：
+		#   `graves[cell]` 现在是 { "hero": hero_id, "fn": 阵营 }；**旧格式**（只存 hero_id 的旧录像）分不清阵营
+		#   ⇒ 退回按敌方红画，别赌成我方。底色先铺、贴图后压 ⇒ 灰碑依旧清楚；**不描边**（用户口径）。
+		#   且**只在替补/落位阶段**才铺（`show_grave_faction`，见上面常量说明）—— 平时碑就是一块灰石头。
+		#   ⚠️ 【2026-09-28·用户报「点了替补英雄后墓碑底色变成灰色」】这格**已经有高亮**时就不再铺底色：
+		#   落位阶段的本方墓碑格会被 `Battle._on_sub_pick()` 染成阵营色（原来那里是土黄 ⇒ 宝石黄压着蓝底
+		#   就显灰）。两层同色叠起来只会发闷 ⇒ 谁在谁不画，保证这一格只有**一层**阵营色。
+		if show_grave_faction and not _highlights.has(cell):
+			var bg := GRAVE_BG_PLAYER if _grave_faction(cell) == DataRegistry.Faction.PLAYER else GRAVE_BG_ENEMY
+			draw_colored_polygon(_hex_points(center, grid.hex_size * CELL_R), bg)
 		draw_texture_rect(GRAVE_TEX, Rect2(center - Vector2(gw, gh) * 0.5, Vector2(gw, gh)), false)
+
+# 这块碑属于哪一方：新格式读 `fn`；旧格式（只存 hero_id 的录像）分不清 ⇒ 按敌方（红）
+func _grave_faction(cell: Vector2i) -> int:
+	var g = graves.get(cell)
+	if g is Dictionary:
+		return int((g as Dictionary).get("fn", DataRegistry.Faction.ENEMY))
+	return DataRegistry.Faction.ENEMY
 
 func _draw_hex(center: Vector2, radius: float, fill: Color, line: Color) -> void:
 	var pts := _hex_points(center, radius)
@@ -194,15 +227,55 @@ func _draw_cell_tile(cell: Vector2i, center: Vector2) -> void:
 	draw_texture_rect(tex, Rect2(center - size * 0.5, size), false, TILE_TINT)
 
 # 该格要不要再盖一层色罩：高亮 > （仅部署阶段）出生区；都不需要时返回 null（纯木纹）
+# 【2026-09-28·用户报「部署阶段，英雄的蓝色底色和出生区有重叠」】**有棋子的格不画出生区色罩**：
+#   棋子自己的阵营底色是半透明的 ⇒ 与出生区那层蓝/红叠在一起成了"双层蓝"，看着像重叠成一块。
+#   占用表由 `Battle._process()` 每帧推（`set_occupied`），只有部署阶段会用到。
 func _cell_tint(cell: Vector2i) -> Variant:
 	if _highlights.has(cell):
 		return _highlights[cell]
-	if show_spawn_zones:
+	if deploy_zone.has(cell) and not occupied_cells.has(cell):
+		return deploy_zone[cell]   # 回放部署段的出生区（实机那条走高亮通道，见 `deploy_zone` 的说明）
+	if show_spawn_zones and not occupied_cells.has(cell):
 		if cell.y == grid.height - 1:
 			return _zone_player_overlay
 		if enemy_zone_cells.has(cell) or cell.y == 0:
 			return _zone_enemy_overlay
 	return null
+
+# 出生区色罩（回放部署段专用通道；传空字典 = 收掉）。没变化就不重绘。
+func set_deploy_zone(colors: Dictionary) -> void:
+	if colors.size() == deploy_zone.size():
+		var same := true
+		for c in colors.keys():
+			if not deploy_zone.has(c):
+				same = false
+				break
+		if same:
+			return
+	deploy_zone = colors.duplicate()
+	queue_redraw()
+
+# 有棋子的格（出生区色罩在这些格上不画）。传进来没变化时不做重绘，避免每帧白刷。
+func set_occupied(cells: Array) -> void:
+	if cells.size() == occupied_cells.size():
+		var same := true
+		for c in cells:
+			if not occupied_cells.has(c):
+				same = false
+				break
+		if same:
+			return
+	occupied_cells.clear()
+	for c in cells:
+		occupied_cells[c] = true
+	queue_redraw()
+
+# 墓碑阵营底色开关（只有替补/落位阶段才亮，避免整局都把碑染成蓝/红）
+func set_grave_faction(on: bool) -> void:
+	if show_grave_faction == on:
+		return
+	show_grave_faction = on
+	queue_redraw()
 
 # 出生区色罩开关（只有部署英雄期间才亮，避免整局都把出生区染成蓝/红）
 func set_spawn_zones(on: bool) -> void:
