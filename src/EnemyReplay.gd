@@ -29,6 +29,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 	while si < plan.size():
 		var step: Dictionary = plan[si]
 		si += 1
+		battle._replay_plan_pos = si   # 回放进度（"已经演到第几步"）——见 Battle 里那个成员的说明
 		# 【2026-09-28】上一招（`plan[si-2]`）此刻已演完、局面已定型 ⇒ 补上"它之后"的局面指纹
 		#   （录制侧用；回放里 `_rec_on` 为 false，什么都不做）。见 `Battle._rec_fp()` 的说明。
 		if battle._rec_on and si >= 2:
@@ -71,71 +72,123 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			if is_instance_valid(u):
 				u.set_acting_ring(false)
 			return   # 已重开/场景已释放：安全退出
-		var a: Dictionary = step["action"]
-		# ⚠️ 每一处 await 之后都必须**重新验一次**单位引用：这一拍里单位可能已经被打死并走完
-		# 死亡淡出（`Battle._on_unit_died` 里 `u.call_deferred("queue_free")`，淡出 0.3s）。
-		# 踩炸弹离场、被反击、被强制位移都会在这期间发生；把"已释放的对象"递给 Battle 会直接崩：
-		#   Invalid type in function '_do_attack' ... argument 1 (previously freed)
-		# （2026-09-15 玩家实战崩在此处：新引擎会算出"踩炸弹换人头"这类走法，命中率明显变高。）
-		if not _unit_ok(u):
-			continue   # 本步作废：跳过这名单位剩下的动作，继续回放下一条
-		# 【2026-09-15 A+B】这一步"想打但没打成"时要能就地补一招 —— 先记下它本来想做什么：
-		#   wanted = 计划里带了一次攻击（打人 atk>=0 或 打障碍 atk_obs），acted = 这一击真的打出去了。
-		# 走位类步骤（计划里本来就没有攻击）不触发补算，避免每个走位步都白跑一次搜索。
-		var wanted: bool = (a.has("atk") and int(a["atk"]) >= 0) or a.has("atk_obs")
-		var acted := false
-		if a.has("move") and a["move"] != null:
-			battle._do_move(u, a["move"], true)
-			await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
-		if a.has("atk_obs"):
-			await _gap(STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
-			if not _unit_ok(u):
-				continue
-			battle._do_attack_obstacle(u, a["atk_obs"], true)
-			acted = true
-			await _wait_action_done()
-		if a.has("atk") and int(a["atk"]) >= 0:
-			# 【2026-09-28】目标也按**稳定身份**解析（录像里带 `tgt` 标签时），老录像退回 `refs[atk]`
-			var t: Unit = _resolve_unit(a.get("tgt", null), refs, int(a["atk"]))
-			if t != null and _unit_ok(t):
-				if t.faction != DataRegistry.Faction.ENEMY and _unit_ok(u):
-					# 只允许攻击当前射程内的目标（防御 AI 计划偏差/移动失败导致越界攻击）
-					if battle._in_attack_range(u, t):
-						await _gap(STEP_GAP)   # 走位与出手之间留一拍，读得出"先走再打"
-						# 这一拍里出手方与被打方都可能死掉/被释放（炸弹、反击、位移）→ 出手前再验一次；
-						# 射程也重新判一次：这一拍里目标可能被击退到射程外。
-						if _unit_ok(u) and _unit_ok(t) and battle._in_attack_range(u, t):
-							battle._do_attack(u, t, true)
-							acted = true
-							await _wait_action_done()   # 等待攻击（含反击）演出完全结束
-		# 【2026-09-15 A+B·用户批准】想打却没打成（目标已死 / 被推出射程 / 这一步本来安排的攻击不存在了）
-		# → 让 Battle 就地为这个单位**重搜一招**（用真实局面），把这一手补上，而不是让它白站一回合。
-		# 为什么会失效：计划是回合开始时按"预测的残局"一次性排好的（预测与真实结算哪怕差一点，
-		# 后面针对同一目标的步骤就会落空）。补算在主线程跑一次短搜索（1.2s 预算），结果同样要过合法性检查。
-		if wanted and not acted and _unit_ok(u) and not u.attacked_this_turn:
-			if my_session != battle._session_id or not battle.is_inside_tree():
-				return   # 已重开/场景已释放：不再补算
-			await _gap(STEP_GAP)   # 补算前留一拍，别让"原本那一招"和"补的这一招"粘成一段
-			var alt: Dictionary = battle._replan_enemy_action(u)
-			if not alt.is_empty() and _unit_ok(u) and not u.attacked_this_turn:
-				if alt.get("move", null) != null:
-					battle._do_move(u, alt["move"], true)
-					await _wait_action_done()
-				if alt.has("atk_obs") and _unit_ok(u):
-					await _gap(STEP_GAP)
-					battle._do_attack_obstacle(u, alt["atk_obs"], true)
-					await _wait_action_done()
-				var alt_atk := int(alt.get("atk", -1))
-				if alt_atk >= 0 and alt_atk < refs.size() and _unit_ok(refs[alt_atk]) and _unit_ok(u):
-					var t2: Unit = refs[alt_atk]
-					if t2.faction != DataRegistry.Faction.ENEMY and battle._in_attack_range(u, t2):
-						await _gap(STEP_GAP)
-						if _unit_ok(u) and _unit_ok(t2) and battle._in_attack_range(u, t2):
-							battle._do_attack(u, t2, true)
-							await _wait_action_done()
+		await _park_with_ring(u)   # 【2026-09-30 凌晨】停顿这一拍里按了暂停 ⇒ 这一招先别出手
+		await _do_step_action(u, step, refs, my_session)
 		# 本英雄行动结束：熄灭行动描边（下一名英雄出手前会重新亮起，交接不拖影）
 		if is_instance_valid(u):
 			u.set_acting_ring(false)
+	await _tail_after_plan(plan, my_session)
+
+## 【2026-09-28·斩杀撤人】把"计划跑完之后才追加进来的步骤"接着演完。
+## 为什么需要它：敌方回合**中途**落位的替补会把补算的那一手追加到 plan 尾部
+##   （`Battle._plan_enemy_late_sub()`，含"斩杀撤人"撤下后换上来的替补）。
+##   而 `run()` 的 while 在那一刻**已经正常结束**（读到的尾部就是当时那一步），
+##   撤下/落位/追加都发生在它返回之后 ⇒ 追加的那一步没人演 ⇒ 替补"站着不出手"。
+##   ⇒ Battle 在"撤下 + 落位"完成后再调本函数，从 `from_idx` 接着把新追加的步骤演完。
+## 与 `run()` 共用同一套逐招实现（`_do_step_action()`）与同一段收尾（`_tail_after_plan()`）。
+func run_from(plan: Array, refs: Array, my_session: int, from_idx: int) -> void:
+	var si: int = maxi(from_idx, 0)
+	while si < plan.size():
+		var step: Dictionary = plan[si]
+		si += 1
+		battle._replay_plan_pos = si
+		if battle._rec_on and si >= 2:
+			var prev: Dictionary = plan[si - 2]
+			if not prev.has("fp"):
+				prev["fp"] = battle._rec_step_fp()
+		if GameState.match_over or battle._replay_decided():
+			break
+		if my_session != battle._session_id or not is_instance_valid(battle) or not battle.is_inside_tree():
+			return
+		await _wait_sub_done()
+		await wait_unpaused()
+		if is_instance_valid(battle) and battle.is_inside_tree():
+			await battle._drain_pending_deaths()
+		if GameState.match_over or battle._replay_decided() or my_session != battle._session_id:
+			break
+		var u: Unit = _resolve_unit(step.get("who", null), refs, int(step["idx"]))
+		if u == null or not u.alive:
+			continue
+		u.set_acting_ring(true)
+		await _gap(HERO_GAP)   # 接着演：不算"本回合第一招"，用常规节奏
+		if my_session != battle._session_id or not battle.is_inside_tree():
+			if is_instance_valid(u):
+				u.set_acting_ring(false)
+			return
+		await _park_with_ring(u)   # 【2026-09-30 凌晨】同上：停顿这一拍里按了暂停 ⇒ 先别出手
+		await _do_step_action(u, step, refs, my_session)
+		if is_instance_valid(u):
+			u.set_acting_ring(false)
+	await _tail_after_plan(plan, my_session)
+
+## 把**一步**真正演出来（`run()` 与 `run_from()` 共用）。调用方负责：解析单位、亮/灭描边、节奏停顿。
+## ⚠️ 每一处 await 之后都必须**重新验一次**单位引用：这一拍里单位可能已经被打死并走完
+##   死亡淡出（`Battle._on_unit_died` 里 `u.call_deferred("queue_free")`，淡出 0.3s）。
+##   踩炸弹离场、被反击、被强制位移都会在这期间发生；把"已释放的对象"递给 Battle 会直接崩：
+##     Invalid type in function '_do_attack' ... argument 1 (previously freed)
+##   （2026-09-15 玩家实战崩在此处：新引擎会算出"踩炸弹换人头"这类走法，命中率明显变高。）
+func _do_step_action(u: Unit, step: Dictionary, refs: Array, my_session: int) -> void:
+	var a: Dictionary = step["action"]
+	if not _unit_ok(u):
+		return   # 本步作废：跳过这名单位剩下的动作
+	# 【2026-09-15 A+B】这一步"想打但没打成"时要能就地补一招 —— 先记下它本来想做什么：
+	#   wanted = 计划里带了一次攻击（打人 atk>=0 或打障碍 atk_obs），acted = 这一击真的打出去了。
+	# 走位类步骤（计划里本来就没有攻击）不触发补算，避免每个走位步都白跑一次搜索。
+	var wanted: bool = (a.has("atk") and int(a["atk"]) >= 0) or a.has("atk_obs")
+	var acted := false
+	if a.has("move") and a["move"] != null:
+		battle._do_move(u, a["move"], true)
+		await _wait_action_done()   # 等待移动动画真正播完（与玩家侧节奏一致）
+	if a.has("atk_obs"):
+		await _gap(STEP_GAP)   # 移动后顿一拍再敲障碍，避免两段动作粘成一段
+		if not _unit_ok(u):
+			return
+		battle._do_attack_obstacle(u, a["atk_obs"], true)
+		acted = true
+		await _wait_action_done()
+	if a.has("atk") and int(a["atk"]) >= 0:
+		# 【2026-09-28】目标也按**稳定身份**解析（录像里带 `tgt` 标签时），老录像退回 `refs[atk]`
+		var t: Unit = _resolve_unit(a.get("tgt", null), refs, int(a["atk"]))
+		if t != null and _unit_ok(t):
+			if t.faction != DataRegistry.Faction.ENEMY and _unit_ok(u):
+				# 只允许攻击当前射程内的目标（防御 AI 计划偏差/移动失败导致越界攻击）
+				if battle._in_attack_range(u, t):
+					await _gap(STEP_GAP)   # 走位与出手之间留一拍，读得出"先走再打"
+					# 这一拍里出手方与被打方都可能死掉/被释放（炸弹、反击、位移）→ 出手前再验一次；
+					# 射程也重新判一次：这一拍里目标可能被击退到射程外。
+					if _unit_ok(u) and _unit_ok(t) and battle._in_attack_range(u, t):
+						battle._do_attack(u, t, true)
+						acted = true
+						await _wait_action_done()   # 等待攻击（含反击）演出完全结束
+	# 【2026-09-15 A+B·用户批准】想打却没打成（目标已死 / 被推出射程 / 这一步本来安排的攻击不存在了）
+	# → 让 Battle 就地为这个单位**重搜一招**（用真实局面），把这一手补上，而不是让它白站一回合。
+	# 为什么会失效：计划是回合开始时按"预测的残局"一次性排好的（预测与真实结算哪怕差一点，
+	# 后面针对同一目标的步骤就会落空）。补算在主线程跑一次短搜索（1.2s 预算），结果同样要过合法性检查。
+	if wanted and not acted and _unit_ok(u) and not u.attacked_this_turn:
+		if my_session != battle._session_id or not battle.is_inside_tree():
+			return   # 已重开/场景已释放：不再补算
+		await _gap(STEP_GAP)   # 补算前留一拍，别让"原本那一招"和"补的这一招"粘成一段
+		var alt: Dictionary = battle._replan_enemy_action(u)
+		if not alt.is_empty() and _unit_ok(u) and not u.attacked_this_turn:
+			if alt.get("move", null) != null:
+				battle._do_move(u, alt["move"], true)
+				await _wait_action_done()
+			if alt.has("atk_obs") and _unit_ok(u):
+				await _gap(STEP_GAP)
+				battle._do_attack_obstacle(u, alt["atk_obs"], true)
+				await _wait_action_done()
+			var alt_atk := int(alt.get("atk", -1))
+			if alt_atk >= 0 and alt_atk < refs.size() and _unit_ok(refs[alt_atk]) and _unit_ok(u):
+				var t2: Unit = refs[alt_atk]
+				if t2.faction != DataRegistry.Faction.ENEMY and battle._in_attack_range(u, t2):
+					await _gap(STEP_GAP)
+					if _unit_ok(u) and _unit_ok(t2) and battle._in_attack_range(u, t2):
+						battle._do_attack(u, t2, true)
+						await _wait_action_done()
+
+## 计划全部演完之后收尾（`run()` 与 `run_from()` 共用）：
+## 补最后一招的局面指纹 → 留一拍 → 等结束语音（用户口径「AI 在没有结束语音之前，玩家不能行动」）。
+func _tail_after_plan(plan: Array, my_session: int) -> void:
 	# 全部行动结束：留一拍再进回合末结算（避免最后一招与回合结束演出首尾相连）
 	if my_session != battle._session_id or not battle.is_inside_tree():
 		return
@@ -149,9 +202,35 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 	#   不带移动/攻击的步骤（没走 `_wait_action_done`），这里再等一次 —— 保证回合末交还控制权前安静。
 	await _wait_voice_done()
 
-## 暂停中不推进任何一步（单机暂停用；联机不暂停，故几乎是空转）
+## 【2026-09-30 凌晨】"亮起描边 → 起手停顿"这一拍里观众按了暂停 ⇒ **这一招先别出手**：
+##   把描边熄掉、停在这儿等放行，放行后再亮起来接着演。
+##   为什么还要这一道：`_gap()` 用的是 `create_timer(sec, false)`（只跟整棵树 paused，不认回放的暂停标志），
+##   所以"闸门"必须在**停顿之后、出手之前**再等一次 —— 否则按暂停的时机只要落在那一拍里
+##   （一人 0.7 秒的窗口），观众就会看到"暂停了还多打一名英雄"。
+##   ⚠️ 实战 `_replay_mode` 恒 false ⇒ 本函数一次都不等（实机逐位不变）。
+func _park_with_ring(u: Unit) -> void:
+	if not (battle._replay_mode and battle._replay_paused and battle._replay_seek_to < 0):
+		return
+	if is_instance_valid(u):
+		u.set_acting_ring(false)
+	await wait_unpaused()
+	if is_instance_valid(u) and u.alive:
+		u.set_acting_ring(true)
+
+## 暂停中不推进任何一步。
+##   · **单机对局的暂停**（ESC，整棵树 `paused`）：一直是这一条；
+##   · 【2026-09-30 凌晨 用户问「回合中的暂停必须等所有英雄行动完才暂停吗」·已修】**录像回放的暂停**
+##     （控制条那颗按钮 ⇒ `Battle._replay_paused`）从前**不经过这里** ⇒ 敌方那一段是**一步**（录像里
+##     `side=1` 的 steps 只有一条 `plan`，里面装着全体敌人的招）⇒ 按暂停要等**整份计划**演完才停
+##     （探针实测：暂停那 5 秒里计划进度 1 → 2 → 3，所有敌人都照打）。
+##     现在每个**步骤开头**都等一次 ⇒ **当前这名英雄这一招演完就停住**，与玩家侧"一招一步"同一粒度。
+##   · 实战不读这个标志（那边 `_replay_paused` 恒 false）⇒ 实机逐位不变；
+##     回放的"快进重演"期间主循环会先把它置 false（见 `Battle._replay_loop()`）⇒ 也不受影响。
+##   · ⚠️ 新一轮跳段请求（`_replay_seek_to >= 0`）**当场放行**：否则"暂停中点下回合"会卡在这里 ——
+##     主循环正等着这份计划演完才轮到处理那个请求（让计划先收尾，跳段随后照常落地）。
 func wait_unpaused() -> void:
-	while battle.is_inside_tree() and battle.get_tree().paused:
+	while battle.is_inside_tree() and (battle.get_tree().paused \
+			or (battle._replay_mode and battle._replay_paused and battle._replay_seek_to < 0)):
 		await battle.get_tree().process_frame
 
 # ---- 单位解析（稳定身份优先）----

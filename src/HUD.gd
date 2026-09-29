@@ -47,6 +47,7 @@ var _deck_pick_panel_w := 0.0
 var _deck_pick_panel_h := 0.0
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
 var _arena_pair: Array = []               # 【2026-09-29】当前这一轮 2 选 1 的两张（选中演出/回放重演都要用）
+var _arena_fly_tween: Tween = null        # 【2026-09-29】那一趟"飞卡"的 tween（回放跳段时要能掐掉）
 # 【2026-09-23 改·用户要求"死亡时卡面破碎升天 → 引导到顶部阵亡标志 → 标志出现并摇晃"+ "空圈和骷髅一样大"】
 #   原来每侧是一个 Label 拼字符串（`"我方 ☠☠☠"`）⇒ ① `○` 与 `☠` 字形不一样大、整行会漂；
 #   ② 没法定位到"具体哪一个标记"去做飞行终点与单独摇晃。
@@ -66,6 +67,9 @@ var _death_fx: DeathFx = null  # 阵亡演出层（全屏，只画特效；比�
 #   `battle.kill_intro_finished()` 才继续 ⇒ 观感是"特效先滑完，英雄再动手击杀"。
 var _kill_fx: Control = null
 var _kill_fx_n := 0            # 同屏多次击杀时上下错开（AoE 一次死两个不会完全重叠）
+# 【2026-09-29·用户报「失败爆炸效果有两次」】结算演出（骷髅震动 → 状态栏爆炸）正在播的标记：
+#   重复触发时直接忽略（Battle 侧也有"结算只发一次"的闸门，这里是第二道保险）。
+var _defeat_anim_running := false
 # 延迟揭示：真实阵亡数（战斗逻辑）先涨，**标志等卡片落地才出现** ⇒ `_reveal_pending` = 已死亡但还没点亮的个数。
 # 槽位 `filled` 的个数记在 `_mark_filled` 里（= 界面上看到的），两者相加 = 真实阵亡数。
 var _reveal_pending := { "my": 0, "op": 0 }
@@ -112,6 +116,22 @@ const NAME_FRAME_RED := preload("res://assets/界面/红方名字框.png")
 #   0 简单 / 1 普通 / 2 困难 / 3 噩梦）⇒ 单机右侧名字显示成「噩梦AI」这样。
 const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]
 const NAME_PLATE_H := 34.0
+# 【2026-09-29·用户要求「战斗中上方状态栏的背景增加透明度」】顶部状态栏那块底的**不透明度**：
+#   0 = 完全透明（只剩名字框 / 阵亡标志 / 回合数浮在地面上）、1 = 完全不透明。
+#   原来是 **0.85**（几乎实心、把地面压住了），现在调成 **0.55**；想更透继续往下调（0.35 已经很透）。
+#   ⚠️ 只管这一条状态栏的底色：名字框与阵亡标志都是各自的素材，不受影响。
+const TOP_BAR_BG_A := 0.55
+# 【2026-09-29·用户报「第三枚和其他的间隔不一样」】顶部那排阵亡标记的**固定节距**：
+#   每枚的 x = `i * (DeathMark.SLOT_D + MARK_GAP)`（不靠容器自动排列）⇒ 间隔恒定可拧。
+#   想宽一点就加大（8~12 挺明显）；嫌挤就减小（4 很紧、0 会贴在一起）。
+const MARK_GAP := 6.0
+# 【2026-09-29·用户报「最右边那个空圈和骷髅都太贴边了」】这排标记**外缘还要再内缩**多少像素
+#   （空圈和骷髅都算，两边对称：我方往右缩、敌方往左缩）。
+#   ⚠️ 原来标记行是贴着**名字框最外沿**（离屏边 12px）摆的 ⇒ 最外面那枚离屏边只剩 12px，看着太挤。
+#   现在额外内缩 `MARK_EDGE_PAD` ⇒ 最外面那枚离屏边 = 12 + 本值 = **24px**，
+#   正好和名字框里文字的边距（`NAME_EDGE_PAD = 12`）对齐 ⇒ 三枚标记像"从名字下面开始排"。
+#   嫌还是太贴边就加大（20 / 28），想更靠外就减小到 0（回到贴框沿）。
+const MARK_EDGE_PAD := 12.0
 # 【2026-09-29·用户要求「双方的名字都贴边显示」】框内文字离框沿留的边距（像素）
 const NAME_EDGE_PAD := 12.0
 # 【2026-09-29·用户要求「名字框太长了，给中间的回合数预留空间」】顶部第一行中间给「第 N 回合 ·
@@ -600,7 +620,12 @@ func _show_deploy_panel() -> void:
 		return
 	# 【2026-09-28·用户要求】竞技场部署期例外：那一段要**默认开着**替补队伍面板
 	#   （见 `_team_panel_forced`），所以这里不能无条件收掉它。
-	if not _team_panel_forced:
+	# 【2026-09-30·本次改动】判据由**缓存标志** `_team_panel_forced` 改成**现算** `_should_force_team_panel()`：
+	#   缓存那份只在每帧 `_sync_arena_team_panel()` 里对齐，而竞技场"选人→部署"的交接是**同一帧**内
+	#   完成（Battle 那边 `state = State.DEPLOY` 落旗 → 接着 `deploy_refresh.emit()` 喊到这里）
+	#   ⇒ 拿旧值会把队伍面板再留一帧、和行动卡池叠着闪一下。现算就当场收干净。
+	if not _should_force_team_panel():
+		_team_panel_forced = false   # 与现算结果对齐：否则下一帧 `_sync_arena_team_panel()` 认为"没变化"、不再收
 		_close_team_panel()   # 部署期只用"开局选人"面板，与常驻"替补队伍"面板互斥，避免重叠
 	if _deploy_overlay:
 		_deploy_overlay.queue_free()
@@ -924,6 +949,10 @@ func _arena_pick_anim(hid: String) -> void:
 		battle._arena_pick_committed(hid)
 		return
 	var t := create_tween()
+	# 【2026-09-29】留住这一趟（回放跳段时 `arena_replay_abort()` 要掐掉它 ⇒ 那记迟到回调不再落账）
+	if _arena_fly_tween != null and _arena_fly_tween.is_valid():
+		_arena_fly_tween.kill()
+	_arena_fly_tween = t
 	t.tween_property(card, "position", card.position + Vector2(0, 360), 0.45)
 	t.parallel().tween_property(card, "modulate:a", 0.0, 0.45)
 	if enemy_card != null:
@@ -937,6 +966,16 @@ func _arena_pick_anim(hid: String) -> void:
 ##   （观众不用点，选哪张由录像说了算）。Battle 那边收尾走 `_arena_pick_committed()` 分流到重演那套。
 func arena_replay_pick(hid: String) -> void:
 	_arena_pick_anim(hid)
+
+## 【2026-09-29 用户报「竞技场的录像，在 2 选 1 界面的时候，点击下回合。会错乱」】回放跳段 =
+##   选牌演出整段收掉：**面板关掉**（否则它会一直盖在跳过去的战斗画面上）+ **还在飞的卡掐掉**
+##   （那个 tween 0.45 秒后才会回调 `battle._arena_pick_committed()` ⇒ 不掐就是一记迟到的一手）。
+##   `Battle._replay_draft_abort()` 调这里；实战那条路永远不调（面板归 `arena_draft_done`/点选收）。
+func arena_replay_abort() -> void:
+	if _arena_fly_tween != null and _arena_fly_tween.is_valid():
+		_arena_fly_tween.kill()
+	_arena_fly_tween = null
+	_close_arena_panel()
 
 # 竞技场触屏（安卓/iOS）：短按=确认选择；按住超时=查看属性；按住滑动=切换查看另一卡；
 # 长按/滑动后松手均不确认（属性浮层固定显示在卡上方，不跟随手指）。
@@ -1391,14 +1430,23 @@ func _should_force_team_panel() -> bool:
 	# 【2026-09-28·用户报「竞技场模式，部署阶段会有两个队伍列表」】**部署期不再强开**：
 	#   部署阶段本来就有一列"开局选人"的池子，再叠一列队伍面板 = 两个列表；非竞技场的部署期
 	#   也只留选人池（见下面 `_refresh_team_panel()` 那条早退）⇒ 这里只认 2 选 1 那一段。
-	return battle.state == Battle.State.ARENA_DRAFT
+	# 【2026-09-30·用户报「2 选 1 阶段有队伍在下面，然后又消失，等部署开始又出来。
+	#   我希望是一直都在，不要一闪一闪的」】再加**交接窗口**（`battle._arena_to_deploy` =
+	#   选人已完、部署卡池还没顶上来那 ≈2 秒：棋盘开场演出 + 战斗开始横幅，见 `_begin_deployment()`）：
+	#   这一段继续摆着队伍面板（内容与部署卡池同序同半径 ⇒ 顶上来时看不出换块），
+	#   部署一开张 Battle 就落旗、这里随之收回，所以不会又变成"两个队伍列表"。
+	return battle.state == Battle.State.ARENA_DRAFT or battle._arena_to_deploy
 
 ## 每帧（`_refresh_controls()` 里）对齐"竞技场强制展开"：
 ##   进入竞技场部署 ⇒ 展开（首次照常从屏幕右缘滑入）；部署一完成 ⇒ 收回。
 ##   只在状态**变化**时动一次，避免每帧重建面板。
+##   【2026-09-30·本次改动】强开期间面板若被别处收掉（`_on_restart()` 重开、`clear_transient_ui()`、
+##   暂停期那条"不重建"的路）就**补建回来** —— 否则强开期一过没人再喊重建，屏底会一直空着，
+##   而用户口径是「一直都要在」（报的就是"队伍消失一下、部署又出来"）。空卡组时这里只是空转
+##   （`_refresh_team_panel()` 在 `ids` 为空时直接 return，不建面板）。
 func _sync_arena_team_panel() -> void:
 	var want := _should_force_team_panel()
-	if want == _team_panel_forced:
+	if want == _team_panel_forced and not (want and _team_panel == null):
 		return
 	_team_panel_forced = want
 	if want:
@@ -1555,8 +1603,11 @@ func _refresh_team_panel() -> void:
 # 关闭常驻队伍面板
 func _close_team_panel() -> void:
 	# 【2026-09-28·用户报「点击英雄会闪一下」】重建（点英雄刷新高亮）时**不要重新滑入**：
-	#   只有「从无到有」那一次才从屏幕右缘滑出；已经有面板就直接落在目标位置。
-	var had_panel: bool = _team_panel != null
+	#   只有「从无到有」那一次才从屏幕右缘滑出（由 `_team_panel_slide_next` 那个标志管），
+	#   已经有面板就直接落在目标位置。
+	# 【2026-09-29 消警告 `UNUSED_VARIABLE`】原来这里还有一句 `var had_panel := _team_panel != null`
+	#   —— 那是在本函数（"关闭面板"这条路上）根本用不到的死变量：真正判"要不要滑入"的那份同名变量
+	#   在 `_refresh_team_panel()` 里（`do_slide = (not had_panel) or _team_panel_slide_next`），那份保留。
 	if _team_panel:
 		_team_panel.queue_free()
 		_team_panel = null
@@ -1593,7 +1644,9 @@ func _build() -> void:
 		sb_top.content_margin_top = 0.0
 		sb_top.content_margin_bottom = 0.0
 		top.add_theme_stylebox_override("panel", sb_top)
-	top.add_theme_stylebox_override("panel", _make_panel(Color(0.08, 0.08, 0.12, 0.85)))
+	# 【2026-09-29·用户要求「战斗中上方状态栏的背景增加透明度」】底色不透明度走常量 `TOP_BAR_BG_A`
+	#   （0.85 → 0.55；这里本来覆盖的就是一块 StyleBoxFlat，不是主题底纹 ⇒ 直接调 alpha 即可）。
+	top.add_theme_stylebox_override("panel", _make_panel(Color(0.08, 0.08, 0.12, TOP_BAR_BG_A)))
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(top)
 	# 【2026-09-29·用户要求「状态栏的计时器放在回合数下面」】中间那组改成**竖排两行**：
@@ -1704,14 +1757,21 @@ func _build() -> void:
 		else:
 			_op_death_name = plate.get_node_or_null("Name") as Label
 		col_box.add_child(plate)
-		var marks_row := HBoxContainer.new()
-		marks_row.add_theme_constant_override("separation", 6)
+		# 【2026-09-29·用户报「第三枚和其他的间隔不一样」】**不用容器自动排列，改成固定节距**：
+		#   原来是 `HBoxContainer` + `separation = 6` ⇒ 间距由容器算，任何容器/主题/分辨率的取整
+		#   都可能让它不那么整齐。现在每枚标记的 x **按节距直接算**（`i * (SLOT_D + MARK_GAP)`），
+		#   结构上不可能不匀。
+		# 【同日·用户报「最右边那个空圈和骷髅都太贴边了」】再给整排加一个**外缘内缩** `MARK_EDGE_PAD`：
+		#   做法是把这个 pad 算进本行的宽度里、并摆在**外侧**（左行摆左边、右行摆右边）
+		#   ⇒ 三枚标记整体往里挪 pad 像素，最外面那枚离屏边 12 + pad = 24px（与名字框文字边距对齐）。
+		#   ⚠️ 想调间隔只改 `MARK_GAP`、想调离屏边的远近只改 `MARK_EDGE_PAD`；大小改 `DeathMark.SLOT_D`。
+		var marks_row := Control.new()
 		marks_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		marks_row.alignment = BoxContainer.ALIGNMENT_BEGIN if is_left else BoxContainer.ALIGNMENT_END
-		if is_left:
-			_top_stack_blue = plate
-		else:
-			_top_stack_red = plate
+		var row_w: float = float(slot_n) * DeathMark.SLOT_D + float(maxi(slot_n - 1, 0)) * MARK_GAP
+		marks_row.custom_minimum_size = Vector2(row_w + MARK_EDGE_PAD, DeathMark.SLOT_D)
+		# 靠外缘摆（与名字框同一侧）：左行贴左、右行贴右 —— 与名字框的 SHRINK 口径一致
+		marks_row.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN if is_left \
+			else Control.SIZE_SHRINK_END
 		col_box.add_child(marks_row)
 		# 【2026-09-29】第二行的宽度约束是**这排标志**（名字框现在各占半屏、整行铺满，
 		#   拿它去算"中间还剩多少"会得出 0）⇒ `_fit_top_center()` 量这一对
@@ -1721,6 +1781,9 @@ func _build() -> void:
 			_top_stack_red = marks_row
 		for i in slot_n:
 			var mk := DeathMark.new(side_fn)
+			# pad 在外侧：左行的 pad 在左（标记从 pad 处起排）、右行的 pad 在右（标记从 0 起排）
+			mk.position = Vector2((MARK_EDGE_PAD if is_left else 0.0)
+				+ float(i) * (DeathMark.SLOT_D + MARK_GAP), 0.0)
 			marks_row.add_child(mk)
 			(_my_marks if mine else _op_marks).append(mk)
 	# 阵亡演出层：加在状态栏之后 ⇒ 同 z_index 下画在状态栏之上（弹窗类浮层是更晚 join 的，仍在其上）
@@ -2149,16 +2212,10 @@ func _faction_ui_color(fn: int) -> Color:
 	return Color(1.0, 0.5, 0.5)
 
 func _set_round_text(round_num: int, _player_side: bool) -> void:
-	# 联机视角：本端操作的是"我方"，另一方是"敌方"。用 battle._my_side() 判断本端是否当前行动方。
-	var my_turn := true
-	if battle != null:
-		if GameState.dual_control:
-			# 自由部署双控：当前行动方都由本端操控，但状态栏仍要如实显示当前是谁的回合（敌方行动=敌方回合）
-			my_turn = battle.side_faction(GameState.active_side) == battle._my_faction()
-		else:
-			my_turn = GameState.active_side == battle._my_side()
-	# 非回合阶段（开局部署/竞技场选人/替补中）不声称"你的回合/敌方回合"：
-	# 否则对方先部署/先手时顶部仍错误显示"你的回合"。
+	# 【2026-09-29 消警告 `UNUSED_VARIABLE`】这里原来有一段 `my_turn`（"本端是不是当前行动方"），
+	#   只服务于旧文案「你的回合 / 敌方回合」；那套文案按用户要求删掉之后它就没人读了 ⇒ 整段删除
+	#   （连 `dual_control` / `active_side` 那两处读取一起去掉，逻辑零变化）。
+	# 非回合阶段（开局部署/竞技场选人/卡组三选一/替补中）只显示阶段名：
 	var phase_txt := ""
 	if battle != null and is_instance_valid(battle) and not _in_replay():
 		if battle.state == Battle.State.ARENA_DRAFT:
@@ -2171,16 +2228,13 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 			phase_txt = "替补"
 	var side := phase_txt
 	# 【2026-09-29·用户要求「状态栏中间的用黄色」】正中这行的颜色**恒为黄色**（不再按"当前行动方"
-	#   或"本端/对端"上色）⇒ 下面那套 `color_side` 的判定已无用，整块删掉。
+	#   或"本端/对端"上色）⇒ 原来那套 `color_side` 判定已无用、整块删掉。
 	if _in_replay():
 		# 回放：按**正在播的那一段**判（`active_side` 是录像里的值，不能用）
 		var rs: int = battle.replay_side_of(battle._replay_frame)
 		if rs < 0:
 			# 【2026-09-28 用户报「部署阶段的提示有问题」】部署那一帧（side = -1）不是任何一方的回合
 			side = "部署"
-			my_turn = true
-		else:
-			my_turn = rs == GameState.SIDE_PLAYER
 	# 【2026-09-29·用户要求】「部署英雄就不要显示第 1 回合了」+「选择卡组也不要第 1 回合」+「竞技场选人也去掉」：
 	#   这三个阶段**回合都还没开始**（第 1 回合要等双方卡组/首发都定下、报完"战斗开始"才走）
 	#   ⇒ 只写阶段名，**不带"第 N 回合"前缀**；回放里部署那一帧同理（那边 `side` = "部署"）。
@@ -2208,7 +2262,9 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 ##   联机换真名那条路仍改它的 `text` —— 见 `_refresh_deaths()` 里那两处 `_my_death_name.text = ...`）。
 ##   尺寸：高固定 `NAME_PLATE_H`、宽按原图比例（237×203 ⇒ 约 1.17 倍高）⇒ 不会拉伸变形。
 func _make_name_plate(tex: Texture2D, txt: String, col: Color, font_size: int, w_override: float = -1.0,
-		align: int = HORIZONTAL_ALIGNMENT_CENTER) -> Control:
+		# 【2026-09-29·用户贴的 `INT_AS_ENUM_WITHOUT_CAST`】原来标注成 `int` ⇒ 赋给
+		#   `lb.horizontal_alignment`（枚举 `HorizontalAlignment`）时报警 ⇒ 参数直接标成枚举类型。
+		align: HorizontalAlignment = HORIZONTAL_ALIGNMENT_CENTER) -> Control:
 	var h := NAME_PLATE_H
 	# 【2026-09-29·用户要求「将名字框延伸到画面中间，两边一样长」】宽度不再按素材比例，而是**外部给定**
 	#   （左右两条等长、各占半屏）；不给就仍按原图比例（老口径）。
@@ -2218,13 +2274,15 @@ func _make_name_plate(tex: Texture2D, txt: String, col: Color, font_size: int, w
 	box.size = Vector2(w, h)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var tr := TextureRect.new()
-	tr.texture = tex
-	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	tr.stretch_mode = TextureRect.STRETCH_SCALE
-	tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(tr)
+	# 【2026-09-29·用户贴的 `SHADOWED_VARIABLE_BASE_CLASS`】这里原来叫 `tr` ⇒ 遮蔽了 `Object.tr()`
+	#   （翻译函数），每次加载脚本都报一条警告 ⇒ 改名 `plate_bg`，只是换名字、行为不变。
+	var plate_bg := TextureRect.new()
+	plate_bg.texture = tex
+	plate_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	plate_bg.stretch_mode = TextureRect.STRETCH_SCALE
+	plate_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	plate_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(plate_bg)
 	var lb := Label.new()
 	lb.name = "Name"
 	lb.text = txt
@@ -3045,6 +3103,11 @@ func _defeat_anim_side(loser_fn: int) -> void:
 	#   **回放里照播**（这段是纯本地视觉、不碰任何判定与网络；`is_inside_tree()` 守卫都在）。
 	if DisplayServer.get_name() == "headless":
 		return
+	# 【2026-09-29·用户报「失败爆炸效果有两次」】这段演出正在播时再被触发就忽略（双保险：
+	#   Battle 侧已加"结算只发一次"的闸门，这里保证即使有人重复调也只演一遍）。
+	if _defeat_anim_running:
+		return
+	_defeat_anim_running = true
 	var marks: Array = _my_marks if lost else _op_marks
 	var anchor: Control = _my_death_name if lost else _op_death_name
 	for i in marks.size():
@@ -3054,6 +3117,7 @@ func _defeat_anim_side(loser_fn: int) -> void:
 		if i > 0:
 			await get_tree().create_timer(0.06).timeout
 			if not is_inside_tree():
+				_defeat_anim_running = false
 				return
 		mk.pop_and_shake()
 		AudioManager.play("select")
@@ -3082,6 +3146,7 @@ func _defeat_anim_side(loser_fn: int) -> void:
 		tw.parallel().tween_property(mk2, "rotation", 0.0, 0.08)
 	await get_tree().create_timer(1.65).timeout
 	if not is_inside_tree():
+		_defeat_anim_running = false
 		return
 	# 爆炸：落点 = 那一侧名字框/标志一带的中心（取名字框所在竖排栈的矩形）
 	var center := Vector2(get_viewport().get_visible_rect().size.x * 0.5, 40.0)
@@ -3101,6 +3166,7 @@ func _defeat_anim_side(loser_fn: int) -> void:
 	#   （原来这里是 `play("death")` —— `SFX_STREAMS` 里根本没有 `death` 这个键 ⇒ 一直静音）。
 	AudioManager.play("defeat_blast")
 	await get_tree().create_timer(0.75).timeout
+	_defeat_anim_running = false   # 演出播完：下一次结算（重开一局 / 回放再看一遍）照常演
 
 ## 【2026-09-29】失败演出用的一次性爆炸：从中心向外炸一圈碎片 + 一圈冲击环，0.7 秒后自毁。
 ##   纯自绘、`MOUSE_FILTER_IGNORE`（不挡任何点击），加在 `_kill_fx` 层上（画在按钮之上）。
@@ -3288,12 +3354,14 @@ func show_result(win: bool, play_sound: bool = true) -> void:
 	#   （用户原话：「把天梯模式的重开和返回选人按钮删除」）⇒ 结算面板只留：
 	#   赢了 =「继续挑战」+「保存并退出」；输了 = 本轮结束，只给「返回主菜单」（退出/结束走暂停界面那两个）。
 	if ladder and win:
-		var again := Button.new()
-		again.text = "继续挑战"
-		again.custom_minimum_size = Vector2(260, 52)
-		again.add_theme_font_size_override("font_size", 20)
-		again.pressed.connect(_on_restart.bind(true))   # 连胜继续，下一局重新选人/选卡组
-		box.add_child(again)
+		# 【2026-09-29·用户贴的 `CONFUSABLE_LOCAL_DECLARATION`】这里原来叫 `again`，而下面**父块**
+		#   还有一个 `again`（「再来一局」那颗）⇒ 报警 ⇒ 本块这颗改名 `challenge_btn`（纯换名）。
+		var challenge_btn := Button.new()
+		challenge_btn.text = "继续挑战"
+		challenge_btn.custom_minimum_size = Vector2(260, 52)
+		challenge_btn.add_theme_font_size_override("font_size", 20)
+		challenge_btn.pressed.connect(_on_restart.bind(true))   # 连胜继续，下一局重新选人/选卡组
+		box.add_child(challenge_btn)
 		# 【2026-09-24 用户要求·补】胜利面板也要能"存着走"（原来只有继续挑战 ⇒ 想退出只能先进下一局再暂停）
 		var save_quit := Button.new()
 		save_quit.text = "保存并退出"
@@ -3455,7 +3523,9 @@ class DeathMark extends Control:
 	var filled := false          ## false = 未死亡标志（素材：蓝/红）；true = 死亡标志
 	var faction := DataRegistry.Faction.PLAYER   ## 这一行属于哪个**绝对阵营**（决定用蓝的还是红的那张）
 
-	func _init(fn: int = DataRegistry.Faction.PLAYER) -> void:
+	# 【2026-09-29·用户贴的 `INT_AS_ENUM_WITHOUT_CAST`】`faction` 是枚举类型（下面那行 `:=`
+	#   从 `DataRegistry.Faction.PLAYER` 推出）⇒ 入参原来标 `int` 时赋值会报警 ⇒ 入参也标成枚举。
+	func _init(fn: DataRegistry.Faction = DataRegistry.Faction.PLAYER) -> void:
 		faction = fn
 		custom_minimum_size = Vector2(SLOT_D, SLOT_D)
 		size = Vector2(SLOT_D, SLOT_D)
@@ -3915,25 +3985,26 @@ class KillFx extends Control:
 		var cy := vs.y * (Y_CENTER + _yoff)
 		# 位置：`_p = 0.5` 时左边缘 = (屏宽 − 卡宽)/2 ⇒ **正好居中**
 		var pos := Vector2(lerpf(-dsz.x, vs.x, _p), cy - dsz.y * 0.5)
-		var tr := _trail
-		if tr > 0.001:
+		# 【2026-09-29·同 `_make_name_plate` 那条】`tr` 会遮蔽 `Object.tr()` ⇒ 改名 `trail`（纯换名）
+		var trail := _trail
+		if trail > 0.001:
 			# 【2026-09-28·用户口径「拖影不要一整块，增加点层次感」】拖影改成**五层**：
 			#   ① 外层柔光带（最高最淡最长）→ ② 主体色带（中层）→ ③ 亮芯（窄而亮，压在最上面）
 			#   → ④ 几条长短不一的速度线（上下错开，给"擦过去"的质感）→ ⑤ 卡面本色残影（逐张变淡）。
 			#   【同日再一句「残影不要斜线」】三块色带一律**等宽矩形**（原来头高尾细 ⇒ 上下两条斜边），
 			#   残影也一律同一水平线 ⇒ 整个拖影只有水平方向的层次，没有斜线。想更干净就删掉 ①/④ 或调小 GHOST_N。
 			var x_head := pos.x + dsz.x * 0.30
-			_band(x_head - dsz.x * 2.4, x_head, cy, dsz.y * 0.26, 0.20 * tr)
-			_band(x_head - dsz.x * 1.8, x_head, cy, dsz.y * 0.17, 0.40 * tr)
-			_band(x_head - dsz.x * 1.2, x_head, cy, dsz.y * 0.055, 0.75 * tr)
+			_band(x_head - dsz.x * 2.4, x_head, cy, dsz.y * 0.26, 0.20 * trail)
+			_band(x_head - dsz.x * 1.8, x_head, cy, dsz.y * 0.17, 0.40 * trail)
+			_band(x_head - dsz.x * 1.2, x_head, cy, dsz.y * 0.055, 0.75 * trail)
 			for s: Vector2 in SPEED_LINES:
 				var sy := cy + dsz.y * s.x
 				var slen := dsz.x * s.y
 				draw_line(Vector2(x_head - dsz.x * 0.15 - slen, sy), Vector2(x_head, sy),
-					Color(_col.r, _col.g, _col.b, 0.45 * tr), maxf(1.5, dsz.y * 0.012), true)
+					Color(_col.r, _col.g, _col.b, 0.45 * trail), maxf(1.5, dsz.y * 0.012), true)
 			for i in range(GHOST_N, 0, -1):
 				var gx := pos.x - dsz.x * GHOST_STEP * float(i)
-				var ga := 0.34 * (1.0 - float(i - 1) / float(GHOST_N)) * tr
+				var ga := 0.34 * (1.0 - float(i - 1) / float(GHOST_N)) * trail
 				# 【2026-09-28·用户口径「残影不要斜线」】残影一律**同一水平线**排开（原来每张往下错 1.2% 卡高，
 				#   叠起来像一条往下的斜线）⇒ y 恒等于卡面 y。
 				draw_texture_rect(_tex, Rect2(Vector2(gx, pos.y), dsz), false, Color(_col.r, _col.g, _col.b, ga))

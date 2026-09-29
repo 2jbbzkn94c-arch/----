@@ -32,13 +32,73 @@ var graves: Dictionary = {}        # cell -> hero_id（阵亡墓碑：替补可�
 var cell_drop: Dictionary = {}       # cell -> float
 var obstacle_drop: Dictionary = {}   # cell -> float
 var item_drop: Dictionary = {}       # cell -> float
-var _cell_fill := Color(0.12, 0.14, 0.2, 0.86)   # 兜底底色（木纹贴图缺失时才用）
-var _cell_line := Color(0, 0, 0, 0.85)   # 六边形格线：黑色，清楚显示格子边界
-# 【已删 2026-09-19（用户同意）】原 `_side_zone_player` / `_side_zone_enemy` 两个颜色常量：
-#   木纹贴图上线后，出生区改用下面的"半透明色罩"（`_zone_player_overlay` / `_zone_enemy_overlay`），
-#   这两个旧常量在全项目**再无任何引用** ⇒ Godot 启动时报 `UNUSED_PRIVATE_CLASS_VARIABLE`
-#   （`BoardView.gd:16`）⇒ 直接删掉，控制台恢复干净。
-# 木纹贴上后，出生区/高亮改成"半透明色罩"盖在木纹上（否则会把木纹整块盖住看不见）
+# 【2026-09-29·用户要求「格子改成从下往上一排一排冒出来」→ 随后「**不要有格子从小变大的动画**」】
+#   格子的"出现进度"：cell -> 0~1（没登记 = 1 = 正常）。
+#   0 = 还没出现（**尺寸照旧、只是全透明**），1 = 正常 ⇒ 逐排"直接现身"，**不做任何缩放**。
+#   由 `Battle._play_board_intro()` 一排一排地驱动（`_set_cell_show()`），演出结束清空。
+var cell_show: Dictionary = {}
+# 该格当前的出现进度（0~1）与线透明度（进度直接当透明度：一排 0.30 秒淡入）
+func _cell_show_v(cell: Vector2i) -> float:
+	return clampf(float(cell_show.get(cell, 1.0)), 0.0, 1.0)
+
+func _cell_alpha(cell: Vector2i) -> float:
+	return _cell_show_v(cell)
+# ---- 【2026-09-29·用户口径「把背景换成地图，然后在上面画棋盘」】----
+#   本层不画任何"格子面"：地面就是 `Battle` 本局抽中的那张地图贴图（`Battle.BATTLE_BG_MAPS` 随机池，
+#   联机两端同种子抽同一张；旧名 `BATTLE_BG_CANDIDATES` 已随"两张随机"改成 `BATTLE_BG_MAPS`）。
+#   棋盘 = **直接画在这张地面上的一层六边形**：
+#     ① 每格一层极淡的"内凹"压暗（`CELL_SCRIM`，0 = 不压）—— 让对局区从地面里收进去一点；
+#     ② 每格一点随机的明暗差（`CELL_SHADE`）—— 一块一块的"手工感"，这是"看起来像一个个格子"的一半；
+#     ③ 格子边界 = **一条黑格线**（见下面 `GRID_LINE`）：画在格边本身、相邻格共用一条，
+#        所以六边形严丝合缝贴在一起（早期版本画在格子内侧，会出现"双线/间距不匀"）。
+#   所以"换地图"= 增删 `Battle.BATTLE_BG_MAPS` 里的行，代码不用动。
+#   ⚠️ 原来那套"逐格铺木纹贴片"（`TILE_TEXS` / `TILE_TINT` / `tile_pick` / `set_tile_seed` / `_draw_cell_tile`）
+#     已整块删掉 —— 用户报的"贴片感"就出在它身上，现在木纹由整张地图提供、天然连续。
+# ---- 格子边界：**黑色格线，画在格边本身**（2026-09-29·用户实机迭代到第四版定稿口径）----
+#   用户原话：「**还是改成黑色**，现在六边形没有贴在一起，显得有些线条又粗又细」⇒ 两个结论：
+#     ① 颜色回到**黑**（不透明 `Color(0,0,0,1)`）；
+#     ② **`GRID_LINE_INSET` 必须 = 0**：上一版把线画在每格**内侧**，于是相邻两格的线各画一条、
+#        中间夹着一道没画的缝 ⇒ 六边形之间看着"没贴在一起"，而且两条 3px 的线并排叠成 ~6px、
+#        在顶点附近还会互相错开 ⇒ 就是用户说的"又粗又细"。
+#        画在**格边本身**：相邻两格共用同一条线 ⇒ 六边形严丝合缝贴在一起，粗细处处一致。
+#   ⚠️ 为什么这里不怕"两格各画一次"：颜色是**不透明**的（alpha 1.0）⇒ 画第二遍与第一遍完全一样，
+#     不会像半透明/深棕那样叠出深浅差。（想改回半透明就必须把 `GRID_LINE_INSET` 调回 1.5 以上。）
+#   ⚠️ 常用拧法：嫌粗/嫌细 → `GRID_LINE_W`（现 2.8；2.0 很细、4.0 很重）；
+#     嫌纯黑太硬 → 把 `GRID_LINE` 改成暖黑 `Color(0.10, 0.06, 0.04, 1.0)`（仍是线，不会发灰）；
+#     想柔一点（透出地面）→ 降 alpha，但同时要把 `GRID_LINE_INSET` 调回 1.5 以上，否则会一深一浅。
+#   另一条**备用路线**：`EDGE_LIGHT` / `EDGE_DARK` = 「内棱」（把每格当板子打光，上侧受光、下侧背光）。
+#   【2026-09-29·用户要求「能不能让棋盘更加立体感点」】**黑线保留，另外把内棱开回来当"槽口"**：
+#     黑线是缝，缝的两侧各一道内棱（缝上方那格的**下棱偏暗**、缝下方那格的**上棱偏亮**）
+#     ⇒ 看上去是一道有厚度、能接光的凹槽，而不是一条平贴的线 ✓（这就是"立体感"的主要来源）
+const GRID_LINE := Color(0.0, 0.0, 0.0, 1.0)          # 黑色格线（不透明；alpha 0 = 不画）
+const GRID_LINE_W := 2.8                              # 黑线宽（像素）
+const GRID_LINE_INSET := 0.0                          # 0 = 画在格边本身（相邻格共用一条 ⇒ 六边形贴在一起）
+# 【2026-09-29·用户要求「立体感还能再强点吗」】内棱加粗加深（0.14/0.22 → **0.24/0.38**、宽 3.0 → **3.8**），
+#   并在每道棱**往里再补一道更宽的柔光棱**（`EDGE_SOFT_*`，往格内渐隐）⇒ 槽口看着更厚、更像刻出来的。
+#   ⚠️ 这两组是"立体感"的主旋钮；嫌脏/太硬就往下调，或把 `EDGE_SOFT_A` 设 0 只留硬棱。
+const EDGE_LIGHT := Color(1.0, 0.96, 0.90, 0.24)      # 上侧内棱（受光；0 = 关这道棱）
+const EDGE_DARK := Color(0.06, 0.04, 0.025, 0.38)     # 下侧内棱（背光；0 = 关这道棱）
+const EDGE_W := 3.8                                   # 内棱线宽（像素）
+const EDGE_INSET := 2.0                               # 内棱相对格边往自己格子里缩多少像素
+const EDGE_SOFT_W := 10.0                             # 柔光棱宽度（像素；往格内渐隐，0 = 不画）
+const EDGE_SOFT_A := 0.13                             # 柔光棱透明度（受光那侧用 `EDGE_LIGHT` 的色）
+const EDGE_SOFT_LIGHT_A := 0.10                       # 柔光棱（背光那侧用 `EDGE_DARK` 的色）
+# ---- 棋盘整体的立体感 ----
+# 【2026-09-29·用户要求「让棋盘更加立体感点」】当时加了这三层；**随后用户要求「棋盘不要加黑色图层」
+#   ⇒ 压暗类全部关掉**（`BOARD_SHADOW_A` / `BOARD_SHADOW_SOFT_A` / `EDGE_RIM_A` / `CELL_SCRIM` /
+#   `CELL_SHADE` 全设成 0）—— 只留"黑格线 + 槽口内棱"，地面上不再有任何压暗层。
+#   想再要一点纵深：把某个值往回加一点即可（比如 `CELL_SCRIM` 0.06、`BOARD_SHADOW_A` 0.12、
+#   `EDGE_RIM_A` 0.08、`CELL_SHADE` 0.03）；每个都能单独设 0 关掉。
+const BOARD_SHADOW_A := 0.0                           # 外缘投影强度（0 = 不画）
+const BOARD_SHADOW_W := 3.5                           # 投影线宽（像素）
+const BOARD_SHADOW_DROP := 3.0                        # 投影下移像素（光源在上方）
+const BOARD_SHADOW_SOFT_A := 0.0                      # 第二层更软的投影强度
+const BOARD_SHADOW_SOFT_W := 8.0                      # 第二层线宽
+const EDGE_RIM_A := 0.0                               # 最外圈格子额外压暗多少（0 = 不压）
+const CELL_SCRIM := 0.0                               # 每格压暗多少（0 = 完全不压）
+const CELL_SCRIM_COLOR := Color(0.06, 0.04, 0.03)     # 压暗往哪个色偏（暖黑）
+const CELL_SHADE := 0.0                               # 每格随机明暗差（0 = 全部一样亮）
+# 出生区/高亮改成"半透明色罩"盖在地面上（否则会把地面整块盖住看不见）
 var _zone_player_overlay := Color(0.10, 0.45, 0.85, 0.42)
 var _zone_enemy_overlay := Color(0.85, 0.2, 0.18, 0.38)
 # 敌方出生区完整格列表（顶帽行+第一满行）；非空时用于底色上色（整片统一）
@@ -59,7 +119,7 @@ const BOMB_TEX := preload("res://assets/图标/炸弹.png")
 # 【2026-09-29·用户要求「炸弹缩小点」】0.62 → **0.50**（去掉白底后图案顶满整框，同一个系数下看着偏大）。
 const BOMB_H := 0.50
 # 【2026-09-29·用户报「炸弹暗一点，有点格格不入」】贴图调制色：把炸弹整体压暗一档、略微偏冷，
-#   好和木地板/酒桶那套色调融在一起（做法与地块那层 `TILE_TINT` 相同：只是画的时候乘一层色，**原图不动**）。
+#   好和木地板/酒桶那套色调融在一起（做法与 `_draw_cell_icon()` 的 `tint` 参数同一个道理：只乘一层色，**原图不动**）。
 #   调法：三个分量一起调小 = 更暗（0.6 就很暗了）；想偏暖就把蓝分量调低、想偏冷就把红分量调低。
 const BOMB_TINT := Color(0.78, 0.79, 0.82, 1.0)
 # 墓碑尺寸：碑高 = 格高 × 这个系数（与酒桶 OBSTACLE_H 同口径：正好落在六边形格子里、不压相邻格）。
@@ -92,25 +152,13 @@ const ITEM_MOVE_TEX := preload("res://assets/美术资源/道具移动.png")
 # 酒桶尺寸：桶高 = 格高 × 这个系数。0.78 左右桶正好整个落在六边形格子里（不会压到相邻格）；
 # 想更大/更小就改这一个数。
 const OBSTACLE_H := 0.60
-# 地块木纹（2026-09-14 用户提供两张：干净木板 / 带血污木板）。
-# 处理过：去奶白底透明化、六边形遮罩裁掉四角水印、裁到图案边界、**旋转 90°**——
-# 用户原图是"顶点朝上"的六边形，而棋盘是"平边朝上"，不转过来边角对不上。
-const TILE_TEXS: Array = [
-	preload("res://assets/美术资源/地块木板1.png"),
-	preload("res://assets/美术资源/地块木板2.png"),
-]
-# 木纹压暗（乘法着色）：原图是很亮的橙木，直接铺会晃眼、也压过棋子。
-# 想更暗/更亮就改这里：三个分量越小越暗；让 R 略小于 G/B 可以顺带降一点饱和。
-const TILE_TINT := Color(0.76, 0.80, 0.80)
-# cell -> 用第几张木纹。开局按 tile_seed 随机铺一次（联机两端同种子，铺法一致）。
-var tile_pick: Dictionary = {}
-var tile_seed := 0
 
 # 出生区色罩是否显示：**只在部署英雄时**亮（开局选人/放位阶段由 Battle 打开，部署完就关）
 var show_spawn_zones := false
 # 格子绘制半径系数：1.0 = 相邻格严丝合缝（间隙 0）。
-# 相邻六边形中心距 = √3 × hex_size，各自画到 hex_size 半径时正好在外接处贴合，不再露底色缝。
-# 想要一条细缝（看起来更像瓷砖）就调小一点，比如 0.985。
+# 相邻六边形中心距 = √3 × hex_size，各自画到 hex_size 半径时正好在外接处贴合。
+# 【2026-09-29】现在"格子"只是地面上的一圈刻痕 ⇒ 这个系数同时决定刻痕网的疏密描边；
+# 想要一条细缝（看着像瓷砖）就调小一点，比如 0.985。
 const CELL_R := 1.0
 
 func _init(g: HexGrid, origin: Vector2 = Vector2.ZERO) -> void:
@@ -119,35 +167,100 @@ func _init(g: HexGrid, origin: Vector2 = Vector2.ZERO) -> void:
 
 func _ready() -> void:
 	z_index = 1
-	_rebuild_tiles()
+	_rebuild_border()
 	queue_redraw()
 
-# 按 tile_seed 随机给每格挑一张木纹。格子顺序来自 grid.all_cells()，两端一致。
-func _rebuild_tiles() -> void:
-	tile_pick.clear()
+# ---- 【2026-09-29·用户要求「让棋盘更加立体感点」】棋盘外缘：哪几条边在"最外圈" + 哪些格是边格 ----
+#   判据：沿这条边的**外法线**方向、隔一个格距（√3 × 半径）找邻格 —— 找不到（棋盘外/顶帽行缺口）
+#   ⇒ 这条边是外缘边。只在 `_ready()` 算一次（棋盘几何此后不变），绘制时直接用。
+var _border_edges: Array = []      # 每项 = [起点 Vector2, 终点 Vector2]（本节点本地坐标）
+var _border_cells: Array = []      # 最外圈格子（用于"内圈压暗"）
+
+func _rebuild_border() -> void:
+	_border_edges.clear()
+	_border_cells.clear()
 	if grid == null:
 		return
-	var rng := RandomNumberGenerator.new()
-	rng.seed = tile_seed
-	for cell in grid.all_cells():
-		tile_pick[cell] = rng.randi() % TILE_TEXS.size()
-	queue_redraw()
+	var member := {}
+	for c in grid.all_cells():
+		member[c] = true
+	var all: Array = grid.all_cells()
+	var r := grid.hex_size * CELL_R
+	for cell in all:
+		var center := board_origin + grid.cell_to_world(cell)
+		var pts := _hex_points(center, r)
+		var is_border := false
+		for i in 6:
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[(i + 1) % 6]
+			var mid := (a + b) * 0.5
+			var n := (b - a).orthogonal().normalized()
+			if n.dot(mid - center) < 0.0:
+				n = -n                     # 取朝外的法线
+			var outside := center + n * (sqrt(3.0) * r)   # 邻格中心（几何位置）
+			# 这个位置上真的有相邻格吗？（顶帽行/棋盘边界处会没有 ⇒ 那就是外缘）
+			var found := false
+			for other in all:
+				if other == cell:
+					continue
+				if grid.distance(cell, other) != 1:
+					continue
+				if (board_origin + grid.cell_to_world(other)).distance_to(outside) < r * 0.35:
+					found = true
+					break
+			if not found:
+				_border_edges.append([a, b])
+				is_border = true
+		if is_border:
+			_border_cells.append(cell)
 
-# 外部（Battle）在开局时给一个种子：联机用同一颗种子 → 两端木纹位置一致；单机每局随机
-func set_tile_seed(s: int) -> void:
-	tile_seed = s
-	_rebuild_tiles()
+# 棋盘外缘投影：两层（窄而实 + 宽而淡），整体往下偏 ⇒ 棋盘像压在地面上
+func _draw_board_shadow() -> void:
+	if BOARD_SHADOW_A <= 0.0 and BOARD_SHADOW_SOFT_A <= 0.0:
+		return
+	if not cell_drop.is_empty():
+		return   # 开场"格子从天上掉下来"期间不画棋盘外缘阴影（那时棋盘还没拼好，会看着像地上先有一圈黑影）
+	var drop := Vector2(0.0, BOARD_SHADOW_DROP)
+	for e in _border_edges:
+		var a: Vector2 = e[0] + drop
+		var b: Vector2 = e[1] + drop
+		if BOARD_SHADOW_SOFT_A > 0.0 and BOARD_SHADOW_SOFT_W > 0.0:
+			draw_line(a, b, Color(0.04, 0.03, 0.02, BOARD_SHADOW_SOFT_A), BOARD_SHADOW_SOFT_W, true)
+		if BOARD_SHADOW_A > 0.0 and BOARD_SHADOW_W > 0.0:
+			draw_line(a, b, Color(0.04, 0.03, 0.02, BOARD_SHADOW_A), BOARD_SHADOW_W, true)
 
 func _draw() -> void:
 	if grid == null:
 		return
-	for cell in grid.all_cells():
-		var center := board_origin + grid.cell_to_world(cell) + Vector2(0.0, float(cell_drop.get(cell, 0.0)))
-		_draw_cell_tile(cell, center)          # 木纹底（两张图随机铺）
+	var cells: Array = grid.all_cells()
+	# 【2026-09-29·用户口径「在地面上画棋盘」+「让棋盘更加立体感点」】分段画：
+	#   ① 棋盘外缘投影（只沿最外圈那几条边，往下偏移）→ ② 最外圈格子额外压暗（内圈阴影）
+	#   → ③ 每格内凹压暗 → ④ 每格随机明暗差 → ⑤ 出生区/高亮色罩 → ⑥ 黑格线
+	#   → ⑦ 上侧受光 / 下侧背光内棱（槽口，立体感主力）。
+	#   地面本身是 Battle 那张地图贴图（本层不画任何格子面 ⇒ 木纹天然连续、没有贴片感）。
+	_draw_board_shadow()
+	if EDGE_RIM_A > 0.0:
+		for cell in _border_cells:
+			_draw_hex_fill(_cell_draw_center(cell), grid.hex_size * CELL_R,
+				Color(0.06, 0.04, 0.03, EDGE_RIM_A))
+	for cell in cells:
+		_draw_cell_scrim(cell, _cell_draw_center(cell))
+	for cell in cells:
+		_draw_cell_shade(cell, _cell_draw_center(cell))
+	for cell in cells:
+		var center := _cell_draw_center(cell)
 		var tint: Variant = _cell_tint(cell)
 		if tint != null:
 			_draw_hex_fill(center, grid.hex_size * CELL_R, tint)   # 出生区/高亮：半透明色罩
-		_draw_hex_outline(center, grid.hex_size * CELL_R, _cell_line)
+	if GRID_LINE.a > 0.0:
+		for cell in cells:
+			_draw_cell_grid_line(cell, _cell_draw_center(cell))
+	if EDGE_LIGHT.a > 0.0:
+		for cell in cells:
+			_draw_cell_edge_light(cell, _cell_draw_center(cell))
+	if EDGE_DARK.a > 0.0:
+		for cell in cells:
+			_draw_cell_edge_dark(cell, _cell_draw_center(cell))
 	# 炸弹标记（【2026-09-29·用户要求「加了个炸弹，替换炸弹」】改用贴图 `BOMB_TEX`；
 	#   尺寸口径与酒桶/墓碑一致：高 = 格高 × `BOMB_H`、宽按原图比例。原来这里是程序画的
 	#   "黑底圆 + 橙芯 + 淡红圈"三笔。）
@@ -234,22 +347,77 @@ func _grave_faction(cell: Vector2i) -> int:
 		return int((g as Dictionary).get("fn", DataRegistry.Faction.ENEMY))
 	return DataRegistry.Faction.ENEMY
 
-func _draw_hex(center: Vector2, radius: float, fill: Color, line: Color) -> void:
-	var pts := _hex_points(center, radius)
-	draw_colored_polygon(pts, fill)
-	draw_polyline(_closed(pts), line, 2.0, true)
+# 某一格**画的时候**的中心：正常位置 + 开场"从天上掉下来"的演出偏移（`cell_drop`）。
+# 【2026-09-29】现在掉下来的是"地面上的这一圈刻痕"（地面本身是背景那张地图，不动）。
+func _cell_draw_center(cell: Vector2i) -> Vector2:
+	return board_origin + grid.cell_to_world(cell) + Vector2(0.0, float(cell_drop.get(cell, 0.0)))
 
-# 每格的木纹底：贴图本身就是"平边朝上"的六边形外框（宽:高 = 2:√3），按格子六边形等比铺满即可
-func _draw_cell_tile(cell: Vector2i, center: Vector2) -> void:
-	if TILE_TEXS.size() == 0:
-		_draw_hex(center, grid.hex_size * CELL_R, _cell_fill, _cell_line)
+# 每格的"内凹"压暗（`CELL_SCRIM` = 0 就不画）：让对局区从地面里收进去一点，格子边界更清楚。
+func _draw_cell_scrim(cell: Vector2i, center: Vector2) -> void:
+	if CELL_SCRIM <= 0.0:
 		return
-	var tex: Texture2D = TILE_TEXS[int(tile_pick.get(cell, 0)) % TILE_TEXS.size()]
-	var r := grid.hex_size * CELL_R
-	var size := Vector2(r * 2.0, r * sqrt(3.0))
-	draw_texture_rect(tex, Rect2(center - size * 0.5, size), false, TILE_TINT)
+	draw_colored_polygon(_hex_points(center, grid.hex_size * CELL_R),
+		Color(CELL_SCRIM_COLOR.r, CELL_SCRIM_COLOR.g, CELL_SCRIM_COLOR.b, CELL_SCRIM * _cell_alpha(cell)))
 
-# 该格要不要再盖一层色罩：高亮 > （仅部署阶段）出生区；都不需要时返回 null（纯木纹）
+# 每格的随机明暗差（`CELL_SHADE` = 0 就不画）：值由格坐标算出来（稳定、两端一致、不用种子），
+# 亮的一半盖一层白、暗的一半盖一层黑 ⇒ 一格一格像手工铺的板子（这是"像一个一个格子"的一半功劳）。
+func _draw_cell_shade(cell: Vector2i, center: Vector2) -> void:
+	if CELL_SHADE <= 0.0:
+		return
+	var v := _cell_shade_value(cell)
+	var a := absf(v) * CELL_SHADE
+	if a < 0.004:
+		return
+	var c := Color(1.0, 1.0, 1.0, a) if v > 0.0 else Color(0.0, 0.0, 0.0, a)
+	draw_colored_polygon(_hex_points(center, grid.hex_size * CELL_R), c)
+
+# 格坐标 → -1~1 的稳定小噪声（不依赖 RNG ⇒ 每局、联机两端都是同一套明暗）
+func _cell_shade_value(cell: Vector2i) -> float:
+	var h: int = int(cell.x) * 73856093 ^ int(cell.y) * 19349663
+	h = (h ^ (h >> 13)) * 1274126177
+	return float((h >> 8) & 255) / 127.5 - 1.0
+
+# 白格线（默认路线）：一条白线绕六边形一圈，画在格边**内侧** ⇒ 相邻两格各画各的、互不叠加，
+# 整片亮度均匀（压在格边上的画法会被两格各画一次，内外深浅不一）。
+# 【2026-09-29·用户要求「格子从下往上一排一排冒出来」→ 随后「**不要有格子从小变大的动画**」】
+#   按 `cell_show`（出现进度）**只做淡入**：`_cell_alpha()` 0→1，**半径与线宽都不动**。
+func _draw_cell_grid_line(cell: Vector2i, center: Vector2) -> void:
+	var r := maxf(1.0, grid.hex_size * CELL_R - GRID_LINE_INSET)
+	var col := Color(GRID_LINE.r, GRID_LINE.g, GRID_LINE.b, GRID_LINE.a * _cell_alpha(cell))
+	draw_polyline(_closed(_hex_points(center, r)), col, GRID_LINE_W, true)
+
+# ---- 格子边界的「内棱」（上一版路线，现在 alpha 默认 0 = 关；见文件顶部 `EDGE_*` 的说明）----
+# 上侧 3 条边 = 受光内棱（画在自己格子内侧）· 下侧 3 条边 = 背光内棱（同样在自己格子内侧）。
+# 顶点顺序来自 `_hex_points()`（平顶六边形）：0=右 1=右下 2=左下 3=左 4=左上 5=右上。
+func _draw_cell_edge_light(cell: Vector2i, center: Vector2) -> void:
+	var r := maxf(1.0, grid.hex_size * CELL_R)
+	var a := _cell_alpha(cell)
+	# 硬棱（贴着槽口）
+	var pts := _hex_points(center, maxf(1.0, r - EDGE_INSET))
+	var top := PackedVector2Array([pts[0], pts[5], pts[4], pts[3]])   # 上侧：右上 → 上 → 左上
+	draw_polyline(top, Color(EDGE_LIGHT.r, EDGE_LIGHT.g, EDGE_LIGHT.b, EDGE_LIGHT.a * a), EDGE_W, true)
+	# 柔光棱（再往里一道、更宽更淡 ⇒ 往格内渐隐，像受光面）
+	if EDGE_SOFT_A > 0.0 and EDGE_SOFT_W > 0.0:
+		var pts2 := _hex_points(center, maxf(1.0, r - EDGE_INSET - EDGE_W))
+		var top2 := PackedVector2Array([pts2[0], pts2[5], pts2[4], pts2[3]])
+		draw_polyline(top2, Color(EDGE_LIGHT.r, EDGE_LIGHT.g, EDGE_LIGHT.b, EDGE_SOFT_A * a),
+			EDGE_SOFT_W, true)
+
+func _draw_cell_edge_dark(cell: Vector2i, center: Vector2) -> void:
+	var r := maxf(1.0, grid.hex_size * CELL_R)
+	var a := _cell_alpha(cell)
+	# 硬棱（贴着槽口）
+	var pts := _hex_points(center, maxf(1.0, r - EDGE_INSET))
+	var bottom := PackedVector2Array([pts[3], pts[2], pts[1], pts[0]])   # 下侧：左下 → 下 → 右下
+	draw_polyline(bottom, Color(EDGE_DARK.r, EDGE_DARK.g, EDGE_DARK.b, EDGE_DARK.a * a), EDGE_W, true)
+	# 柔光棱（再往里一道、更宽更淡 ⇒ 往格内渐隐，像背光面的过渡）
+	if EDGE_SOFT_LIGHT_A > 0.0 and EDGE_SOFT_W > 0.0:
+		var pts2 := _hex_points(center, maxf(1.0, r - EDGE_INSET - EDGE_W))
+		var bottom2 := PackedVector2Array([pts2[3], pts2[2], pts2[1], pts2[0]])
+		draw_polyline(bottom2, Color(EDGE_DARK.r, EDGE_DARK.g, EDGE_DARK.b, EDGE_SOFT_LIGHT_A * a),
+			EDGE_SOFT_W, true)
+
+# 该格要不要再盖一层色罩：高亮 > （仅部署阶段）出生区；都不需要时返回 null（露出地面）
 # 【2026-09-28·用户报「部署阶段，英雄的蓝色底色和出生区有重叠」】**有棋子的格不画出生区色罩**：
 #   棋子自己的阵营底色是半透明的 ⇒ 与出生区那层蓝/红叠在一起成了"双层蓝"，看着像重叠成一块。
 #   占用表由 `Battle._process()` 每帧推（`set_occupied`），只有部署阶段会用到。
@@ -332,7 +500,7 @@ func _draw_cell_digit(center: Vector2, txt: String) -> void:
 	draw_string(f, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1))
 
 # 把贴图按原始比例放进"边长 box 的正方形"里，居中画到格子中心（道具/金矿/障碍共用思路）
-# `tint` = 贴图调制色（默认白色 = 原样画；与地块那层 `TILE_TINT` 一个用法，用来把某张图压暗/调色）
+# `tint` = 贴图调制色（默认白色 = 原样画；用来把某张图压暗/调色，如炸弹那层 `BOMB_TINT`）
 func _draw_cell_icon(tex: Texture2D, center: Vector2, box: float, tint: Color = Color(1, 1, 1, 1)) -> void:
 	var tw := float(tex.get_width())
 	var th := float(tex.get_height())
@@ -352,9 +520,6 @@ func _hex_points(center: Vector2, radius: float) -> PackedVector2Array:
 
 func _draw_hex_fill(center: Vector2, radius: float, fill: Color) -> void:
 	draw_colored_polygon(_hex_points(center, radius), fill)
-
-func _draw_hex_outline(center: Vector2, radius: float, line: Color) -> void:
-	draw_polyline(_closed(_hex_points(center, radius)), line, 2.0, true)
 
 func _closed(pts: PackedVector2Array) -> PackedVector2Array:
 	var out := pts.duplicate()

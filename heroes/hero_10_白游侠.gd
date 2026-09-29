@@ -13,10 +13,10 @@ func on_attack(target: Unit) -> void:
 		return
 	if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
 		fx()
-		fx_on_target(target)
+		# 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】
+		#   原来这里还有一句 `fx_on_target(target)`（在目标格也爆一环）⇒ 去掉，只留施法者自己那圈。
 	battle._add_status_msg(target, StatusDB.FREEZE)
 	for v in battle._same_side_adjacent(target):
-		fx_on_target(v)
 		v.set_big_hit_style()
 		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, StatusDB.FREEZE)
@@ -29,7 +29,6 @@ func on_attack_dead(target: Unit) -> void:
 		return
 	# 死亡目标：仍冰冻其相邻敌人（目标本体已亡，不再冰冻自身）
 	for v in battle._same_side_adjacent(target):
-		fx_on_target(v)
 		v.set_big_hit_style()
 		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, StatusDB.FREEZE)

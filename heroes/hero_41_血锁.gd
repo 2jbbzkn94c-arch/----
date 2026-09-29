@@ -79,6 +79,18 @@ func refresh_identity() -> void:
 func skips_lunge_anim() -> bool:
 	return true
 
+## 【2026-09-30·用户口径「血锁贴身不拉人的时候也要刀光」】拉得动才有钩爪演出：
+##   `Battle._pull_to()` 在**已经贴身**（距离 ≤1）时直接返回 false ⇒ 连钩爪都不出、画面上什么都没有。
+##   这里如实报"这一击有没有位移演出"：贴身为 false ⇒ Battle 会补一道**原地刀光**
+##   （见 `HeroBase.melee_has_displace_fx`）；距离 ≥2 为 true ⇒ 钩爪自己就是演出，不再叠刀光。
+##   ⚠️ 判据必须与 `_pull_to()` 开头那句一致（两边都是"距离 ≤1 = 拉不动"）。
+func melee_has_displace_fx(target: Unit) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	if battle == null or battle.grid == null:
+		return false
+	return battle.grid.distance(unit.cell, target.cell) > 1
+
 ## 【2026-09-23 新增·与暗域同一处修复】结算后钩爪整段还要放 0.34s
 ##   （飞出 0→0.12 / 咬住 →0.16 / 收链 + 把目标拖到位 →0.34，见 `_play_hook_fx` 的时间轴）
 ##   ⇒ 反击要等它放完再加标准停顿，否则"拖人还没到位反击就冲上来了"。

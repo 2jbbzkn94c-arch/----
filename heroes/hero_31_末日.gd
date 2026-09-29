@@ -3,18 +3,18 @@ extends HeroBase
 class_name HeroDoomsday
 
 func on_move() -> void:
+	# 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】去掉逐目标爆环
+	#   （原来两个循环里各有一句 `fx_on_target(v)`）⇒ 只留末尾那一次 `fx()`（自己身上那圈）。
 	var hurt_any := false
 	# 先敌人
 	for v in battle.units:
 		if v.alive and v != unit and v.hp < unit.hp and v.faction != unit.faction:
-			fx_on_target(v)
 			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的末日肃清" % unit.display_name, true)
 			hurt_any = true
 	# 再队友
 	for v in battle.units:
 		if v.alive and v != unit and v.hp < unit.hp and v.faction == unit.faction:
-			fx_on_target(v)
 			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的末日波及" % unit.display_name, true)
 			hurt_any = true

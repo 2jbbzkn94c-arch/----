@@ -1088,6 +1088,16 @@ func stop_hero_walk() -> void:
 	if _walk_player != null and _walk_player.playing:
 		_walk_player.stop()
 
+## 【2026-09-29·用户报「部署阶段返回主菜单，登场音效还在响」】只掐**人声**这一条。
+##   登场台词（`play_hero_voice(名字, "line")`）走 `_voice_player`，长的一两句就有好几秒
+##   （部署流程还在 `_deploy_wait_entrance()` 里等它，最长 `ENTRANCE_VOICE_CAP` 4 秒）；
+##   而 AudioManager 是 autoload 常驻 ⇒ 不掐就会跟着飘进主菜单/大厅。
+##   ⚠️ 不动 `_players` 池：按钮点击音与短音效共用它，离场时立即清会把"返回主菜单"那声点击拦腰截断。
+func stop_hero_voice() -> void:
+	if _voice_player != null and is_instance_valid(_voice_player):
+		_voice_player.stop()
+	_voice_until_ms = 0   # 顺手清掉"播完时刻"，免得 AI 回放/部署流程等一条已经被掐掉的音
+
 ## 【2026-09-28·用户报「点击认输后背后还有其他音效」】立即**掐掉所有还在响的声音**：
 ##   行走音是循环节奏（最长 `WALK_MAX_SEC`）、语音/技能音还有一两秒尾巴 —— 认输是"立即收场"，
 ##   胜负框弹出来时背后不该还夹着打斗声。对局结束（认输）那条路调它，然后再放胜负音。

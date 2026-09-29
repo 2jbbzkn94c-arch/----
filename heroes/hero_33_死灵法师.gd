@@ -27,6 +27,18 @@ func _skeletons_vanish() -> void:
 			continue
 		battle.log_message.emit("%s 召唤的骷髅兵随之消散。" % s.display_name)
 		s.alive = false
-		var st: Tween = battle.create_tween()
+		# 【2026-09-30·同 `summon_骷髅兵.gd` 那处】原来写 `battle._skeleton_owner_gone.bind(s)`：
+		#   回调 0.25 秒后才响，而这段路上骷髅可能先被释放（它同时被打死 / 主人在同一次结算里
+		#   被撤下又阵亡）⇒ 绑进去的是已释放实例，`_skeleton_owner_gone(s: Unit)` 的形参转换
+		#   在**进入函数体之前**就失败（用户贴的 `Cannot convert argument 1 from Object to Object`）。
+		#   改法同款：补间绑在骷髅自己身上 + 回调走 `WeakRef` 重新取、校验后再调。
+		var w_s: WeakRef = weakref(s)
+		var st: Tween = s.create_tween()
+		if st == null:
+			battle._skeleton_owner_gone(s)   # 兜底：拿不到补间（不在树里）就直接收尾
+			continue
 		st.tween_property(s, "modulate:a", 0.0, 0.25)
-		st.tween_callback(battle._skeleton_owner_gone.bind(s))
+		st.tween_callback(func():
+			var u = w_s.get_ref()
+			if u != null and is_instance_valid(u):
+				battle._skeleton_owner_gone(u))

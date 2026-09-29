@@ -6,6 +6,8 @@ extends HeroBase
 ##   烛火点燃 / 剑气扫过的格都算那一条）；用户实机报「超新星怎么打到目标之后，旁边的障碍物也一起扣血」
 ##   ⇒ 只摘掉超新星这一处，其余四处照旧。AI 模拟侧 `BattleAI._sim_nova()` 同步摘掉（对拍口径一致）。
 ## 反过来"主动攻击障碍物"不触发任何英雄技能（规则①不变）。
+## 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】两个钩子里
+##   **逐目标**的 `fx_on_target(v)`（在被打/被推的每个人身上各爆一环）都去掉了 ⇒ 只留 `fx()`（自己身上那圈）。
 class_name HeroNova
 
 func on_attack(target: Unit) -> void:
@@ -13,7 +15,6 @@ func on_attack(target: Unit) -> void:
 	if target == null or not target.alive:
 		return
 	for v in battle._same_side_adjacent(target):
-		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)
@@ -24,7 +25,6 @@ func on_attack_dead(target: Unit) -> void:
 	if target == null or not is_instance_valid(target):
 		return
 	for v in battle._same_side_adjacent(target):
-		fx_on_target(v)
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)

@@ -49,8 +49,12 @@ func _ready() -> void:
 func _on_pool_card_clicked(hid: String) -> void:
 	AudioManager.play("select_actor")
 	_toggle(hid)
-	_build_tooltip()   # 英雄属性框（悬停/点选英雄卡时弹出）
 	set_process_input(true)   # 触屏拖动英雄池
+	# 【2026-09-29·用户报「自由部署界面点击英雄后，属性框会留着」】这里原来调的 `_build_tooltip()`
+	#   是**构造函数**（每点一次就新建一个 CanvasLayer + 一个新面板，并把 `_tooltip`/`_tooltip_box`
+	#   指向新的那个）⇒ ① 点几次就多几层；② 原来那个已经显示出来的框**再也收不起来**了
+	#   （`_hide_tooltip()` 操作的是新框、`_refresh()` 重建卡片后又不会再有 `mouse_exited`）⇒ 一直挂着。
+	#   属性框改为**只在 `_build()` 里建一次**（见那里），这条路上不再建。
 
 # ---- 英雄属性框：与普通模式选人页同一套格式（DataRegistry.hero_info_zones）----
 # 之前这一页只有"点卡=选人"，没有悬停/点选弹属性，所以在自由部署页看不到英雄属性框。
@@ -410,6 +414,7 @@ func _build() -> void:
 	btn_row.add_child(menu_btn)
 
 	_refresh()
+	_build_tooltip()   # 【2026-09-29】英雄属性框**只在这里建一次**（原来错放在"点击英雄"那条路上，见那里的说明）
 
 # 与普通模式英雄池同款：5 列平顶蜂窝 HexCard，按种族分组（人族→机械→兽族→精灵→魔族），超高可滚动
 # 【2026-09-23 用户要求】筛选也用普通模式那一套：**同一个实现** `Menu.HeroFilter`（嵌套类），
@@ -536,7 +541,11 @@ func _pick_side(s: int) -> void:
 	_refresh()
 
 func _toggle(id: String) -> void:
-	_show_detail(id)   # 点选英雄同时弹属性框（与普通模式一致：点一下就能看属性）
+	# 【2026-09-29·用户报「点击英雄后属性框会留着」】桌面靠**悬停**弹属性框就够了；点选时再弹一次会
+	#   "挂着不走"：`_refresh()` 会把卡片整批重建 ⇒ 旧卡片不会发 `mouse_exited`、鼠标底下那张新卡片
+	#   也不会发 `mouse_entered` ⇒ 没人再来收这个框。**只有触屏**（根本没有 hover）才在点选时补一次。
+	if DisplayServer.is_touchscreen_available():
+		_show_detail(id)
 	var arr := _cur()
 	if arr.has(id):
 		arr.erase(id)

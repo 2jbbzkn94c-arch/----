@@ -54,6 +54,15 @@ var grave_moved := false  # 暗域占据死亡格时：墓碑已回退到暗域�
 
 var hex_radius := 44.0
 
+# 【2026-09-29·用户报「英雄背景的颜色没有填满六边形」】阵营**底色那一层**要铺到格子边界：
+#   病灶：`Battle` 建棋子时给的是 `hex_size * 0.9`（棋子本体故意比格子小一圈），而底色与本体共用
+#   同一个多边形 ⇒ 底色边缘离格子边界还差 10%（≈8px），露出的那圈地面看着就是"颜色没填满"。
+#   ⇒ 底色单独放大 `FACTION_HEX_FILL` 倍（0.9 × 1.10 ≈ 0.99 格半径），**本体（人物图）与所有标记
+#     仍按 `hex_radius` 走**（人物大小不变，只有底色铺满）。
+#   ⚠️ 取 1.10 而不是 1/0.9≈1.111：留一线给格子那道黑线，别让半透明的底色盖住格线（盖了会发浑）。
+#      想再收一点就调小（1.0 = 与人物一样大、退回改动前），想更满就调到 1.111。
+const FACTION_HEX_FILL := 1.10
+
 # 【2026-09-28·用户口径】棋子内部的**图层契约**：
 #   · **0 = 背景**：`_hex`（阵营色六边形）与 `_art_hex`（人物图）；
 #   · `FRAME_Z`（相对）**= 框/标识**：选中金框、被动光环、行动(红橙)描边、治疗/变身粒子环；
@@ -126,7 +135,8 @@ func _ready() -> void:
 func _build_visual() -> void:
 	var fs := hex_radius / 39.0   # 字号缩放系数：棋子随 hex_size 放大时文字等比放大（基准 48*0.82≈39）
 	_hex = Polygon2D.new()
-	_hex.polygon = _hex_points(hex_radius)
+	# 【2026-09-29·用户报「英雄背景的颜色没有填满六边形」】底色单独放大到铺满格子（见 `FACTION_HEX_FILL`）
+	_hex.polygon = _hex_points(hex_radius * FACTION_HEX_FILL)
 	_hex.color = _faction_color(faction)
 	add_child(_hex)
 
@@ -136,7 +146,9 @@ func _build_visual() -> void:
 	#   贴图层用白色（= 不染色），人物保持原色。
 	_art = DataRegistry.hero_card_art(display_name)
 	_art_hex = Polygon2D.new()
-	_art_hex.polygon = _hex.polygon
+	# 【2026-09-29】人物图这一层**仍按 `hex_radius`**（不再跟着底色放大）——
+	#   与底色的多边形解耦：底色铺满整格，人物保持原来大小（取景/`HERO_ART_FIT` 微调口径不变）。
+	_art_hex.polygon = _hex_points(hex_radius)
 	_art_hex.color = Color(1, 1, 1, 1)
 	# 【2026-09-27·用户报"糊 + 锯齿"】图带 mipmap，必须显式开 `LINEAR_WITH_MIPMAPS` 才会用到；
 	#   棋子只有 ~146px 宽而图是 512 ⇒ 无 mipmap 的缩小采样就是锯齿+发糊的来源。
@@ -212,7 +224,10 @@ func _build_visual() -> void:
 	_debuff_label.add_theme_font_size_override("font_size", int(11.0 * fs))
 	_debuff_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_debuff_label.position = Vector2(-hex_radius, hex_radius * 0.44)
-	_debuff_label.size = Vector2(hex_radius * 2.0, 14.0 * fs)
+	# 【2026-09-30·用户口径「英雄卡面，负面效果起始点太靠右了」】右端从"贴牌面右缘 `+R`"收到
+	#   `R × (0.866 − DEBUFF_RIGHT_INSET)` ⇒ 整行往左挪、待在平顶六边形的直边段里
+	#   （原来那一行右端到 `+R`，而六边形在那个高度只有 `±0.866R` ⇒ 字压在斜边上）。
+	_debuff_label.size = Vector2(hex_radius * (1.0 + HEX_SIDE_HALF - DEBUFF_RIGHT_INSET), 14.0 * fs)
 	_debuff_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
 	_debuff_label.visible = false
 	add_child(_debuff_label)
@@ -303,6 +318,16 @@ func _hex_points(r: float) -> PackedVector2Array:
 #   只改**底色这一层**（`_hex.color`）——卡面贴图（`_art_hex`）不受影响，仍是不透明的原色。
 #   想更透就往下调（0.40 ≈ 很透 / 0.70 ≈ 只压一层淡色），只改这一个常量。
 const FACTION_FILL_ALPHA := 0.55
+
+# ---- 牌面状态字那一行的横向摆位（减益紫字右对齐用）----
+# 平顶六边形（`_hex_points`：顶点在 0°/60°…）的"直边段"（|y| ≤ R/2）半宽 = R·cos30° = 0.866R；
+# 牌面那两行状态字（增益金 / 减益紫）落在 y = 0.44R 处，正好还在直边段里。
+const HEX_SIDE_HALF := 0.8660254        # cos30°：直边段的半宽（单位 = hex_radius）
+## 【2026-09-30·用户口径「英雄卡面，负面效果起始点太靠右了」】**减益紫字那一行右端内缩多少**
+##   （单位 = hex_radius）。原来那一行右对齐到牌面右缘 `+R` —— 而六边形在那个高度只有 `±0.866R`
+##   ⇒ 字压在/探出斜边上、看着"太靠右"。现在右端收到 `R × (0.866 − 这个数)`：整行往左挪、待在牌面里。
+##   想再往中间挪就加大（0.30 / 0.45），写 0 = 回到贴右缘（旧观感）。
+const DEBUFF_RIGHT_INSET := 0.18
 
 func _faction_color(f: int) -> Color:
 	if f == DataRegistry.Faction.PLAYER:

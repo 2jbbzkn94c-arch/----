@@ -8,6 +8,6 @@ func on_move() -> void:
 		return   # 无相邻敌人：技能未生效，不演出
 	play_skill_sfx()
 	fx()
+	# 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】去掉逐目标爆环
 	for v in enemies:
-		fx_on_target(v)
 		battle._add_status_msg(v, StatusDB.FREEZE, true)   # 纯状态施加(无伤害)：穿圣盾，不消耗盾
