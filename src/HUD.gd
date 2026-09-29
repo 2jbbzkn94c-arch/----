@@ -37,7 +37,7 @@ var _deck_pick_preview: Control = null     # 当前卡组的队伍预览宿主
 var _deck_pick_info: Label = null          # 当前卡组信息行（人数/不足提示）
 var _deck_pick_start_btn: Button = null     # 用当前卡组出战
 # 【2026-09-21 用户定】选卡组限时大字（读 `battle.deck_pick_time_left`，15 秒，超时随机选一个）
-var _deck_pick_timer_label: Label = null
+var _deck_pick_timer_label: Label = null   # 【2026-09-29 已废】选卡组读秒改到状态栏（保留声明，恒为 null）
 var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重算尺寸定位）
 # 【2026-09-23 修·用户报"点击卡组切换后弹窗会左右移动"】面板尺寸**只在首次量一次**：
 #   量的是"三个卡组里人最多的那支"（卡行最宽）+ 最宽形态的限时大字（两位数秒）。
@@ -46,12 +46,18 @@ var _deck_pick_panel: PanelContainer = null # 面板本体（切换卡组后重�
 var _deck_pick_panel_w := 0.0
 var _deck_pick_panel_h := 0.0
 var _arena_timer_label: Label = null      # 选人倒计时（选卡面板上方的大字）
+var _arena_pair: Array = []               # 【2026-09-29】当前这一轮 2 选 1 的两张（选中演出/回放重演都要用）
 # 【2026-09-23 改·用户要求"死亡时卡面破碎升天 → 引导到顶部阵亡标志 → 标志出现并摇晃"+ "空圈和骷髅一样大"】
 #   原来每侧是一个 Label 拼字符串（`"我方 ☠☠☠"`）⇒ ① `○` 与 `☠` 字形不一样大、整行会漂；
 #   ② 没法定位到"具体哪一个标记"去做飞行终点与单独摇晃。
 #   现在拆成：每侧 = 一个名字 Label + `LOSS_DEATH_COUNT` 个 `DeathMark` 槽（固定尺寸、自绘圆环/骷髅）。
 var _my_death_name: Label = null
 var _op_death_name: Label = null
+# 【2026-09-29·用户要求「将状态栏死亡标志移到名字下方」】两侧各是一个**竖排栈**（名字框在上、阵亡标志在下）
+#   ⇒ 记下这两个 Control 供 `_fit_top_center()` 量"中间那组还剩多少宽度"用
+#   （名字框现在只是栈里的一格，量它自己会漏掉下面那排标志的宽度）。
+var _top_stack_blue: Control = null
+var _top_stack_red: Control = null
 var _my_marks: Array = []      # 本端视角的"我方"那排（左）
 var _op_marks: Array = []      # 本端视角的"对方"那排（右）
 var _death_fx: DeathFx = null  # 阵亡演出层（全屏，只画特效；比状态栏晚加入 ⇒ 画在状态栏之上）
@@ -94,6 +100,28 @@ var _team_panel_slide_next := false
 # 【2026-09-27·用户要求】结束回合按钮换成图片（图缺失时自动退回原来的金色文字按钮）
 const END_TURN_TEX := "res://assets/界面/结束回合.png"
 const END_BTN_IMG_H := 112.0   # 图片按钮的高度（宽按图的比例 ⇒ 112 × 237/209 ≈ 127）
+# 【2026-09-29·用户要求】顶部状态栏两侧的"我方/敌方"换成**名字框**素材，名字写在框里：
+#   蓝方（= PLAYER）在左、红方（= ENEMY）在右（单机里本端就是 PLAYER ⇒ 正好"蓝左红右"；
+#   联机客房是红方，框色仍按**绝对阵营**给，与下面那排阵亡标志同一套口径）。
+#   素材是用户提供的 237×203 带透明通道 PNG；高度由 `NAME_PLATE_H` 定、宽度按原图比例（不会拉伸变形）。
+#   【2026-09-29·用户要求「将状态栏死亡标志移到名字下方」】名字框与阵亡标志改成**竖着两行** ⇒
+#   框高从 44 收到 **34**（两行加起来 34 + 1 + 20 = 55 ≤ 56，见 `_build()` 那段高度账）。
+const NAME_FRAME_BLUE := preload("res://assets/界面/蓝方名字框.png")
+const NAME_FRAME_RED := preload("res://assets/界面/红方名字框.png")
+# 【2026-09-29·用户要求「单机敌方用难度+AI」】难度档名（下标 = `GameState.ai_difficulty`：
+#   0 简单 / 1 普通 / 2 困难 / 3 噩梦）⇒ 单机右侧名字显示成「噩梦AI」这样。
+const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]
+const NAME_PLATE_H := 34.0
+# 【2026-09-29·用户要求「双方的名字都贴边显示」】框内文字离框沿留的边距（像素）
+const NAME_EDGE_PAD := 12.0
+# 【2026-09-29·用户要求「名字框太长了，给中间的回合数预留空间」】顶部第一行中间给「第 N 回合 ·
+#   火焰 · 剩余时间」留的宽度（左右两条名字框各占 `(屏宽 − 24 − 本值) / 2`、等长）。
+#   这组文字会随回合数/计时变长 ⇒ `_fit_top_center()` 仍会按实际宽度逐档缩字号兜底。
+const TOP_MID_GAP := 250.0
+# 【2026-09-29·用户要求】左下角「菜单」按钮的素材；**高度与「替补队伍」那个图标按钮一致**
+#   （`TEAM_TOGGLE_ICON_H = 58`），宽度按原图比例 ⇒ 两个图标按钮同高、大小观感一致。
+const MENU_TEX := "res://assets/界面/菜单_透明.png"
+const MENU_IMG_H := 58.0
 # 【2026-09-27·用户要求】「结束回合按钮往上移一点」+「那行右边贴边加一个箭头，点开拉出替补队伍列表」：
 #   ① 按钮带离屏幕底边留 `BTN_ROW_FOOT_GAP`（原来是 10 ⇒ 现在抬起来 30px）；
 #   ② 替补队伍列表**默认收起**，由右贴边的箭头按钮拉出/收回（`_team_panel_open`）；
@@ -112,7 +140,9 @@ const TEAM_TOGGLE_OPEN := "▼"     # 展开状态下的箭头：点它收回去
 # 【2026-09-27】底部常驻行现在只有「结束回合」；`_restart_btn` 已随"重开/返回选人整合进暂停面板"移除。
 # 【2026-09-28·用户要求】联机那枚「返回大厅」也删掉 ⇒ 底部行两种模式都只剩「结束回合」；
 #   联机退出改走**右上角「认输」**：先喊一句完整的话给对端，再走认输结算（退出大厅走结算面板的按钮）。
-var _surrender_btn: Button = null   # 【2026-09-28】联机：右上角「认输」（单机恒为 null）
+var _surrender_btn: Button = null   # 【2026-09-28】联机：认输（单机恒为 null）
+# 【2026-09-29·用户要求】联机结算面板的「再来一局」：点了要**等对方也点**才开局
+var _rematch_btn: Button = null
 var _warn_holder: Control = null   # 回合剩余时间不足警告：屏幕边缘浅红闪烁
 var _warn_tween: Tween = null      # 边缘警告呼吸 tween
 var _unit_card_overlay: Control = null   # 右键英雄信息卡（成员持有，避免 lambda 捕获被释放节点）
@@ -217,6 +247,9 @@ func bind(b: Battle) -> void:
 	battle.item_view_requested.connect(show_item_info)
 	battle.touch_view_end_requested.connect(_close_unit_card)
 	battle.turn_banner.connect(_show_turn_banner)
+	# 【2026-09-29】联机结算：「再来一局」的双方意向变化 / 对端回大厅 ⇒ 刷新按钮或跟着回大厅
+	battle.rematch_state_changed.connect(_refresh_rematch_ui)
+	battle.peer_left_to_lobby.connect(_on_peer_left_to_lobby)
 	battle.peer_message.connect(_show_peer_chat)
 	# 用对象方法而非 lambda 连接 autoload 信号：场景释放时 Godot 自动断开连接，
 	# 避免"全局信号在对象释放后仍回调其 lambda（Lambda capture freed）"。
@@ -436,18 +469,22 @@ func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -
 	var label := Label.new()
 	label.name = "TurnBanner"
 	label.text = text
-	label.add_theme_font_size_override("font_size", 54)
+	label.add_theme_font_size_override("font_size", 84)
 	label.add_theme_color_override("font_color", (color as Color) if color != null else Color(1.0, 0.9, 0.45))
 	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	label.add_theme_constant_override("outline_size", 8)
+	label.add_theme_constant_override("outline_size", 10)
 	# 【2026-09-28·用户报「竞技场弹出的先手提示被 2 选 1 面板挡住了，往上移」】
-	#   原来是"整屏铺满 + 文字竖直居中" ⇒ 文字正好落在**屏幕正中**，压在竞技场 2 选 1 面板上。
-	#   现在改成**顶部通栏、距顶 22%**：所有横幅一起上移（观感统一），不会再被中央面板盖住。
+	#   那一版把横幅改成"顶部通栏、距顶 22%"（所有横幅一起上移）。
+	# 【2026-09-29·用户要求「回合切换提醒放到画面中间，加大」】改回**整屏铺满 + 文字竖直居中**
+	#   ⇒ 文字正落在屏幕正中；字号 54 → **84**、描边 8 → **10**。
+	#   ⚠️ 代价：中央那几块面板（竞技场 2 选 1 / 卡组三选一 / 部署卡片行）会与横幅叠着显示 ——
+	#   当初上移 22% 就是为了躲它们。要单独豁免某一条（比如竞技场那句"本局谁先手"）或整体回到
+	#   "上方 22%"，改这一处即可（把下面 4 行换成 TOP_WIDE + offset_top = vs.y * 0.22）。
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	label.offset_top = vs.y * 0.22
-	label.offset_bottom = vs.y * 0.22 + 96.0
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.offset_top = 0.0
+	label.offset_bottom = 0.0
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 不拦截点击
 	add_child(label)
 	_turn_banner = label
@@ -456,7 +493,7 @@ func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -
 	_turn_banner_tween = t
 	label.modulate.a = 0.0
 	label.scale = Vector2(1.4, 1.4)
-	label.pivot_offset = Vector2(vs.x / 2.0, 48.0)   # 缩放中心跟着新高度走
+	label.pivot_offset = Vector2(vs.x / 2.0, vs.y / 2.0)   # 缩放中心 = 屏幕中心（文字就在那儿）
 	# 放大+淡入 → 停留 → 淡出并移除
 	t.tween_property(label, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	t.parallel().tween_property(label, "modulate:a", 1.0, 0.16)
@@ -539,12 +576,19 @@ func _status_explain_lines(u: Unit) -> Array:
 
 # 开局部署面板（分步：点选英雄 -> 点击出生格放置）
 var _deploy_overlay: Control = null
-var _deploy_timer_label: Label = null   # 部署轮倒计时（面板上方大字，与竞技场选人一致）
+# 【2026-09-29·用户要求「部署阶段的倒计时放到上方状态栏」】原来这里还有 `_deploy_timer_label`
+#   （面板上方的 64 号大字）—— 已删：部署读秒改由状态栏那枚计时器显示（`_update_deploy_pick_timer()`）。
 func _show_deploy_panel() -> void:
 	if _in_replay():
 		_close_deploy_panel()   # 【录像回放】回放里永不显示"开局选人/部署"面板（含那行大字倒计时）
 		return
 	_refresh_round()   # 进入/退出部署阶段都刷新顶部标签（部署期显示"部署选人"）
+	# 【2026-09-29·用户报「部署阶段，点击菜单后，队伍列表会弹出来」】暂停期间**不要重建这个面板**：
+	#   重建 = `queue_free()` 旧的 + 末尾 `add_child` 新的 ⇒ 新面板会排在**暂停浮层之后**（画在它上面），
+	#   于是"点了菜单，卡池/队伍那一行又冒出来盖在暂停黑底上"。暂停时局面本来就不动，
+	#   等恢复（或下一次正常刷新）再建即可 ⇒ 这里直接让路。
+	if get_tree() != null and get_tree().paused:
+		return
 	# 非部署阶段则收起
 	if battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY:
 		_close_deploy_panel()
@@ -556,7 +600,6 @@ func _show_deploy_panel() -> void:
 	if _deploy_overlay:
 		_deploy_overlay.queue_free()
 	_deploy_overlay = null
-	_deploy_timer_label = null
 	var vsize := get_viewport().get_visible_rect().size
 	# 棋盘下方队伍列表：透明背景、一行六边形卡（与替补面板一致），不弹窗不遮罩
 	var overlay := Control.new()
@@ -610,23 +653,10 @@ func _show_deploy_panel() -> void:
 	#   摆到"按钮行上方"就会压住棋盘最下面两行（玩家正是要点那些绿格放人）。部署期「结束回合」已隐藏
 	#   （见 `_refresh_controls()`）⇒ 这条带子归卡片行用。
 	panel.position = Vector2((vsize.x - pw) / 2.0, vsize.y - ph - 34.0)   # 【2026-09-28·用户要求「替补队伍往上移」】由贴屏底 6px 抬到 34px
-	# 【2026-09-28·用户要求】「部署阶段倒计时时间**移到棋盘中间**」：大字居中在**棋盘包围盒中心**
-	var tlabel := Label.new()
-	# 【2026-09-28·用户要求「部署阶段倒计时字号大点」】48 → **64**（描边本来 6 ⇒ 跟着放宽到 8，
-	#   否则大字会显得"发飘"）；同时把对齐改成**垂直居中**、宿主盒给足（300×110），
-	#   这样"以棋盘中心为中心"在换字号后依然成立（原来是靠 60 高的盒子碰巧对上的）。
-	tlabel.add_theme_font_size_override("font_size", 64)
-	tlabel.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
-	tlabel.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	tlabel.add_theme_constant_override("outline_size", 8)
-	tlabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tlabel.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	tlabel.visible = false
-	var bc: Vector2 = _board_center_px()
-	tlabel.position = Vector2(bc.x - 150.0, bc.y - 55.0)
-	tlabel.size = Vector2(300, 110)
-	overlay.add_child(tlabel)
-	_deploy_timer_label = tlabel
+	# 【2026-09-29·用户要求「部署阶段的倒计时放到上方状态栏」】棋盘中央那枚 64 号大字**撤掉** ——
+	#   改由上方状态栏那枚计时器显示（与卡组三选一同一套做法：接管 `_turn_timer_label`，
+	#   见 `_update_deploy_pick_timer()`）。原来这里建的 `_deploy_timer_label` 与 `_board_center_px()`
+	#   一起删掉（后者只服务于它）。
 
 # 本端当前轮是否轮到本端部署选人（主机=玩家轮，客户端=敌轮；单机=仅玩家轮）
 func _deploy_my_pick() -> bool:
@@ -782,7 +812,6 @@ func _close_deploy_panel() -> void:
 	if _deploy_overlay:
 		_deploy_overlay.queue_free()
 		_deploy_overlay = null
-		_deploy_timer_label = null
 
 # 竞技场选人：面板中央展示本轮随机的 2 名英雄（2选1），点击即选择
 func _show_arena_pair(pair: Array) -> void:
@@ -840,36 +869,8 @@ func _show_arena_pair(pair: Array) -> void:
 	host.custom_minimum_size = Vector2(total_w, card_h)
 	host.size = Vector2(total_w, card_h)
 	wrapbox.add_child(host)
-	var click_cb := func(hid: String):
-		# 【2026-09-28·用户报「竞技场 2 选 1 的音效和点击有间隔」】选人音必须**在最外层点击的那一刻**响：
-		#   下面那段 0.45 秒的"飞卡"动画演完才回调 `_on_arena_pick()` ⇒ 挂在那边会晚半秒。
-		AudioManager.play("select_actor")
-		# 点击即停表：选中动画期间不再倒计时，防止演出中触发自动选导致双选
-		if battle != null and is_instance_valid(battle):
-			battle.arena_pick_time_left = -1.0
-		# 选中动画：被点卡牌向下移出（飞入下方玩家队伍），未被选的另一张（归敌方）向上移出，
-		# 两卡同时播完后再进入下一轮。
-		var card := _find_arena_card(hid)
-		# 给敌方的那张 = pair 中不是 hid 的另一张
-		var enemy_card: Control = null
-		for phid in pair:
-			if phid != hid:
-				enemy_card = _find_arena_card(phid)
-				break
-		if card == null:
-			battle._on_arena_pick(hid)
-			return
-		var t := create_tween()
-		# 玩家选的：向下飞入玩家队伍
-		t.tween_property(card, "position", card.position + Vector2(0, 360), 0.45)
-		t.parallel().tween_property(card, "modulate:a", 0.0, 0.45)
-		# 给敌方的：向上飞出敌方区域
-		if enemy_card != null:
-			t.parallel().tween_property(enemy_card, "position", enemy_card.position + Vector2(0, -360), 0.45)
-			t.parallel().tween_property(enemy_card, "modulate:a", 0.0, 0.45)
-		t.tween_callback(func():
-			if battle != null and is_instance_valid(battle):
-				battle._on_arena_pick(hid))
+	_arena_pair = pair.duplicate()   # 【2026-09-29】选中演出要用（原来闭包直接抓 pair，回放驱动时拿不到）
+	var click_cb := func(hid: String): _arena_pick_anim(hid)
 	for i in pair.size():
 		var hid: String = pair[i]
 		var def := DataRegistry.get_hero(hid)
@@ -897,6 +898,40 @@ func _show_arena_pair(pair: Array) -> void:
 	panel.size = Vector2(pw, ph)
 	# 画面正中央（略偏上，给下方飞入路径留空间）
 	panel.position = Vector2((vsize.x - pw) / 2.0, (vsize.y - ph) / 2.0 - 40)
+
+## 竞技场 2 选 1 的"选中"演出（**点卡与回放重演共用同一段**）：被选的那张向下飞入我方队伍、
+## 另一张（归敌方）向上飞出，0.45 秒演完才把结果交回 `Battle`（`_arena_pick_committed()`）。
+## ⚠️ 【2026-09-28 用户报「竞技场 2 选 1 的音效和点击有间隔」】选人音必须挂在**最外层**（这里），
+##   不能等飞卡动画演完才响。
+func _arena_pick_anim(hid: String) -> void:
+	if battle == null or not is_instance_valid(battle):
+		return
+	AudioManager.play("select_actor")
+	# 点击即停表：选中动画期间不再倒计时，防止演出中触发自动选导致双选
+	battle.arena_pick_time_left = -1.0
+	var card := _find_arena_card(hid)
+	var enemy_card: Control = null
+	for phid in _arena_pair:
+		if phid != hid:
+			enemy_card = _find_arena_card(phid)
+			break
+	if card == null:
+		battle._arena_pick_committed(hid)
+		return
+	var t := create_tween()
+	t.tween_property(card, "position", card.position + Vector2(0, 360), 0.45)
+	t.parallel().tween_property(card, "modulate:a", 0.0, 0.45)
+	if enemy_card != null:
+		t.parallel().tween_property(enemy_card, "position", enemy_card.position + Vector2(0, -360), 0.45)
+		t.parallel().tween_property(enemy_card, "modulate:a", 0.0, 0.45)
+	t.tween_callback(func():
+		if battle != null and is_instance_valid(battle):
+			battle._arena_pick_committed(hid))
+
+## 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】回放侧驱动**同一段**选中演出
+##   （观众不用点，选哪张由录像说了算）。Battle 那边收尾走 `_arena_pick_committed()` 分流到重演那套。
+func arena_replay_pick(hid: String) -> void:
+	_arena_pick_anim(hid)
 
 # 竞技场触屏（安卓/iOS）：短按=确认选择；按住超时=查看属性；按住滑动=切换查看另一卡；
 # 长按/滑动后松手均不确认（属性浮层固定显示在卡上方，不跟随手指）。
@@ -1082,29 +1117,11 @@ func _show_deck_pick_panel(decks: Array) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wrapbox.add_child(title)
-	# 【2026-09-28·用户要求】「普通模式，卡组三选一也要弹出哪方先手」：标题下面一行写先手方。
-	#   来源 = `Battle._first_side`（每局由 `_prepare_first_side()` 随机一次，与部署顺序/行动方同源）。
-	#   ⚠️ 只加这一行（用户口径：不加说明性小字）。
-	var first_lbl := Label.new()
-	var first_mine: bool = battle == null or battle._first_side == battle._my_side()
-	first_lbl.text = "先手：%s" % ("我方" if first_mine else "敌方")
-	first_lbl.add_theme_font_size_override("font_size", 20)
-	first_lbl.add_theme_color_override("font_color",
-		Color(0.5, 0.85, 1.0) if first_mine else Color(1.0, 0.5, 0.5))
-	first_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	wrapbox.add_child(first_lbl)
-	# 【2026-09-21 用户定】限时大字：15 秒内不选 ⇒ 随机选一个可用卡组（Battle 侧 `_deck_pick_timeout()`）。
-	# 样式与部署轮/竞技场那两处大字同一套（金 → ≤5 秒转红，见 `_update_deck_pick_timer`）。
-	_deck_pick_timer_label = Label.new()
-	_deck_pick_timer_label.add_theme_font_size_override("font_size", 32)
-	_deck_pick_timer_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
-	_deck_pick_timer_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	_deck_pick_timer_label.add_theme_constant_override("outline_size", 5)
-	_deck_pick_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	# ⚠️ 先填"最宽形态"（两位数秒）再量面板：原来这里是空串 ⇒ 第一帧文字进来后内容变宽、
-	#   面板向右长；下一次点卡组切换又按带文字的宽度重新居中 ⇒ 整体左移（"弹窗左右移动"的半个病灶）。
-	_deck_pick_timer_label.text = "%d 秒（超时随机选一个卡组）" % int(Battle.DECK_PICK_TIME_LIMIT)
-	wrapbox.add_child(_deck_pick_timer_label)
+	# 【2026-09-28·用户要求】原来这里有一行「先手：我方/敌方」（09-28 加的）⇒ **整行删掉**：
+	#   用户口径「普通模式里卡组 3 选 1 界面的先手提示去掉」。
+	# 【2026-09-29·用户要求】原来这里有一个 32 号大字读秒（"N 秒（超时随机选一个卡组）"）⇒
+	#   **整个撤销**：时间提示改到**上方状态栏**正中（复用回合倒计时那个 Label，见
+	#   `_update_deck_pick_timer()`），文案只留纯秒数。面板因此少一行、宽度也不再被那行大字撑开。
 	# 卡组1/2/3 切换行（同编辑页 deck_bar 布局：tabs 占满整行，右侧放按钮）
 	var bar := HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 8)
@@ -1280,7 +1297,7 @@ func _close_deck_pick_panel() -> void:
 	_deck_pick_preview = null
 	_deck_pick_info = null
 	_deck_pick_start_btn = null
-	_deck_pick_timer_label = null   # 【2026-09-21】限时大字随面板一起释放
+	_deck_pick_timer_label = null   # 【2026-09-29】那行大字已废（读秒移去状态栏），这里保留只为兼容旧引用
 	_deck_pick_tabs.clear()
 	_deck_pick_decks = []
 	_set_score_tooltip_visible(false)
@@ -1297,30 +1314,6 @@ func _team_row_radius(n: int) -> float:
 	var vsize := get_viewport().get_visible_rect().size
 	var tavail: float = maxf(vsize.x - 44.0, 320.0)
 	return minf(_TEAM_ROW_MAX_R, maxf(tavail / (2.0 + float(maxi(n, 1) - 1) * 1.5), 18.0))
-
-## 【2026-09-28·用户要求】棋盘包围盒的**屏幕中心** —— 部署倒计时大字要摆在那儿。
-##   算法与 `Battle._board_origin()` 一致（逐格 `_raw_cell_to_world` 取包围盒 + 六边形外接半径），
-##   只用 `battle.grid` / `battle.hex_size`，**不改 Battle.gd**（那边并行会话在动）。
-func _board_center_px() -> Vector2:
-	var vsize := get_viewport().get_visible_rect().size
-	if battle == null or not is_instance_valid(battle) or battle.grid == null:
-		return vsize * 0.5
-	var g: HexGrid = battle.grid
-	var hs: float = battle.hex_size
-	var minx := INF
-	var miny := INF
-	var maxx := -INF
-	var maxy := -INF
-	for cell in g.all_cells():
-		var p := g._raw_cell_to_world(cell)
-		minx = min(minx, p.x)
-		miny = min(miny, p.y)
-		maxx = max(maxx, p.x)
-		maxy = max(maxy, p.y)
-	var org: Vector2 = battle._board_origin()
-	var left: float = org.x + minx - hs
-	var top: float = org.y + miny - hs * 0.866
-	return Vector2(left + ((maxx - minx) + 2.0 * hs) * 0.5, top + ((maxy - miny) + 2.0 * hs * 0.866) * 0.5)
 
 ## 正在"选替补上阵"（这一阶段**必须**显示替补列表，与用户收没收起无关）
 func _sub_picking() -> bool:
@@ -1418,7 +1411,10 @@ func _refresh_team_toggle() -> void:
 	if battle != null and is_instance_valid(battle) and not _in_replay():
 		# 【2026-09-28 晚·本次改动】竞技场**选人（2 选 1）**也算"由系统强制展开"的阶段 ⇒ 同部署期一样藏箭头
 		#   （面板已经开着，再摆一个"拉出"箭头会让玩家以为能收起它）。普通模式不受影响。
+		# 【2026-09-29·用户要求「普通模式卡组 3 选 1 的时候，不要显示替补按钮」】卡组还没定、
+		#   队伍面板本来就没有内容可看 ⇒ `DECK_PICK` 也一并藏箭头。
 		show_toggle = battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY \
+			and battle.state != Battle.State.DECK_PICK \
 			and not _should_force_team_panel()
 	_team_toggle_btn.visible = show_toggle
 	# 【2026-09-28·用户要求】「需要替补的时候……**替补按钮常暗**」：这一阶段置灰（disabled）
@@ -1431,6 +1427,10 @@ func _refresh_team_toggle() -> void:
 #  - SUBSTITUTING / PLACE_SUB：同一面板变"选择替补上阵"，点击英雄=选中落位（battle._on_sub_pick）。
 func _refresh_team_panel() -> void:
 	if battle == null:
+		return
+	# 【2026-09-29·同 `_show_deploy_panel()` 那条】暂停期间不重建：重建会把面板挪到 HUD 子节点末尾
+	#   ⇒ 画在暂停浮层**上面**（用户报的"点了菜单还有列表冒出来"就是这一族）。恢复后再刷新即可。
+	if get_tree() != null and get_tree().paused:
 		return
 	if _in_replay():
 		_close_team_panel()   # 回放里不摆常驻队伍卡（见 `_in_replay()` 的说明）
@@ -1567,27 +1567,62 @@ func _build() -> void:
 	# 顶部：回合与阵营
 	var top := PanelContainer.new()
 	top.position = Vector2(0, 0)
-	top.size = Vector2(vsize.x, 54)
+	# 【2026-09-29·用户报「回合数的位置没改动啊」】病灶：`top` 是 **PanelContainer（容器）** ——
+	#   它会把子节点 `toph` 强行摆进自己的内容区，我在 `toph` 上设的 `position/size/alignment`
+	#   一律被覆盖 ⇒ 两条（回合数 / 计时器）挤在原来的 54 高里，怎么调都看不出变化。
+	#   现在把这条顶栏加高到与"名字框 + 标志"两行同高（73），`toph` 的两行才真的排在条内：
+	#   回合数贴顶、计时器在它下面。
+	top.size = Vector2(vsize.x, NAME_PLATE_H + 1 + DeathMark.SLOT_D)
+	# 【2026-09-29·用户报「回合数还是没有贴边」】再补一刀：这条顶栏用的是主题的弹出框底纹，
+	#   它自带 content_margin（内边距）⇒ 里面的两行离顶边永远差那几像素。这里复制一份样式、
+	#   把内边距清零（**底纹照旧保留**）⇒ 回合数真正贴顶。
+	var top_sb := top.get_theme_stylebox("panel")
+	if top_sb != null:
+		var sb_top: StyleBox = top_sb.duplicate()
+		sb_top.content_margin_left = 0.0
+		sb_top.content_margin_right = 0.0
+		sb_top.content_margin_top = 0.0
+		sb_top.content_margin_bottom = 0.0
+		top.add_theme_stylebox_override("panel", sb_top)
 	top.add_theme_stylebox_override("panel", _make_panel(Color(0.08, 0.08, 0.12, 0.85)))
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(top)
-	var toph := HBoxContainer.new()
+	# 【2026-09-29·用户要求「状态栏的计时器放在回合数下面」】中间那组改成**竖排两行**：
+	#   第一行 = 回合数（+ 火焰），第二行 = 计时器；整组仍在两行状态栏的**正中**。
+	var toph := VBoxContainer.new()
+	toph.add_theme_constant_override("separation", 0)
+	# 【2026-09-29·用户要求「回合数的位置不要变，靠上」】整组**贴着第一行顶**排（不在两行里居中）
+	#   ⇒ 回合数落在第一行（与两条名字框同一水平线），计时器紧贴它下面。
+	toph.alignment = BoxContainer.ALIGNMENT_BEGIN
+	var top_row_a := HBoxContainer.new()
+	top_row_a.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_row_a.add_theme_constant_override("separation", 4)
+	# 【2026-09-29·用户要求「将名字框延伸到画面中间，两边一样长」】名字框占满**第一行**（各半屏）
+	#   ⇒ 中间那组（第 N 回合 · 火焰 · 剩余时间）从"整条居中"挪到**第二行**（与两排阵亡标志同一行、
+	#   夹在它们中间居中）—— 否则它会正好压在那两条名字框上。
 	toph.position = Vector2(0, 0)
-	toph.size = Vector2(vsize.x, 54)
-	toph.alignment = BoxContainer.ALIGNMENT_CENTER
+	toph.size = Vector2(vsize.x, NAME_PLATE_H + 1 + DeathMark.SLOT_D)
+	# 【2026-09-29·真凶】上一行原来是 `ALIGNMENT_CENTER` —— **它把上面那句 BEGIN 覆盖了**
+	#   （同一帧里赋值两次，后者生效）⇒ 中间那组一直在 73 高的条里**垂直居中**：计时器一出现，
+	#   整组高度从 34 变 70 ⇒ 重新居中 ⇒ **回合数跟着上下跳**（用户报的"上上下下"就是这个，
+	#   不是字号问题）。探针实测：修前 `round` 的 y=19（= (73−34)/2），修后贴顶。
+	toph.alignment = BoxContainer.ALIGNMENT_BEGIN
 	top.add_child(toph)
+	top_row_a.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	# 竖着**贴顶**（不让它去吃 VBox 的剩余高度 ⇒ 计时器显隐都不会让回合数挪位）
+	top_row_a.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	toph.add_child(top_row_a)
 	_round_label = Label.new()
 	_round_label.add_theme_font_size_override("font_size", 24)
 	_round_label.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
 	_round_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	toph.add_child(_round_label)
-	var flame := FlameIcon.new()
-	flame.custom_minimum_size = Vector2(34, 34)
-	flame.size = Vector2(34, 34)
-	flame.size_px = 26.0
-	flame.visible = false   # 第 11 回合起才显示
-	toph.add_child(flame)
-	_flame_icon = flame
+	top_row_a.add_child(_round_label)
+	# 【2026-09-29·用户要求「把状态栏 11 回合后的火焰图案去掉」】原来这里 new 了一个 `FlameIcon`
+	#   （第 11 回合起常驻脉动）⇒ **不再创建**（`_flame_icon` 恒为 null，下面那几处本来就有 null 守卫：
+	#   `_fit_top_center()` 的 `flame_on` 恒 false、`_set_round_text()` 里那句 `visible=` 跳过）。
+	#   ⚠️ 「回合标签变红脉动」那套（`_start_round_fire()` / `_stop_round_fire()`）**保留**，
+	#   用户这次只点名去掉火焰图案。
+	_flame_icon = null
 	_turn_timer_label = Label.new()
 	_turn_timer_label.add_theme_font_size_override("font_size", 26)
 	_turn_timer_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.6))
@@ -1601,68 +1636,127 @@ func _build() -> void:
 	# 顶部阵亡计数：左我方 / 右敌方（骷髅图标，放大版）
 	# 联机对局这两行还要显示双方姓名（我方=本机名片姓名 / 敌方=对端姓名），
 	# 字号收一档（27→18）免得和中间的"第 N 回合 / 剩余时间"挤在一起。
-	# 【2026-09-23 改】每侧 = 名字 + 逐槽 DeathMark（不是拼字符串）⇒ 空圈与骷髅同尺寸、单槽可定位/摇晃。
-	var death_font := 18 if GameState.is_online else 27
+	# 【2026-09-23 改】每侧 = 名字 + 逐槽 DeathMark（不是拼字符串）⇒ 单槽可定位/摇晃。
+	# 【2026-09-29·用户要求】改成**竖排两行**（名字框在上、标志在下），见下面那段高度账。
 	var slot_n: int = battle.LOSS_DEATH_COUNT if battle != null else 3
-	_my_death_name = Label.new()
-	_my_death_name.add_theme_font_size_override("font_size", death_font)
-	_my_death_name.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
-	_my_death_name.text = "我方"
-	_my_death_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_my_death_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	var my_row := HBoxContainer.new()
-	my_row.add_theme_constant_override("separation", 7)
-	my_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	my_row.position = Vector2(12, 11)
-	my_row.size = Vector2(vsize.x * 0.5, DeathMark.SLOT_D)   # 高度跟着槽走（BEGIN 对齐，从 x=12 起排）
-	root.add_child(my_row)
-	my_row.add_child(_my_death_name)
+	# 【2026-09-28·用户报「联机对战中，主机是蓝方，客房是红方。现在状态栏有点混乱」】
+	#   这一行的名字色与下面两排阵亡标志原来**写死**成"我方=蓝 / 敌方=红"，而联机里
+	#   **客房是红方**（主机 = PLAYER = 蓝 · 客房 = ENEMY = 红）⇒ 客房看到的是"自己的名字和
+	#   阵亡标志是蓝的、对手反而是红的"，左右两行与棋盘上的阵营色对不上。
+	#   ⇒ 一律按**绝对阵营色**上色（与棋子描边 `Unit._faction_color` 同一套口径）：PLAYER 蓝 · ENEMY 红。
+	#   单机/双控里 我方 = PLAYER ⇒ 与改动前逐位相同。
+	var my_fn: int = battle._my_faction() if battle != null else DataRegistry.Faction.PLAYER
+	# （原来这里还有 `my_col`/`op_col` 两个局部变量；名字框与骷髅槽改成"按所在行的绝对阵营取色"之后没人用了 ⇒ 删）
+	# 【2026-09-29·用户要求】名字不再直接写在状态栏上，而是**写在名字框素材里**。
+	# 【2026-09-29·用户报「客房的红蓝色名字框的方向反了」】名字框的**左右是绝对的**：
+	#   **左 = 蓝方（PLAYER）· 右 = 红方（ENEMY）**，不随主客视角对调 —— 素材本身是分左右的
+	#   （蓝框给左边、红框给右边），跟着"我在左"翻过来在客房里就朝反了。
+	#   框里写的仍是**本端视角**的名字（我这侧 = 「我方」、对面 = 「敌方」），框色/骷髅槽色按绝对阵营，
+	#   这样客房里看到的就是"右边红框 + 我方、左边蓝框 + 敌方"，与棋盘上"自己是红"完全对得上。
+	#   ⚠️ 阵亡骷髅那两排也跟着名字框走（同一行）：`_my_marks` 挂到**本端绝对阵营**所在的那一行
+	#   （客房里就是右行）⇒ `_reveal_mark()` / 卡片飞行终点都不需要改（它们按数组取位置）。
+	# 【2026-09-29·用户要求「名字字体放大点」】18 → **24**（框高 34、"我方"两字 ≈48px，
+	#   框宽有半屏那么多 ⇒ 放得下；联机的长名字也还有余量）。
+	var plate_font: int = 24
+	# 【2026-09-29·用户要求「将状态栏死亡标志移到名字下方」】每侧改成**竖着两行**：
+	#   第一行 = 名字框（素材里带字，框色按**绝对阵营**：左蓝 = PLAYER · 右红 = ENEMY），
+	#   第二行 = 3 枚阵亡标志，**靠外缘对齐**（与名字框同侧：左行贴左、右行贴右）。
+	#   ⚠️ 高度账（下面三个尺寸都由它定）：状态栏高 54，而右上角的「音量 / 暂停（联机是「认输」）」
+	#   从 y≈58.5 起 ⇒ 两行加起来必须 ≤ 56：**名字框 34 + 间隔 1 + 标志槽 20 = 55**（起点 y=1 ⇒ 到 56 结束）。
+	#   想让标志更大，得先动右上角那几个按钮（往下会压棋盘顶行、往左就离开角落）—— 要改说一声。
+	# 【2026-09-29·用户要求三连】①「名字框延伸到画面中间，两边一样长」⇒ 框宽改成**外部给定**
+	#   `bar_w = 半屏 − 12(起排缝) − 8(中间缝)`，左右等长；②「放大死亡标志」⇒ `SLOT_D` 20 → **38**
+	#   （右上角那两个按钮搬走后不再受 y≤56 限制，两行合计 34+1+38 = 73 < 棋盘让出的 101）;
+	#   ③ 暂停键 →「菜单」并搬到左下角（见 `_pause_btn` 那一段）。
+	# 【2026-09-29·用户要求「名字框太长了，给中间的回合数预留空间」】框不再各占半屏：
+	#   中间留出 `TOP_MID_GAP` 给「第 N 回合 · 火焰 · 剩余时间」（那组仍在**第一行**居中，
+	#   但纵向跨越两行 ⇒ 视觉上落在整块的正中），左右两条等长。
+	var bar_w: float = (vsize.x - 24.0 - TOP_MID_GAP) * 0.5
 	_my_marks.clear()
-	for i in slot_n:
-		var mk := DeathMark.new(Color(0.5, 0.85, 1.0))
-		my_row.add_child(mk)
-		_my_marks.append(mk)
-	_op_death_name = Label.new()
-	_op_death_name.add_theme_font_size_override("font_size", death_font)
-	_op_death_name.add_theme_color_override("font_color", Color(1.0, 0.5, 0.5))
-	_op_death_name.text = "敌方"
-	_op_death_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_op_death_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	# 右侧整行贴右缘（图标在前、名字在后，与原来的 "☠☠☠ 敌方" 同一观感）
-	var op_row := HBoxContainer.new()
-	op_row.add_theme_constant_override("separation", 7)
-	op_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	op_row.alignment = BoxContainer.ALIGNMENT_END
-	op_row.size = Vector2(vsize.x - 12, DeathMark.SLOT_D)
-	op_row.position = Vector2(0, 11)
-	root.add_child(op_row)
 	_op_marks.clear()
-	for i in slot_n:
-		var mk2 := DeathMark.new(Color(1.0, 0.5, 0.5))
-		op_row.add_child(mk2)
-		_op_marks.append(mk2)
-	op_row.add_child(_op_death_name)
+	for side_fn in [DataRegistry.Faction.PLAYER, DataRegistry.Faction.ENEMY]:
+		var mine: bool = side_fn == my_fn
+		var is_left: bool = side_fn == DataRegistry.Faction.PLAYER   # 左蓝右红（绝对阵营，不随主客视角翻）
+		var col_box := VBoxContainer.new()
+		col_box.add_theme_constant_override("separation", 1)
+		col_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col_box.position = Vector2(12 if is_left else 0, 1)
+		col_box.size = Vector2(vsize.x - 12, NAME_PLATE_H + 1 + DeathMark.SLOT_D)
+		root.add_child(col_box)
+		var plate := _make_name_plate(NAME_FRAME_BLUE if is_left else NAME_FRAME_RED,
+			# 【2026-09-29·用户要求「把双方的名字都用白色」】名字不再按阵营上色，一律**白色**
+			#   （框内文字带黑描边 ⇒ 蓝框/红框上都看得清）；`_faction_ui_color()` 仍给阵亡演出用。
+			"我方" if mine else "敌方", Color(1.0, 1.0, 1.0), plate_font, bar_w,
+			HORIZONTAL_ALIGNMENT_LEFT if is_left else HORIZONTAL_ALIGNMENT_RIGHT)
+		# 框自己别被 VBox 拉宽（素材按原比例，拉宽就变形）：靠外缘摆
+		plate.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN if is_left else Control.SIZE_SHRINK_END
+		if mine:
+			_my_death_name = plate.get_node_or_null("Name") as Label
+		else:
+			_op_death_name = plate.get_node_or_null("Name") as Label
+		col_box.add_child(plate)
+		var marks_row := HBoxContainer.new()
+		marks_row.add_theme_constant_override("separation", 6)
+		marks_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		marks_row.alignment = BoxContainer.ALIGNMENT_BEGIN if is_left else BoxContainer.ALIGNMENT_END
+		if is_left:
+			_top_stack_blue = plate
+		else:
+			_top_stack_red = plate
+		col_box.add_child(marks_row)
+		# 【2026-09-29】第二行的宽度约束是**这排标志**（名字框现在各占半屏、整行铺满，
+		#   拿它去算"中间还剩多少"会得出 0）⇒ `_fit_top_center()` 量这一对
+		if is_left:
+			_top_stack_blue = marks_row
+		else:
+			_top_stack_red = marks_row
+		for i in slot_n:
+			var mk := DeathMark.new(side_fn)
+			marks_row.add_child(mk)
+			(_my_marks if mine else _op_marks).append(mk)
 	# 阵亡演出层：加在状态栏之后 ⇒ 同 z_index 下画在状态栏之上（弹窗类浮层是更晚 join 的，仍在其上）
 	_death_fx = DeathFx.new()
 	_death_fx.z_index = 0
 	add_child(_death_fx)
 	_refresh_deaths()
 
-	# 右上角暂停键（仅单机对局显示；联机不可暂停）：
-	# 放在**状态栏下方**（y=60，状态栏高 54），不挤占顶部状态栏。
+	# 【2026-09-29·用户要求】「暂停」→ **「菜单」**，并**搬到左下角**（原来在右上角，正好压着状态栏
+	#   那两排阵亡标志）。单机点开的是同一块暂停面板（冻结整棵树），**音量控件收进面板里**
+	#   （用户口径「声音集合到菜单里」⇒ `_build()` 末尾那个浮动音量键已删）。
 	_pause_btn = Button.new()
-	_pause_btn.text = "暂停"
+	# 【2026-09-29·用户要求】「菜单」按钮换成素材 `assets/界面/菜单.png`（与「结束回合」同一套做法：
+	#   图 = 按钮本体、四个状态共用同一张图、缺图时退回文字按钮）。
+	var menu_tex := load(MENU_TEX) as Texture2D
+	_pause_btn.text = "菜单"
 	_pause_btn.add_theme_font_size_override("font_size", 15)
 	_pause_btn.custom_minimum_size = Vector2(50, 30)
+	if menu_tex != null:
+		_pause_btn.text = ""
+		var menu_w: float = MENU_IMG_H * float(menu_tex.get_width()) / float(menu_tex.get_height())
+		_pause_btn.custom_minimum_size = Vector2(menu_w, MENU_IMG_H)
+		var menu_states := {
+			"normal": Color(1.0, 1.0, 1.0, 1.0),
+			"hover": Color(1.10, 1.10, 1.10, 1.0),
+			"pressed": Color(0.84, 0.84, 0.84, 1.0),
+			"disabled": Color(0.55, 0.55, 0.58, 0.85),
+		}
+		for state in menu_states.keys():
+			var sb := StyleBoxTexture.new()
+			sb.texture = menu_tex
+			sb.modulate_color = menu_states[state]
+			_pause_btn.add_theme_stylebox_override(String(state), sb)
+		# 【2026-09-29·用户报「怎么有白边」】点过之后按钮进入 focus 态，主题默认那圈**浅色描边**
+		#   会画在图标外侧 ⇒ 看着就是一圈白边。图标按钮不需要焦点框 ⇒ 用空样式盖掉。
+		_pause_btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	_pause_btn.pressed.connect(_on_pause_pressed)
 	root.add_child(_pause_btn)
-	# 按实际尺寸贴右边缘定位（主题内边距会让按钮比 custom_minimum_size 略大，
-	# 用设定值定位会溢出屏幕右缘）
 	_pause_btn.reset_size()
-	_pause_btn.position = Vector2(vsize.x - _pause_btn.size.x - 6.0, 60.0)
+	_pause_btn.position = Vector2(12.0, vsize.y - _pause_btn.size.y - 12.0)
 
-	# 【2026-09-28·用户要求】联机：**右上角「认输」**（与「暂停」同一个角落/尺寸 —— 联机没有暂停，
+	# 【2026-09-28·用户要求】联机：**认输**（与「暂停/菜单」同一个尺寸 —— 联机没有暂停，
 	#   两个按钮互斥显示，见 `_refresh_controls()`）。点一下先喊一句完整的话给对端，再走认输结算。
+	# 【2026-09-29】随状态栏变高（名字框 + 38px 标志）**往左挪**：避开右排标志所占的
+	#   `vsize.x-138 … vsize.x-12` 那条带（否则会压在标志上）。
 	_surrender_btn = Button.new()
 	_surrender_btn.text = "认输"
 	_surrender_btn.add_theme_font_size_override("font_size", 15)
@@ -1670,7 +1764,11 @@ func _build() -> void:
 	_surrender_btn.pressed.connect(_on_surrender_pressed)
 	root.add_child(_surrender_btn)
 	_surrender_btn.reset_size()
-	_surrender_btn.position = Vector2(vsize.x - _surrender_btn.size.x - 6.0, 60.0)
+	# 【2026-09-29·用户要求「将联机的认输按钮放在红方下面，贴边」】位置 = **红方（右）那一列的下方**、
+	#   贴右边缘 12px（与名字框/标志那两行的 12px 口径一致）；y = 状态栏整块底下再留 8px。
+	#   ⚠️ 这一带已经贴到棋盘上沿（棋盘从 y≈101 起）⇒ 按钮下缘会压住最上面那排棋格的右上角一点点。
+	_surrender_btn.position = Vector2(vsize.x - _surrender_btn.size.x - 12.0,
+		NAME_PLATE_H + 1.0 + DeathMark.SLOT_D + 8.0)
 
 	# 底部常驻按钮行：**只剩「结束回合」**（居中）。「重开 / 返回选人」整合进暂停面板（2026-09-27 用户要求）；
 	#   联机的「返回大厅」也已删（2026-09-28 用户要求）⇒ 两种模式的底部行现在一样，联机退出走右上角「认输」。
@@ -1751,12 +1849,14 @@ func _build() -> void:
 	_refresh_team_toggle()
 
 	# 【2026-09-27 用户报「刚进录像会有黄色字体弹出，被蓝方回合盖住」】建顶栏时就分清是不是回放局：
-	#   回放局一进来就直接写"第 N 回合 · 蓝方/红方回合"，**不留那一帧**黄色对局文案（`_set_round_text(1, true)`
+	#   回放局一进来就直接写"第 N 回合"，**不留那一帧**黄色对局文案（`_set_round_text(1, true)`
 	#   会先写成"第 1 回合 · 你的回合"，回放里那句话既不对、又会被随后的横幅盖住 → 一闪而过看着很脏）。
+	# 【2026-09-29·用户要求「中间那个『敌方回合 / 你的回合』字样去掉」】这里同样只留"第 N 回合"
+	#   （回放里那种"蓝方回合/红方回合"也不写了；谁在行动看中间这行的颜色 + 换段横幅）。
 	if GameState.replay_id != "":
-		_round_label.text = "第 %d 回合 · %s" % [GameState.round_number,
-			"蓝方回合" if GameState.active_side == GameState.SIDE_PLAYER else "红方回合"]
-		_round_label.add_theme_color_override("font_color", Color(0.5, 0.85, 1.0))
+		_round_label.text = "第 %d 回合" % GameState.round_number
+		# 【2026-09-29·用户要求「状态栏中间的用黄色」】回放第一帧的颜色也统一成黄色
+		_round_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
 		_top_fit_key = ""
 		_fit_top_center()
 	else:
@@ -1767,16 +1867,9 @@ func _build() -> void:
 	# 【2026-09-28·用户要求】「将音量键移到右上角，**暂停左边**」：与「暂停」（联机时那一格是「认输」）
 	#   同一行、放在它**左边 8px**、垂直居中；弹层仍在按钮**下方**自动弹出（`_open_panel()` 里那条
 	#   "放不下就向上弹"的逻辑照旧兜底）。原来它在右下角（`place_bottom_right`）。
-	var volume := VolumeControl.new()
-	root.add_child(volume)
-	var right_w: float = _pause_btn.size.x if _pause_btn != null else 50.0
-	if _surrender_btn != null and _surrender_btn.size.x > right_w:
-		right_w = _surrender_btn.size.x
-	var anchor_btn: Control = _pause_btn if _pause_btn != null else _surrender_btn
-	var vol_h: float = VolumeControl.BTN_H
-	volume.size = Vector2(VolumeControl.BTN_W, vol_h)
-	volume.position = Vector2(vsize.x - right_w - 14.0 - VolumeControl.BTN_W,
-		anchor_btn.position.y + (anchor_btn.size.y - vol_h) * 0.5)
+	# 【2026-09-29·用户要求「声音集合到菜单里」】战斗界面的**浮动音量键删掉** —— 音量控件现在
+	#   由「菜单」面板里那个 `VolumeControl` 提供（见 `_on_pause_pressed()`）。菜单键本身在**左下角**，
+	#   与联机的「喊话」键同一角落（喊话在它右边，见 `_build_chat_button`）。
 
 	# 左下角"喊话"按钮(仅联机对战中显示)
 	_build_chat_button(root, vsize)
@@ -1960,8 +2053,12 @@ func _on_chat_overlay_input(ev: InputEvent) -> void:
 func _show_peer_chat(txt: String) -> void:
 	_show_chat_bubble(txt, false)
 
-# 喊话气泡：own=true=我方发出(顶部回合栏下方靠左、我方计数一侧)；own=false=对端喊话(靠右、敌方一侧)。
-# 两端各按自己视角落位：本端看自己发的在"我方"侧、对端发的在"敌方"侧，一眼分清谁在说话。
+# 喊话气泡：`own=true` = 本端发出、`own=false` = 对端喊话。
+# 【2026-09-29·用户报「主机的喊话，在客房视角，跑到客房自己那一侧弹出」】气泡按**说话方的绝对阵营**摆：
+#   **蓝方（PLAYER）贴左 · 红方（ENEMY）贴右** —— 与顶部名字框的左右口径完全一致（左蓝框右红框、
+#   骷髅槽同理）。原来写死"自己=左、对端=右"，那是**主机视角**：客房是红方 ⇒ 自己喊话跑到左边
+#   （对端名字框那一侧）、对端（主机）喊话跑到右边（自己名字框那一侧），正好反过来。
+#   底色/描边/字色同样按"说话方是蓝还是红"给，两端看到的颜色与棋盘阵营色一致。
 func _show_chat_bubble(txt: String, own: bool) -> void:
 	if txt == "":
 		return
@@ -1970,9 +2067,12 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 	if _chat_bubble != null and is_instance_valid(_chat_bubble):
 		_chat_bubble.queue_free()
 	var vsize := get_viewport().get_visible_rect().size
+	var my_fn: int = battle._my_faction() if battle != null else DataRegistry.Faction.PLAYER
+	var speaker_fn: int = my_fn if own else (DataRegistry.Faction.ENEMY if my_fn == DataRegistry.Faction.PLAYER else DataRegistry.Faction.PLAYER)
+	var is_blue: bool = speaker_fn == DataRegistry.Faction.PLAYER
 	var bubble := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.1, 0.16, 0.24, 0.94) if own else Color(0.24, 0.1, 0.12, 0.94)
+	sb.bg_color = Color(0.1, 0.16, 0.24, 0.94) if is_blue else Color(0.24, 0.1, 0.12, 0.94)
 	sb.corner_radius_top_left = 12
 	sb.corner_radius_top_right = 12
 	sb.corner_radius_bottom_left = 12
@@ -1981,14 +2081,14 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 	sb.content_margin_right = 16.0
 	sb.content_margin_top = 8.0
 	sb.content_margin_bottom = 8.0
-	sb.border_color = Color(0.5, 0.85, 1.0, 0.9) if own else Color(1.0, 0.4, 0.35, 0.9)
+	sb.border_color = Color(0.5, 0.85, 1.0, 0.9) if is_blue else Color(1.0, 0.4, 0.35, 0.9)
 	sb.set_border_width_all(2)
 	bubble.add_theme_stylebox_override("panel", sb)
 	bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var label := Label.new()
 	label.text = txt
 	label.add_theme_font_size_override("font_size", 26)
-	label.add_theme_color_override("font_color", Color(0.85, 0.95, 1.0) if own else Color(1.0, 0.78, 0.72))
+	label.add_theme_color_override("font_color", Color(0.85, 0.95, 1.0) if is_blue else Color(1.0, 0.78, 0.72))
 	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
 	label.add_theme_constant_override("outline_size", 4)
 	label.custom_minimum_size = Vector2(0, 40)
@@ -1998,12 +2098,13 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 	await get_tree().process_frame
 	var bs := bubble.get_combined_minimum_size()
 	bubble.size = bs
-	# 顶部回合栏(54)下方弹气泡；我方发言贴左 12px（我方计数侧），对端发言贴右 12px，
-	# 左右对称摆放（我方气泡位置不动），一眼分清谁在说话。
-	var bx := 12.0
-	if not own:
-		bx = vsize.x - bs.x - 12.0
-	bubble.position = Vector2(maxf(6.0, bx), 62.0)
+	# 状态栏**整块**（名字框 34 + 间 1 + 标志槽 38 = 73）下方弹气泡；**按说话方的绝对阵营贴边**：
+	#   蓝方贴左 12px、红方贴右 12px（与顶部名字框/骷髅槽的左右口径一致）。
+	#   【2026-09-29·用户报「联机模式喊话的弹框有点挡住死亡标志了」】原来写死 y=62 —— 那是"状态栏 54 高"
+	#   年代的值；状态栏改成两行（73）之后，62 正好压在**第二行那排阵亡标志**上 ⇒ 改成按状态栏底边算
+	#   （`NAME_PLATE_H + 1 + DeathMark.SLOT_D`）再留 8px。
+	var status_bottom: float = NAME_PLATE_H + 1.0 + DeathMark.SLOT_D
+	bubble.position = Vector2(maxf(6.0, 12.0 if is_blue else vsize.x - bs.x - 12.0), status_bottom + 8.0)
 	bubble.modulate.a = 0.0
 	var t := create_tween()
 	_chat_bubble_tween = t
@@ -2026,6 +2127,15 @@ func refresh_round_label() -> void:
 		return
 	_set_round_text(GameState.round_number, true)
 
+## 【2026-09-28·用户报「联机对战中，主机是蓝方，客房是红方。现在状态栏有点混乱」】
+##   状态栏的颜色一律按**绝对阵营**给（不再用"我方=蓝 / 敌方=红"）：PLAYER = 蓝 · ENEMY = 红 ——
+##   与棋盘上棋子描边（`Unit._faction_color`）、出生区色罩同一套口径。
+##   联机时主机 = PLAYER = 蓝、客房 = ENEMY = 红；单机/自由部署双控里本端 = PLAYER ⇒ 与改动前逐位相同。
+func _faction_ui_color(fn: int) -> Color:
+	if fn == DataRegistry.Faction.PLAYER:
+		return Color(0.5, 0.85, 1.0)
+	return Color(1.0, 0.5, 0.5)
+
 func _set_round_text(round_num: int, _player_side: bool) -> void:
 	# 联机视角：本端操作的是"我方"，另一方是"敌方"。用 battle._my_side() 判断本端是否当前行动方。
 	var my_turn := true
@@ -2047,9 +2157,11 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 			phase_txt = "部署选人"
 		elif battle.state == Battle.State.SUBSTITUTING or battle.state == Battle.State.PLACE_SUB:
 			phase_txt = "替补"
-	var side := phase_txt if phase_txt != "" else ("你的回合" if my_turn else "敌方回合")
+	var side := phase_txt
+	# 【2026-09-29·用户要求「状态栏中间的用黄色」】正中这行的颜色**恒为黄色**（不再按"当前行动方"
+	#   或"本端/对端"上色）⇒ 下面那套 `color_side` 的判定已无用，整块删掉。
 	if _in_replay():
-		# 回放：说"蓝方/红方"（用户要求），且按**正在播的那一段**判（`active_side` 是录像里的值，不能用）
+		# 回放：按**正在播的那一段**判（`active_side` 是录像里的值，不能用）
 		var rs: int = battle.replay_side_of(battle._replay_frame)
 		if rs < 0:
 			# 【2026-09-28 用户报「部署阶段的提示有问题」】部署那一帧（side = -1）不是任何一方的回合
@@ -2057,9 +2169,16 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 			my_turn = true
 		else:
 			my_turn = rs == GameState.SIDE_PLAYER
-			side = "蓝方回合" if my_turn else "红方回合"
-	_round_label.text = "第 %d 回合 · %s" % [round_num, side]
-	var normal_color := Color(0.5, 0.85, 1.0) if my_turn else Color(1.0, 0.5, 0.5)
+	# 【2026-09-29·用户要求】「部署英雄就不要显示第 1 回合了」+「选择卡组也不要第 1 回合」+「竞技场选人也去掉」：
+	#   这三个阶段**回合都还没开始**（第 1 回合要等双方卡组/首发都定下、报完"战斗开始"才走）
+	#   ⇒ 只写阶段名，**不带"第 N 回合"前缀**；回放里部署那一帧同理（那边 `side` = "部署"）。
+	if side == "部署选人" or side == "部署" or side == "选择卡组" or side == "竞技场选人":
+		_round_label.text = side
+	else:
+		_round_label.text = "第 %d 回合%s" % [round_num, (" · " + side) if side != "" else ""]
+	# 【2026-09-29·用户要求「状态栏中间的用黄色」】正中那行（回合数 / 阶段名）恒用**黄色**，
+	#   不再按当前行动方的阵营蓝/红上色（谁在行动看下面的计时器与换段横幅就够了）。
+	var normal_color := Color(1.0, 0.85, 0.5)
 	_round_label.add_theme_color_override("font_color", normal_color)
 	# 扣血阶段视觉提醒：进入超回合扣血（当前测试：第 1 回合起）后，回合标签"燃烧"+火焰图标常驻脉动。
 	var burning := GameState.should_apply_round_damage() and GameState.match_running and not GameState.match_over
@@ -2071,6 +2190,48 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 		_stop_round_fire(normal_color)
 	_top_fit_key = ""          # 文字/火焰都变了 ⇒ 强制重算一次中间那组的字号
 	_fit_top_center()
+
+## 【2026-09-29·用户要求】"名字框 + 框内居中名字"：框是素材（`蓝方名字框.png` / `红方名字框.png`），
+##   名字写在框里。返回外框 `Control`，里面的 `Label` 命名为 `Name`（"我方/敌方"由它显示，
+##   联机换真名那条路仍改它的 `text` —— 见 `_refresh_deaths()` 里那两处 `_my_death_name.text = ...`）。
+##   尺寸：高固定 `NAME_PLATE_H`、宽按原图比例（237×203 ⇒ 约 1.17 倍高）⇒ 不会拉伸变形。
+func _make_name_plate(tex: Texture2D, txt: String, col: Color, font_size: int, w_override: float = -1.0,
+		align: int = HORIZONTAL_ALIGNMENT_CENTER) -> Control:
+	var h := NAME_PLATE_H
+	# 【2026-09-29·用户要求「将名字框延伸到画面中间，两边一样长」】宽度不再按素材比例，而是**外部给定**
+	#   （左右两条等长、各占半屏）；不给就仍按原图比例（老口径）。
+	var w := w_override if w_override > 0.0 else h * float(tex.get_width()) / float(tex.get_height())
+	var box := Control.new()
+	box.custom_minimum_size = Vector2(w, h)
+	box.size = Vector2(w, h)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var tr := TextureRect.new()
+	tr.texture = tex
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_SCALE
+	tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(tr)
+	var lb := Label.new()
+	lb.name = "Name"
+	lb.text = txt
+	lb.add_theme_font_size_override("font_size", font_size)
+	lb.add_theme_color_override("font_color", col)
+	lb.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	lb.add_theme_constant_override("outline_size", 3)
+	lb.horizontal_alignment = align
+	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# 【2026-09-29·用户要求「状态栏上双方的名字都贴边显示」】名字不再框内居中，而是**贴外缘**：
+	#   左框（蓝方）靠左、右框（红方）靠右；离框边留 `NAME_EDGE_PAD` 免得压在框沿的花纹上。
+	if align == HORIZONTAL_ALIGNMENT_LEFT:
+		lb.offset_left += NAME_EDGE_PAD
+	elif align == HORIZONTAL_ALIGNMENT_RIGHT:
+		lb.offset_right -= NAME_EDGE_PAD
+	lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(lb)
+	return box
 
 ## 【2026-09-27·用户报「战斗中状态栏在 11 回合后，显示会挤到一起」】顶部中间那组
 ##   （`第 N 回合 · 阵营` + 火焰 + 剩余时间）是**整条居中**排的，而左右两侧的阵亡计数行是**绝对定位**
@@ -2092,10 +2253,14 @@ func _fit_top_center() -> void:
 	var vsize := get_viewport().get_visible_rect().size
 	var lw := 0.0
 	var rw := 0.0
-	if _my_death_name != null and is_instance_valid(_my_death_name) and _my_death_name.get_parent() is Control:
-		lw = (_my_death_name.get_parent() as Control).get_combined_minimum_size().x
-	if _op_death_name != null and is_instance_valid(_op_death_name) and _op_death_name.get_parent() is Control:
-		rw = (_op_death_name.get_parent() as Control).get_combined_minimum_size().x
+	# 【2026-09-29·两行布局】两侧各是一个**竖排栈**（名字框 + 下面那排标志）
+	#   ⇒ 量栈的总宽（原来量的是 `_my_death_name` 的父亲 = 名字框自己，现在那只是栈里一格，
+	#     会漏掉下面那排 3 枚标志的宽度，中间那组就会压上去）；同时左/右与"我/对"解耦
+	#     （联机客房里"我方"在右边，按我/对取宽会把左右量反）。
+	if _top_stack_blue != null and is_instance_valid(_top_stack_blue):
+		lw = _top_stack_blue.get_combined_minimum_size().x
+	if _top_stack_red != null and is_instance_valid(_top_stack_red):
+		rw = _top_stack_red.get_combined_minimum_size().x
 	var avail := vsize.x - lw - rw - 28.0        # 两侧各留 12px 起排缝 + 4px 余量
 	var sep := 4.0
 	if _round_label.get_parent() is HBoxContainer:
@@ -2107,9 +2272,13 @@ func _fit_top_center() -> void:
 		if flame_on:
 			w += sep + fw
 		if timer_on:
+			# 【2026-09-29·用户报「回合数随着计时器出现上上下下」】计时器现在在**自己那一行**
+			#   ⇒ 它不再跟回合数抢宽度；宽度取"两行里较宽的那行"即可。原来按**横排相加**算 ⇒
+			#   计时器一出现就判定"放不下"、把回合数字号缩一档 ⇒ 字号一变，视觉上就是上下跳。
 			var tf := _turn_timer_label.get_theme_font("font")
-			w += sep + tf.get_string_size(_turn_timer_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			var tw := tf.get_string_size(_turn_timer_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1,
 				_turn_timer_label.get_theme_font_size("font_size")).x
+			w = maxf(w, tw)
 		return w
 	var fs_use := 18
 	for fs in [24, 22, 20, 18]:
@@ -2195,12 +2364,18 @@ func _refresh_deaths() -> void:
 			_reveal_mark("my", false)
 		while int(_reveal_pending["op"]) > 0:
 			_reveal_mark("op", false)
-	# 联机对局：两侧文字=双方姓名（我方=本机名片，敌方=对端；对端没发姓名时写"对方"）；单机写"我方/敌方"
-	var my_txt := "我方"
+	# 【2026-09-29·用户要求】「我方名字用联机的名字。单机敌方用难度+AI」⇒
+	#   左侧（我方）= **名片名**（`Stats.display_name()`，联机与单机都用它，空则退回"我方"）；
+	#   右侧 = 联机时是对端姓名（没发姓名写"对方"），**单机时是「难度 + AI」**（如「噩梦AI」）。
+	var my_txt := Stats.display_name()
+	if my_txt.strip_edges() == "":
+		my_txt = "我方"
 	var op_txt := "敌方"
 	if GameState.is_online:
-		my_txt = Stats.display_name()
 		op_txt = GameState.net_peer_name if GameState.net_peer_name != "" else "对方"
+	else:
+		var d: int = clampi(GameState.ai_difficulty, 0, AI_DIFF_NAMES.size() - 1)
+		op_txt = "%sAI" % AI_DIFF_NAMES[d]
 	if my_txt != _last_my_text and _my_death_name != null:
 		_my_death_name.text = my_txt
 		_last_my_text = my_txt
@@ -2255,7 +2430,9 @@ func _on_unit_dying(u: Unit) -> void:
 	var is_summon: bool = DataRegistry.summons.has(u.hero_id)
 	# 死亡位置 → 屏幕坐标（单位在世界画布上；HUD 这一层没有位移 ⇒ 可直接当本层坐标用）
 	var start: Vector2 = u.get_global_transform_with_canvas().origin
-	var col := Color(0.5, 0.85, 1.0) if side == "my" else Color(1.0, 0.5, 0.5)
+	# 【2026-09-28·联机状态栏】阵亡演出（破碎粒子 + 飞行小卡）的颜色也按**死者自己的绝对阵营**给：
+	#   原来写死"我方=蓝"，联机客房（红方）自己的阵亡演出会是蓝的（用户报的同类问题）。
+	var col := _faction_ui_color(u.faction)
 	var target: Control = null if is_summon else _next_mark(side)
 	# pending 先 +1：真实计数马上会涨（`_on_unit_died` 在 0.3s 后），这样 `_refresh_deaths` 不会提前点亮
 	if not is_summon:
@@ -2315,13 +2492,26 @@ func _process(_dt: float) -> void:
 			#   之后完全听用户的开关（原来 _refresh_team_panel() 里用 picking 强制开 ⇒ 用户一点收起就被它翻回来）。
 			# 【2026-09-28】显隐改由 _refresh_team_panel() 的派生条件负责（用户开关 or 正在选替补）；
 			#   这里只在进入选替补时补刷一次（原来靠 prev_st 判离开，状态一帧内跳两次就会漏）。
-			if st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB:
+			# 【2026-09-29·用户报「拉出替补队伍的时候拖下英雄，上了英雄之后替补队伍没有自动收回」】
+			#   离开替补流程这一半**必须补回来**：显隐是派生条件（`_team_panel_open or _sub_picking()`），
+			#   而"先自己拉出列表、再拖下英雄"这条路把**用户开关**置成了 true ⇒ 替补落位后派生条件仍为真
+			#   ⇒ 面板不会自己收。所以离开替补阶段时，把用户开关一并清掉（他报的就是这个）。
+			var was_sub: bool = prev_st == Battle.State.SUBSTITUTING or prev_st == Battle.State.PLACE_SUB
+			var now_sub: bool = st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB
+			if now_sub:
 				# 【2026-09-28·用户报「主动撤下后点替补英雄又闪一下」】只有**从替补流程之外**进来才滑：
 				#   SUBSTITUTING → PLACE_SUB（= 点了英雄）是同一次替补里的状态推进 ⇒ 不能重滑。
-				var was_sub: bool = prev_st == Battle.State.SUBSTITUTING or prev_st == Battle.State.PLACE_SUB
-				if not was_sub:
+				# 【2026-09-29·用户报「打开替补队伍的时候拖下英雄，替补队伍会闪一下」】再加一道：
+				#   面板**本来就摆着**（用户自己开着的）时不要再让它"滑入一次" —— 拖下撤人时面板
+				#   正是开着的那块 ⇒ 重滑 = 闪。`_refresh_team_panel()` 内部会原地更新（不重滑）。
+				if not was_sub and _team_panel == null:
 					_team_panel_slide_next = true
 				_refresh_team_panel()
+			elif was_sub:
+				# 离开替补流程（替补已落位 / 撤下取消 / 超时自动补位完成）⇒ 收回列表：
+				#   连"用户自己拉出来的那块"一起收（清掉用户开关，再走标准收起路径 ⇒ 不重建、不闪）。
+				_team_panel_open = false
+				_close_team_panel()
 	_update_turn_timer()
 	_update_arena_pick_timer()
 	_update_deploy_pick_timer()
@@ -2331,36 +2521,47 @@ func _process(_dt: float) -> void:
 
 # 部署面板上方大字倒计时：本端真人选人轮（battle.deploy_budget_active）显示共享预算剩余秒
 func _update_deploy_pick_timer() -> void:
-	if _deploy_timer_label == null or not is_instance_valid(_deploy_timer_label):
-		return
 	if battle == null or not is_instance_valid(battle):
 		return
-	# 【2026-09-28·用户报「对端认输后，屏幕中央的大字倒计时还在跳」】再加一道：
-	#   对局已结束（认输/判负）就不显示 —— 正常由 `Battle._apply_surrender()` 清掉
-	#   `deploy_budget_active`，这里只是双保险，避免任何"停住的读秒"挂在屏幕中央。
-	if battle.deploy_budget_active and GameState.match_running and not GameState.match_over:
-		var secs := int(ceil(battle.deploy_budget_left))
-		_deploy_timer_label.visible = true
-		_deploy_timer_label.text = str(max(secs, 0))
-		_deploy_timer_label.add_theme_color_override("font_color",
-			Color(1.0, 0.3, 0.25) if secs <= 5 else Color(1.0, 0.9, 0.4))
-	else:
-		_deploy_timer_label.visible = false
+	if _turn_timer_label == null or not is_instance_valid(_turn_timer_label):
+		return
+	# 【2026-09-28·用户报「对端认输后，屏幕中央的大字倒计时还在跳」】对局已结束（认输/判负）就不显示。
+	# 【2026-09-29·用户报「有时候普通模式的部署阶段没有时间提示了」】不能要求 `GameState.match_running`
+	#   —— 它在**每会话第 1 局的部署期是 false**（`_start_match()` 才置 true）⇒ 判据用"正处在部署期"。
+	# 【2026-09-29·用户要求「部署阶段的倒计时放到上方状态栏」】不再自己画大字，改成**接管状态栏那枚
+	#   计时器**（`_turn_timer_label`）—— 与卡组三选一（`_update_deck_pick_timer()`）完全同一套做法：
+	#   条件不满足就直接 return**不抢**（那会儿回合倒计时自己会隐藏）。
+	if not (battle.deploy_budget_active and not GameState.match_over \
+			and (battle.state == Battle.State.DEPLOY or battle.state == Battle.State.PLACE_DEPLOY)):
+		return
+	var secs := int(ceil(battle.deploy_budget_left))
+	_turn_timer_label.visible = true
+	# 【2026-09-29·用户报「怎么部署阶段还有那个闹钟图案」】这里原来也带 `⏱` 前缀
+	#   （上一轮只改了回合计时器那一处）⇒ 一并去掉，只留纯秒数。
+	_turn_timer_label.text = "%d 秒" % maxi(secs, 0)
+	_turn_timer_label.add_theme_color_override("font_color",
+		Color(1.0, 0.3, 0.25) if secs <= 5 else Color(1.0, 0.9, 0.4))
+	_fit_top_center()
 
-# 【2026-09-21 用户定】选卡组面板的限时大字：读 `battle.deck_pick_time_left`（15 秒，超时随机选一个）。
-# 已选定（联机在等对端）或面板不在 DECK_PICK ⇒ 清空不显示。
+# 【2026-09-21 用户定】选卡组限时：读 `battle.deck_pick_time_left`（15 秒，超时随机选一个）。
+# 【2026-09-29·用户要求】「将卡组 3 选 1 的时间提示放到上方状态栏，不需要写随机选择」：
+#   面板里那个 32 号大字**撤掉**（见 `_show_deck_pick_panel()`），改在**状态栏正中那行下面**显示，
+#   文案只留纯秒数（不再写"（超时随机选一个卡组）"）。
+#   ⚠️ `_process()` 里本函数排在 `_update_turn_timer()` **之后** ⇒ 那会儿若不在对局中，
+#   回合计时器已被它隐藏，这里正好接管同一个 Label；不满足条件就直接 return（不抢）。
 func _update_deck_pick_timer() -> void:
-	if _deck_pick_timer_label == null or not is_instance_valid(_deck_pick_timer_label):
-		return
 	if battle == null or not is_instance_valid(battle):
+		return
+	if _turn_timer_label == null or not is_instance_valid(_turn_timer_label):
 		return
 	if battle.state != Battle.State.DECK_PICK or battle.deck_pick_time_left <= 0.0:
-		_deck_pick_timer_label.text = ""
 		return
 	var secs := int(ceil(battle.deck_pick_time_left))
-	_deck_pick_timer_label.text = "%d 秒（超时随机选一个卡组）" % secs
-	_deck_pick_timer_label.add_theme_color_override("font_color",
+	_turn_timer_label.visible = true
+	_turn_timer_label.text = "%d 秒" % secs
+	_turn_timer_label.add_theme_color_override("font_color",
 		Color(1.0, 0.3, 0.25) if secs <= 5 else Color(1.0, 0.9, 0.4))
+	_fit_top_center()
 
 # 选人面板上方的大字倒计时：仅当本端正在 2 选 1（battle.arena_pick_time_left >= 0）
 func _update_arena_pick_timer() -> void:
@@ -2400,7 +2601,8 @@ func _update_turn_timer() -> void:
 			secs = int(ceil(battle.peer_turn_time_left))
 	if show_timer:
 		_turn_timer_label.visible = true
-		_turn_timer_label.text = "⏱ %d 秒" % secs
+		# 【2026-09-29·用户要求「时间前面不要加个闹钟图案」】去掉 `⏱` 前缀，只留秒数
+		_turn_timer_label.text = "%d 秒" % secs
 		_turn_timer_label.add_theme_color_override("font_color",
 			Color(1.0, 0.35, 0.3) if secs <= 10 else Color(1.0, 0.9, 0.6))
 	else:
@@ -2587,6 +2789,42 @@ func _on_pause_pressed() -> void:
 	hint.add_theme_color_override("font_color", Color(0.75, 0.8, 0.9))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(hint)
+	# 【2026-09-29·用户要求「声音集合到菜单里」】音量控件搬进菜单面板（原来浮在右上角）；
+	#   面板居中一行、与按钮同宽，省得缩在角落。
+	# 【2026-09-29·用户要求「音量调节不要再弹框，就在菜单栏里可以拉动」】菜单面板里直接摆一条
+	#   **常驻、可直接拖的滑条**（原来塞进去的是 `VolumeControl` —— 那是"喇叭按钮 + 弹出小面板"
+	#   那一套 ⇒ 在菜单里还得再点一次才出滑条）。这里只要滑条本体：拖动即生效，右边写百分比。
+	#   ⚠️ 暂停面板是 `PROCESS_MODE_WHEN_PAUSED`，滑条是它的子节点 ⇒ 暂停期间照样能拖。
+	var vol_row := HBoxContainer.new()
+	vol_row.add_theme_constant_override("separation", 10)
+	vb.add_child(vol_row)
+	var vol_title := Label.new()
+	vol_title.text = "音量"
+	vol_title.add_theme_font_size_override("font_size", 18)
+	vol_title.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+	vol_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	vol_title.custom_minimum_size = Vector2(46, 36)
+	vol_row.add_child(vol_title)
+	var vol_slider := HSlider.new()
+	vol_slider.min_value = 0.0
+	vol_slider.max_value = 100.0
+	vol_slider.step = 1.0
+	vol_slider.custom_minimum_size = Vector2(150, 36)
+	vol_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vol_slider.value = clampf(roundf(AudioManager.get_volume() * 100.0), 0.0, 100.0)
+	vol_row.add_child(vol_slider)
+	var vol_pct := Label.new()
+	vol_pct.text = "静音" if int(vol_slider.value) <= 0 else "%d%%" % int(vol_slider.value)
+	vol_pct.add_theme_font_size_override("font_size", 18)
+	vol_pct.add_theme_color_override("font_color", Color(0.9, 0.93, 1.0))
+	vol_pct.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	vol_pct.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	vol_pct.custom_minimum_size = Vector2(52, 36)
+	vol_row.add_child(vol_pct)
+	vol_slider.value_changed.connect(func(p: float):
+		AudioManager.set_volume(clampf(p / 100.0, 0.0, 1.0))
+		vol_pct.text = "静音" if int(roundf(p)) <= 0 else "%d%%" % int(roundf(p)))
+	vol_slider.drag_ended.connect(func(_changed: bool): AudioManager.play("select"))
 	var resume := Button.new()
 	resume.text = "继续游戏"
 	resume.add_theme_font_size_override("font_size", 20)
@@ -2738,6 +2976,15 @@ func _on_end_turn() -> void:
 # 对局中的"重开"用默认 false（竞技场沿用同队伍，普通模式重新选卡组）。
 func _on_restart(redraft := false) -> void:
 	_resume()   # 若正处于暂停：先恢复，否则重开流程全被冻结
+	# 【2026-09-29·用户要求】联机：「再来一局」**不立刻开局**，只表达意向并留在结算面板上等对方；
+	#   对方也点了才开局（主机权威），对方退出则回联机大厅（见 `_on_peer_left_to_lobby`）。
+	if GameState.is_online:
+		if battle != null and is_instance_valid(battle):
+			battle.request_rematch_online()
+			_refresh_rematch_ui()
+		else:
+			_on_peer_left_to_lobby()
+		return
 	if _result_overlay != null:
 		# 关闭结算浮层（场景不卸载，需手动收起，否则遮住重开的选人/部署界面）
 		_result_overlay.queue_free()
@@ -2762,6 +3009,169 @@ func _on_restart(redraft := false) -> void:
 	else:
 		get_tree().reload_current_scene()
 
+# 【2026-09-29·用户要求】结算演出：**失败方的三枚阵亡标志先震动 → 那一侧状态栏处爆炸 →
+#   然后才弹结算面板**（面板在 `show_result()` 里等这段跑完）。
+#   · 失败方 = 本端输了（`win == false`）就是**我方那一排**，否则是**对端那一排**；
+#   · 震动复用 `DeathMark.pop_and_shake()`（死亡时同一套"弹出+摇晃"，三枚逐枚错开 0.06s）；
+#   · 爆炸 = 在那一排的状态栏位置上炸一圈碎片（`_StatusBurst`，自绘、纯演出、不接输入）；
+#   · headless/回放：直接返回（跑批与回放时序逐位不变）。
+func _defeat_anim(win: bool) -> void:
+	var my_fn: int = battle._my_faction() if battle != null else DataRegistry.Faction.PLAYER
+	var loser_fn: int = (DataRegistry.Faction.PLAYER if my_fn == DataRegistry.Faction.ENEMY else DataRegistry.Faction.ENEMY) if win else my_fn
+	await _defeat_anim_side(loser_fn)
+
+## 【2026-09-29·用户报「录像里还是没看到失败的效果」】回放的结局**不走 `show_result()`**
+##   （那边是 `Battle._replay_show_result()` 只弹一条"蓝方/红方获胜"横幅）⇒ 给它一个入口：
+##   按"输的是哪一方"播同一段演出（震动 → 爆炸）。`loser_is_blue` = 输的是蓝方吗。
+func replay_defeat_anim(loser_is_blue: bool) -> void:
+	await _defeat_anim_side(DataRegistry.Faction.PLAYER if loser_is_blue else DataRegistry.Faction.ENEMY)
+
+func _defeat_anim_side(loser_fn: int) -> void:
+	var my_fn: int = battle._my_faction() if battle != null else DataRegistry.Faction.PLAYER
+	var lost: bool = loser_fn == my_fn
+	# 【2026-09-29·用户要求「录像里也要看到」】只跳过 headless（跑批/无窗口）；
+	#   **回放里照播**（这段是纯本地视觉、不碰任何判定与网络；`is_inside_tree()` 守卫都在）。
+	if DisplayServer.get_name() == "headless":
+		return
+	var marks: Array = _my_marks if lost else _op_marks
+	var anchor: Control = _my_death_name if lost else _op_death_name
+	for i in marks.size():
+		var mk = marks[i]
+		if mk == null or not is_instance_valid(mk):
+			continue
+		if i > 0:
+			await get_tree().create_timer(0.06).timeout
+			if not is_inside_tree():
+				return
+		mk.pop_and_shake()
+		AudioManager.play("select")
+	# 【2026-09-29·用户要求】「震动有点短，要循序渐进，越来越爆炸的感觉」⇒ 弹完再叠**三段渐强震动**：
+	#   幅度 3 → 7 → 11px、每段次数 4 → 7 → 10、单次时长 0.10 → 0.075 → 0.05s（越来越快越猛），
+	#   三枚一起（首枚已先弹过），总时长约 1.6 秒，然后才炸。
+	for mk2 in marks:
+		if mk2 == null or not is_instance_valid(mk2):
+			continue
+		var base_pos: Vector2 = mk2.position
+		var tw: Tween = mk2.create_tween()
+		var amp := 3.0
+		for seg in 3:
+			var step: float = 0.10 - float(seg) * 0.025
+			var n: int = 4 + seg * 3
+			for j in n:
+				var dx: float = amp if j % 2 == 0 else -amp
+				var rot: float = (0.05 + 0.05 * float(seg)) * (1.0 if j % 2 == 0 else -1.0)
+				tw.tween_property(mk2, "position", base_pos + Vector2(dx, 0.0), step)
+				tw.parallel().tween_property(mk2, "rotation", rot, step)
+			amp += 4.0
+		tw.tween_property(mk2, "position", base_pos, 0.08)
+		tw.parallel().tween_property(mk2, "rotation", 0.0, 0.08)
+	await get_tree().create_timer(1.65).timeout
+	if not is_inside_tree():
+		return
+	# 爆炸：落点 = 那一侧名字框/标志一带的中心（取名字框所在竖排栈的矩形）
+	var center := Vector2(get_viewport().get_visible_rect().size.x * 0.5, 40.0)
+	if anchor != null and is_instance_valid(anchor):
+		var plate: Control = anchor.get_parent() as Control
+		if plate != null:
+			var r: Rect2 = plate.get_global_rect()
+			center = r.position + r.size * 0.5
+	var burst := _StatusBurst.new()
+	burst.z_index = 5
+	if _kill_fx != null and is_instance_valid(_kill_fx):
+		_kill_fx.add_child(burst)
+	else:
+		add_child(burst)
+	burst.play(center, Color(1.0, 0.45, 0.35) if lost else Color(0.6, 0.85, 1.0))
+	AudioManager.play("death")
+	await get_tree().create_timer(0.75).timeout
+
+## 【2026-09-29】失败演出用的一次性爆炸：从中心向外炸一圈碎片 + 一圈冲击环，0.7 秒后自毁。
+##   纯自绘、`MOUSE_FILTER_IGNORE`（不挡任何点击），加在 `_kill_fx` 层上（画在按钮之上）。
+## 【2026-09-29·用户问「爆炸有没有更好的效果」】把原来"18 个圆点 + 一圈环"升级成**四层叠加**的爆炸
+##   （全部自绘、零素材、固定种子可复现）：
+##     ① **白闪**：0~0.08s 一枚白色大圆瞬间铺开又收（爆炸的"亮"）；
+##     ② **火球**：核心亮黄 → 橙红的两层圆快速涨大淡出（温度梯度，内亮外暗）；
+##     ③ **冲击环**：一圈带厚度的环向外扩张、越扩越细越淡（原来那圈保留但更细更快）；
+##     ④ **碎块 + 火星**：14 块不规则碎块（四边形，各自旋转、受"重力"下坠）+ 20 道火星拖尾
+##        （短线，比碎块更快更细、拖尾随速度方向拉长）；再补 5 团**余烟**（大而淡的圆，慢速上飘）。
+class _StatusBurst extends Control:
+	var _t := 0.0
+	var _life := 1.15
+	var _center := Vector2.ZERO
+	var _col := Color(1.0, 0.45, 0.35)
+	var _chunks: Array = []
+	var _sparks: Array = []
+	var _smoke: Array = []
+
+	func play(c: Vector2, col: Color) -> void:
+		_center = c
+		_col = col
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		set_anchors_popup()
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 20260929      # 固定种子 ⇒ 每次爆炸形状一致（可复现、联机两端同观感）
+		for i in 14:             # 碎块
+			var a := TAU * float(i) / 14.0 + rng.randf_range(-0.15, 0.15)
+			_chunks.append({ "d": Vector2(cos(a), sin(a)), "v": rng.randf_range(150.0, 330.0),
+				"s": rng.randf_range(5.0, 11.0), "rot": rng.randf_range(-6.0, 6.0) })
+		for i in 20:             # 火星
+			var a2 := TAU * float(i) / 20.0 + rng.randf_range(-0.25, 0.25)
+			_sparks.append({ "d": Vector2(cos(a2), sin(a2)), "v": rng.randf_range(260.0, 520.0),
+				"len": rng.randf_range(10.0, 26.0) })
+		for i in 5:              # 余烟
+			var a3 := TAU * float(i) / 5.0 + rng.randf_range(-0.4, 0.4)
+			_smoke.append({ "d": Vector2(cos(a3), sin(a3)), "v": rng.randf_range(30.0, 70.0),
+				"r": rng.randf_range(26.0, 52.0) })
+		queue_redraw()
+
+	func set_anchors_popup() -> void:
+		set_anchors_preset(Control.PRESET_FULL_RECT)
+
+	func _process(dt: float) -> void:
+		_t += dt
+		if _t >= _life:
+			queue_free()
+			return
+		queue_redraw()
+
+	func _draw() -> void:
+		var k: float = clampf(_t / _life, 0.0, 1.0)
+		var fade: float = 1.0 - k
+		# ② 余烟（最底层，先画）：慢速上飘、越飘越大越淡
+		for s in _smoke:
+			var ps: Vector2 = _center + (s["d"] as Vector2) * float(s["v"]) * k - Vector2(0.0, 26.0 * k)
+			draw_circle(ps, float(s["r"]) * (0.6 + 0.9 * k), Color(0.32, 0.3, 0.34, 0.22 * fade))
+		# ② 火球：内亮黄 → 外橙红两层，快速涨大后淡出（只在前 45% 寿命里）
+		var kf: float = clampf(_t / (_life * 0.45), 0.0, 1.0)
+		if kf < 1.0:
+			var ff: float = 1.0 - kf
+			draw_circle(_center, 16.0 + 78.0 * kf, Color(1.0, 0.75, 0.28, 0.85 * ff))
+			draw_circle(_center, 10.0 + 44.0 * kf, Color(1.0, 1.0, 0.92, 0.95 * ff))
+		# ③ 碎块：飞出去 + 旋转 + 受"重力"下坠（y 额外 +220·k²）
+		for f in _chunks:
+			var pc: Vector2 = _center + (f["d"] as Vector2) * float(f["v"]) * k + Vector2(0.0, 220.0 * k * k)
+			var r: float = maxf(float(f["s"]) * fade, 0.6)
+			var ang: float = float(f["rot"]) * k
+			var pts := PackedVector2Array()
+			for q in 4:
+				var qa: float = ang + TAU * float(q) / 4.0
+				pts.append(pc + Vector2(cos(qa), sin(qa)) * r)
+			draw_colored_polygon(pts, Color(_col.r, _col.g, _col.b, fade))
+		# ④ 火星拖尾：短线沿速度方向拉长（比碎块更快更细）
+		for sp in _sparks:
+			var pv: Vector2 = _center + (sp["d"] as Vector2) * float(sp["v"]) * k
+			var tail: Vector2 = pv - (sp["d"] as Vector2) * float(sp["len"]) * fade
+			draw_line(tail, pv, Color(1.0, 0.9, 0.6, fade), maxf(3.0 * fade, 0.6), true)
+		# ① 白闪：最前 8%（盖在最上面）
+		if _t < 0.08:
+			var kw: float = 1.0 - _t / 0.08
+			draw_circle(_center, 40.0 + 90.0 * (1.0 - kw), Color(1, 1, 1, 0.9 * kw))
+		# ⑤ 冲击环：扩张 + 变细变淡
+		draw_arc(_center, 18.0 + 190.0 * k, 0.0, TAU, 48,
+			Color(_col.r, _col.g, _col.b, fade * 0.85), maxf(7.0 * fade, 1.0), true)
+		draw_arc(_center, 10.0 + 120.0 * k, 0.0, TAU, 40,
+			Color(1.0, 1.0, 0.95, fade * 0.55), maxf(3.0 * fade, 0.8), true)
+
 func show_result(win: bool) -> void:
 	# 【2026-09-25】主动放弃天梯时**不能**解暂停（战斗要冻在面板后面）⇒ 只收掉暂停遮罩，保持 paused。
 	if _ladder_gave_up:
@@ -2779,6 +3189,11 @@ func show_result(win: bool) -> void:
 		await get_tree().create_timer(0.75).timeout
 		if not is_inside_tree():
 			return
+	# 【2026-09-29·用户要求】「为失败增加演出效果：失败时三个骷髅头震动 → 失败方状态栏处爆炸 →
+	#   再弹结算界面」⇒ 面板前先播这段（`_defeat_anim()` 内部按步 await，headless 直接跳过）。
+	await _defeat_anim(win)
+	if not is_inside_tree():
+		return
 	if _result_overlay != null:
 		_result_overlay.queue_free()
 	var vsize := get_viewport().get_visible_rect().size
@@ -2882,6 +3297,7 @@ func show_result(win: bool) -> void:
 	again.add_theme_font_size_override("font_size", 20)
 	again.pressed.connect(_on_restart.bind(true))   # 结束后再战一局：竞技场重新选人
 	box.add_child(again)
+	_rematch_btn = again   # 【2026-09-29】联机"等对方也点再来一局"要改它的文案/可用性
 	# 单机/联机都显示：联机由主机权威广播重启（不退出大厅连接）
 
 	var to_menu := Button.new()
@@ -2895,6 +3311,38 @@ func _vspacer(h: float) -> Control:
 	var s := Control.new()
 	s.custom_minimum_size = Vector2(0, h)
 	return s
+
+# 【2026-09-29·用户要求】联机结算面板「再来一局」的状态文案：
+#   双方都没点 = 「再来一局」（可点）· 只有本端点了 = 「等待对方…」（置灰不可重复点）·
+#   对方先点了 = 「对方已同意 · 再来一局」（点一下就开局）· 双方都点了 = 「开始新一局…」
+func _refresh_rematch_ui() -> void:
+	if _rematch_btn == null or not is_instance_valid(_rematch_btn):
+		return
+	if not GameState.is_online or battle == null or not is_instance_valid(battle):
+		return
+	var mine: bool = battle.local_rematch_want()
+	var peer: bool = battle.peer_rematch_want()
+	if mine and peer:
+		_rematch_btn.text = "开始新一局…"
+		_rematch_btn.disabled = true
+	elif mine:
+		_rematch_btn.text = "等待对方…"
+		_rematch_btn.disabled = true
+	elif peer:
+		_rematch_btn.text = "对方已同意 · 再来一局"
+		_rematch_btn.disabled = false
+	else:
+		_rematch_btn.text = "再来一局"
+		_rematch_btn.disabled = false
+
+# 【2026-09-29·用户要求】「如果有一方退出，则返回联机大厅」：结算后对端回了大厅 ⇒ 本端也回
+#   （与「返回大厅」按钮同一条路，只是**不再**回头喊 `leave`，避免两边互相喊）。
+func _on_peer_left_to_lobby() -> void:
+	if not GameState.is_online:
+		return
+	GameState.reset_online()
+	NetBus.stop()
+	get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
 
 func _on_back_to_menu() -> void:
 	if GameState.is_online:
@@ -2966,24 +3414,25 @@ class FlameIcon extends Control:
 #   ③ 用户口径"**有骷髅头死亡标志就不要那个红圈了**" ⇒ 满槽只画骷髅（连淡圆底都不画）。
 # `filled` 由 HUD 控制（延迟揭示：卡片落地后才置 true）。尺寸微调改下面 const。
 class DeathMark extends Control:
-	# 【2026-09-23 用户反馈三连】**①「骷髅头太小了」⇒ 槽 26 → 34、占比 0.86 → 0.92**（骷髅宽 18.9 → 27.6px）；
-	#   **②「圆圈缩小点」⇒ 空圈直径单独给 `RING_D`**（不再和骷髅共用一个内径）；
-	#   **③「单独把骷髅头放大点」⇒ 只抬 `SKULL_FILL` 0.92 → 1.06**（骷髅宽 27.6 → **31.8px**，空圈仍是 22px）。
-	#   ⇒ 三个旋钮各管一件事：**骷髅大小动 `SKULL_FILL`（本行）**，槽位方框动 `SLOT_D`，空圈动 `RING_D`。
-	#   `SKULL_FILL > 1` = 骷髅比槽内径还宽（还没到方框宽度 34 就放得下，不裁切）。
-	const SLOT_D := 34.0        ## 每槽边长（像素）：槽位方框（也决定骷髅能长多大）
-	const RING_D := 22.0        ## 空圈**直径**（独立于骷髅；22 = 放大之前那个圈的尺寸）
-	const RING_PAD := 2.0       ## 骷髅缩放用的基准留白（骷髅内径 = SLOT_D − 2×RING_PAD = 30）
-	const RING_W := 2.0         ## 空圈线宽
-	const SKULL_FILL := 1.06    ## 骷髅宽度 ÷ 骷髅内径（0.92 = 比内径小一圈；1.06 = 比内径还宽一点）
+	# 【2026-09-29·用户要求】改用**用户新增的三个素材**（`assets/界面/`）：
+	#   **已阵亡 = `死亡标志.png`**；**未阵亡 = `蓝方未死亡标志.png` / `红方未死亡标志.png`**
+	#   （按这一行所属的**绝对阵营**取 ⇒ 联机客房里"我方"那排拿到的就是红的那张）。
+	#   ⇒ 原来"自绘空圈 + 用 `☠` 字形画骷髅"那一套（连同 `RING_D` / `RING_W` / `RING_PAD` /
+	#     `SKULL_FILL` 四个旋钮）**整段退休**：那套是当年为了"空圈与骷髅一样大、整行不漂"手写的，
+	#     现在尺寸由素材自己保证。
+	# ⚠️ `SLOT_D` 只决定**画多大**：素材等比贴进这个方框（取短边，不拉伸变形）。
+	const TEX_DEAD := preload("res://assets/界面/死亡标志.png")
+	const TEX_ALIVE_BLUE := preload("res://assets/界面/蓝方未死亡标志.png")
+	const TEX_ALIVE_RED := preload("res://assets/界面/红方未死亡标志.png")
+	const SLOT_D := 38.0        ## 每槽边长（像素）：素材等比贴进来（2026-09-29 用户「放大死亡标志」20 → 38）
 	const SHAKE_PX := 3.0       ## 摇晃幅度（像素）
 	const SHAKE_TIMES := 4      ## 摇晃几下（左右各算一下）
 
-	var filled := false          ## false = 空心圆（尚未阵亡）；true = 骷髅（已阵亡）
-	var mark_color := Color(0.5, 0.85, 1.0)   ## 我方=蓝、敌方=红（由 HUD 按阵营给）
+	var filled := false          ## false = 未死亡标志（素材：蓝/红）；true = 死亡标志
+	var faction := DataRegistry.Faction.PLAYER   ## 这一行属于哪个**绝对阵营**（决定用蓝的还是红的那张）
 
-	func _init(c: Color = Color(0.5, 0.85, 1.0)) -> void:
-		mark_color = c
+	func _init(fn: int = DataRegistry.Faction.PLAYER) -> void:
+		faction = fn
 		custom_minimum_size = Vector2(SLOT_D, SLOT_D)
 		size = Vector2(SLOT_D, SLOT_D)
 		mouse_filter = Control.MOUSE_FILTER_IGNORE   # 纯显示，不拦鼠标（不挡棋盘点击）
@@ -3019,27 +3468,17 @@ class DeathMark extends Control:
 		t.parallel().tween_property(self, "rotation", 0.0, 0.05)
 
 	func _draw() -> void:
-		var c := size * 0.5
-		if not filled:
-			# 空心圆：**自绘**（不用 `○` 字形），直径 = `RING_D`（用户要求"圆圈缩小点" ⇒ 单独给定，
-			#   不再和骷髅共用一个内径：现在是"骷髅大、空圈小"）。
-			draw_arc(c, maxf(RING_D * 0.5, 2.0), 0.0, TAU, 48, mark_color, RING_W, true)
+		# 【2026-09-29】直接贴素材：已阵亡 = 死亡标志；未阵亡 = 按**绝对阵营**取蓝/红那张。
+		#   等比缩放（取短边）⇒ 68×83 与 81×102 两种素材都不会被拉变形。
+		var tex: Texture2D = TEX_DEAD if filled else (TEX_ALIVE_BLUE if faction == DataRegistry.Faction.PLAYER else TEX_ALIVE_RED)
+		if tex == null:
 			return
-		# 已阵亡：**只画骷髅，不再画那个圈**（用户口径「有骷髅头死亡标志就不要那个红圈了」）
-		#   —— 骷髅按"槽内径"缩放（比空圈大），这是用户"骷髅太小 → 调大、圆圈再缩小"两条口径的最终结果。
-		var r := maxf(minf(size.x, size.y) * 0.5 - RING_PAD, 2.0)
-		var font := get_theme_font("font")
-		if font == null:
-			return                                  # 无字体（headless 等）：什么都不画，不影响逻辑
-		var fs := int(maxf(size.y * 0.92, 8.0))
-		var gw := font.get_string_size("☠", HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		var gh := font.get_height(fs)
-		if gw <= 0.0 or gh <= 0.0:
+		var ts := tex.get_size()
+		if ts.x <= 0.0 or ts.y <= 0.0:
 			return
-		var k := (r * 2.0 * SKULL_FILL) / gw        # 横向缩放：骷髅宽度 = 骷髅内径 × SKULL_FILL（>1 就是比内径还宽）
-		draw_set_transform(c, 0.0, Vector2(k, k))
-		draw_string(font, Vector2(-gw * 0.5, gh * 0.34), "☠", HORIZONTAL_ALIGNMENT_LEFT, -1, fs, mark_color)
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		var k := minf(size.x / ts.x, size.y / ts.y)
+		var d := ts * k
+		draw_texture_rect(tex, Rect2((size - d) * 0.5, d), false)
 
 # 【2026-09-23 新增·用户要求】英雄阵亡演出（一次性节点，演完自毁；同样按用户要求写成 HUD 的嵌套类）：
 #   ① **卡面破碎升天**：原地炸成一堆六边形碎片，碎片向上飘散、旋转、淡出；

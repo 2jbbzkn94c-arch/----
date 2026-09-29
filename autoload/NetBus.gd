@@ -57,8 +57,12 @@ func _process(dt: float) -> void:
 		_was_status = st
 		_peer_gone_emitted = true   # 底层已断开：不再走心跳判定
 		disconnected.emit()
-	if st == MultiplayerPeer.CONNECTION_CONNECTED:
-		while _peer.get_available_packet_count() > 0:
+	# 【2026-09-29·用户报 `NetBus.gd:71 _process: Cannot call method 'get_available_packet_count'
+	#   on a null value`】病根 = **重入**：上面那两句 `connected.emit()` / `disconnected.emit()`
+	#   会让业务层（HUD/Battle）当场调 `NetBus.stop()`（认输、返回大厅、场景切换都会）⇒ `_peer`
+	#   在**本函数中途**被置空，而后面这段还照着老状态往下用 ⇒ 撞空。这里补两道"发完信号再复检"。
+	if st == MultiplayerPeer.CONNECTION_CONNECTED and is_online and _peer != null:
+		while _peer != null and is_online and _peer.get_available_packet_count() > 0:
 			# 先取发送者 id 再取内容：get_packet() 会把该包弹出队列，
 			# 若先取内容再 get_packet_peer()，最后一条包已被弹出 -> 队空报错。
 			var from := _peer.get_packet_peer()

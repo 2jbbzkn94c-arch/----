@@ -52,6 +52,12 @@ const PATCH_EVERY := 30        # 每这么多帧回填一次头部（≈1 秒）
 #   转码时与画面一起喂给 ffmpeg（`-c:a aac`），转完**立刻删掉 wav**（用户明确「不需要保留 wav」）。
 const AUDIO_BUS := "Master"
 const AAC_BITRATE := "160k"    # mp4 音轨码率（人声/音效足够；比视频小两个数量级，体积几乎没影响）
+# 【2026-09-29 用户要求「完整走完的保存录像只需要 MP4 视频，不需要保存音频和 avi 文件」】
+#   中间产物（临时 wav + 抓帧用的 avi）现在放在**游戏自己的 user:// 目录**里，不再丢进保存目录：
+#   ⇒ 保存目录里从头到尾**只有最终那一个 mp4**（原来保存过程中会在用户眼前出现 avi/wav，
+#     被当成"导出了音频和 avi"）。⚠️ avi 例外地**先留在保存目录、抓完帧才搬进来**：
+#     用户早先要求过「中途被杀也要能播」—— 录到一半被杀时，保存目录里那份 avi 是唯一能播的成品。
+const TMP_DIR := "user://replay_tmp"
 
 var battle = null
 var _dir := ""                 # 本次保存目录（= `rec_dir()`，绝对路径）
@@ -159,14 +165,16 @@ func run(replay_id: String) -> String:
 		AudioManager.play("lose")
 		return ""
 	var avi_abs := _unique_path(_dir, "replay_%s" % replay_id, ".avi")
+	_sweep_tmp()   # 【2026-09-29】先把上一次留下的临时文件清掉（崩溃/被杀时可能还留着）
 	if not _avi_open(avi_abs):
 		_title("")
 		log_msg("录制失败：写不出文件（%s）" % avi_abs)
 		AudioManager.play("lose")
 		return ""
 	AudioManager.play("select")   # 开录：给一声
-	# 【2026-09-29 用户要求「导出的视频没有声音」】画面开抓的同时开始录音（Master 总线，含 BGM/台词/音效）
-	_audio_start(_unique_path(_dir, "replay_%s" % replay_id, ".wav"))
+	# 【2026-09-29 用户要求「导出的视频没有声音」】画面开抓的同时开始录音（Master 总线，含 BGM/台词/音效）；
+	#   ⚠️ 临时 wav 落在 `user://replay_tmp/`（不进保存目录，见 `TMP_DIR` 的说明）。
+	_audio_start(_tmp_abs("replay_%s.wav" % replay_id))
 	# 【2026-09-28 用户报「怎么默认倍速，太快了」·真因】画面帧率**必须钉在 `FPS`**：
 	#   抓帧是"每个渲染帧抓一张"、AVI 又按 `FPS` 播；每帧推进多少游戏时间靠 `_drive_time_scale()` 补偿。
 	#   机器渲染得比 `FPS` 快多少，需要的 `time_scale` 就是那个倍数（`FPS`=60 时：120fps ⇒ 2.0），
@@ -210,9 +218,12 @@ func run(replay_id: String) -> String:
 	#   画面 + 声音都收尾（关掉 avi、摘掉录音效果器），把 avi 与临时 wav **一起删掉**，只留那句提示。
 	#   （原先"留个 avi 先放着"的兜底按这个口径取消；「不需要没 ffmpeg 时保留 wav」也是同一件事。）
 	var ff := _find_ffmpeg()
+	# 【2026-09-29】先把 avi 正常收尾（写 idx1 索引 + 回填头部 + **关掉文件句柄**），再把它**搬进临时目录**：
+	#   搬完保存目录就干净了（只剩最终那个 mp4），而"录到一半被杀"那份仍然留在保存目录里能播（见 `TMP_DIR`）。
+	_avi_finish()
+	avi_abs = _move_to_tmp(avi_abs)
+	Engine.max_fps = _prev_max_fps
 	if ff == "":
-		_avi_finish()                       # 先正常收尾（关掉文件句柄，Windows 才删得掉）
-		Engine.max_fps = _prev_max_fps
 		DirAccess.remove_absolute(avi_abs)
 		if wav_abs != "":
 			DirAccess.remove_absolute(wav_abs)
@@ -223,7 +234,6 @@ func run(replay_id: String) -> String:
 		AudioManager.play("lose")
 		return ""
 	_ui_notice("录像保存中…")
-	_avi_finish()
 	# 收尾：帧率上限还原（倍速**不还原**：那是观众自己的设置，录制只是"记录当时的速度"）
 	Engine.max_fps = _prev_max_fps
 	AudioManager.play("click")   # 【2026-09-28】录完了：再给一声
@@ -238,7 +248,7 @@ func run(replay_id: String) -> String:
 		_ui_notice("这次没录到画面")
 		log_msg("录制失败：这一遍没抓到画面（无渲染环境？）")
 		return ""
-	var out_path := avi_abs
+	var out_path := ""   # ⚠️ 只有**验过是能打开的 mp4**才赋值（见下面的 `_mp4_ok()`）
 	# ⚠️ 【2026-09-28】进入"转码"这一段时把中止标志**清掉**：`_stopped` 的语义是"中止**当前**这一段" ——
 	#   用户刚才按 ESC / 点「停止录制」停的是**录制**，那之后要照常把已录的部分**保存**成 mp4
 	#   （这正是他说的"保存中"）；若不清，`_mux()` 轮询的第一帧就会把 ffmpeg 杀掉、只剩 avi。
@@ -246,11 +256,19 @@ func run(replay_id: String) -> String:
 	_stopped = false
 	_title("录像保存中…（正在转 mp4，%.0f 秒素材）" % (float(_frames) / FPS))
 	var mp4_abs := _unique_path(_dir, "replay_%s" % replay_id, ".mp4")
-	# 【2026-09-29 用户要求「导出的视频没有声音」】把刚录下来的 wav 作为**第二路输入**交给 ffmpeg
+	# 【2026-09-29 用户要求「导出的视频没有声音」】把刚录下来的 wav 作为**第二路输入**给 ffmpeg
 	#   （`-c:a aac` 压进 mp4）；不管转成功还是失败，这段**临时 wav 一律删掉**（用户明确「不需要保留 wav」）。
-	if await _mux(ff, avi_abs, mp4_abs, wav_abs):
-		DirAccess.remove_absolute(avi_abs)   # 转成功就只留 mp4（更小、更好分享）
+	var muxed: bool = await _mux(ff, avi_abs, mp4_abs, wav_abs)
+	# 【2026-09-29 用户报「而且无法打开」·真凶】原来只要"文件不是 0 字节"就当成转成功了 ——
+	#   可**转码被中途打断**（转码期间按了 ESC / 游戏被杀）时，那个 mp4 是**半截**的：没有 `moov` 原子，
+	#   播放器一律报"无法打开"（实测用户目录里那份 8.1MB 的 mp4：`moov atom not found`），
+	#   于是"打不开的 mp4"就这样留在保存目录里。现在**结构验一遍**：没有 `moov` 就当失败处理。
+	if muxed and _mp4_ok(mp4_abs):
 		out_path = mp4_abs
+		DirAccess.remove_absolute(avi_abs)      # 转成功：中间 avi 也删掉（它本来就在临时目录里）
+	elif FileAccess.file_exists(mp4_abs):
+		DirAccess.remove_absolute(mp4_abs)      # 半截 mp4 一律删掉：宁可不留，也不给一个打不开的文件
+		log_msg("删除打不开的半截 mp4：%s" % mp4_abs)
 	if wav_abs != "":
 		DirAccess.remove_absolute(wav_abs)
 	_title("")            # 成品出来了：清掉"录像保存中…"
@@ -258,13 +276,76 @@ func run(replay_id: String) -> String:
 	# ⚠️ 这里**不再自动打开文件夹**：保存位置由 `ReplayPanel.show_saved_popup()` 弹框给出，
 	#   用户想打开就点弹框里的「打开文件夹」（用户 2026-09-28 要求"弹出保存录像位置"）。
 	#   （"没找到 ffmpeg"那条分支已经在上面**直接返回**了：那种情况什么都不保存，走不到这里。）
-	if _mux_aborted:
-		_ui_notice("已中止保存（avi 原文件保留）")
-		log_msg("已中止保存（avi 原文件保留）。")
-	else:
+	if out_path != "":
 		_ui_notice("录像已保存")
-		log_msg("录像已保存。")
+		log_msg("录像已保存：%s" % out_path)
+	elif _mux_aborted:
+		_ui_notice("已中止保存（这次没有成品）")
+		log_msg("已中止保存：半截 mp4 已删掉；中间 avi 还在 %s（下次开录会清掉）。" % avi_abs)
+	else:
+		_ui_notice("转 mp4 失败（这次没有保存）")
+		log_msg("转 mp4 失败或成品不完整（缺 moov）：已删掉打不开的 mp4；中间 avi 还在 %s。" % avi_abs)
 	return out_path
+
+# ---- 临时文件（中间 avi / 临时 wav）都放这儿，保存目录里从头到尾只有最终那个 mp4 ----
+
+## `user://replay_tmp/` 下的绝对路径（目录不存在就建）。
+func _tmp_abs(name: String) -> String:
+	var d := ProjectSettings.globalize_path(TMP_DIR)
+	if not DirAccess.dir_exists_absolute(d):
+		DirAccess.make_dir_recursive_absolute(d)
+	return "%s/%s" % [d, name]
+
+## 把文件搬进临时目录（搬不动就原样返回 —— 只是"不好看"，不影响功能）。
+## ⚠️ 必须在**关掉文件句柄之后**搬（Windows 上开着句柄改名会失败，见 `_avi_finish()`）。
+func _move_to_tmp(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return path
+	var dst := _tmp_abs(path.get_file())
+	var err := DirAccess.rename_absolute(path, dst)
+	if err == OK and FileAccess.file_exists(dst):
+		return dst
+	log_msg("中间文件搬进临时目录失败（err=%d），就地处理：%s" % [err, path])
+	return path
+
+## 开录前清一次临时目录：上一次崩溃/被杀留下的中间文件不该越积越多。
+## ⚠️ **只清临时目录**，绝不碰保存目录里的东西（那里的 avi 可能是"录到一半被杀"的唯一成品）。
+func _sweep_tmp() -> void:
+	var d := ProjectSettings.globalize_path(TMP_DIR)
+	if not DirAccess.dir_exists_absolute(d):
+		return
+	var da := DirAccess.open(d)
+	if da == null:
+		return
+	for f in da.get_files():
+		DirAccess.remove_absolute("%s/%s" % [d, String(f)])
+
+## 【2026-09-29 用户报「而且无法打开」】成品自检：**不只看大小，还要看结构** ——
+##   转码被中途打断留下的 mp4 是半截的（没有 `moov` 原子），播放器一律报"无法打开"
+##   （实测用户那份 8.1MB 的产物：ffprobe 原话 `moov atom not found`；同一目录里能播的那份则含 moov）。
+##   ffmpeg 是**收尾时才写 moov**、`+faststart` 再把它搬到文件最前面 ⇒ 只看**开头 2MB** 就够，
+##   而且不必整份扫（几十上百 MB 的成品也秒回）。
+##   ⚠️ 只做"有没有 moov"这一件事：真正的解码校验交给 ffprobe（不保证装了）。
+func _mp4_ok(path: String) -> bool:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return false
+	var total := f.get_length()
+	if total <= 0:
+		f.close()
+		return false
+	var head := f.get_buffer(mini(total, 2 << 20))
+	f.close()
+	return _has_marker(head, 109, 111, 111, 118)   # 'm','o','o','v'
+
+## 在字节流里找四字符标记（用原生 `PackedByteArray.find()` 定位首字节，别在 GDScript 里逐字节遍历）。
+func _has_marker(buf: PackedByteArray, a: int, b: int, c: int, d: int) -> bool:
+	var i := buf.find(a)
+	while i >= 0 and i + 3 < buf.size():
+		if buf[i + 1] == b and buf[i + 2] == c and buf[i + 3] == d:
+			return true
+		i = buf.find(a, i + 1)
+	return false
 
 ## 画面中央的大字提示（走 HUD 现成的回合横幅通道）。抓帧已停时才调用 ⇒ 不会录进视频。
 ## 只给"保存中/已保存"这类**导出收尾**用（用户 2026-09-28 要求按 ESC 后要有提示）。

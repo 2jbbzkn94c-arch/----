@@ -326,6 +326,8 @@ var _replay_seek_req := 0             # 【2026-09-29】跳段**请求**次数�
 									  #   而观众如果在开场里点了「开局」，播放权已经交给主循环那次跳段 ⇒
 									  #   这条旧协程**不能再碰播放状态**（否则刚停住的画面又被它解开）。
 									  #   用"请求"而不是"落地"计数：请求是同步发生的，不存在时间差。
+var _replay_seek_goal := -1           # 【2026-09-29】"已经排着队的那个落点"：连点「上/下回合」时的 ±1 基准
+									  #   （见 `replay_seek_step()`；-1 = 没有在途请求）
 var _hud = null                       # 本局的 HUD（`_setup_hud()` 里记住；回放换段直接用它报横幅）
 var _replay_seek_pause := true        # 跳段落地后是否暂停（见 `replay_seek_frame()`）
 var _replay_hold_seq := 0             # 回合横幅"停一拍"的"代"：换代 = 旧的等待当场作废（见 `_replay_enter_frame()`）
@@ -362,7 +364,10 @@ var _replay_panel = null              # 回放控制条（src/ReplayPanel.gd；�
 var _replay_frame := 0                # 当前半回合下标（段的序号）
 var _replay_step := 0                 # 当前段内已重演到第几招
 var _ending_side := false   # 正在"结束回合/结算扣血"流程中：期间阵亡不立即替补（推迟到本方下回合
-var _rematch_requested := false   # 客户端已请求"再来一局"（防重复发请求）
+var _rematch_requested := false   # 本端已请求"再来一局"（防重复发请求）
+var _peer_rematch_want := false   # 【2026-09-29】对端也点了"再来一局"
+signal rematch_state_changed      # 【2026-09-29】任一侧的"再来一局"意向变化 ⇒ HUD 刷按钮文案
+signal peer_left_to_lobby         # 【2026-09-29】结算后对端回了大厅 ⇒ 本端也跟着回大厅
 var _rematch_started := false     # 主机已发起联机重开（防重入，重载场景后新实例自动重置）
 
 # 回合限时：本端可操作回合超过时限自动结束0 秒）= 未开始计时（部署/等待/选人阶段）
@@ -1469,6 +1474,11 @@ func _begin_arena_draft() -> void:
 	_arena_gave = []
 	_arena_player_rounds = 0
 	_arena_enemy_rounds = 0
+	# 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】选牌也要进录像：
+	#   这里开一本"选牌账"（先手 + 每一轮的候选与选择，见 `_rec_note_draft_round()`）。
+	#   ⚠️ 只在**还没账**时开：天梯续档（`_rec_resume()`）接过的那本账里可能已经记了前几轮。
+	if _rec_on and _rec != null and not _replay_mode and (_rec.meta.get("draft", {}) as Dictionary).is_empty():
+		_rec.meta["draft"] = { "first_side": _first_side, "rounds": [] }
 	# 关键：选人一开始就清空上一局卡组。否则在 8 轮选完（才 set_decks）之前，
 	# 任何读取 GameState.player_deck/enemy_deck 的地方（部署/队伍面板等）都会显示上一局阵容
 	GameState.set_decks([], [])
@@ -1537,6 +1547,10 @@ func _resume_arena_draft(d: Dictionary) -> void:
 # 竞技场开场："本局X先手"黄色大字先演完，再弹 2 选 1 面板（用户 2026-09-28 口径）。
 #   横幅演出 = 放大 0.16 + 停留 0.9 + 淡出 0.35 ≈ 1.45 秒（见 `HUD._show_turn_banner()`）。
 #   暂停中不推进：暂停时横幅本身也停着（Tween 默认 TWEEN_PAUSE_BOUND），与 `_show_arena_round()` 开头同口径。
+## 【2026-09-29 用户要求·竞技场选牌进录像】回放选牌段的三拍（都用 `_gap_plain()` ⇒ 跟倍速、不跟暂停）：
+const REPLAY_DRAFT_READ_SEC := 1.1     ## 我方轮：面板亮着停留多久（没有 15 秒读秒）
+const REPLAY_DRAFT_ENEMY_SEC := 0.8    ## 敌方轮："敌方正在选择英雄……"停留多久
+const REPLAY_DRAFT_FLY_SEC := 0.5      ## 选中"飞卡"演出（与 HUD 的 0.45s 对齐 + 一点余量）
 const ARENA_BANNER_SECONDS := 1.45
 
 func _wait_arena_banner() -> void:
@@ -1779,6 +1793,7 @@ func _action_arena_enemy_pick() -> void:
 	for c in _arena_pending:
 		_arena_pool.erase(c)   # 本轮两个候选离开候选池，避免重复抽取
 	_arena_enemy_rounds += 1
+	_rec_note_draft_round(GameState.SIDE_ENEMY, [a, b], en_hid)   # 【2026-09-29】选牌进录像
 	log_message.emit("敌方选择了 %s，%s 归你。" % [DataRegistry.get_hero(en_hid).display_name, DataRegistry.get_hero(give_player).display_name])
 	_arena_pending = []
 	_notify_team()   # 敌方轮归你的英雄也实时更新下方队
@@ -1798,6 +1813,7 @@ func _on_arena_pick(hid: String) -> void:
 	if not _arena_pending.has(hid):
 		return
 	# 玩家1 个进自己的卡组，另一个自动进敌方卡组
+	var _pair_rec: Array = _arena_pending.duplicate()   # 【2026-09-29】录像记账用（下面就把 `_arena_pending` 清了）
 	_arena_picked.append(hid)
 	for c in _arena_pending:
 		if c != hid:
@@ -1805,9 +1821,44 @@ func _on_arena_pick(hid: String) -> void:
 		_arena_pool.erase(c)
 	_arena_pending = []
 	_arena_player_rounds += 1
+	_rec_note_draft_round(GameState.SIDE_PLAYER, _pair_rec, hid)   # 【2026-09-29】选牌进录像
 	log_message.emit("你选择了 %s。敌方获得了 %s。" % [DataRegistry.get_hero(hid).display_name, DataRegistry.get_hero(_arena_enemy.back()).display_name if _arena_enemy.size() > 0 else ""])
 	_notify_team()   # 竞技场选人实时更新下方队伍
 	_show_arena_round()
+
+## 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】"这一轮选定了"的**统一出口**：
+##   HUD 的选中演出（点卡 / 回放重演共用同一段，见 `HUD._arena_pick_anim()`）演完调这里。
+##   实战 ⇒ 照旧 `_on_arena_pick()`；回放 ⇒ 走重演那套（选哪张由录像说了算，观众点不动）。
+func _arena_pick_committed(hid: String) -> void:
+	if _replay_mode:
+		_replay_arena_apply_pick(GameState.SIDE_PLAYER, hid)
+		return
+	_on_arena_pick(hid)
+
+## 回放重演一轮选牌的结果：与实战两条路（`_on_arena_pick()` / `_action_arena_enemy_pick()`）
+##   **同一套记账规则**（挑走的那张归挑的人、另一张归对方；敌方轮里"对方挑剩的"记进 `_arena_gave`），
+##   只是**不碰候选池、不推进轮次**——候选与轮次都由录像说了算（见 `_replay_draft_frame()`）。
+##   候选对从 `_arena_pending` 读（重演时由 `_replay_draft_frame()` 按录像摆好，与实战同一处状态）。
+func _replay_arena_apply_pick(side: int, kept: String) -> void:
+	if _arena_pending.size() < 2 or not _arena_pending.has(kept):
+		return
+	var other := ""
+	for c in _arena_pending:
+		if c != kept:
+			other = c
+	if side == GameState.SIDE_PLAYER:
+		_arena_picked.append(kept)
+		if other != "":
+			_arena_enemy.append(other)
+		_arena_player_rounds += 1
+	else:
+		_arena_enemy.append(kept)
+		if other != "":
+			_arena_picked.append(other)
+			_arena_gave.append(other)   # 敌方送出来的那张（口径与实战一致）
+		_arena_enemy_rounds += 1
+	_arena_pending = []
+	_notify_team()   # 与实战一样：每落一轮就实时刷新下方队伍
 
 # ---- 联机竞技场（双人各自 2 1，无先后、随时点选）----
 # 规则（与单机竞技场同源，只是敌方为真人）
@@ -2288,6 +2339,13 @@ func _try_place_deploy(cell: Vector2i) -> bool:
 	#   （用户那条 00:02 录像里只有敌方 3 手就是这个）。现在统一走 `_deploy_spawn_at()`。
 	AudioManager.play("select")
 	_deploy_entrance_busy = true   # 【2026-09-28】这一手登场演出期间：锁住放位/选人（演完放行）
+	# 【2026-09-28·用户报「联机模式里的，部署阶段绿色高亮没有在上完一个英雄后消失」】
+	#   绿色（"能放这儿"）在这一手**落定那一刻**就该收掉。原来只有 `_deploy_after_pick()` 里那一处还原，
+	#   而它要等完"登场演出（`ENTRANCE_DUR` 0.45s）＋ 登场台词（上限 `ENTRANCE_VOICE_CAP` 4s）"、
+	#   还要再等一次 `AudioManager.voice_time_left()`（上限 `DEPLOY_VOICE_WAIT` 4s）⇒ 点完格子后
+	#   绿格还能亮好几秒（联机里对端那一手的入场语音也在等，观感最明显）。
+	#   ⇒ 放位当场就还原成"我方蓝 + 敌方红"（`_deploy_after_pick()` 里那一处保留 = 网络那条路的兜底）。
+	_show_deploy_zones(Color(0.2, 0.6, 0.95, 0.55))
 	_deploy_spawn_at(DataRegistry.Faction.PLAYER, hid, cell)
 	# 联机：把这次部署广播给对端（对端apply_deployment，保证两端一致）
 	if GameState.is_online and NetBus.is_online:
@@ -2316,6 +2374,8 @@ func _try_place_enemy_deploy(cell: Vector2i) -> bool:
 	#   统一走 `_deploy_spawn_at()`：记账 + 造人 + 淡入一次到位，两端口径一致。
 	AudioManager.play("select")
 	_deploy_entrance_busy = true   # 【2026-09-28】这一手登场演出期间：锁住放位/选人（演完放行）
+	# 【2026-09-28·同上】联机客户端这一侧同样：放位当场收掉绿格（别等登场演出 + 台词 + 语音那几秒）
+	_show_deploy_zones(Color(0.2, 0.6, 0.95, 0.55))
 	_deploy_spawn_at(DataRegistry.Faction.ENEMY, hid, cell)
 	if GameState.is_online and NetBus.is_online:
 		NetBus.send_all(JSON.stringify({ "type": "deploy", "faction": DataRegistry.Faction.ENEMY, "hero": hid, "cell": [cell.x, cell.y] }))
@@ -3333,7 +3393,10 @@ func _play_entrance_anim(u: Unit) -> void:
 	var base_scale := u.scale      # 记下原缩放（选中时是 1.08）—— 结尾要还原成它，不能写死 Vector2.ONE
 	u.modulate.a = 0.0
 	u.scale = Vector2(base_scale.x * ENTRANCE_SINK_SX, base_scale.y * ENTRANCE_SINK_SY)
-	var t := create_tween()
+	# 【2026-09-29 用户贴的 `Lambda capture at index 0 was freed`】单位身上的动画一律**绑在这个单位上**
+	#   （`u.create_tween()` 而不是 Battle 的 `create_tween()`）：单位一被释放（跳段重建 / 阵亡清理），
+	#   它身上的 tween 跟着被杀 ⇒ 既不会留下"鬼影动画"，也不会在回调醒来时撞上已释放的捕获。
+	var t := u.create_tween()
 	t.tween_property(u, "modulate:a", 1.0, ENTRANCE_DUR * 0.5)   # 先淡入：观感"从土里透出来"
 	t.parallel().tween_property(u, "scale", base_scale, ENTRANCE_DUR) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)     # 末尾轻微过冲 = 钻出地面的弹性
@@ -3380,8 +3443,10 @@ func _begin_side(side: int) -> void:
 		await get_tree().create_timer(0.05).timeout
 		waited += 0.05
 	turn_banner.emit(_turn_banner_text(side))
-	# 【2026-09-28·用户挑定】回合切换音分敌我：我方 = `Alert_MyTurn`，敌方 = `Alert_TurnOver`
-	AudioManager.play("turn_my" if side == _my_side() else "turn_enemy")
+	# 【2026-09-29·用户口径「把敌方回合的音效也换成我方回合，删除敌方回合音效」】敌我共用一个键：
+	#   原来这里分敌我（我方 `Alert_MyTurn` / 敌方 `Alert_EnemyTurn`），现在两条都放 `turn_my`
+	#   （`turn_enemy` 连素材一起删了，见 `AudioManager.SFX_STREAMS` 那段注释）。
+	AudioManager.play("turn_my")
 	# 账 + 补位起手（与回放共用同一段，见 `_side_begin_stage()`）
 	if await _side_begin_stage(side):
 		return   # 本端补位面板接管：回合开始技顺延到补位完成后（`_resume_after_sub()`）
@@ -4678,12 +4743,13 @@ func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = fals
 func _melee_obstacle_hit(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var apos := board_view.cell_world_center(u.cell)
 	var swing_to := apos.lerp(board_view.cell_world_center(cell), 0.3)
-	var t := create_tween()
+	# 【2026-09-29】绑在攻击者身上（见 `_play_entrance_anim()` 那条说明）：单位被释放时动画当场作废
+	var t := u.create_tween()
 	t.tween_property(u, "position", swing_to, 0.1)
 	t.tween_callback(func():
 		if u == null or not is_instance_valid(u):
 			return   # 攻击者在挥击演出期间被释放：中止
-		var back := create_tween()
+		var back := u.create_tween()
 		back.tween_property(u, "position", apos, 0.08)
 		back.tween_callback(func():
 			if u != null and is_instance_valid(u):
@@ -4803,14 +4869,31 @@ func _dispatch_player_op(cmd: Dictionary) -> bool:
 # 联机"再来一局"：不退出连接。主机权威重启——重随机种子并广播，双端重载 Main 场景重走部署/选卡
 # 客户端点-> 发请求给主机；主机点击或收到请求 -> 广播 restart_new(新种+ 本端重载；客户端收到广播后重载
 func request_rematch_online() -> void:
+	# 【2026-09-29·用户要求】「点击再来一局，需要等待对方也点击再来一局」⇒ 本端只**表达意向**，
+	#   不再立刻开局；等**双方都想**了才由主机 `_start_online_rematch()`（客户端等 `restart_new`）。
 	if not GameState.is_online:
 		return
+	if _rematch_requested:
+		return
+	_rematch_requested = true
 	if GameState.is_host:
-		_start_online_rematch()
+		NetBus.send_all(JSON.stringify({ "type": "rematch_want" }))
 	else:
-		if not _rematch_requested:
-			_rematch_requested = true
-			NetBus.send_to(1, JSON.stringify({ "type": "restart_req" }))
+		NetBus.send_to(1, JSON.stringify({ "type": "rematch_want" }))
+	rematch_state_changed.emit()
+	_try_start_rematch()
+
+# 双方都想再来一局 ⇒ 只有主机真的开局（客户端收到 restart_new 再重载）
+func _try_start_rematch() -> void:
+	if _rematch_requested and _peer_rematch_want and GameState.is_host:
+		_start_online_rematch()
+
+# ---- HUD 用：本端/对端的"再来一局"意向（结算面板按钮文案用）----
+func local_rematch_want() -> bool:
+	return _rematch_requested
+
+func peer_rematch_want() -> bool:
+	return _peer_rematch_want
 
 func _start_online_rematch() -> void:
 	if not GameState.is_host or _rematch_started:
@@ -4862,13 +4945,24 @@ func _on_net_packet(_from_id: int, text: String) -> void:
 		var t := String(cmd.get("type", ""))
 		if t == "leave":
 			# 对方主动离开本局（回大厅）：立即触发断线提示，不再干等心跳超时
+			# 【2026-09-29·用户要求】「如果有一方退出，则返回联机大厅」⇒ 已经结算时（结算面板/等再来一局）
+			#   不再弹"断线"提示，而是**本端也回联机大厅**（`peer_left_to_lobby` → HUD 走同一套退出）。
 			if state != State.ENDED:
 				NetBus.disconnected.emit()
+			else:
+				peer_left_to_lobby.emit()
+			return
+		if t == "rematch_want":
+			# 【2026-09-29】对端也想再来一局：记下；两边都想了就由主机开局
+			_peer_rematch_want = true
+			rematch_state_changed.emit()
+			_try_start_rematch()
 			return
 		if t == "restart_req":
-			# 客户端请再来一局" -> 主机权威重启（广播新种子；send_all 不回环，主机本地也重启）
-			if GameState.is_host:
-				_start_online_rematch()
+			# 【旧协议·兼容】老版本客户端发的是 restart_req ⇒ 当"对端也想来一局"处理（不再直接开局）
+			_peer_rematch_want = true
+			rematch_state_changed.emit()
+			_try_start_rematch()
 			return
 		if t == "restart_new":
 			# 主机广播重启 -> 客户端应用新种子并重载（主机不接收自己的广播
@@ -5104,7 +5198,8 @@ func _animate_emerge(u: Unit, cell: Vector2i, for_enemy: bool) -> void:
 	var base_scale := u.scale
 	var sink_scale := Vector2(base_scale.x * 0.30, base_scale.y * 0.12)   # 贴地压扁 = 沉入地下
 	var target_pos := board_view.cell_world_center(cell)
-	var out_t := create_tween()
+	# 【2026-09-29】绑在这个单位身上（见 `_play_entrance_anim()` 那条说明）
+	var out_t := u.create_tween()
 	out_t.tween_property(u, "scale", sink_scale, 0.16).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
 	out_t.parallel().tween_property(u, "modulate:a", 0.0, 0.16)
 	out_t.tween_callback(func():
@@ -5112,7 +5207,7 @@ func _animate_emerge(u: Unit, cell: Vector2i, for_enemy: bool) -> void:
 			return
 		u.position = target_pos      # 逻辑落点早已生效（cell/occupancy），这里只是把画面挪过去
 		u.scale = sink_scale
-		var in_t := create_tween()
+		var in_t := u.create_tween()
 		in_t.tween_property(u, "modulate:a", 1.0, 0.20)   # 先淡入，再放大：观感是"从土里透出来"
 		in_t.parallel().tween_property(u, "scale", base_scale, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)   # 末尾轻微过冲 = 钻出地面的弹性
 		in_t.tween_callback(func():
@@ -5131,7 +5226,9 @@ func _animate_step_path(u: Unit, path: Array, idx: int, for_enemy: bool) -> void
 		_finish_move(u, for_enemy)
 		return
 	var cell: Vector2i = path[idx]
-	var t := create_tween()
+	# 【2026-09-29】走位这条链也绑在单位身上（见 `_play_entrance_anim()` 那条说明）：
+	#   跳段重建会把整盘人换掉 ⇒ 旧单位身上的这条链必须当场作废，不能"演到一半再撞见已释放的自己"
+	var t := u.create_tween()
 	t.tween_property(u, "position", board_view.cell_world_center(cell), 0.2)   # 每格移动略放
 	t.tween_callback(func():
 		# 炸弹：只有移动到路径终点(停下)才引爆；单纯经过中间的炸弹格不再爆炸
@@ -5368,13 +5465,14 @@ func _play_melee_hit(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		return
 	var apos := board_view.cell_world_center(attacker.cell)
 	var hit_to := apos.lerp(board_view.cell_world_center(target.cell), 0.35)   # 攻击者轻冲接
-	var t := create_tween()
+	# 【2026-09-29】绑在攻击者身上（见 `_play_entrance_anim()` 那条说明）
+	var t := attacker.create_tween()
 	t.tween_property(attacker, "position", hit_to, 0.12)
 	t.tween_callback(func():
 		if attacker == null or not is_instance_valid(attacker):
 			return   # 攻击者在出招演出期间被释放：中止本次近战动画
 		# 命中：回到原位，再结算伤
-		var back := create_tween()
+		var back := attacker.create_tween()
 		back.tween_property(attacker, "position", apos, 0.1)
 		back.tween_callback(func(): _apply_attack(attacker, target, for_enemy)))
 
@@ -5509,11 +5607,11 @@ func _start_board_intro_once() -> void:
 ## 【2026-09-28·用户口径「Alert_BattleStart 放在卡组三选一后，同时提示：战斗开始，然后进入部署阶段」】
 ##   开战音 + 中央横幅「战斗开始」；本局只报一次（续档恢复 / 中途重进部署不再报）。
 ##   返回 true = 这一次真的报了（调用方据此决定要不要"停一拍"再进部署）。
-func _announce_battle_start() -> bool:
-	# 【2026-09-29 用户报「录像部署阶段的时候按开局，会弹战斗开始」】回放里**永远不报开战**：
-	#   上面 `_ready()` 那几条分支已经不让回放走实时开局了，这里是**最后一道** ——
-	#   万一还有别的旧协程叫到它（`_begin_deployment()` 那条链），也不会在录像里冒出横幅与开战音。
-	if _replay_mode:
+## 【2026-09-29】加 `force_replay`：竞技场选牌段的**重演**里这一拍是"该报的"（与实战同一顺序），
+##   而"回放里冒出「战斗开始」"那次误报（用户报过：部署阶段按开局弹战斗开始）必须继续挡住 ⇒
+##   只有显式 `force_replay = true` 时才在回放里放行。
+func _announce_battle_start(force_replay: bool = false) -> bool:
+	if _replay_mode and not force_replay:
 		return false
 	if _battle_announced:
 		return false
@@ -8510,7 +8608,13 @@ func _replay_begin(data: Dictionary) -> void:
 		# 【2026-09-28 用户报「怎么部署都结束了，还弹出开局部署」】顺序必须是**先横幅、再动画**：
 		#   原来先 `_replay_deploy_frame()` 演完、末尾那次 `_replay_enter_frame(true)` 才弹横幅。
 		_replay_deploy_clear()   # 部署段从空盘开始（横幅那一拍里不该已经站着 6 个人）
-		await _replay_enter_frame(true)
+		# 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】竞技场录像：**先演选牌段**
+		#   （先手提示 → 8 轮 2 选 1 → 双方卡组就位 → 「战斗开始」），再进部署段 —— 与实战同一顺序。
+		#   没有选牌数据的录像当场返回，一个字都不多演。
+		if entry_req == _replay_seek_req:
+			await _replay_draft_frame()
+		if entry_req == _replay_seek_req:
+			await _replay_enter_frame(true)
 		# ⚠️ 横幅这一拍里被跳段接管了 ⇒ **这一趟不再演部署**（否则观众点了「开局」、画面停在空盘上等放行，
 		#   这一趟却还在往上摆人 ⇒ "停是停了，人还在上"）。部署交给主循环跳段落地那次演。
 		if entry_req == _replay_seek_req:
@@ -8632,10 +8736,27 @@ func replay_seek_frame(i: int, pause: bool = true) -> void:
 	#   看着就是"点了没反应"（实测：20 秒后 frame/step 一动不动）。这里提前换代 ⇒ 那些等待当场作废、
 	#   主循环下一轮就去处理这个请求了。
 	_replay_hold_seq += 1
+	# 【2026-09-29】记下"这一趟要落到哪一段"：连点时的基准要拿它算（见 `replay_seek_step()`）
+	_replay_seek_goal = _replay_seek_to
 	# 主循环演到末段就收工了 ⇒ 这时点跳段必须把循环叫起来（否则请求没人处理，画面卡在末段）
 	if not _replay_loop_running:
 		_replay_paused = false
 		_replay_start()
+
+## 【2026-09-29 用户报「我连着点下回合，就会出bug」·真因】控制条原来传的是 `_replay_frame ± 1`，
+##   而连点时**段号还没动**（请求要等主循环一趟快进重演才落地）⇒ 六下点下来算出来是**同一个落点**、
+##   只前进一段（探针实测：1× 连点 6 下 frame 2→3；同一段代码 4× 下同样 6 下却走了 2 段 ⇒ 完全不可预期，
+##   正是用户说的"连点就出bug"）。
+##   现在以"**已经排着队的那个落点**"（`_replay_seek_goal`）为基准再 ±1 ⇒ N 下一气点完就是前进 N 段；
+##   中间那些落地会被后来的请求顶掉（本来就该顶掉，见 `_replay_loop()` 里 `my_req` 那道闸门），
+##   但**终点不会数错**。
+func replay_seek_step(delta: int) -> void:
+	if not _replay_mode or _replay_frame_count() <= 0:
+		return
+	var base: int = _replay_seek_goal
+	if base < 0:
+		base = _replay_frame
+	replay_seek_frame(base + delta)
 
 func replay_frame_count() -> int:
 	return _replay_frame_count()
@@ -8755,6 +8876,12 @@ func _replay_loop() -> void:
 			#   既不重演部署/回合开始技，也不碰播放状态（新请求会按它自己的口径落地）。
 			if my_req != _replay_seek_req:
 				continue
+			# 【2026-09-29 用户要求·竞技场选牌进录像】落到"开局"时**先演选牌段**再演部署
+			#   （与进场那次同一条路：先手提示 → 8 轮 2 选 1 → 双方卡组就位 → 「战斗开始」）。
+			if at_deploy:
+				await _replay_draft_frame()
+				if my_req != _replay_seek_req:
+					continue
 			await _replay_enter_frame(true)      # `force`：跳段落地这一次一定要报（不受"同一段不重复报"影响）
 			if my_req != _replay_seek_req:
 				continue
@@ -8996,6 +9123,73 @@ func _replay_deploy_clear() -> void:
 		board_view.set_deploy_zone({})   # 色罩由 `_replay_deploy_frame()` 每上一人重铺（见该函数）
 	_refresh_board()
 
+## 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】竞技场**选牌段**的重演：
+##   先手提示 → 8 轮依次过（我方轮弹 2 选 1 面板、按当时选的那张飞卡；敌方轮显示"敌方正在选择英雄……"）
+##   → 双方卡组各就位 → 「战斗开始」→ 交给部署段（`_replay_deploy_frame()`）。
+##   · 没有选牌数据的录像（非竞技场 / 老录像 / 联机竞技场）⇒ 当场返回，一个字都不演（兼容不变）；
+##   · **不显示 15 秒读秒、也不让观众点**：`state` 不进 `ARENA_DRAFT`、`arena_pick_time_left` 恒 -1
+##     ⇒ HUD 那行大字自然不显示；观众就算点到卡，也只会走 `_arena_pick_committed()` —— 回放里那条路
+##     只认录像里的选择（他点不动结果）。选哪张、轮到谁，全由 `meta.draft` 说了算。
+##   · 演出用的是**实战同一段**：面板走 `arena_draft_requested` 信号、选中走 `HUD._arena_pick_anim()`
+##     （点卡与回放共用）⇒ 观感与实战一致。
+func _replay_draft_frame() -> void:
+	if not _replay_mode or not is_inside_tree():
+		return
+	var d: Dictionary = (_replay_data.get("meta", {}) as Dictionary).get("draft", {})
+	var rounds: Array = d.get("rounds", [])
+	if rounds.is_empty():
+		return
+	_arena_picked = []
+	_arena_enemy = []
+	_arena_gave = []
+	_arena_player_rounds = 0
+	_arena_enemy_rounds = 0
+	_arena_pending = []
+	_arena_pool = []                  # 回放不重摇池子：候选对全部来自录像
+	arena_pick_time_left = -1.0       # 不显示读秒（见函数头）
+	GameState.set_decks([], [])       # 与实战一致：选人期间卡组为空
+	_notify_team()
+	# 先手横幅：与实战同一句话（`_begin_arena_draft()` 那一行），回放里直接喊 HUD 报
+	_first_side = int(d.get("first_side", _first_side))
+	if _hud != null and is_instance_valid(_hud) and _hud.is_inside_tree():
+		_hud._show_turn_banner("本局%s先手" % ("我方" if _first_side == _my_side() else "对方"),
+				Color(1.0, 0.85, 0.45), ARENA_BANNER_SECONDS)
+	await _gap_plain(ARENA_BANNER_SECONDS)
+	for st in rounds:
+		if not _replay_mode or not is_inside_tree():
+			return
+		var rec: Dictionary = st
+		var side := int(rec.get("side", GameState.SIDE_PLAYER))
+		var pair: Array = (rec.get("pair", []) as Array).duplicate()
+		var kept := String(rec.get("kept", ""))
+		if pair.size() < 2 or kept == "":
+			continue
+		_arena_pending = pair            # 与实战同一处状态：候选对接下来的"飞卡"回调可见
+		if side == GameState.SIDE_PLAYER:
+			arena_draft_requested.emit(pair)          # 弹 2 选 1（实战同一条信号）
+			await _gap_plain(REPLAY_DRAFT_READ_SEC)   # 亮一会儿让观众看清两张
+			if not _replay_mode or not is_inside_tree():
+				return
+			if _hud != null and is_instance_valid(_hud) and _hud.has_method("arena_replay_pick"):
+				_hud.arena_replay_pick(kept)          # 走实战那段"飞卡"演出，演完回调 `_arena_pick_committed()`
+				await _gap_plain(REPLAY_DRAFT_FLY_SEC)
+			else:
+				_replay_arena_apply_pick(side, kept)  # 没有 HUD（跑批/探针）：直接落账
+		else:
+			arena_draft_requested.emit([])            # 实战同一句提示："敌方正在选择英雄……"
+			await _gap_plain(REPLAY_DRAFT_ENEMY_SEC)
+			if not _replay_mode or not is_inside_tree():
+				return
+			_replay_arena_apply_pick(side, kept)
+	# 8 轮选完：双方卡组各就位（与实战同一句）+ 收掉选人面板 + 「战斗开始」（与实战同一拍）
+	GameState.set_decks(_order_deck(_arena_picked), _order_deck(_arena_enemy))
+	_notify_team()
+	arena_draft_done.emit()
+	if _announce_battle_start(true):
+		await _gap_plain(BATTLE_START_HOLD)
+	log_message.emit("竞技场选人完成（录像重演）：我方 %d 名，敌方 %d 名。" % [
+		GameState.player_deck.size(), GameState.enemy_deck.size()])
+
 ## 【用户 2026-09-27】部署那一段的动画：清空盘面，然后按录像里记下的顺序**逐手**让英雄冒出来
 ## （`_deploy_spawn_at()` 记的 `deploy_steps`）。没有逐手明细（老录像）就停在"部署完成"的静态画面上。
 func _replay_deploy_frame() -> void:
@@ -9111,6 +9305,18 @@ func _replay_enter_frame(force: bool = false) -> void:
 	if _hud != null and is_instance_valid(_hud) and _hud.is_inside_tree():
 		_hud.refresh_round_label()   # 顶栏跟着换段走（回放里没有信号驱动它）
 		_hud._show_turn_banner(txt, col, REPLAY_BANNER_HOLD)
+	# 【2026-09-29 用户报「录像的回合切换怎么没声音」】实战那一嗓在 `_begin_side()` 里
+	#   （2026-09-29 起敌我共用 `turn_my`，原来的 `turn_enemy` 连素材一起删了），而回放换段走的是这里
+	#   ⇒ 原来录像里**每一次回合切换都是哑的**（探针实测：连进 6 段，回合音 0 次）。
+	#   同一个时点补上（报完横幅就响 —— 与实战"先弹提示、再响声"的顺序一致）：
+	#   · 部署段（`side < 0`）不算回合 ⇒ 不响（实战进部署那段也没有这一嗓）；
+	#   · >1× 时由 `AudioManager._play_stream()` 自己按倍速静音（与技能音效同一口径，不改）；
+	#   · 第 11 回合起的 `BGM_Final`（决战曲）也照 `_begin_side()` 那一句补上（`play_music` 同曲不重启）。
+	if side >= 0:
+		# 【2026-09-29·用户口径】敌我共用一个键（原来分 `turn_my` / `turn_enemy`，后者连素材一起删了）
+		AudioManager.play("turn_my")
+		if replay_round_of(_replay_frame) >= 11:
+			AudioManager.play_music("final")
 	# 这一拍里**不放行播放**（`_replay_paused` 保持调用方给的值：跳段落地那次就是 true）⇒ 横幅能在没有招式
 	# 干扰的情况下被读完。
 	# ⚠️ 【2026-09-28 用户报「录像时候的倍速好像没用」】原来这一拍用**真实秒**（不吃倍速）—— 段数一多，
@@ -9217,6 +9423,12 @@ func _replay_show_result() -> void:
 	var col := Color(0.45, 0.7, 1.0) if blue_win else Color(1.0, 0.42, 0.38)
 	var txt := "蓝方获胜" if blue_win else "红方获胜"
 	if _hud != null and is_instance_valid(_hud):
+		# 【2026-09-29·用户报「录像里还是没看到失败的效果」】回放的结局只弹这条横幅，不走
+		#   `HUD.show_result()` ⇒ 那套"骷髅头渐强震动 → 输方状态栏爆炸 → 再出结果"的演出得在这里补：
+		#   先播完演出（约 2.4s），再弹"蓝方/红方获胜"横幅。headless 里 `replay_defeat_anim()` 自己跳过。
+		await _hud.replay_defeat_anim(not blue_win)
+		if not _replay_mode or not is_inside_tree():
+			return
 		# 终局提示停得比回合横幅久一点（读完结果再淡出）：2 × `REPLAY_BANNER_HOLD` = 3.0s
 		_hud._show_turn_banner(txt, col, REPLAY_BANNER_HOLD * 2.0)
 
@@ -9554,6 +9766,21 @@ func _rec_note_deploy_step(faction: int, hero_id: String, cell: Vector2i) -> voi
 		_rec.meta["deploy_steps"] = arr
 		return
 	_deploy_steps_buf.append(rec)
+
+## 【2026-09-29 用户要求「竞技场模式录像需要将选牌流程加进去」】记一轮竞技场选牌：
+##   `side` = 这一轮是谁在挑（`SIDE_PLAYER`/`SIDE_ENEMY`）、`pair` = 摆出来的两张、`kept` = 当时挑走的那张
+##   （另一张归对方，回放重演时由 `_replay_arena_apply_pick()` 按同一条规则推出来 ⇒ 不用另存）。
+## 账本挂在 `_rec.meta["draft"]` 上 ⇒ 与"部署逐手"一样，随天梯续档的 `_rec_pack()/_rec_resume()` 一起走。
+func _rec_note_draft_round(side: int, pair: Array, kept: String) -> void:
+	if _replay_mode or not _rec_on or _rec == null or pair.size() < 2 or kept == "":
+		return
+	var d: Dictionary = _rec.meta.get("draft", {})
+	if d.is_empty():
+		d = { "first_side": _first_side, "rounds": [] }
+	var rounds: Array = d.get("rounds", [])
+	rounds.append({ "side": side, "pair": pair.duplicate(), "kept": kept })
+	d["rounds"] = rounds
+	_rec.meta["draft"] = d
 
 ## 记一招（玩家指令 / 替补落位 / 敌方实际执行的一步）。
 func _rec_step(step: Dictionary) -> void:

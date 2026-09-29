@@ -33,12 +33,15 @@ const SFX_STREAMS := {
 	# "select": preload("res://assets/音效/其他音效/选中.ogg"),    # 选中 / 音量滑条松手 / 开录
 	# 【2026-09-28·用户挑定】事件音（原版素材**直接搬进来、没有重编码**，所以是 mp3）：
 	#   胜利 = 原版 `Quest_Win` · 失败 = `Quest_Fail` · 部署开始 = `Alert_BattleStart`
-	#   我方回合 = `Alert_MyTurn` · 敌方回合 = `Alert_EnemyTurn`（原来那条 `Alert_TurnOver` 已按用户要求换掉）
+	#   我方回合 = `Alert_MyTurn`（原来那条 `Alert_TurnOver` 已按用户要求换掉）
 	"win": preload("res://assets/音效/其他音效/胜利.mp3"),             # 对局胜利（Battle._check_win / _check_no_limit_end / ReplayPanel）
 	"lose": preload("res://assets/音效/其他音效/失败.mp3"),            # 对局失败（Battle 两处）+ 录像导出失败（ReplayExporter 两处）
 	"battle_start": preload("res://assets/音效/其他音效/部署开始.mp3"),   # 部署阶段开始（Battle._begin_deployment）
-	"turn_my": preload("res://assets/音效/其他音效/我方回合.mp3"),       # 我方回合开始（Battle._begin_side）
-	"turn_enemy": preload("res://assets/音效/其他音效/敌方回合.mp3"),    # 敌方回合开始（Battle._begin_side）
+	# 【2026-09-29·用户口径「把敌方回合的音效也换成我方回合，删除敌方回合音效」】只留这一条：
+	#   双方回合开始都响它（`Battle._begin_side()` / 回放换段那处都直接 `play("turn_my")`）。
+	#   原来那条 `turn_enemy`（`Alert_EnemyTurn`）**连素材带键一起删掉** —— 要回退：
+	#   把 `D:\资源\音效_mp3\Alert_EnemyTurn.mp3` 拷回 `assets/音效/其他音效/敌方回合.mp3` 再加一行键即可。
+	"turn_my": preload("res://assets/音效/其他音效/我方回合.mp3"),       # 回合开始（我方/敌方共用，Battle._begin_side）
 	# 【2026-09-28·用户口径「BattleStart.mp3 部署完毕演这个」】部署完毕（双方首发站好）那一声：
 	#   原版 `BattleStart`，与上面那条 `Alert_BattleStart`（卡组三选一之后报"战斗开始"）**不是同一条**。
 	"deploy_done": preload("res://assets/音效/其他音效/部署完毕.mp3"),   # 部署完毕（Battle._begin_after_deploy）

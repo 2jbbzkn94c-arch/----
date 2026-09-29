@@ -54,13 +54,16 @@ func _ready() -> void:
 	first.pressed.connect(func(): battle.replay_seek_frame(0))
 	box.add_child(first)
 	var prev := _btn("上回合", 78.0)
-	prev.pressed.connect(func(): battle.replay_seek_frame(battle._replay_frame - 1))
+	# 【2026-09-29 用户报「我连着点下回合，就会出bug」】这两个按钮改成走 `replay_seek_step(±1)`：
+	#   它按"已经排着队的那个落点"算，连点 N 下就是前进/后退 N 段
+	#   （原来传的是 `_replay_frame ± 1`，连点时段号还没动 ⇒ 几下都算成同一个落点、只走一段）。
+	prev.pressed.connect(func(): battle.replay_seek_step(-1))
 	box.add_child(prev)
 	_play_btn = _btn("暂停", 78.0)
 	_play_btn.pressed.connect(func(): battle.replay_set_paused(not battle._replay_paused))
 	box.add_child(_play_btn)
 	var nxt := _btn("下回合", 78.0)
-	nxt.pressed.connect(func(): battle.replay_seek_frame(battle._replay_frame + 1))
+	nxt.pressed.connect(func(): battle.replay_seek_step(1))
 	box.add_child(nxt)
 	# 速度：点开一个**选择框**（用户 2026-09-28 要求「点击倍速按钮，弹出来选择框，0.5x 在上，加速在下」）
 	#   —— 原来是"点一下循环下一档"，看不到有哪些档、也回不去指定档。
