@@ -328,6 +328,9 @@ var _replay_seek_req := 0             # 【2026-09-29】跳段**请求**次数�
 									  #   用"请求"而不是"落地"计数：请求是同步发生的，不存在时间差。
 var _replay_seek_goal := -1           # 【2026-09-29】"已经排着队的那个落点"：连点「上/下回合」时的 ±1 基准
 									  #   （见 `replay_seek_step()`；-1 = 没有在途请求）
+var _replay_export_full := false      # 【2026-09-29 用户要求】「导出整场」**已开录**：落地不停、不等放行
+var _replay_export_full_pending := false  # 「导出整场」已点击、还在等"从头"那次落地（这一拍照规矩停住）
+var _replay_force_end := false        # 【2026-09-29 用户报】回放里已经分出胜负 ⇒ 直接收尾（不再演后面的招）
 var _hud = null                       # 本局的 HUD（`_setup_hud()` 里记住；回放换段直接用它报横幅）
 var _replay_seek_pause := true        # 跳段落地后是否暂停（见 `replay_seek_frame()`）
 var _replay_hold_seq := 0             # 回合横幅"停一拍"的"代"：换代 = 旧的等待当场作废（见 `_replay_enter_frame()`）
@@ -3235,19 +3238,25 @@ func _throw_gift(from_u: Unit, cell: Vector2i, delay: float) -> void:
 	gift.position = from
 	gift.z_index = 20       # 画在单位之上（单位是 2/10）：飞行途中不会被棋子挡住
 	add_child(gift)
+	# 【2026-09-29·用户报 `Lambda capture at index 0 was freed`】这条补间挂在 **Battle** 身上（不是 gift），
+	#   gift 先被释放时回调照样会跑 ⇒ 捕获改走 WeakRef（引擎在**进 lambda 体之前**就打印那条错，
+	#   体里写 `is_instance_valid()` 拦不住）。
+	var w_gift: WeakRef = weakref(gift)
 	var dur := 0.5          # 飞行时长：0.38 → 0.5，慢一点看得出来是"丢过去"
 	var t := create_tween()
 	if delay > 0.0:
 		t.tween_interval(delay)
 	# 抛物线：水平线性插值 + 垂直抬高一截（sin 曲线两端为 0、中段最高），顺手自转一点像被抛出的礼盒
 	t.tween_method(func(k: float) -> void:
-		if not is_instance_valid(gift):
+		var g2: GiftFly = w_gift.get_ref() as GiftFly
+		if g2 == null:
 			return
-		gift.position = from.lerp(to, k) + Vector2(0.0, -48.0 * sin(PI * k))
-		gift.rotation = k * TAU * 1.5, 0.0, 1.0, dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		g2.position = from.lerp(to, k) + Vector2(0.0, -48.0 * sin(PI * k))
+		g2.rotation = k * TAU * 1.5, 0.0, 1.0, dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	t.tween_callback(func():
-		if is_instance_valid(gift):
-			gift.queue_free()
+		var g2: GiftFly = w_gift.get_ref() as GiftFly
+		if g2 != null:
+			g2.queue_free()
 		_gift_hidden_cells.erase(cell)
 		_refresh_board()                                           # 落地才把道具图标画出来
 		_boom_ring_fx(cell, Color(1.0, 0.85, 0.35), 1.1, 0.28))    # 落地小爆环
@@ -3905,6 +3914,18 @@ func _settle_side_round_damage(side: int) -> void:
 		_apply_round_damage_to(fn, amount)
 
 # ---- 胜负：一方累3 名英雄阵亡即判负 ----
+## 【2026-09-29 用户报「录像最后，一方已经被打死了、已经死 3 个人了，结果另一方的动画还在动，动完了才结束」】
+##   回放**不判胜负**（`_check_win()` 在回放里直接 `return false`）⇒ `GameState.match_over` 在回放里恒假，
+##   于是实战那条"已经分出胜负就别再演下一步"的守卫（`EnemyReplay.run()` 里 2026-09-25 那条）
+##   **在回放里从来没生效**：录到最后一段时，剩下的招（多半是敌方计划里排在后面的几手）照样一手手演完，
+##   观众看到的就是"人都死够了，另一边还在动，动完才结束"。
+##   这里给回放单独一条判据，口径与实战 `_check_win()` 的判负线**同一把尺**
+##   （一方累计阵亡 `LOSS_DEATH_COUNT` 名；`no_death_limit` 的自由部署局不算）。
+func _replay_decided() -> bool:
+	if not _replay_mode or GameState.no_death_limit:
+		return false
+	return _my_dead() >= LOSS_DEATH_COUNT or _opp_dead() >= LOSS_DEATH_COUNT
+
 func _check_win() -> bool:
 	if _replay_mode:
 		return false   # 【2026-09-27·录像】回放不判胜负：也不记账、不弹结算面板（判负只是录像里的事实）
@@ -4736,8 +4757,10 @@ func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = fals
 	var from := board_view.cell_world_center(u.cell)
 	var to := board_view.cell_world_center(cell)
 	var flight := _ray_flight(u.cell, cell)
+	# 【2026-09-29·同 gift 那条】射线补间归 **Battle**：`on_hit` 可能在 u 已被释放之后才被调用 ⇒ 捕获走 WeakRef
+	var w_u: WeakRef = weakref(u)
 	_spawn_ranged_ray(u, from, to, flight, func():
-		_impact_obstacle(u, cell, for_enemy))
+		_impact_obstacle(w_u.get_ref() as Unit, cell, for_enemy))
 
 # 近战攻击障碍物：攻击者向障碍轻挥（小前冲+回位），命中后结算
 func _melee_obstacle_hit(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
@@ -5496,8 +5519,12 @@ func _launch_projectile(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	var from := board_view.cell_world_center(attacker.cell)
 	var to := board_view.cell_world_center(target.cell)
 	var flight := _ray_flight(attacker.cell, target.cell)
+	# 【2026-09-29·同 gift 那条】射线补间归 **Battle** ⇒ 命中时两者都可能已被释放；捕获走 WeakRef。
+	#   传 null 与今天同口径：`_apply_attack` 自己有空值护栏，会照常放行动作（不卡回合）。
+	var w_attacker: WeakRef = weakref(attacker)
+	var w_target: WeakRef = weakref(target)
 	_spawn_ranged_ray(attacker, from, to, flight, func():
-		_apply_attack(attacker, target, for_enemy))
+		_apply_attack(w_attacker.get_ref() as Unit, w_target.get_ref() as Unit, for_enemy))
 
 ## 【2026-09-23 新增·用户要求】远程攻击的射线演出（普攻 / 远程反击 / 远程拆障碍共用一条实现）：
 ##   `from → to` **咻地飞过去**，`flight` 秒后触发 `on_hit`（`flight` 由 `_ray_flight()` 给，画面上"打到"与掉血同步）。
@@ -5515,14 +5542,21 @@ func _spawn_ranged_ray(shooter: Unit, from: Vector2, to: Vector2, flight: float,
 	var ray := RangedRay.new()
 	ray.setup(from, to, String(spec.get("style", "beam")), spec.get("color", Color(1, 1, 1)))
 	add_child(ray)
+	# 【2026-09-29·同 gift 那条】补间归 **Battle**，ray 却可能先被释放 ⇒ 捕获走 WeakRef
+	var w_ray: WeakRef = weakref(ray)
 	var t := create_tween()
 	# 【2026-09-23 深夜·"咻"】EASE_IN：起步稍慢、命中那一下最快 ⇒ 像被"射"出去而不是飘过去
 	#   （旧写法 EASE_OUT 越接近目标越慢 = 拖沓）。时长本身已经压到 0.07~0.14 秒，见 `_ray_flight()`。
 	t.tween_method(func(v: float):
-		ray.progress = v
-		ray.queue_redraw(), 0.0, 1.0, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		var ry: RangedRay = w_ray.get_ref() as RangedRay
+		if ry == null:
+			return
+		ry.progress = v
+		ry.queue_redraw(), 0.0, 1.0, flight).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	t.tween_callback(func():
-		ray.hit_flash()
+		var ry: RangedRay = w_ray.get_ref() as RangedRay
+		if ry != null:
+			ry.hit_flash()   # 射线已不在就不闪，但下面 on_hit **必须照叫**：伤害结算挂在它身上
 		on_hit.call())
 	# 命中后流光淡出：0.10 秒（旧 0.16 ⇒ 拖尾挂太久就不"咻"了）
 	t.tween_property(ray, "fade", 0.0, 0.10)
@@ -5833,7 +5867,11 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	if can_counter:
 		var gap := create_tween()
 		gap.tween_interval(0.15 + _hero(attacker).attack_settle_delay())
-		gap.tween_callback(func(): _play_counter(attacker, target, for_enemy))
+		# 【2026-09-29·同 gift 那条】补间归 **Battle**：单位在这段间隔里阵亡会被释放（`_on_unit_died` 里
+		#   `call_deferred("queue_free")`）⇒ 捕获走 WeakRef；两者为 null 时 `_play_counter` 自己会安全收尾。
+		var w_attacker: WeakRef = weakref(attacker)
+		var w_target: WeakRef = weakref(target)
+		gap.tween_callback(func(): _play_counter(w_attacker.get_ref() as Unit, w_target.get_ref() as Unit, for_enemy))
 	else:
 		_finish_attack(attacker, for_enemy)
 
@@ -5864,31 +5902,39 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 【2026-09-28·用户口径「反击音效也要用普通攻击的」】反击音 = 反击者自己的普攻音
 	#   （与 `_do_attack` 同一套：英雄登记了就用它，没有才退回通用 `attack.wav`）
 	_play_attack_sfx(counterer)
+	# 【2026-09-29·同 gift 那条】`ct` / `br` 都挂在 **Battle** 身上 ⇒ 捕获的两个人可能在演出期间被释放；
+	#   改用 WeakRef 在回调里重新取（取到的名字换成 `cr`/`atk`：GDScript 不许 lambda 里重名遮蔽外层局部）。
+	var w_counterer: WeakRef = weakref(counterer)
+	var w_attacker: WeakRef = weakref(attacker)
 	var ct := create_tween()
 	ct.tween_property(counterer, "position", lunge_to, 0.1)
 	ct.tween_callback(func():
-		if not is_instance_valid(counterer):
-			_finish_attack(attacker, for_enemy)
+		var cr: Unit = w_counterer.get_ref() as Unit
+		var atk: Unit = w_attacker.get_ref() as Unit
+		if not is_instance_valid(cr):
+			_finish_attack(atk, for_enemy)
 			return   # 反击者在演出期间被释放：跳过反击，正常收尾
-		if is_instance_valid(attacker):
-			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			var chp_before := attacker.hp
-			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
+		if is_instance_valid(atk):
+			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [cr.display_name, atk.display_name, cdmg])
+			var chp_before := atk.hp
+			atk.take_damage(cdmg, false, true, "被%s反击" % cr.display_name, true)
 			# 【演出】反击同样算攻击：面板伤害 ≥6 且真的打掉了血就震（含把攻击者反杀）
-			_shake_once(cdmg, chp_before - attacker.hp)
-			if attacker.alive:
-				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
+			_shake_once(cdmg, chp_before - atk.hp)
+			if atk.alive:
+				_hero(cr).on_counter_landed(atk)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
-		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
-			counterer.atk_use_buff = 0
-			counterer.refresh_stats()
+		if is_instance_valid(cr) and cr.atk_use_buff > 0:
+			cr.atk_use_buff = 0
+			cr.refresh_stats()
 		var br := create_tween()
-		br.tween_property(counterer, "position", cpos, 0.12)
+		br.tween_property(cr, "position", cpos, 0.12)
 		br.tween_callback(func():
+			var cr3: Unit = w_counterer.get_ref() as Unit
+			var atk3: Unit = w_attacker.get_ref() as Unit
 			# 太阳斩：每次反击后攻击力-1，直到恢复正
-			if is_instance_valid(counterer) and counterer.alive:
-				_hero(counterer).on_after_counter()
-			_finish_attack(attacker, for_enemy)))
+			if is_instance_valid(cr3) and cr3.alive:
+				_hero(cr3).on_after_counter()
+			_finish_attack(atk3, for_enemy)))
 
 # 远程对射反击演出：反击者原地发射投掷物飞向攻击者，命中全额结算（不贴脸）
 func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_enemy: bool) -> void:
@@ -5902,23 +5948,29 @@ func _launch_counter_projectile(attacker: Unit, counterer: Unit, cdmg: int, for_
 	#   与近战反击同口径 —— 优先反击者自己的普攻音（远程英雄 = RangedAttack），没有才退回通用 `attack.wav`。
 	_play_attack_sfx(counterer)
 	# 【2026-09-23】远程反击同样改成"射一条射线"（用反击者自己的英雄配色/样式）
+	# 【2026-09-29·同 gift 那条】射线补间归 **Battle** ⇒ 捕获改走 WeakRef（取到的名字换 `cr`/`atk`：
+	#   GDScript 不许 lambda 里重名遮蔽外层局部，所以不能沿用原参数名）。
+	var w_counterer: WeakRef = weakref(counterer)
+	var w_attacker: WeakRef = weakref(attacker)
 	_spawn_ranged_ray(counterer, from, to, flight, func():
-		if is_instance_valid(attacker):
-			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [counterer.display_name, attacker.display_name, cdmg])
-			var chp_before := attacker.hp
-			attacker.take_damage(cdmg, false, true, "被%s反击" % counterer.display_name, true)
+		var cr: Unit = w_counterer.get_ref() as Unit
+		var atk: Unit = w_attacker.get_ref() as Unit
+		if is_instance_valid(atk):
+			log_message.emit("%s 反击 %s，造成 %d 伤害。" % [cr.display_name, atk.display_name, cdmg])
+			var chp_before := atk.hp
+			atk.take_damage(cdmg, false, true, "被%s反击" % cr.display_name, true)
 			# 【演出】远程反击同样算攻击：面板伤害 ≥6 且真的打掉了血就震（含把攻击者反杀）
-			_shake_once(cdmg, chp_before - attacker.hp)
-			if attacker.alive:
-				_hero(counterer).on_counter_landed(attacker)   # 反击命中演出(复仇者2倍命中粒子)
+			_shake_once(cdmg, chp_before - atk.hp)
+			if atk.alive:
+				_hero(cr).on_counter_landed(atk)   # 反击命中演出(复仇者2倍命中粒子)
 		# 反击也算一次攻击结算：消耗反击者携带的"攻击道具+1"（反击伤害已按该加成计入）
-		if is_instance_valid(counterer) and counterer.atk_use_buff > 0:
-			counterer.atk_use_buff = 0
-			counterer.refresh_stats()
+		if is_instance_valid(cr) and cr.atk_use_buff > 0:
+			cr.atk_use_buff = 0
+			cr.refresh_stats()
 		# 太阳斩：每次反击后攻击力-1，直到恢复正
-		if is_instance_valid(counterer) and counterer.alive:
-			_hero(counterer).on_after_counter()
-		_finish_attack(attacker, for_enemy))
+		if is_instance_valid(cr) and cr.alive:
+			_hero(cr).on_after_counter()
+		_finish_attack(atk, for_enemy))
 
 func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 	# 攻击者可能已在演出链中阵被释放（反击、炸弹、光环反伤等）：
@@ -8677,6 +8729,7 @@ func replay_record_start() -> void:
 	var path: String = await _replay_export.run(GameState.replay_id)
 	_replay_export = null
 	_replay_exporting = false
+	_replay_export_full = false   # 【2026-09-29】整场导出结束（转完/没转成/被中止）⇒ 清掉这个开关
 	if _replay_panel != null and is_instance_valid(_replay_panel):
 		_replay_panel.refresh()
 		if path != "":
@@ -8696,6 +8749,43 @@ func replay_record_stop() -> void:
 		return
 	_replay_export.stop()
 	replay_set_paused(true)
+
+## 【2026-09-29 用户要求】「有没有办法在制作录像的时候就同时把能保存的 1 倍速视频准备好，需要导出的时候
+##   直接导出，不需要自己录制」⇒ 控制条加「**导出整场**」：点一下就**从这条录像的头一路演到底并录下来**，
+##   演到终局自动停录 → 转 mp4 → 弹保存位置，观众不用管、也不用自己按开始/停止。
+## ⚠️ **带声音就必须实时**（实测 Godot 自带的离线渲染 `--write-movie --fixed-fps` 也是实时、而且没录到声音：
+##   3 秒素材花了 3.08 秒墙钟）⇒ 这一趟耗时≈视频本身，跑的时候游戏就该这么演着。
+## ⚠️ 顺序（很关键）：先 `replay_seek_frame(0)` ⇒ 落地照规矩在"开局"停下等放行（这一拍**画面是干净的**：
+##   盘面已清、提示已收）⇒ **就在这一刻开录** ⇒ 再放行 ⇒ 于是视频从"选牌/部署的第一帧"开始，
+##   中间那段"跳段重演"的糊影**不会被录进去**。开录之后 `_replay_export_full` 才置真：
+##   后面每一次落地的"停住等放行 / 落地即停"都不再生效（见 `_replay_loop()` 里那两处判据）。
+func replay_export_full() -> void:
+	if not _replay_mode or _replay_exporting or _replay_export_full_pending:
+		return   # 已在录制/导出/正在准备：忽略重复点击
+	_replay_export_full_pending = true
+	replay_set_speed(1.0)          # 整场视频按 1 倍速录（用户口径就是"1 倍速视频"）
+	replay_seek_frame(0)
+	_replay_export_full_wait()
+
+## 「导出整场」的第二步（协程）：等"从头"那次跳段**落地停住**（空盘、等放行那一刻）→ 开录 → 放行。
+func _replay_export_full_wait() -> void:
+	var req := _replay_seek_req
+	var t0 := Time.get_ticks_msec()
+	while _replay_mode and is_inside_tree() and Time.get_ticks_msec() - t0 < 60000:
+		if _replay_seek_req != req:
+			_replay_export_full_pending = false
+			return   # 观众自己又点了别的跳段：这次整场导出作废（不抢他的操作）
+		if _replay_seek_to < 0 and not _replay_seeking and _replay_paused:
+			break    # 已经落到"开局"那一拍、正停着 ⇒ 就是开录的时点
+		await get_tree().process_frame
+	if not _replay_mode or not is_inside_tree():
+		_replay_export_full_pending = false
+		return
+	log_message.emit("开始导出整场：从选牌/部署一路演到终局（耗时≈视频本身，带声音）。")
+	_replay_export_full = true          # 从这一刻起：落地不再停、也不等放行
+	_replay_export_full_pending = false
+	replay_record_start()          # 不 await：它是协程（与按钮同一条路）
+	replay_set_paused(false)       # 放行 ⇒ 整场一路播下去
 
 ## 正在录制？（控制条按钮据此切换文字；`_replay_auto_back()` 也据此不切场景）
 func replay_is_recording() -> bool:
@@ -8857,7 +8947,8 @@ func _replay_loop() -> void:
 			#   ⇒ 一落地就把召唤/推人/放道具全演完了，观众还没点「继续」。现在两者**同一口径**：
 			#   先停住等放行，放行之后才报横幅、才演那一套（"开始之后才出现提示"也一并满足）。
 			#   ⚠️ 只对"落地即停"的跳段生效（`my_pause`）；普通回合的「上/下回合」照旧"落地即停"。
-			if (at_deploy or went_back) and my_pause:
+			#   【2026-09-29 用户要求·导出整场】整场导出期间**连这道闸门也不走**（不等观众按「继续」）。
+			if (at_deploy or went_back) and my_pause and not _replay_export_full:
 				# 等待期间屏幕上**不该有任何回合提示**（含上一条还在淡出的回合横幅）+ 顶栏别停在旧回合号
 				if _hud != null and is_instance_valid(_hud):
 					_hud.clear_transient_ui()
@@ -8900,7 +8991,8 @@ func _replay_loop() -> void:
 				continue   # 上面这两段演出期间又被跳段接管：别写播放状态、别报"落地完成"
 			# 【2026-09-29】同上：这里也走 `replay_set_paused()` —— 放行之后要把按钮从「继续」翻回「暂停」，
 			#   而下面那次统一刷新要等"横幅 + 部署/回合开始那套"演完（可能好几秒）才轮到 ⇒ 中间那段字是反的。
-			replay_set_paused(my_pause)   # 看完那一拍：按用户点的是「看」还是「继续」定（**本地值**）
+			# 【2026-09-29 用户要求·导出整场】整场导出期间**落地不停**：一路播下去，不等观众按「继续」。
+			replay_set_paused(my_pause and not _replay_export_full)
 			_replay_seek_done = _replay_frame   # 外部确认"我这次跳段落地了"（整趟同帧跑完，看不见中间态）
 			_replay_seek_seq += 1
 			if _replay_panel != null and is_instance_valid(_replay_panel):
@@ -8912,8 +9004,17 @@ func _replay_loop() -> void:
 		if _replay_frame < 0 or _replay_frame >= _replay_frame_count():
 			break   # 越界（末段也演完了）：停下等玩家点"返回/重看"（不自动退出）
 		var steps: Array = (_frames()[_replay_frame] as Dictionary).get("steps", [])
+		# 【2026-09-29 用户报「录像最后，一方已经死 3 个人了，另一方的动画还在动，动完了才结束」】
+		#   已经分出胜负 ⇒ **本段剩下的招一手都不再演**，直接把这一段当作"演完了"（下面那段收尾逻辑
+		#   会报「蓝方/红方获胜」、该停录就停录、该回列表就回列表）—— 与实战的节奏对齐
+		#   （实战里判负当场结束，不会再有下一步）。判据见 `_replay_decided()`。
+		if _replay_decided():
+			if _replay_step < steps.size():
+				log_message.emit("回放：已有一方阵亡达 %d 名，本段剩下的招式不再重演。" % LOSS_DEATH_COUNT)
+			_replay_step = steps.size()
+			_replay_force_end = true
 		if _replay_step >= steps.size():
-			if _replay_frame + 1 > _replay_frame_count() - 1:
+			if _replay_frame + 1 > _replay_frame_count() - 1 or _replay_force_end:
 				# 【2026-09-28 用户报「主动撤下 3 个人后，没有提示哪方胜，就卡住了」】末段演完**必须报结果**：
 				#   原来这里直接 break ⇒ 回放停在终局画面上，谁也不说谁赢了（看着就是"卡住"）。
 				_replay_show_result()
@@ -8940,7 +9041,9 @@ func _replay_loop() -> void:
 		await _replay_wait_action(_replay_wait_cap_ms)
 		# 【2026-09-28 用户要求】「我方的间隔时间拉长点，现在太快了」：玩家侧演完再补一拍
 		#   （只在玩家侧；敌方那一段内部有自己的节奏，见 `EnemyReplay` 的 0.7/0.25/0.3）。
-		if replay_side_of(_replay_frame) == GameState.SIDE_PLAYER:
+		#   【2026-09-29】已经分出胜负这一拍也不补：那一拍本来是给"下一步点选"留的余量，
+		#   而这最后一步之后直接收尾 ⇒ 再多停 0.6s 就是白等（用户报的"卡一段"里有它一份）。
+		if replay_side_of(_replay_frame) == GameState.SIDE_PLAYER and not _replay_decided():
 			await _gap_plain(REPLAY_PLAYER_GAP)
 	_replay_loop_running = false
 
@@ -9463,6 +9566,12 @@ func _replay_wait_action(cap_ms: int = 3000) -> void:
 		# 【2026-09-28 用户报「主动撤下 3 个人后…就卡住了」】撤下没有演出可等 ⇒ 原来白等满 3 秒兜底窗口，
 		#   连撤 3 个人就是 3 段"什么都没发生"的停顿，看着像卡死。
 		_replay_skip_wait = false
+		return
+	# 【2026-09-29 用户报「录像里第三个人被打死、墓碑出来了，然后画面卡一段，才弹骷髅震动」·真因】
+	#   这一步"演完了吗"是等 `action_finished` 信号（外加 3 秒兜底）。可**判负那一刻发出信号的那个收尾
+	#   （`_finish_attack()`）早在本步的演出里就发过了** ⇒ 这里连上时已经没人会再发 ⇒ **白等满 3 秒兜底**
+	#   （墓碑、盘面全都静止 = 观众说的"卡一段"）。已经分出胜负时这最后一步没什么可等的 ⇒ 当场放行。
+	if _replay_decided():
 		return
 	var mine := _session_id
 	var done := [false]

@@ -66,29 +66,46 @@ func attach(btn: Button) -> void:
 	dice.modulate.a = 0.0
 	dice.visible = false
 	btn.add_child(dice)
+	# 【2026-09-29·用户报 `Lambda capture at index 0 was freed`（22 分钟时刷出来）】
+	#   上一版（见本函数末尾那段说明）靠"detach() 里逐个断开"来防这件事，但那只堵了 detach 一条路：
+	#   只要**捕获的节点先死、lambda 后跑**（骰子被 free / 按钮面板被重建 / 补间回调晚一拍），
+	#   引擎在 `call()` 那一刻就会打印这条错误 —— **在 lambda 体里写 `is_instance_valid()` 是拦不住的**
+	#   （错误发生在进入函数体之前，捕获已被换成 null）。⇒ 四个 lambda 一律改成捕获 **WeakRef**，
+	#   调用时 `get_ref()` 取一次、为 null 直接返回（这样无论谁先死都不会再报）。
+	var w_dice: WeakRef = weakref(dice)
+	var w_btn: WeakRef = weakref(btn)
 	var place := func() -> void:
-		if not is_instance_valid(dice) or not is_instance_valid(btn):
+		var d_node: Object = w_dice.get_ref()
+		var b_node: Object = w_btn.get_ref()
+		if d_node == null or b_node == null:
 			return
-		var d := clampf(btn.size.y - 22.0, 18.0, 36.0)
-		dice.size = Vector2(d, d)
-		dice.position = Vector2(DICE_INSET_X, (btn.size.y - d) * 0.5)
+		var d := clampf((b_node as Button).size.y - 22.0, 18.0, 36.0)
+		(d_node as TextureRect).size = Vector2(d, d)
+		(d_node as TextureRect).position = Vector2(DICE_INSET_X, ((b_node as Button).size.y - d) * 0.5)
 	var on_enter := func() -> void:
-		if not is_instance_valid(dice):
+		var d_node: Object = w_dice.get_ref()
+		var b_node: Object = w_btn.get_ref()
+		if d_node == null or b_node == null:
 			return
 		# ⚠️ 每次悬浮现算（不在 `place()` 里缓存）：按钮文案会在运行时变长
 		#   （「开始对战」→「完成编辑」、「筛选」→「筛选（3 项）」…）⇒ 缓存会过期、骰子就压到字上了。
 		#   现算只多一次字符串测宽，且只在悬浮时发生。
-		if not _fits(btn, dice.size.y):
+		if not _fits(b_node as Button, (d_node as TextureRect).size.y):
 			return                 # 放不下（会压到字）⇒ 这一颗不淡入
-		dice.visible = true
-		var tw := dice.create_tween()
-		tw.tween_property(dice, "modulate:a", 1.0, 0.12)
+		(d_node as TextureRect).visible = true
+		var tw := (d_node as Node).create_tween()
+		tw.tween_property(d_node, "modulate:a", 1.0, 0.12)
 	var on_exit := func() -> void:
-		if not is_instance_valid(dice):
+		var d_node: Object = w_dice.get_ref()
+		if d_node == null:
 			return
-		var tw := dice.create_tween()
-		tw.tween_property(dice, "modulate:a", 0.0, 0.12)
-		tw.tween_callback(func(): dice.visible = false)
+		var tw := (d_node as Node).create_tween()
+		tw.tween_property(d_node, "modulate:a", 0.0, 0.12)
+		# ⚠️ 这一句原来无守卫地捕获骰子 ⇒ 补间回调晚跑一拍就报同样的错 ⇒ 同样走 WeakRef
+		tw.tween_callback(func():
+			var dd: Object = w_dice.get_ref()
+			if dd != null:
+				(dd as TextureRect).visible = false)
 	# ⚠️ 【2026-09-25·用户实机报错】三个 lambda 都**捕获了这颗骰子** ⇒ 必须在 `detach()` 里逐个断开，
 	#   否则骰子被 free 之后按钮再 resized / 悬浮，引擎就报
 	#   `Lambda capture at index 0 was freed. Passed "null" instead.`（`gdspeech_lambda_callable.cpp:242`）。

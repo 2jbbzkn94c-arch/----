@@ -35,7 +35,7 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 			var prev: Dictionary = plan[si - 2]
 			if not prev.has("fp"):
 				prev["fp"] = battle._rec_step_fp()
-		if GameState.match_over:
+		if GameState.match_over or battle._replay_decided():
 			break
 		if my_session != battle._session_id:
 			return   # 已重开：安全退出，避免访问已释放单位
@@ -52,9 +52,11 @@ func run(plan: Array, refs: Array, my_session: int) -> void:
 		#   放行 ⇒ 下一名敌人照样亮描边/走位/出手（用户看到的就是这一整步）。
 		#   这里先把死亡结算排空（≤0.3s，与回合末 `Battle._drain_pending_deaths()` 同一把尺）再判一次
 		#   ⇒ 绝不在"已经判负（或判胜）"之后再走一步。**纯节奏守卫**：不改伤害、不改判定、不改死亡时序。
+		#   【2026-09-29】`battle._replay_decided()`：回放里 `match_over` 恒假（回放不判胜负）⇒ 这条守卫
+		#   在录像里原来**从来没生效**，用户看到"人都死够了、另一边还在动"。判据与实战判负线同一把尺。
 		if is_instance_valid(battle) and battle.is_inside_tree():
 			await battle._drain_pending_deaths()
-		if GameState.match_over or my_session != battle._session_id:
+		if GameState.match_over or battle._replay_decided() or my_session != battle._session_id:
 			break
 		var idx: int = step["idx"]
 		var u: Unit = _resolve_unit(step.get("who", null), refs, idx)

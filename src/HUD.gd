@@ -499,10 +499,15 @@ func _show_turn_banner(text: String, color: Variant = null, hold: float = 0.9) -
 	t.parallel().tween_property(label, "modulate:a", 1.0, 0.16)
 	t.tween_interval(hold)
 	t.tween_property(label, "modulate:a", 0.0, 0.35)
+	# 【2026-09-29·用户报 `Lambda capture at index 0 was freed`】捕获节点改走 **WeakRef**：
+	#   引擎在**进入 lambda 体之前**就打印这条错（捕获已被换成 null）⇒ 体里写 `is_instance_valid()`
+	#   拦不住。这里 `label` 可能先被别处 free（换横幅 / 清横幅 / 场景切换）而补间还活着。
+	var w_label: WeakRef = weakref(label)
 	t.tween_callback(func():
-		if is_instance_valid(label):
-			label.queue_free()
-		if _turn_banner == label:
+		var l: Object = w_label.get_ref()
+		if l != null:
+			(l as Node).queue_free()
+		if _turn_banner != null and not is_instance_valid(_turn_banner):
 			_turn_banner = null)
 
 # 点面板外任意处关闭浮层。返回 true 表示本次事件已消费（阻止漏给 Battle 触发重复查看/行动）
@@ -2111,10 +2116,13 @@ func _show_chat_bubble(txt: String, own: bool) -> void:
 	t.tween_property(bubble, "modulate:a", 1.0, 0.18)
 	t.tween_interval(2.6)
 	t.tween_property(bubble, "modulate:a", 0.0, 0.4)
+	# 【2026-09-29·同横幅那条】气泡也可能在补间跑完前被换掉/释放 ⇒ 捕获走 WeakRef
+	var w_bubble: WeakRef = weakref(bubble)
 	t.tween_callback(func():
-		if is_instance_valid(bubble):
-			bubble.queue_free()
-		if _chat_bubble == bubble:
+		var b: Object = w_bubble.get_ref()
+		if b != null:
+			(b as Node).queue_free()
+		if _chat_bubble != null and not is_instance_valid(_chat_bubble):
 			_chat_bubble = null)
 
 ## 【2026-09-27·录像回放】刷新顶部"第 N 回合 · 蓝方/红方回合"。回放里没有 `round_changed`／

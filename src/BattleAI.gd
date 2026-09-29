@@ -5426,14 +5426,42 @@ func _sim_on_move(sim: Sim, u: SimUnit, moved_dist: int = 0) -> void:
 					and not sim.bombs.has(n) and not sim.buff_cells.has(n) and not sim.gold_cells.has(n):
 				bcells.append(n)
 		if bcells.size() > 0:
+			# 【2026-09-29·用户问「炸弹放哪有没有说法／和血锁没配合」】真实侧已把写死的 `_frontest()`
+			#   换成**按价值选格**（`heroes/hero_35_炸弹人.gd::_best_bomb_cell()`）⇒ 这里必须同源复刻，
+			#   否则"模拟里那颗雷的位置"和真实不一样，AI 会按假位置推演自己的雷。三项与真实逐条对齐：
+			#     ① 敌人 `走得到该格`（walk_dist ≤ 其 emove）⇒ 可能落停引爆 ⇒ `+min(其血, 5)`；
+			#     ② 敌人 `walk_dist ≤ emove + 1` ⇒ 从旁边过/走向这里 ⇒ `+1`；
+			#     ③ 我方活着且未被沉默/眩晕的 `hero_41`（血锁）的**邻格** ⇒ `+8`（一拉就按到雷上）；
+			#   同分时按"更靠对手底线"裁决（与真实的 `_front_metric()` 同式）。
+			#   ⚠️ 尺子差异：真实用 `grid.distance`（六边形距离）、这里用 `walk_dist`（路网步数）——
+			#     只在 ≤6 个候选格里挑一个，量级差异不翻盘；要严格同源得把路网搬进英雄脚本（另说）。
+			var pull_ally: SimUnit = null
+			for a in sim.units:
+				if a != null and a.alive and a.fn == u.fn and a.hero_id == "hero_41" \
+						and not a.silenced and not a.stunned:
+					pull_ally = a
+					break
 			var best_cell: Vector2i = bcells[0]
-			var best_d := INF
+			var best_s := -INF
+			var best_front := INF
 			for n in bcells:
-				var d: float = grid.cell_to_world(n).y
+				var s := 0.0
+				for e in sim.units:
+					if e == null or not e.alive or e.fn == u.fn or e.immune_bombs:
+						continue
+					var de: int = walk_dist(sim, e.cell, n)
+					if de <= e.emove:
+						s += minf(float(e.hp), SIM_BOMB_DAMAGE)      # ① 按这一炸能打掉的血计
+					if de <= e.emove + 1:
+						s += 1.0                                     # ② 通路/经过
+				if pull_ally != null and grid.neighbors(pull_ally.cell).has(n):
+					s += 8.0                                         # ③ 血锁一拉就按到雷上
+				var front: float = grid.cell_to_world(n).y
 				if u.fn != DataRegistry.Faction.PLAYER:
-					d = -d   # 敌方从上方进攻：正前方朝下（与 hero_35 的 _frontest 同式）
-				if d < best_d:
-					best_d = d
+					front = -front
+				if s > best_s or (is_equal_approx(s, best_s) and front < best_front):
+					best_s = s
+					best_front = front
 					best_cell = n
 			sim.bombs[best_cell] = true
 	if u.hero_id == "hero_38":   # 涌电技师：攻击+1 后电最低血玩家（真实伤害，无视圣盾）

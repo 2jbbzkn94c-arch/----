@@ -72,9 +72,15 @@ func _ready() -> void:
 	box.add_child(_speed_btn)
 	# 【2026-09-28 用户要求】「状态栏改为开始录制，点击后变成停止录制」：同一条按钮切换。
 	#   停止后由 Battle 调 `show_saved_popup()` 弹出"录像保存位置"（位置记忆见 `ReplayExporter.rec_dir()`）。
-	_rec_btn = _btn("开始录制", 104.0)
+	_rec_btn = _btn("开始录制", 96.0)
 	_rec_btn.pressed.connect(_on_record_toggle)
 	box.add_child(_rec_btn)
+	# 【2026-09-29 用户要求】「有没有办法…把能保存的 1 倍速视频准备好，需要导出的时候直接导出，
+	#   不需要自己录制」⇒ 「导出整场」：点一下它自己从选牌/部署一路演到终局并录下来、自动保存。
+	#   （带声音就必须实时 ⇒ 耗时≈视频本身；不想等就还按老办法「开始录制/停止录制」。）
+	var full := _btn("导出整场", 96.0)
+	full.pressed.connect(func(): battle.replay_export_full())
+	box.add_child(full)
 	var quit := _btn("返回", 70.0)
 	quit.pressed.connect(func(): battle.replay_quit())
 	box.add_child(quit)
