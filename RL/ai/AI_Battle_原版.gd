@@ -7881,7 +7881,9 @@ func _solid_front_ok(sim: Sim, hu: SimUnit) -> bool:
 ##      于是"挡下 0 血点"的位置照样判定为"在挡"（探针实测 ⑭ 依旧处处 +5.00）。
 ## ⚠️ 成本：每个队友两趟 `_inc_memoized`（与 ㉕ 同量级、走 `INC_MEMO` 记忆化），且只在"堡垒没动 +
 ##   已过 `_solid_front_ok`"时才跑（一局最多几次）。
-func _tank_screens_someone(sim: Sim, tank: SimUnit) -> bool:
+func _tank_screens_someone(sim: Sim, _tank: SimUnit) -> bool:
+	# 【2026-09-29 用户贴的警告】第二个参数**从来没用过**（判据只用 `sim`：`_tank_screen_val(sim)` 自己会去找堡垒）
+	#   ⇒ 按 Godot 的建议加下划线前缀（`_tank`）消掉 `UNUSED_PARAMETER`；调用处原样、行为零变化。
 	return _tank_screen_val(sim) > 0.0
 
 ## 【2026-09-28 晚·用户拍板「走 2」】㉙**阶段 1 用的"坦克挡位"判据**（位置就绪版）。

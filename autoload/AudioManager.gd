@@ -53,6 +53,11 @@ const SFX_STREAMS := {
 	#   原版 `音效_英雄/Bomb_RangedAttack_Hit.wav`（44.1k 单声道 PCM）⇒ ffmpeg libvorbis -q:a 6 转 ogg，
 	#   并把开头 47ms 静音裁到 8ms（起播不拖）。原来 `Battle._explode_bomb_at()` 是**静音**的。
 	"bomb": preload("res://assets/音效/其他音效/炸弹爆炸.ogg"),           # 炸弹引爆（Battle._explode_bomb_at）
+	# 【2026-09-29·用户要求「给骷髅头爆炸加点音效」】结算演出那两声（素材是用户自己放进 `其他音效/` 的）：
+	#   · `skull_shake` = 三枚阵亡标志**渐强震动**那 1.65 秒（HUD `_defeat_anim_side()` 里那段 ramp，1.31 秒）；
+	#   · `defeat_blast` = 那一侧状态栏处**爆炸**那一下（同一函数末尾的 `_StatusBurst`，1.75 秒）。
+	"skull_shake": preload("res://assets/音效/其他音效/骷髅头震动.mp3"),
+	"defeat_blast": preload("res://assets/音效/其他音效/失败爆炸音.mp3"),
 	# （另：`crit` / `shield_break` / `poison` / `sub_enter` 四个键**代码里从未调用**，不登记）
 }
 

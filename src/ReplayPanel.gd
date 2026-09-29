@@ -250,12 +250,14 @@ func show_saved_popup(path: String) -> void:
 	#   `PanelContainer`（Container）在布局时按自己的最小尺寸重算 ⇒ 实测 `size` 仍是 `(405, 1974)`、
 	#   位置被顶到屏幕外。改成工程里既有的做法（与录像列表同一套）：**套一个铺满屏幕的 `CenterContainer`**，
 	#   尺寸与居中全交给容器算，不再手工摆位置。
-	var wrap := CenterContainer.new()
-	wrap.set_anchors_preset(Control.PRESET_FULL_RECT)
-	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(wrap)
-	wrap.add_child(panel)
-	_saved = wrap   # 关闭时整壳一起释放（`_close_saved_popup()`）
+	#   ⚠️ 【2026-09-29 用户贴的警告 `SHADOWED_GLOBAL_IDENTIFIER`】这个变量原来叫 `wrap` ——
+	#   与内置函数 `wrap()` 撞名，Godot 每次加载脚本都打一条警告。改叫 `shell`（壳的意思，与 `_saved` 一致）。
+	var shell := CenterContainer.new()
+	shell.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(shell)
+	shell.add_child(panel)
+	_saved = shell   # 关闭时整壳一起释放（`_close_saved_popup()`）
 	AudioManager.play("select_actor")   # 【2026-09-28 用户反馈】原来这里放的是胜利音（听着像"结束音效"）⇒ 换成中性 UI 点击声
 
 func _close_saved_popup() -> void:

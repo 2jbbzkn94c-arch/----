@@ -1418,8 +1418,12 @@ func _refresh_team_toggle() -> void:
 		#   （面板已经开着，再摆一个"拉出"箭头会让玩家以为能收起它）。普通模式不受影响。
 		# 【2026-09-29·用户要求「普通模式卡组 3 选 1 的时候，不要显示替补按钮」】卡组还没定、
 		#   队伍面板本来就没有内容可看 ⇒ `DECK_PICK` 也一并藏箭头。
+		# 【2026-09-29·用户要求「在棋盘演出效果的时候，也不要显示替补按钮」】开场那段棋盘演出
+		#   （格子/障碍/道具从天上落下来，`Battle._board_intro_running`）期间也藏 —— 演出期间
+		#   屏幕本该只有棋盘在动。演出结束（`_board_intro_running` 转假）后每帧刷新会自己把它放回来。
 		show_toggle = battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY \
 			and battle.state != Battle.State.DECK_PICK \
+			and not battle._board_intro_running \
 			and not _should_force_team_panel()
 	_team_toggle_btn.visible = show_toggle
 	# 【2026-09-28·用户要求】「需要替补的时候……**替补按钮常暗**」：这一阶段置灰（disabled）
@@ -2958,7 +2962,7 @@ func _ladder_do_give_up() -> void:
 	Stats.reset_streak(Stats.current_mode_key())
 	LadderStore.finish_run()
 	_ladder_gave_up = true
-	show_result(false)
+	show_result(false, false)   # 【2026-09-29】放弃这条路不播胜负音（保持原样；真打输/打赢才播）
 
 # 解除暂停（幂等）：收起遮罩并恢复场景树
 func _resume() -> void:
@@ -3056,6 +3060,9 @@ func _defeat_anim_side(loser_fn: int) -> void:
 	# 【2026-09-29·用户要求】「震动有点短，要循序渐进，越来越爆炸的感觉」⇒ 弹完再叠**三段渐强震动**：
 	#   幅度 3 → 7 → 11px、每段次数 4 → 7 → 10、单次时长 0.10 → 0.075 → 0.05s（越来越快越猛），
 	#   三枚一起（首枚已先弹过），总时长约 1.6 秒，然后才炸。
+	# 【2026-09-29·用户要求「给骷髅头爆炸加点音效：骷髅头震动的时候 → 骷髅头震动.mp3」】
+	#   渐强震动这一段起手就播（素材 1.31 秒，正好盖住下面 1.65 秒的 ramp）。
+	AudioManager.play("skull_shake")
 	for mk2 in marks:
 		if mk2 == null or not is_instance_valid(mk2):
 			continue
@@ -3090,7 +3097,9 @@ func _defeat_anim_side(loser_fn: int) -> void:
 	else:
 		add_child(burst)
 	burst.play(center, Color(1.0, 0.45, 0.35) if lost else Color(0.6, 0.85, 1.0))
-	AudioManager.play("death")
+	# 【2026-09-29·用户要求「给骷髅头爆炸加点音效：失败爆炸音.mp3」】爆炸那一下出声
+	#   （原来这里是 `play("death")` —— `SFX_STREAMS` 里根本没有 `death` 这个键 ⇒ 一直静音）。
+	AudioManager.play("defeat_blast")
 	await get_tree().create_timer(0.75).timeout
 
 ## 【2026-09-29】失败演出用的一次性爆炸：从中心向外炸一圈碎片 + 一圈冲击环，0.7 秒后自毁。
@@ -3180,7 +3189,7 @@ class _StatusBurst extends Control:
 		draw_arc(_center, 10.0 + 120.0 * k, 0.0, TAU, 40,
 			Color(1.0, 1.0, 0.95, fade * 0.55), maxf(3.0 * fade, 0.8), true)
 
-func show_result(win: bool) -> void:
+func show_result(win: bool, play_sound: bool = true) -> void:
 	# 【2026-09-25】主动放弃天梯时**不能**解暂停（战斗要冻在面板后面）⇒ 只收掉暂停遮罩，保持 paused。
 	if _ladder_gave_up:
 		if _pause_overlay != null and is_instance_valid(_pause_overlay):
@@ -3202,6 +3211,13 @@ func show_result(win: bool) -> void:
 	await _defeat_anim(win)
 	if not is_inside_tree():
 		return
+	# 【2026-09-29·用户报「胜利音效比骷髅头爆炸还早」】胜负音**挪到这里播**：原来由 `Battle._check_win()`
+	#   在"第 3 名阵亡"那一刻就放（那时死亡卡片还在飞、骷髅头还没炸）⇒ 听着是"声先到、演出后到"。
+	#   现在放在阵亡/失败演出（`_defeat_anim()`：骷髅头震动 → 状态栏爆炸）**跑完之后**，
+	#   与结算面板同时出现。`play_sound = false` 给"主动放弃天梯"那条路用（它本来就没有这一声）。
+	#   ⚠️ 回放的结局不走本函数（`Battle._replay_show_result()` 另有入口）⇒ 回放里照旧不播胜负音。
+	if play_sound:
+		AudioManager.play("win" if win else "lose")
 	if _result_overlay != null:
 		_result_overlay.queue_free()
 	var vsize := get_viewport().get_visible_rect().size

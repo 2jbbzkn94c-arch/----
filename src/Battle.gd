@@ -937,13 +937,13 @@ func _apply_surrender(winner: int) -> void:
 	#   大字由 `deploy_budget_active` 决定显隐 —— 不清它就会一直挂着、数字还在动。
 	deploy_budget_active = false
 	log_message.emit("对局结束：%s认输。" % ("对方" if winner == _my_side() else "我方"))
-	# 【2026-09-28·用户报「联机认输后没有胜利/失败音效」】认输这条路原来漏了音效
-	#   （阵亡判负那几支都有）⇒ 与 `_check_win` 同口径、按赢家分：
-	#   本端按认输 ⇒ winner 是对面 ⇒ 响 `lose`；对端收到 `surrender` 包 ⇒ winner 是自己 ⇒ 响 `win`。
+	# 【2026-09-28·用户报「联机认输后没有胜利/失败音效」】认输这条路原来漏了音效。
 	# 【2026-09-28·用户报「点击认输后背后还有其他音效」】认输是**立即收场**：先把还在响的全部
-	#   掐掉（行走音是循环的、语音与招式音还有一两秒尾巴），再放这一局的胜负音。
+	#   掐掉（行走音是循环的、语音与招式音还有一两秒尾巴）。
+	# 【2026-09-29·用户报「胜利音效比骷髅头爆炸还早」】胜负音**不在这里播**：统一由
+	#   `HUD.show_result()` 在演出跑完后播（下面 `_emit_match_result()` → `match_result` → 它）
+	#   —— 这里再播一次会叠成两声。
 	AudioManager.stop_all_audio()
-	AudioManager.play("win" if winner == _my_side() else "lose")
 	_emit_match_result(winner)
 
 # ---- 普通模式新流程：进入战斗后弹"选择卡组"面板（三选一已存卡组 / 随机英雄）----
@@ -3926,6 +3926,9 @@ func _replay_decided() -> bool:
 		return false
 	return _my_dead() >= LOSS_DEATH_COUNT or _opp_dead() >= LOSS_DEATH_COUNT
 
+# 【2026-09-29·用户报「胜利音效比骷髅头爆炸还早」】本函数与 `_check_no_limit_end()` **只判定与记账、
+#   不出声**：胜负音统一由 `HUD.show_result()` 在阵亡/失败演出（骷髅头震动 → 状态栏爆炸）**跑完之后**播。
+#   原来在这几支里 `AudioManager.play("win"/"lose")` —— 那一刻死亡卡片还在飞、骷髅头还没炸 ⇒ 声先到、演出后到。
 func _check_win() -> bool:
 	if _replay_mode:
 		return false   # 【2026-09-27·录像】回放不判胜负：也不记账、不弹结算面板（判负只是录像里的事实）
@@ -3941,7 +3944,6 @@ func _check_win() -> bool:
 		state = State.ENDED
 		_clear_selection()
 		log_message.emit("双方都阵亡达 %d 名，同归于尽——但判本端获胜（对方负）。" % LOSS_DEATH_COUNT)
-		AudioManager.play("win" if winner == _my_side() else "lose")   # 与其它结束支同一口径
 		_emit_match_result(winner)
 		return true
 	if my_dead >= LOSS_DEATH_COUNT:
@@ -3950,7 +3952,6 @@ func _check_win() -> bool:
 		state = State.ENDED
 		_clear_selection()
 		log_message.emit("败北……我方英雄阵亡达 %d 名。" % LOSS_DEATH_COUNT)
-		AudioManager.play("lose")   # 【2026-09-28·用户挑定】失败 = Quest_Fail（原来这里错放了胜利音）
 		_emit_match_result(winner2)
 		return true
 	if opp_dead >= LOSS_DEATH_COUNT:
@@ -3959,7 +3960,6 @@ func _check_win() -> bool:
 		state = State.ENDED
 		_clear_selection()
 		log_message.emit("胜利！敌方英雄阵亡达 %d 名。" % LOSS_DEATH_COUNT)
-		AudioManager.play("win")
 		_emit_match_result(winner3)
 		return true
 	return false
@@ -3985,8 +3985,7 @@ func _check_no_limit_end() -> bool:
 	GameState.end_match(winner)
 	state = State.ENDED
 	_clear_selection()
-	# 【2026-09-28·用户挑定】这一支里"我方无人可上"是我方败 ⇒ 按赢家分开放胜负音
-	AudioManager.play("win" if winner == _my_side() else "lose")
+	# 【2026-09-29】胜负音统一由 `HUD.show_result()` 播（见 `_check_win()` 上面那段说明）
 	_emit_match_result(winner)
 	return true
 
@@ -6345,6 +6344,10 @@ func _trigger_on_move(u: Unit) -> void:
 		return
 	# 【2026-09-28】**必须 await**：涌电技师的电击伤害要等技能音效播到后段才落（见
 	#   `hero_38_涌电技师.gd::ELECTRO_HIT_DELAY`）⇒ 这里不 await 的话那一手会"先结束、伤害后到"。
+	# 【2026-09-29】基类 `HeroBase.on_move()` 不是协程 ⇒ 引擎静态分析会对这一行报
+	#   `REDUNDANT_AWAIT`（"await 不必要"）—— 那是**误报**：重写它的英雄（涌电技师）就是协程，
+	#   去掉 await 会让"先结束、伤害后到"复现。⇒ 只压掉这条警告，不改语义。
+	@warning_ignore("redundant_await")
 	await _hero(u).on_move()
 
 # 回合开始时（该阵营）的角色技
