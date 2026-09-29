@@ -302,6 +302,12 @@ var _ai_used := false              # 是否已消费本次线程结果
 var _ai_mutex := Mutex.new()       # 保护 _ai_plan/_ai_done 跨线程读写
 var _enemy_refs: Array = []        # 敌方回放的单位引用表（计划里的 idx 是这张表的下标）
 var _enemy_plan_running := false   # 当前是否正在回放敌方计划（中途落位的替补据此补一步）
+# 【2026-09-28·用户口径】"中毒 1 血"的 AI 单位：本回合的行动照样打完，**打完就撤**，
+#   换一个满血替补上场、当回合出手（它再中毒也已经是下个敌方回合开场的事，这一手白赚）。
+#   检测在回合开头（`_ai_poison_withdraw_pick()`，此刻毒 tick 已结算 ⇒ 活下来的才会进这张表），
+#   执行在计划回放之后（`_ai_poison_withdraw_apply()`，那时 `_enemy_plan_running` 还开着、
+#   落位能顺手补一手）。谁若在回放途中被玩家反击打死 ⇒ 它已不 alive，apply 自动跳过。
+var _poison_withdraw_wanted: Array = []
 var _enemy_replay: EnemyReplay = null   # 敌方计划回放器（演出+节奏+等待兜底，见 EnemyReplay.gd）
 # 【2026-09-27 用户要求·录像回放】录制/回放态的成员定义与实现统一放在文件末尾
 # 「录像回放」段（见 `_replay_begin()` / `_rec_begin()`），这里只声明类型。
@@ -8037,6 +8043,11 @@ func _withdraw_unit(u: Unit) -> void:
 func _apply_withdraw(u: Unit) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
+	# 【2026-09-28】原来这里还有一道 `state != State.PLAYER_INPUT ⇒ return` 的门，现在**删掉**：
+	#   那是"玩家点按钮"那一条路的输入校验，而它挡住了**内部调用**（AI 的中毒撤人跑在
+	#   `State.ENEMY_TURN` 里）。误用的防护仍在，且更准：玩家入口 `_withdraw_unit()` 自己就判
+	#   `state != State.PLAYER_INPUT`，也只有它连着按钮/拖拽；本函数是"应用"那一层，
+	#   联机收广播时（客户端 state 也不是 PLAYER_INPUT）本来就照跑。
 	# 【2026-09-28·联机也录】撤下的记账放在"应用"这一层（单机 / 联机主机 / 客户端收到广播重演，三条路都到这儿）。
 	#   下标必须**在移除之前**取（执行后 `units.find(u)` 只会得到 -1）。
 	_rec_step({ "type": "withdraw", "fn": u.faction, "hero": u.hero_id, "u": units.find(u) })
@@ -8354,6 +8365,77 @@ func _load_weights_json(path: String, tag: String) -> Dictionary:
 func _load_nightmare_weights() -> Dictionary:
 	return _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
 
+# ---------------- 【2026-09-28·用户口径】中毒 1 血的 AI 单位：打完这一手就撤 ----------------
+# 用户原话（三条判据，逐条落到这里）：
+#   ① "只有 1 血的中毒队友" ⇒ 死是**锁死**的：`_tick_statuses()` 每方回合开场各扣 1
+#      （`src/Battle.gd` 里那一处），跟它站哪、对面怎么打都无关；
+#   ② "应该是我方回合" ⇒ 毒是**这一回合才挂上**的（那次 tick 已经过去）⇒ 它活过本回合，
+#      死在**下个我方回合开场** ⇒ 本回合（敌方回合）就是唯一的撤人窗口；
+#   ③ "不把那个英雄的行动走完再撤，你不是白白浪费一个回合吗" ⇒ 检测只登记名单，
+#      **不从计划里拿掉**：它照常进搜索、该走位走位、该出手出手，回放跑完才撤。
+# 反面口径（用户明确否掉的）：**不做**"预测下回合会挨打致死就撤" —— 挨打是躲不掉的，
+#   撤了那几下只是换个人挨，还白烧一个替补名额。
+# 被反击打死更划算（用户提的那一条）：它若在回放途中被玩家反击打死，就走**正常阵亡那条路**
+#   （算对手一个击杀、替补名额在下个敌方回合开场落位），`_ai_poison_withdraw_apply()` 会因为
+#   它已 `not alive` 自动跳过 —— 不重复记账、不白烧名额。
+## 回合开头登记"中毒 1 血"的单位（此刻毒 tick 已结算 ⇒ 能进名单的都是活过这一次 tick 的）。
+## 只登记、不落任何一手：撤下的动作留到 `_ai_poison_withdraw_apply()`（回放跑完之后）。
+func _ai_poison_withdraw_pick() -> void:
+	_poison_withdraw_wanted = []
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction != DataRegistry.Faction.ENEMY:
+			continue
+		if int(u.hp) != 1 or not u.has_status(StatusDB.POISON):
+			continue
+		_poison_withdraw_wanted.append(u)
+		if _CONSOLE_SUB_LOG:
+			print("[中毒撤人] 登记 %s（中毒 1 血）：本回合照常行动，行动完即撤下换替补。" % u.display_name)
+
+## 计划回放跑完之后执行撤下。必须**在 `_replay_enemy_plan()` 之内**调（那时
+## `_enemy_plan_running` 还开着 ⇒ `_on_unit_died` 当场 `_place_enemy_sub()` 落位，
+## 而 `_place_enemy_sub()` 尾部会 `_plan_enemy_late_sub()` 给替补补一手 ⇒ 当回合能出手）。
+func _ai_poison_withdraw_apply() -> void:
+	if _poison_withdraw_wanted.is_empty():
+		return
+	var list := _poison_withdraw_wanted
+	_poison_withdraw_wanted = []
+	if state == State.ENDED or GameState.match_over:
+		return
+	# 只撤**一个**：撤下 = 视为阵亡，会记进敌方阵亡数。已经死满 2 个时再撤就是送掉第 3 个
+	#   ——"抢救一个下回合必死的单位"绝不值得用整局去换。
+	if enemy_dead >= LOSS_DEATH_COUNT - 1:
+		if _CONSOLE_SUB_LOG:
+			print("[中毒撤人] 敌方已阵亡 %d 名 ⇒ 不撤（撤下算阵亡，再撤就是丢第 %d 个、直接判负）。"
+					% [enemy_dead, LOSS_DEATH_COUNT])
+		return
+	if _pending_enemy_sub > 0:
+		return   # 已有一个待补名额还没落位：先让它补完，别把两个名额挤在一拍里
+	var u: Unit = null
+	for w in list:
+		if w != null and is_instance_valid(w) and w.alive:
+			u = w as Unit
+			break
+	if u == null:
+		return   # 全都在本回合被打死了（例如被反击）⇒ 走正常阵亡那条路，这里什么都不用做
+	if enemy_roster.size() == 0 and not _dynamic_sub_active():
+		return   # 没替补可上 ⇒ 撤下就是纯减员（名额要等下一个敌方回合开场才落位）
+	# 落点先定好：优先 AI 规则 C（"能立刻参战"那一格），与手动落位同一把尺；
+	#   规则 C 关闭（`SUB_JOIN_RULE = 0`，默认）时就是原来的"本方墓碑格 → 出生区第一个空格"。
+	var cell := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
+	if _sub_join_rule_on():
+		cell = _sub_cell_by_rule_c(str(enemy_roster[0]), cell)
+	if _CONSOLE_SUB_LOG:
+		print("[中毒撤人] %s 行动结束 ⇒ 撤下（视为阵亡，第 %d 名）；替补落点 %s"
+				% [u.display_name, enemy_dead + 1, str(cell)])
+	await _apply_withdraw(u)
+	# 撤下把名额记进 `_pending_enemy_sub`，但**不会**自动落位（`_on_unit_died` 只 await 了
+	#   `_defer_enemy_sub_after_gap()`）⇒ 这里自己落，并等它把入场演出播完（`_place_enemy_sub`
+	#   内部逐个 await）——落定之后 `_plan_enemy_late_sub()` 补的那一手就在计划尾部等着被执行。
+	GameState.active_side = GameState.SIDE_ENEMY
+	await _place_enemy_sub(true)
+
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
 func _run_enemy_turn() -> void:
 	if _replay_mode:
@@ -8370,6 +8452,10 @@ func _run_enemy_turn() -> void:
 	await _enemy_replay.wait_unpaused()   # 暂停中：等恢复再开始敌方行动（暂停期间不推进任何一步）
 	# 构建模拟快照（descs 顺序与 units 一致，回放用的 refs 与之同序）。
 	# 打包集中在 BattleSnapshot（以前 Battle 两处 + 11 个测试各抄一份，字段已漂移过）
+	# 【2026-09-28·中毒撤人】登记要在**打包快照之前**：此刻毒 tick 已结算（`_run_side_skills()`
+	#   里那次），活下来的"中毒 1 血"才是"活过这一次 tick、会死在下个我方回合开场"的那批。
+	#   ⚠️ 只登记名单，**不把它们从快照里剔除** —— 用户口径：这一手照常打，打完才撤。
+	_ai_poison_withdraw_pick()
 	var refs: Array = units.duplicate()
 	var snap := BattleSnapshot.collect(self)
 
@@ -8418,6 +8504,12 @@ func _run_enemy_turn() -> void:
 		var plan: Array = _ai_plan
 		_ai_mutex.unlock()
 		await _replay_enemy_plan(plan, refs, my_session)
+		if my_session != _session_id or not is_inside_tree():
+			return
+		# 【2026-09-28·中毒撤人】计划跑完 ⇒ 该打的那一手都打完了，这时才撤那个"中毒 1 血"
+		#   单位并让替补落位（此刻 `_enemy_plan_running` 仍为 true ⇒ 替补能补一手、当回合出手）。
+		#   必须排在 `_check_win()` **之前**：撤下 = 视为阵亡，得让胜负判定看到真实人数。
+		await _ai_poison_withdraw_apply()
 		if my_session != _session_id or not is_inside_tree():
 			return
 		if not _check_win():
