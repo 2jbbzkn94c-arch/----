@@ -1517,6 +1517,7 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_P2_DEDUP": w_tp_p2_dedup = int(v)
 			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
 			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
+			"SUB_BY_SEARCH": w_sub_by_search = int(v)
 			# 【2026-09-25】「挨打合计」记忆化（1 = 开；见 const INC_MEMO 处说明）
 			"INC_MEMO": w_inc_memo = int(v)
 			# 【2026-09-25】阶段 2 内层宽度（0 = 沿用 beam/8；见 const TWO_PHASE_INNER 处说明）
@@ -2710,6 +2711,12 @@ func _tp_state(s2: Sim, path: Array, done: Dictionary, score: float) -> Dictiona
 ##   而且**能打到人的落点全保留** ⇒ 不会漏掉"站过去打"这一手（被剪掉的那类恰恰就是它）。
 ##   ⚠️ 与 `SUMMON_SLOT_ONLY` 同一处、同一形状：默认关，写成权重文件才生效。
 const INFILTRATE_SLOT_ONLY := 0
+
+## 【2026-09-29 晚·同上】替补选人"让搜索自己回答该上谁"的**档位开关**（默认 0 = 关）：
+##   真正的逻辑在 `Battle._sub_idx_by_search()`（要跑搜索，只有 Battle 有场景/快照），这里只放旋钮：
+##   写进权重文件（`SUB_BY_SEARCH: 1`）就生效；`Battle` 侧用 `probe.get("w_sub_by_search")` 读它。
+const SUB_BY_SEARCH := 0
+var w_sub_by_search := SUB_BY_SEARCH
 var w_infiltrate_slot_only := INFILTRATE_SLOT_ONLY
 
 ## 【2026-09-29 晚·用户「影丸为什么要打黄金矿工，然后被反击送走。为什么不打圣诞老人，圣诞老人已经反击过了」】

@@ -11,7 +11,7 @@ func _run() -> void:
 	for bud in [800]:   # 只跑一档（链条验证不需要扫预算，省时间）
 		await _rebuild()
 		battle.enemy_roster = ROSTER.duplicate()
-		battle.sub_by_search = 1
+		# battle.sub_by_search = 1   # 故意注释掉：验证"只写在权重文件里"也能生效
 		battle.sub_by_search_ms = bud
 		battle.player_dead = 1
 		battle.enemy_dead = 0
@@ -115,7 +115,7 @@ func _chain_check() -> void:
 		print("CHAIN2|拿不到 AI")
 		return
 	ai.difficulty = 3
-	ai.w_order_polish = 1
+	# ai.w_order_polish = 1
 	ai.order_polish_max_steps = 8
 	var snap := BattleSnapshot.collect(battle)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],

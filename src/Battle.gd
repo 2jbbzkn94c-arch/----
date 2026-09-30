@@ -7770,23 +7770,40 @@ const SUB_BY_SEARCH_MS := 2000
 var sub_by_search_ms := SUB_BY_SEARCH_MS  # 运行时可切（探针按预算 A/B）
 
 func _sub_idx_by_search(cells: Array) -> int:
-	if sub_by_search <= 0 or enemy_roster.is_empty() or cells.is_empty():
+	# 【2026-09-29 晚·用户口径】"只有**能算出斩杀**的时候才换人，其他时候一律按需求替补"：
+	#   基准 = 需求制那一位（`_best_enemy_sub_idx()`）；候选 = 需求制 ＋ 预设席前 `SUB_BY_SEARCH_TOPK` 名。
+	#   逐个跑一次**轻量**搜索（BEAM 80 / 漏斗 8 / 内层 4），在**末态**上数"玩家方已阵亡"；
+	#   **只有某个候选比需求制多收人头**才覆盖它（持平/更差 ⇒ 返回 -1 = 不改）。
+	if enemy_roster.is_empty() or cells.is_empty():
+		return -1
+	# 【2026-09-29 晚】本侧开关 **或** 权重档位（`SUB_BY_SEARCH` 写在权重文件里也生效；读不到 = 关）
+	if sub_by_search <= 0 and not _sub_by_search_from_weights():
 		return -1
 	var ai = _make_battle_ai()
 	if ai == null:
 		return -1
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = false
-	ai.time_budget_ms = sub_by_search_ms
-	# 【2026-09-29 晚·用户「压成本」】这次内层搜索**只为回答"该上谁"**，不必用满噩梦档的宽度：
-	#   BEAM 400→80、两阶段漏斗 32→8、内层 16→4 ⇒ 动态（×2/最低血/反击名额）照样在 sim 里，
-	#   但每次搜索从 4~7s 掉到亚秒~秒级。要改剂量就把这三个数提到 `SUB_BY_SEARCH_*` 常量里。
-	ai.set_weights({ "BEAM": 80, "TWO_PHASE_LAYOUTS": 8, "TWO_PHASE_INNER": 4 })
+	# 【2026-09-29 晚·钉不稳定性】这次内层搜索**关掉时间闸**（`time_budget_ms = 0` ⇒ `deadline = 0`，
+	#   引擎里所有 `if deadline > 0 and Time.get_ticks_msec() >= deadline` 的分段截断全部跳过）
+	#   ⇒ 同一盘面 + 同一参数**必定给同一个结果**（宽度由轻量权重封顶，不再由墙上时钟决定跑到哪）。
+	#   上一版用 `sub_by_search_ms`（800ms）当闸，可搜索实际要跑几秒 ⇒ 每次截断点不同 ⇒ 读数时好时坏。
+	ai.time_budget_ms = 0
+	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
 	var cell: Vector2i = cells[0]
+	var need_i := _best_enemy_sub_idx()
+	var cands: Array = [need_i]
+	for k in mini(SUB_BY_SEARCH_TOPK, enemy_roster.size()):
+		if k != need_i:
+			cands.append(k)
 	var snap := BattleSnapshot.collect(self)
 	var best_i := -1
+	var best_kills := -1
 	var best_sc := -1e18
-	for i in mini(SUB_BY_SEARCH_TOPK, enemy_roster.size()):
+	var need_kills := -1
+	for i in cands:
+		if i < 0 or i >= enemy_roster.size():
+			continue
 		var hid := String(enemy_roster[i])
 		var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
@@ -7798,16 +7815,41 @@ func _sub_idx_by_search(cells: Array) -> int:
 		if not sim.occ.has(cell):
 			sim.occ[cell] = nu
 		var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
-		var sc: float = ai._evaluate(ai._plan_end_state(sim, plan), true)
+		var end_sim = ai._plan_end_state(sim, plan)
+		var kills := _count_foe_deaths(end_sim)
+		var sc: float = ai._evaluate(end_sim, true)
 		if _CONSOLE_AI_LOG:
-			print("[AI替补上人·搜索选人] 候选 %s（落 %s）⇒ 落位后这一手末态分 %.1f（预算 %dms）" % [
-				_hname(hid), str(cell), sc, sub_by_search_ms])
-		if sc > best_sc:
+			print("[AI替补上人·搜索选人] 候选 %s ⇒ 本回合可收玩家方 %d 个｜末态分 %.1f" % [_hname(hid), kills, sc])
+		if i == need_i:
+			need_kills = kills
+		# 【2026-09-29 晚·钉第二处抖动】**同分（同为最多人头）时不再比"末态分"**（那个分两次跑会抖），
+		#   改成"按候选顺序取第一个"：候选顺序 = 需求制 → 预设席前几名 ⇒ 结果**确定**且优先贴近需求制。
+		if kills > best_kills:
+			best_kills = kills
 			best_sc = sc
 			best_i = i
-	if _CONSOLE_AI_LOG and best_i >= 0:
-		print("[AI替补上人·搜索选人] → 按「落位后的末态分」选：%s（%.1f）" % [_hname(String(enemy_roster[best_i])), best_sc])
+	if best_i < 0 or best_i == need_i or best_kills <= need_kills:
+		if _CONSOLE_AI_LOG:
+			print("[AI替补上人·搜索选人] 没有候选比需求制多收人头（需求制 %d 个 vs 最好 %d 个）⇒ 不改，仍按需求制上人。" % [need_kills, best_kills])
+		return -1
+	if _CONSOLE_AI_LOG:
+		print("[AI替补上人·搜索选人] → **改上 %s**：本回合可收玩家方 %d 个（需求制只有 %d 个）" % [_hname(String(enemy_roster[best_i])), best_kills, need_kills])
 	return best_i
+
+## 末态里**玩家方已阵亡**的单位数（搜索选人用；只数，不动局面）
+func _count_foe_deaths(sim) -> int:
+	var n := 0
+	for u in sim.units:
+		if u != null and not u.alive and u.fn != DataRegistry.Faction.ENEMY:
+			n += 1
+	return n
+## 【2026-09-29 晚】档位开关：`SUB_BY_SEARCH` 只写在权重文件里也要能生效（读 AI 侧旋钮；读不到 = 关）
+func _sub_by_search_from_weights() -> bool:
+	var probe = _make_battle_ai()
+	if probe == null:
+		return false
+	var v: Variant = probe.get("w_sub_by_search")
+	return v != null and float(v) > 0.0
 
 func _hname(hid: String) -> String:
 	var d := DataRegistry.get_hero(hid)
@@ -7866,10 +7908,9 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
 					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
 			# 【2026-09-29 晚·SUB_BY_SEARCH】开着时：让搜索自己回答「该上谁」（见 `_sub_idx_by_search()`）
-			if sub_by_search > 0:
-				var sb := _sub_idx_by_search(_sub_legal_cells_for_ai())
-				if sb >= 0:
-					idx_pick = sb
+			var sb := _sub_idx_by_search(_sub_legal_cells_for_ai())   # 内部自判：本侧开关或权重档位
+			if sb >= 0:
+				idx_pick = sb
 			next_id = enemy_roster.pop_at(idx_pick)
 		else:
 			var dyn := _dynamic_sub_pick()
