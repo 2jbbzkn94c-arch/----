@@ -3987,7 +3987,10 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 	if not is_nan(gap):
 		var other := float(gap) - total
 		if absf(other) >= 0.05 or parts.is_empty():
-			parts.append("其它(未列) %+.1f" % other)
+			# 【2026-09-29 晚·用户「黄金矿工的对不上，你把那个消了」】这一桶**本来就不是"未列项"**，
+			#   而是"英雄特化项"（金矿 `GOLD_*` / 血锁开团 / ⑯⑰⑱⑲ 的施加者覆盖值…）—— 见本函数头注。
+			#   名字改准 + 明写它与 `gap` 的关系，别再让读者以为"数字对不上"。
+			parts.append("英雄特化/其它 %+.1f（不在分差比对内）" % other)
 	if parts.is_empty():
 		return ""
 	var out := " · ".join(parts)
@@ -3995,8 +3998,15 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 	#   差得明显 = **两份明细的基准局面不是同一个** —— 2026-09-28 抓到过一次：一边传"打完之后"的 `bd1`、
 	#   一边传"打之前"的 `bd_alt2` ⇒ 明细整段错位、标题与明细自相矛盾（用户就是拿这个来问的）。
 	#   这里把同类错误直接打出来，不再让它静静躺在日志里骗人。
-	if not is_nan(gap) and absf(float(gap) - total) >= 0.6:
-		out += " ⚠️ 明细与分差对不上（差 %.1f ⇒ 明细基准不同、属日志 bug）" % (float(gap) - total)
+	#   ⚠️ 【2026-09-29 晚】这道自检**必须先扣掉"英雄特化"那一桶**：`bd_now/bd_alt` 是 `_eval_breakdown()`
+	#   的**通用项**字典，而 `gap` 是**整份评分**之差（含英雄特化）⇒ 不扣的话，"这局走的正好是黄金矿工"这类
+	#   局面天天误报（用户实测差 24.0）。扣掉之后仍对不上，才是真的基准错位。
+	# 【2026-09-29 晚·删掉那条 ⚠️】原来这里是"明细之和 vs 分差"的对不上自检，可它的口径天生对不上：
+	#   `total` 只累计**通用项**（`_eval_breakdown()` 的字典），`gap` 是**整份评分**之差（含英雄特化项）
+	#   ⇒ 残差必然落进上面那行「英雄特化/其它」桶里 —— 也就是说这条 ⚠️ **永远是在报"桶里有东西"**，
+	#   而不是"基准错位"（用户实测：走黄金矿工那局差 24.0，天天误报）。
+	#   真正要抓的"两侧基准不是同一个局面"那种错，靠 `_breakdown_line()` 那条同类自检 + 探针即可，
+	#   这里不再打这种自相矛盾的提示。
 	return out
 
 ## 把"这一步的评分变化"翻译成人话：取变化最大的 1~3 项，各配一句短语（`_term_phrase`）。
