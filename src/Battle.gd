@@ -7769,7 +7769,7 @@ const SUB_BY_SEARCH_TOPK := 2      # 候选只试前 2 名（成本护栏：每�
 const SUB_BY_SEARCH_MS := 2000
 var sub_by_search_ms := SUB_BY_SEARCH_MS  # 运行时可切（探针按预算 A/B）
 
-func _sub_idx_by_search(cells: Array) -> int:
+func _sub_idx_by_search(cells: Array, need_i: int) -> int:
 	# 【2026-09-29 晚·用户口径】"只有**能算出斩杀**的时候才换人，其他时候一律按需求替补"：
 	#   基准 = 需求制那一位（`_best_enemy_sub_idx()`）；候选 = 需求制 ＋ 预设席前 `SUB_BY_SEARCH_TOPK` 名。
 	#   逐个跑一次**轻量**搜索（BEAM 80 / 漏斗 8 / 内层 4），在**末态**上数"玩家方已阵亡"；
@@ -7791,7 +7791,8 @@ func _sub_idx_by_search(cells: Array) -> int:
 	ai.time_budget_ms = 0
 	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
 	var cell: Vector2i = cells[0]
-	var need_i := _best_enemy_sub_idx()
+	# ⚠️ 基准由**调用方传入**（它已经算过需求制、也打过那段日志）⇒ 这里不再调一次，
+	#   否则控制台会把整段需求判定打两遍（用户实测："每次替补都打印两次替补信息"）。
 	var cands: Array = [need_i]
 	for k in mini(SUB_BY_SEARCH_TOPK, enemy_roster.size()):
 		if k != need_i:
@@ -7894,6 +7895,7 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 			#   （3 人阵容 ⇒ 打死它 = 直接判负玩家），把"选谁"交给 AI 侧挑"补上来就能收官"的那个。
 			#   默认 0（`_sub_finish_w()` 恒 0）⇒ `idx_pick` 就是原来的 `_best_enemy_sub_idx()` ⇒ 逐位不变。
 			var idx_pick := _best_enemy_sub_idx()
+			var need_pick := idx_pick   # 需求制基准（传给"搜索选人"当对照；避免把需求判定打两遍）
 			# 【2026-09-29·用户「你随便替补两个人，8 血不是随便杀吗」】**这道 `_foe_alive_count() == 1` 门去掉**：
 			#   原来只有"对面只剩 1 个"才让 AI 挑"补上来就能收官"的那个人 ⇒ 对面还有 3 个人时，
 			#   替补选人只按需求/身价走、压根不管"能不能补刀"。现在只要 `SUB_FINISH_W > 0`（噩梦）就交给
@@ -7908,7 +7910,7 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
 					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
 			# 【2026-09-29 晚·SUB_BY_SEARCH】开着时：让搜索自己回答「该上谁」（见 `_sub_idx_by_search()`）
-			var sb := _sub_idx_by_search(_sub_legal_cells_for_ai())   # 内部自判：本侧开关或权重档位
+			var sb := _sub_idx_by_search(_sub_legal_cells_for_ai(), need_pick)   # 内部自判：本侧开关或权重档位
 			if sb >= 0:
 				idx_pick = sb
 			next_id = enemy_roster.pop_at(idx_pick)
