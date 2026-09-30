@@ -9571,6 +9571,8 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 		var sub = ai._sub_probe_unit(hid, Vector2i(-99, -99))
 		if sub == null:
 			continue
+		if int(sub.eatk) <= 0:
+			continue   # 【2026-09-29 晚·用户「不能补个 0 攻的」】0 攻候选直接出局（打不出伤害 ⇒ 收不掉）
 		var best_here := Vector2i(-99, -99)
 		var best_still := false
 		for c in cells:

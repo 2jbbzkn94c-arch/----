@@ -3381,6 +3381,11 @@ func _sub_probe_unit(hid: String, cell: Vector2i) -> SimUnit:
 	nu.atk_type = def.attack_type
 	nu.skills = def.skills.duplicate()
 	nu.name = hid
+	# 【2026-09-29 晚·用户「都斩杀了补谁都没关系，但你不能补个 0 攻的共鸣者」】
+	#   共鸣者（hero_47）的 `effective_atk()` 在 `echo_set >= 0` 时**返回队友攻击力之和**
+	#   ⇒ 探针单位如果带着这个值，就会被算成"能一刀收"（其实它刚落位、还没共鸣，真打出去是 0/1 伤）。
+	#   ⇒ 探针一律把 echo 关掉（-1）：与"新落位的替补"的真实状态一致。
+	nu.echo_set = -1
 	_sim_apply_hero_fixups(nu)
 	nu.sim_index = -1
 	return nu
