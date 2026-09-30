@@ -7769,6 +7769,54 @@ const SUB_BY_SEARCH_TOPK := 2      # 候选只试前 2 名（成本护栏：每�
 const SUB_BY_SEARCH_MS := 2000
 var sub_by_search_ms := SUB_BY_SEARCH_MS  # 运行时可切（探针按预算 A/B）
 
+## 【2026-09-29 晚·用户「AI 在思考替补的时候，游戏画面会卡住」】**替补选人那次搜索改跑后台线程**：
+##   平时那一轮搜索走 `_enemy_ai_worker` 线程 ⇒ 界面不卡；而替补选人这一段原来是**主线程同步跑**
+##   （3 个候选 × 各一次搜索 ≈ 29~37s）⇒ 画面冻住。这里照同一套套路（`Thread` + `Mutex` + 主线程每帧
+##   `await process_frame` 轮询）把它挪到线程里；`BattleAI` 只读几何与静态表、不碰场景节点 ⇒ 线程安全。
+##   ⚠️ 兜底：线程异常退出（脚本报错）/ 已重开切场景 ⇒ 放弃本次结果、**退回需求制**（绝不卡死、绝不选不出人）。
+var _sub_pick_thread: Thread = null
+var _sub_pick_done := false
+var _sub_pick_result := -1
+var _sub_pick_mutex := Mutex.new()
+
+func _sub_pick_worker(cells: Array, need_i: int) -> void:
+	var r := _sub_idx_by_search(cells, need_i)
+	_sub_pick_mutex.lock()
+	_sub_pick_result = r
+	_sub_pick_done = true
+	_sub_pick_mutex.unlock()
+
+## 线程版入口：返回 -1 = 不改（没开 / 没人多收人头 / 线程出事 / 已重开）
+func _sub_idx_by_search_threaded(cells: Array, need_i: int) -> int:
+	_sub_pick_mutex.lock()
+	_sub_pick_done = false
+	_sub_pick_result = -1
+	_sub_pick_mutex.unlock()
+	_sub_pick_thread = Thread.new()
+	_sub_pick_thread.start(_sub_pick_worker.bind(cells, need_i))
+	var my_session := _session_id
+	while true:
+		if not is_inside_tree() or my_session != _session_id:
+			_sub_pick_thread.wait_to_finish()
+			_sub_pick_thread = null
+			return -1
+		_sub_pick_mutex.lock()
+		var fin := _sub_pick_done
+		_sub_pick_mutex.unlock()
+		if fin:
+			break
+		if _sub_pick_thread != null and _sub_pick_thread.is_started() and not _sub_pick_thread.is_alive():
+			push_error("替补选人线程异常退出（脚本报错？）→ 本次放弃，按需求制上人。")
+			break
+		await get_tree().process_frame
+	var res := -1
+	if _sub_pick_thread != null:
+		_sub_pick_thread.wait_to_finish()
+		_sub_pick_thread = null
+		_sub_pick_mutex.lock()
+		res = _sub_pick_result
+		_sub_pick_mutex.unlock()
+	return res
 func _sub_idx_by_search(cells: Array, need_i: int) -> int:
 	# 【2026-09-29 晚·用户口径】"只有**能算出斩杀**的时候才换人，其他时候一律按需求替补"：
 	#   基准 = 需求制那一位（`_best_enemy_sub_idx()`）；候选 = 需求制 ＋ 预设席前 `SUB_BY_SEARCH_TOPK` 名。
@@ -7910,7 +7958,7 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
 					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
 			# 【2026-09-29 晚·SUB_BY_SEARCH】开着时：让搜索自己回答「该上谁」（见 `_sub_idx_by_search()`）
-			var sb := _sub_idx_by_search(_sub_legal_cells_for_ai(), need_pick)   # 内部自判：本侧开关或权重档位
+			var sb := await _sub_idx_by_search_threaded(_sub_legal_cells_for_ai(), need_pick)   # 线程版：不冻界面
 			if sb >= 0:
 				idx_pick = sb
 			next_id = enemy_roster.pop_at(idx_pick)
