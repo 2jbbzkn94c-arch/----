@@ -166,7 +166,7 @@ const SUB_DPS_ATK_SUM := 5
 ##   `countered` 我方是否已有人克制 core · `ally_heroes`/`foe_heroes` 双方存活 hero_id（给身价/克制用）·
 ##   `player_near` 对面有单位贴着我方（后勤在贴身时贬价，沿用旧口径）。
 ## 需求优先级（顺序 = 判定顺序；`sub_need()` 与 `sub_need_for()` 共用这一份）。
-const SUB_NEED_ORDER := ["缺前排", "缺治疗", "需克制", "缺输出", "缺射程"]
+const SUB_NEED_ORDER := ["缺前排", "需克制", "缺输出", "缺射程", "缺治疗"]   # 【2026-09-29 晚·用户要求】把「缺治疗」从第 2 位挪到**最后**（原来的顺序：缺前排 → 缺治疗 → 需克制 → 缺输出 → 缺射程）
 
 ## 某个需求"条件本身成不成立"（**独立判定、互不短路** ⇒ 供 `sub_need_for()` 逐个试）。
 func sub_need_ok(need: String, ctx: Dictionary) -> bool:
