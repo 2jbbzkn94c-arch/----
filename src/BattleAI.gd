@@ -3891,6 +3891,9 @@ func _plain_incoming(end_sim: Sim, idx: int, cell: Vector2i) -> String:
 		if p is Array and (p as Array).size() >= 2:
 			src.append("%s%.0f" % [String(p[0]), float(p[1])])
 	var tail := ("（%s）" % "＋".join(src)) if src.size() > 0 else ""
+	if info.has("blocked_name"):
+		# 【2026-09-29 晚】被盾挡掉的那一笔单独写出来（它是"最小那笔"，不在上面的清单里）
+		tail += "（圣盾挡掉 %s%.0f）" % [String(info["blocked_name"]), float(info.get("blocked_val", 0.0))]
 	var line := "下回合在这一格会挨 %.0f 伤%s" % [inc, tail]
 	if bool(info.get("displaced", false)) and info.has("disp_cell"):
 		# 【2026-09-26 修·日志自相矛盾】总和与逐笔必须同源（见 `_displace_total_max()`）：
@@ -9305,8 +9308,15 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		var ix := inst.find(blocked)
 		if ix >= 0:
 			inst.remove_at(ix)
+			# ⚠️ 【2026-09-29 晚·用户实机：「塔盾哪来的 4 伤，鼠队长是 4 伤」】**名字数组必须同步删掉**：
+			#   原来只 `names[ix] += "(盾挡·最小那笔)"`、不删 ⇒ `names` 比 `inst` 多一项
+			#   ⇒ 从 ix 起 `parts` 把"名字"和"伤害"**整体错位一格**（总和还对、谁打的错位：
+			#   实际是 鼠队长4＋医护兵3，日志写成 塔盾4＋鼠队长3）。
+			#   被挡掉的那一对改成单独字段（`blocked_name/blocked_val`）给日志打，不再挂在列表里。
 			if ix < names.size():
-				names[ix] = names[ix] + "(盾挡·最小那笔)"   # 被盾挡掉的那一次标出来（2026-09-26 起标的是最小那笔）
+				out["blocked_name"] = String(names[ix])
+				names.remove_at(ix)
+			out["blocked_val"] = blocked
 			top = 0.0                        # 盾吃掉一笔后重算 max（`out["max"]` 还有别处在读）
 			for v2 in inst:
 				top = maxf(top, float(v2))
