@@ -2014,6 +2014,12 @@ func _polish_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: 
 	var plan: Array = (best["path"] as Array).duplicate(true)
 	var score := _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit, start_targets)
 	var sweeps := 2 if w_tp_polish >= 2 else 1
+	# 【2026-09-29 晚·用户「影丸……为什么不打圣诞老人，圣诞老人已经反击过了」】顺序抛光（默认关，见 `_order_polish()`）：
+	#   先把它做掉再进下面的"逐单位换动作"循环 —— 换顺序可能让某些动作变得合法（影丸先动就能打到已反击过的目标）。
+	if w_order_polish > 0:
+		best = _order_polish(sim, best, enemy_idxs, start_can_hit, deadline, start_targets)
+		plan = (best["path"] as Array).duplicate(true)
+		score = _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit, start_targets)
 	last_polish_swaps = 0
 	last_polish_gain = 0.0
 	for _sw in sweeps:
@@ -2433,6 +2439,9 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				var moves: Array = _tp_move_actions(st["sim"], idx)
 				if is_sm and w_summon_slot_only > 0:
 					moves = _tp_summon_slot_moves(st["sim"], idx, moves)
+				# 【2026-09-29 晚·用户「宿魂移动位置被剪枝的情况还挺普遍的」】渗透类单位的候选收窄（键见 const 处）
+				if w_infiltrate_slot_only > 0:
+					moves = _tp_infiltrate_slot_moves(st["sim"], idx, moves)
 				for a in moves:
 					if is_sm:
 						last_tp_p1_summon_kids += 1
@@ -2691,6 +2700,87 @@ func _tp_state(s2: Sim, path: Array, done: Dictionary, score: float) -> Dictiona
 ##   判据与现役**同一把尺子**：`alt_best` = 非贴身处开火的最高伤害（现役 `_actions_for()` 里同式），
 ##   `pinned_atk` = 贴身时的伤害（基础压 1、buff 照常）；**只有存在更高的非贴身伤害时**才丢掉这个落点，
 ##   并且**这一格能击杀就保留**（与 `_ranged_pinned_shot_ok` 的两条例外逐字一致）⇒ 被围住的远程不会被删光候选。
+## 【2026-09-29 晚·用户「宿魂移动位置被剪枝的情况还挺普遍的」】**渗透/瞬移类的阶段 1 候选收窄**
+##   （键 `INFILTRATE_SLOT_ONLY`，默认 0 = 关 = 现役逐位不变）。
+##   病灶：带 [渗透] 的单位（宿魂 hero_46 为代表）在 `_sim_walk_cells(passing=true)` 下几乎能落到全场空格
+##   ⇒ 阶段 1 的联合枚举里它的候选独占大头（用户那局日志：`阶段1分账 英雄 1643 条`），而漏斗只有
+##   `TWO_PHASE_LAYOUTS`（32）个位子 ⇒ "让它站到正确开火格"的那套阵型被别的单位那些**看着更划算的走位**
+##   挤掉，阶段 2 根本没机会评它（日志自己会写「没选的那一手更值 ⇒ 疑似被搜索漏掉（剪枝）」）。
+##   ⚠️ 与"提漏斗宽度"相反：这是**只减不增**的收窄（同样的 32 个位子留给别的单位更多 ⇒ 单位多的局也不会爆），
+##   而且**能打到人的落点全保留** ⇒ 不会漏掉"站过去打"这一手（被剪掉的那类恰恰就是它）。
+##   ⚠️ 与 `SUMMON_SLOT_ONLY` 同一处、同一形状：默认关，写成权重文件才生效。
+const INFILTRATE_SLOT_ONLY := 0
+var w_infiltrate_slot_only := INFILTRATE_SLOT_ONLY
+
+## 【2026-09-29 晚·用户「影丸为什么要打黄金矿工，然后被反击送走。为什么不打圣诞老人，圣诞老人已经反击过了」】
+##   **顺序抛光**（键 `ORDER_POLISH`，默认 0 = 关）：`_polish_plan()` 只做"**在同一个出手顺序里**把某个单位的
+##   动作换成另一个"，不新增动作、不改顺序 ⇒ 救不回"**同一套动作、换个顺序就安全/更值**"这一类。
+##   影丸那局正是：让影丸**先动手**（或让占着那格的队友后走），它就能打到"这一回合已经反击过、不会再还手"
+##   的圣诞老人（日志里那条备选 `本可多赚 14.8 分`），而原顺序下那一手不合法 ⇒ 只能去打还会反击的黄金矿工、
+##   然后被反击送走。这里对最终计划的**步骤排列**再评分一遍，取最高的那个顺序。
+##   ⚠️ 只处理 ≤ 4 步的计划（4! = 24 条，每条"重放 + 评分"都是毫秒级）；更多步骤**不抛光**（不做近似爬山，
+##   避免行为不可预期）；**不改漏斗宽度** ⇒ 单位多的局不会爆炸。
+const ORDER_POLISH := 0
+const ORDER_POLISH_MAX_STEPS := 6
+var order_polish_max_steps := ORDER_POLISH_MAX_STEPS   # 运行时可切（探针 A/B）
+var w_order_polish := ORDER_POLISH
+var last_order_polish_gain := 0.0
+
+func _order_polish(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: Dictionary,
+		deadline: int, start_targets: Dictionary = {}) -> Dictionary:
+	last_order_polish_gain = 0.0
+	if best.is_empty() or not best.has("path"):
+		return best
+	var plan: Array = best["path"]
+	if plan.size() < 2 or plan.size() > order_polish_max_steps:
+		return best
+	if deadline > 0 and Time.get_ticks_msec() >= deadline:
+		return best
+	var base_score := _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit, start_targets)
+	var best_plan: Array = plan
+	var best_score := base_score
+	for perm in _permutations_of(plan.size()):
+		if abort_requested:
+			break
+		var cand: Array = []
+		for pi in perm:
+			cand.append(plan[int(pi)])
+		var cs := _plan_score(_plan_end_state(sim, cand), cand, enemy_idxs, start_can_hit, start_targets)
+		if cs > best_score + 0.0001:
+			best_score = cs
+			best_plan = cand
+	if best_score <= base_score + 0.0001:
+		return best
+	last_order_polish_gain = best_score - base_score
+	var out: Dictionary = best.duplicate(true)
+	out["path"] = best_plan
+	out["score"] = best_score
+	return out
+
+## n ≤ 5 的全排列（返回下标数组的数组）；n > 5 返回空（= 不抛光）。
+func _permutations_of(n: int) -> Array:
+	var out: Array = []
+	if n <= 1 or n > 5:
+		return out
+	var idxs: Array = []
+	for i in n:
+		idxs.append(i)
+	_permute_rec(idxs, 0, out)
+	return out
+
+func _permute_rec(a: Array, k: int, out: Array) -> void:
+	if k >= a.size():
+		out.append(a.duplicate())
+		return
+	for i in range(k, a.size()):
+		var t: Variant = a[k]
+		a[k] = a[i]
+		a[i] = t
+		_permute_rec(a, k + 1, out)
+		var t2: Variant = a[k]
+		a[k] = a[i]
+		a[i] = t2
+
 func _tp_move_actions(sim: Sim, idx: int) -> Array:
 	var out: Array = [{ "move": null, "atk": -1 }]   # 原地
 	if idx < 0 or idx >= sim.units.size():
@@ -2766,6 +2856,52 @@ func _is_summon_idx(sim: Sim, idx: int) -> bool:
 ##   ⚠️ **判据取安全超集**：只看"从这一格出发、路网距离 ≤ 射程"（不查视线/嘲讽门/贴身/后勤不能攻击），
 ##     ⇒ 只会**多留**几格，绝不会误删真正的攻击位（宁可多算，不可丢线）。
 ##   ⚠️ 「原地」永远保留（它是合法选项，且骷髅不动也可能够得到人）。
+func _tp_infiltrate_slot_moves(sim: Sim, idx: int, moves: Array) -> Array:
+	if idx < 0 or idx >= sim.units.size():
+		return moves
+	var u: SimUnit = sim.units[idx]
+	if u == null or not u.alive or not u.skills.has(DataRegistry.Skill.INFILTRATE):
+		return moves          # 不是渗透类 ⇒ 原样（逐位不变）
+	var reach := maxi(u.atk_range, 1)
+	if u.atk_type == DataRegistry.AttackType.RANGED and _sim_enemy_adjacent(sim, u, u.cell):
+		reach = 1             # 远程被贴身：射程压 1（真实规则，与 `_threat_can_hit()` 同一把尺）
+	# ② "不靠渗透就能走到"的格（普通走法）—— 保留，免得把它的常规走位价值也抹掉
+	var normal := {}
+	for c in _sim_walk_cells(sim, u.cell, _threat_emove_next(sim, u), false):
+		normal[c] = true
+	var out: Array = []
+	for a in moves:
+		var mv: Variant = a.get("move")
+		if mv == null:
+			out.append(a)                       # 原地
+			continue
+		var cell: Vector2i = mv
+		if normal.has(cell):
+			out.append(a)
+			continue
+		# ①b 【2026-09-29 晚·用户「给宿魂再加个能捡的 buff 位置格」】**能捡到东西的落点也保留**：
+		#    渗透类单位（宿魂）本来就能一步跨到远处的道具/金矿上 —— 那是它独有的赚法
+		#    （日志里 ⑤/⑧「顺路吃到道具」就是这么来的），收窄时不能把它砍掉。
+		#    判据直接用现成的 `_sim_cell_has_pickup()`（与"撤退克制过滤"放行纯捡东西那一步同一把尺子）。
+		if _sim_cell_has_pickup(sim, u, cell):
+			out.append(a)
+			continue
+		# ① 能打到某个敌人的落点 —— **全保留**（"站过去打"就是这一手，被剪掉的那类正是它）
+		var can_hit := false
+		for j in sim.units.size():
+			var e: SimUnit = sim.units[j]
+			if e == null or not e.alive or e.fn == u.fn:
+				continue
+			if walk_dist(sim, cell, e.cell) <= reach:
+				can_hit = true
+				break
+		if can_hit:
+			out.append(a)
+		# 其余（渗透过去、又打不到人、也不是常规走位能到的格）⇒ 不生成
+	if out.size() == 0:
+		return moves          # 兜底：收窄后一个都没有（例如被围死）⇒ 退回原表，绝不把单位变成"不能动"
+	return out
+
 func _tp_summon_slot_moves(sim: Sim, idx: int, moves: Array) -> Array:
 	if idx < 0 or idx >= sim.units.size():
 		return moves
@@ -6850,9 +6986,16 @@ func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit,
 		return
 	if t.eatk <= 0:
 		return   # 攻击力为 0（麻痹等）打不出反击：与真实规则一致（也不占用"每回合一次"名额）
-	# 【2026-09-30·用户口径】"有没有资格反击"用**命中那一刻**的距离（调用方传；没传就用当前位置）
-	var dist_c := grid.distance(u_hit if u_hit.x != -99 else u.cell,
+	# 【2026-09-30·用户口径】**反击资格**取"命中那一刻的距离"与"位移后距离"里**更贴近贴身**的那个
+	#   （= 取小）。与真实侧 `Battle._apply_attack` 同一把尺：
+	#     · 长角把目标**撞开**（1→2）：命中时贴身 ⇒ 能反击；
+	#     · 血锁把目标**拉近**（2~3→1）：拉完贴身 ⇒ 也能反击；
+	#     · 真·远程对射（2→2）：两边都是 2 ⇒ 走下面"双方都远程"那条。
+	#   调用方没传命中落点 ⇒ 两个距离相同 ⇒ 与改动前逐位一致。
+	var d_hit := grid.distance(u_hit if u_hit.x != -99 else u.cell,
 		t_hit if t_hit.x != -99 else t.cell)
+	var d_now := grid.distance(u.cell, t.cell)
+	var dist_c: int = mini(d_hit, d_now)
 	if dist_c > 1:
 		# 远程对射：攻击方与反击方都必须是远程；被攻击方被贴身则反击不了
 		if u.atk_type != DataRegistry.AttackType.RANGED:

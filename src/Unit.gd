@@ -918,8 +918,15 @@ func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, b
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
 	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k * (1.0 + (size_mul - 1.0) * 0.6))))
 	lbl.z_index = 120
-	lbl.position = global_position + Vector2(xoff * k, yoff * k)
-	lbl.size = Vector2(64.0 * k * size_mul, 28.0 * k * size_mul)   # 盒子一起放大，数字才不会被裁
+	# 【2026-09-30·用户报「伤害数字有点歪」】⚠️ 原来把 label 的**左上角**钉在 `(xoff, yoff)` 上、盒子宽度
+	#   写死 `64×k`：字号一放大（`size_mul = NUMBER_FONT_MUL = 1.35`）盒子只往**右**长，
+	#   而文字是在盒子里**居中**的 ⇒ 整串数字跟着**往右偏（盒子增量的一半）≈ 15px**（就是"歪"）。
+	#   ⇒ 先算盒子，再把**横向**按盒子中心摆（纵向仍钉在 `yoff`、与改动前一致；`Label` 的文字是
+	#     **顶端对齐**的，盒子往下长不会挪动文字）⇒ `size_mul = 1` 时与改动前逐像素一致
+	#     （所以「圣盾/被动」这类词条飘字一点没变），放大时数字是"原地变大、横向居中对齐棋子"。
+	var box := Vector2(64.0 * k * size_mul, 28.0 * k * size_mul)
+	lbl.size = box
+	lbl.position = Vector2(global_position.x + (xoff + 32.0) * k - box.x * 0.5, global_position.y + yoff * k)
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(lbl)
 	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。

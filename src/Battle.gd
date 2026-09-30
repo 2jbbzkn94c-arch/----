@@ -6339,15 +6339,21 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，
 	# 才以全额攻击力反击（被贴身=压制中：攻击降为1/技能失效，反击不了）
 	var can_counter := false
+	# 【2026-09-30·用户口径】**反击资格**取"命中那一刻的距离"与"位移后距离"里**更贴近贴身**的那个
+	#   （= 两者取小）。为什么要这样（两个位移方向相反，用单一一侧的尺子必然错一个）：
+	#     · 长角把目标**撞开**（1 → 2）：命中时贴身 ⇒ 应该能反击（用户口径）；
+	#     · 血锁把目标**拉近**（2~3 → 1）：拉完贴身 ⇒ 也应该能反击（用户报「拉过来怎么不反击」）；
+	#     · 真·远程对射（2 → 2）：两边都是 2 ⇒ 走下面"双方都远程"那条。
+	#   ⚠️ 两个变量声明在**外面**：下面 tween 回调要把 `dist_hit` 传给 `_play_counter`（判演出用哪种）。
+	var dist_hit := grid.distance(atk_cell_at_hit, tgt_cell_at_hit)
+	var dist_now := grid.distance(attacker.cell, target.cell)
 	# 攻击力为 0（如麻痹把攻击压到 0）的单位打不出反击：直接不反击——**不播反击动画**、
 	# 不消耗"每回合一次"的反击名额（本回合攻击力若回升仍可反击）。
 	if target.alive and target.can_attack() and target.effective_atk() > 0 \
 			and (not target.counter_used_this_turn or (target.skill_allowed() and _hero(target).infinite_counter())):
-		# 【2026-09-30·用户口径】用**命中那一刻**的距离（见上面 `atk_cell_at_hit` 那段说明）：
-		#   长角把人撞开之后，被撞的远程单位仍按"挨打时贴身"判 ⇒ 能远程反击一次。
-		#   ⚠️ 下面"够不够得到攻击者"（`dist_c <= target.attack_range`）**仍按当前位置**算 ——
-		#   那是"反击这一枪打不打得到"，与"有没有资格反击"是两件事；位置没变时两者等价。
-		var dist_c := grid.distance(atk_cell_at_hit, tgt_cell_at_hit)
+		# 【2026-09-30·用户口径】**反击资格**取"命中那一刻的距离"与"位移后距离"里**更贴近贴身**的那个
+		#   （= 取小，理由见上面声明处那段）。下面"够不够得到攻击者"（`dist_c <= range`）随之同尺。
+		var dist_c: int = mini(dist_hit, dist_now)
 		if dist_c <= 1:
 			can_counter = true
 		elif attacker.attack_type == DataRegistry.AttackType.RANGED \
@@ -6374,18 +6380,18 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 		#   `call_deferred("queue_free")`）⇒ 捕获走 WeakRef；两者为 null 时 `_play_counter` 自己会安全收尾。
 		var w_attacker: WeakRef = weakref(attacker)
 		var w_target: WeakRef = weakref(target)
-		# ⚠️ 命中那一刻的落点要**按值捕获**（Vector2i 是值类型，lambda 里直接用没问题）
+		# ⚠️ 命中那一刻的距离要**按值捕获**（int 是值类型，lambda 里直接用没问题）
 		gap.tween_callback(func(): _play_counter(w_attacker.get_ref() as Unit, w_target.get_ref() as Unit,
-			for_enemy, atk_cell_at_hit, tgt_cell_at_hit))
+			for_enemy, dist_hit))
 	else:
 		_finish_attack(attacker, for_enemy)
 
 # 反击演出：反击者向攻击者轻冲一下再结算伤害，随后回到原
-## 【2026-09-30·用户口径】`atk_cell_at_hit` / `tgt_cell_at_hit` = **命中那一刻**双方站的格子
-##   （在 `_apply_attack` 里、任何位移之前记下的）。判"这一记是远程对射还是贴身互搏"必须用它们 ——
-##   被长角撞开的远程单位现在**有资格**反击，若按击退后的当前位置判，它会误走"贴脸突进"那一支。
-func _play_counter(attacker: Unit, target: Unit, for_enemy: bool,
-		atk_cell_at_hit: Vector2i = Vector2i(-99, -99), tgt_cell_at_hit: Vector2i = Vector2i(-99, -99)) -> void:
+## 【2026-09-30·用户口径】`dist_at_hit` = **命中那一刻**双方的距离（在 `_apply_attack` 里、任何位移之前量好）。
+##   判"这一记走远程抛射还是贴身互搏"要用它 —— 被长角**撞开**的远程单位有资格反击，
+##   但它是从贴身位置打的这一枪，按击退后的当前位置判会误走"贴脸突进"那一支。
+##   `-1` = 调用方没传 ⇒ 退回"当前位置"，与改动前一致。
+func _play_counter(attacker: Unit, target: Unit, for_enemy: bool, dist_at_hit: int = -1) -> void:
 	if not is_instance_valid(target) or not is_instance_valid(attacker):
 		_finish_attack(_safe_unit(attacker), for_enemy)
 		return
@@ -6401,23 +6407,18 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool,
 		return
 	# 【2026-09-30·用户口径】反击也会把人反杀 ⇒ 同样先播击杀卡面（反击者），播完再让反击落地
 	await _kill_intro(counterer, attacker, cdmg, true)
-	# 【2026-09-30·同 `_apply_attack` 那条】"这一击是远程对射还是贴身互搏"要按**命中那一刻**的距离判；
-	#   调用方没传（老路径 / 直接调用）时退回"当前位置"⇒ 行为与改动前一致。
-	var atk_hit := atk_cell_at_hit if atk_cell_at_hit.x != -99 else attacker.cell
-	var tgt_hit := tgt_cell_at_hit if tgt_cell_at_hit.x != -99 else counterer.cell
+	# 【2026-09-30·同 `_apply_attack` 那条】"这一击是远程抛射还是贴身互搏"：
+	#   用**命中那一刻的距离** ∪ **当前位置的距离**里更贴近贴身的那个（与资格判定同一把尺）。
+	#   调用方没传（-1）⇒ 退回"当前位置"，行为与改动前一致。
+	var dist_now := grid.distance(counterer.cell, attacker.cell)
+	var dist_use: int = dist_now if dist_at_hit < 0 else mini(dist_at_hit, dist_now)
+	if dist_use > 1:
+		_launch_counter_projectile(attacker, counterer, cdmg, for_enemy)
+		return
 	# 【2026-09-30·同 `_do_attack` 那条】击杀卡面演出期间整盘人可能被换掉 ⇒ 回来先复查；
 	#   走本函数入口同款的 `_finish_attack()` 收尾（对已释放的攻方安全）。
 	if not is_instance_valid(counterer) or not is_instance_valid(attacker):
 		_finish_attack(_safe_unit(attacker), for_enemy)
-		return
-	# 远程对射（距离>1）：反击者原地发射投掷物，不贴脸突进
-	# 【2026-09-30·用户口径】这里的"距离>1"同样要按**命中那一刻**判（见 `_apply_attack` 里
-	#   `atk_cell_at_hit` 那段）：被长角撞开的远程单位现在**有资格**反击了，若仍按击退后的
-	#   当前位置判，它会走"贴脸突进"那一支（明明已经被推开了）⇒ 演出与规则不一致。
-	var dist_now := grid.distance(counterer.cell, attacker.cell)
-	var dist_at_hit := grid.distance(tgt_hit, atk_hit)
-	if dist_now > 1 or dist_at_hit > 1:
-		_launch_counter_projectile(attacker, counterer, cdmg, for_enemy)
 		return
 	var cpos := board_view.cell_world_center(counterer.cell)   # 落点=自身格子中心（不受中途换瞬移影响
 	var lunge_to := cpos.lerp(board_view.cell_world_center(attacker.cell), COUNTER_LUNGE_FRAC)   # 沿反向轻冲一下（幅度见常量）
@@ -7756,6 +7757,61 @@ func _defer_enemy_sub_after_gap() -> void:
 	if GameState.active_side == GameState.SIDE_ENEMY and _enemy_plan_running:
 		await _place_enemy_sub(true)
 
+## 【2026-09-29 晚·用户那条连杀链】「让搜索自己回答该上谁」（`SUB_BY_SEARCH`，默认 0 = 关）。
+##   用户链条（探针 `连杀链自检` 已逐条验通）：先收掉 1 血目标 ⇒ 红帽削嬉皮死神到 6 ⇒ **此时它才是全场最低血**
+##   ⇒ 小阴影 ×2 收它 ⇒ 本回合两杀 = 玩家方 3 名阵亡 = 直接判负。
+##   ⚠️ 现有两条路都算不出：需求制（静态身价/需求）与收尾优先（`sub_kill_scan` = 单杀 + **静态条件**，
+##   看不见「队友那一刀之后 ×2 才亮」）。而 `ai.search()` 本身懂这些动态 ⇒ 这里按候选各跑一次
+##   「落位后这一手」的短预算搜索，取末态分最高的那个。
+const SUB_BY_SEARCH := 0
+var sub_by_search := SUB_BY_SEARCH      # 运行时可切（探针 A/B 用；权重档位将来也可写这里）
+const SUB_BY_SEARCH_TOPK := 2      # 候选只试前 2 名（成本护栏：每多一个候选就多一次搜索）
+const SUB_BY_SEARCH_MS := 2000
+var sub_by_search_ms := SUB_BY_SEARCH_MS  # 运行时可切（探针按预算 A/B）
+
+func _sub_idx_by_search(cells: Array) -> int:
+	if sub_by_search <= 0 or enemy_roster.is_empty() or cells.is_empty():
+		return -1
+	var ai = _make_battle_ai()
+	if ai == null:
+		return -1
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false
+	ai.time_budget_ms = sub_by_search_ms
+	# 【2026-09-29 晚·用户「压成本」】这次内层搜索**只为回答"该上谁"**，不必用满噩梦档的宽度：
+	#   BEAM 400→80、两阶段漏斗 32→8、内层 16→4 ⇒ 动态（×2/最低血/反击名额）照样在 sim 里，
+	#   但每次搜索从 4~7s 掉到亚秒~秒级。要改剂量就把这三个数提到 `SUB_BY_SEARCH_*` 常量里。
+	ai.set_weights({ "BEAM": 80, "TWO_PHASE_LAYOUTS": 8, "TWO_PHASE_INNER": 4 })
+	var cell: Vector2i = cells[0]
+	var snap := BattleSnapshot.collect(self)
+	var best_i := -1
+	var best_sc := -1e18
+	for i in mini(SUB_BY_SEARCH_TOPK, enemy_roster.size()):
+		var hid := String(enemy_roster[i])
+		var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+		var nu = ai._sub_probe_unit(hid, cell)
+		if nu == null:
+			continue
+		nu.sim_index = sim.units.size()
+		sim.units.append(nu)
+		if not sim.occ.has(cell):
+			sim.occ[cell] = nu
+		var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+		var sc: float = ai._evaluate(ai._plan_end_state(sim, plan), true)
+		if _CONSOLE_AI_LOG:
+			print("[AI替补上人·搜索选人] 候选 %s（落 %s）⇒ 落位后这一手末态分 %.1f（预算 %dms）" % [
+				_hname(hid), str(cell), sc, sub_by_search_ms])
+		if sc > best_sc:
+			best_sc = sc
+			best_i = i
+	if _CONSOLE_AI_LOG and best_i >= 0:
+		print("[AI替补上人·搜索选人] → 按「落位后的末态分」选：%s（%.1f）" % [_hname(String(enemy_roster[best_i])), best_sc])
+	return best_i
+
+func _hname(hid: String) -> String:
+	var d := DataRegistry.get_hero(hid)
+	return d.display_name if d != null else hid
 func _place_enemy_sub(mid_turn: bool = false) -> void:
 	# 【2026-09-28·用户口径「AI 如果同时替补两个人的话，1 个 1 个上，登场音效完了再上另一个」】
 	#   本函数会在**同一帧里循环放下全部待补名额**（同时阵亡两人 ⇒ 两个人一起冒出来、两句登场台词叠着响）。
@@ -7809,6 +7865,11 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 			if _CONSOLE_AI_LOG and enemy_roster.size() > 0:
 				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
 					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
+			# 【2026-09-29 晚·SUB_BY_SEARCH】开着时：让搜索自己回答「该上谁」（见 `_sub_idx_by_search()`）
+			if sub_by_search > 0:
+				var sb := _sub_idx_by_search(_sub_legal_cells_for_ai())
+				if sb >= 0:
+					idx_pick = sb
 			next_id = enemy_roster.pop_at(idx_pick)
 		else:
 			var dyn := _dynamic_sub_pick()
@@ -8408,7 +8469,28 @@ func _sub_finish_hero_pick(cells: Array, default_idx: int = -1) -> int:
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
-	var hid: String = ai.pick_sub_hero(sim, enemy_roster, cells)
+	# 【2026-09-29 晚·用户「场上并没有能被收尾的英雄。鼠队长补上来也没有，其次波盾和鼠队长攻击一样，
+	#   为什么是上鼠队长」】**先问"到底有没有人能收掉"**：`pick_sub_hero()` 的档位里有"参与/离得近"
+	#   这类**不要求打死**的档 ⇒ 场上一个能收的都没有时它照样返回一个人 ⇒ 旧口径拿这个非空返回当
+	#   "能收尾"⇒ 无条件覆盖需求制（用户那局：需求制 波盾 29.4 被 鼠队长 18.4 顶掉，而场上根本没有可收的目标）。
+	#   现在以 `sub_kill_scan()`（合力斩杀那把唯一的尺）为准：**空 ⇒ 没有任何真实的收尾计划 ⇒ 不覆盖**；
+	#   非空 ⇒ 收尾人选也用它给的 `hero`（它挑的是"真能补上这一刀"的那个，与动态替补同源）。
+	var scan: Dictionary = ai.sub_kill_scan(sim, enemy_roster, cells)
+	if scan.is_empty():
+		if _CONSOLE_AI_LOG:
+			print("[AI替补上人] 收尾优先：场上没有「替补补上来就能收掉」的目标（`sub_kill_scan` 空）⇒ **不覆盖**，按需求制上人。")
+		return -1
+	# 只在这两种情况下才覆盖（见下面那段说明）：① 非它不可（本回合我方自己收不掉）② 斩杀局（打死谁都直接赢）
+	var need_v := float(scan.get("need", 0.0))
+	var team_v := float(scan.get("team", 0.0))
+	var terminal := player_dead == LOSS_DEATH_COUNT - 1
+	if team_v >= need_v and not terminal:
+		if _CONSOLE_AI_LOG:
+			print("[AI替补上人] 收尾优先：名单里有人能收掉残血目标，但**我方本回合自己就收得掉**（队友 %.0f ≥ 需要 %.0f）且不是斩杀局 ⇒ **不覆盖**，仍按需求制上人。" % [team_v, need_v])
+		return -1
+	var hid: String = String(scan.get("hero", ""))
+	if hid == "" or enemy_roster.find(hid) < 0:
+		hid = ai.pick_sub_hero(sim, enemy_roster, cells)   # 兜底：扫描给了人但不在预设席里（口径不同）⇒ 退回旧选法
 	var i := enemy_roster.find(hid)
 	if i < 0:
 		return -1
@@ -9625,6 +9707,43 @@ func _ai_finish_withdraw_apply() -> void:
 	await _enemy_replay.run_from(_ai_plan, _enemy_refs, _session_id, _replay_plan_pos)
 
 # ---- 强力 AI：搜索敌方本回合全部操作并打分，执行最优序----
+## 【2026-09-29 晚·用户要求「在控制台里把战局状态记录」⇒ 方便照盘复刻】**整盘状态转储**（一行、机器可读）。
+##   前缀固定 `[战局转储]`；粘给我就能在探针里原样重建这一局（单位 id/格/血/攻/射/移/三个回合标记 + 碑/障碍/炸弹）。
+##   只在 `_CONSOLE_AI_LOG`（默认开）下打；**只读、只打印**，不参与任何判定。
+func _log_state_dump() -> void:
+	if not _CONSOLE_AI_LOG:
+		return
+	print(_state_dump_line())
+
+## 同上的**字符串版**（探针直接调它拿同一份转储文本，不必靠捕获 stdout）
+func _state_dump_line() -> String:
+	var parts: Array = []
+	for fn in [DataRegistry.Faction.ENEMY, DataRegistry.Faction.PLAYER]:
+		var us: Array = []
+		for u in units:
+			if u == null or not is_instance_valid(u) or not u.alive or u.faction != fn:
+				continue
+			var sts: Array = []
+			for sk in u.statuses.keys():
+				sts.append(String(sk))
+			us.append("%s@%s hp%d/%d atk%d r%d mv%d m%d/a%d/c%d%s" % [
+				String(u.hero_id), str(u.cell), int(u.hp), int(u.max_hp),
+				int(u.effective_atk()), int(u.attack_range), int(u.effective_move()),
+				int(u.moved_this_turn), int(u.attacked_this_turn), int(u.counter_used_this_turn),
+				(" st=%s" % ",".join(sts) if sts.size() > 0 else "")])
+		parts.append(("AI: " if fn == DataRegistry.Faction.ENEMY else "玩家: ") + " | ".join(us))
+	parts.append("碑=%s" % str(graves.keys()))
+	parts.append("障碍=%s" % str(obstacles.keys()))
+	parts.append("炸弹=%s" % str(bombs.keys()))
+	# 【2026-09-29 晚·补全】buff / 金矿 / 道具归属（`buff_owner` = 格→阵营；金矿格 / 场上道具格）
+	var bo: Array = []
+	for c in buff_owner.keys():
+		bo.append("%s→%d" % [str(c), int(buff_owner[c])])
+	parts.append("buff格=%s" % (("[" + ", ".join(bo) + "]") if bo.size() > 0 else "[]"))
+	var gc: Variant = get("_gold_cells")
+	parts.append("金矿=%s" % (str((gc as Dictionary).keys()) if gc is Dictionary else "[]"))
+	return "[战局转储] " + "　‖　".join(parts)
+
 func _run_enemy_turn() -> void:
 	if _replay_mode:
 		return   # 【2026-09-27·录像】回放不跑 AI 搜索：敌方那一段照录像里的计划重演
@@ -9644,6 +9763,7 @@ func _run_enemy_turn() -> void:
 	#   里那次），活下来的"中毒 1 血"才是"活过这一次 tick、会死在下个我方回合开场"的那批。
 	#   ⚠️ 只登记名单，**不把它们从快照里剔除** —— 用户口径：这一手照常打，打完才撤。
 	_ai_poison_withdraw_pick()
+	_log_state_dump()   # 【2026-09-29 晚·用户要求】AI 决策前把整盘状态打一行（方便照盘复刻）
 	# 【2026-09-28·斩杀撤人】⚠️ **2026-09-29 晚：这一判已挪到"计划回放跑完"之后**（见下面
 	#   `_ai_finish_withdraw_apply()` 之前那处调用）—— 用户实测「**本回合被打死了 2 个，剩最后一个，
 	#   应该是可以替补斩杀的**」：① 门的数字是 `player_dead`（对面已阵亡几名），而"本回合又打死两个"
