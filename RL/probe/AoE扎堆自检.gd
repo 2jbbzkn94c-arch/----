@@ -46,6 +46,13 @@ func _run() -> void:
 		_u(E, "hero_23", Vector2i(3, 3), 20, 20, 5, 3, 1, MELEE, [], "我方乙"),
 		_u(P, "hero_10", Vector2i(3, 4), 20, 20, 5, 3, 2, RANGED, [], "白游侠"),
 	])
+	# D 【2026-09-29 追加·㉛ 的不重复计价对照】同样一发散射，但溅到的是**脆皮输出**（红帽13血）
+	#   ⇒ 她那一份该由 ㉖ 收（㉛ 的门把她挡在外面），只有厚血的甲算进 ㉛ 的 Σ。
+	_panel(ai, "D ㉖/㉛ 分工·散射溅到红帽(脆皮输出)", [
+		_u(E, "hero_26", Vector2i(3, 1), 26, 26, 5, 3, 1, MELEE, [], "我方甲"),
+		_u(E, "hero_40", Vector2i(3, 2), 13, 13, 4, 3, 1, MELEE, [], "我方红帽"),
+		_u(P, "hero_10", Vector2i(3, 4), 20, 20, 5, 3, 2, RANGED, [], "白游侠"),
+	])
 	# B 长剑剑气：乙(2,3) 站在 甲(2,2) 身后同一条射线上（长剑从 (2,1) 砍甲）；丙(4,2) 不在射线上
 	_panel(ai, "B 长剑剑气·身后直线", [
 		_u(E, "hero_26", Vector2i(2, 2), 26, 26, 5, 3, 1, MELEE, [], "我方甲"),
@@ -92,6 +99,43 @@ func _panel(ai, tag: String, descs_in: Array) -> void:
 		var o := {}
 		var inc := float(ai._incoming_total_on(sim, u, u.cell, o))
 		print("AOE|%s|%s|%s|挨打合计=%.1f|逐笔=%s" % [tag, str(u.name), str(u.cell), inc, _fmt(o)])
+	_aoe_shape(ai, sim, tag)
+
+## 【2026-09-29 追加】㉛ AoE 形状总账的读数：
+##   逐单位 = 它站在这一格"因对手 AoE 形状"会额外挨的那一份（三族见 `_aoe_riders_on()`）；
+##   盘面 Σ 分两栏 —— 「全场」= 所有我方单位之和，「㉖门外」= ㉛ **真正收**的那部分
+##   （脆皮输出那部分由 ㉖ 按全部挨打合计罚 ⇒ ㉛ 跳过、不重复计价）。
+##   末段 = 同一末态在 W = 0 / 2 / 4 三档下的㉛罚分（探针自己改 `w_aoe_rider_total`，不动权重文件）。
+func _aoe_shape(ai, sim, tag: String) -> void:
+	if not ai.has_method("_aoe_rider_total") or not ai.has_method("_aoe_riders_on") or not ai.has_method("_exposure_covered"):
+		print("AOE|%s|㉛|GUARD|fork 里没有 ㉛ 那三只函数 ⇒ 重建后重跑" % tag)
+		return
+	var rows: Array[String] = []
+	var sum_all := 0.0
+	var sum_out := 0.0
+	for i in sim.units.size():
+		var u = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		var s := 0.0
+		for rdr in ai._aoe_riders_on(sim, u, u.cell):
+			s += float(rdr[1])
+		if s <= 0.0:
+			continue
+		var covered: bool = bool(ai._exposure_covered(u))
+		sum_all += s
+		if not covered:
+			sum_out += s
+		rows.append("%s%s形状=%.0f%s" % [str(u.name), str(u.cell), s,
+			"（㉖内⇒㉛不计）" if covered else ""])
+	var w_save: float = float(ai.w_aoe_rider_total)
+	var pen: Array[String] = []
+	for wv in [0.0, 2.0, 4.0]:
+		ai.w_aoe_rider_total = wv
+		pen.append("W=%.0f⇒%.2f" % [wv, float(ai._aoe_rider_total(sim))])
+	ai.w_aoe_rider_total = w_save
+	print("AOE|%s|㉛|Σ形状(全场)=%.1f|Σ形状(㉖门外)=%.1f|%s|%s" % [tag, sum_all, sum_out,
+		(" · ".join(rows)) if rows.size() > 0 else "∅", " ".join(pen)])
 
 func _fmt(o: Dictionary) -> String:
 	var bits: Array[String] = []

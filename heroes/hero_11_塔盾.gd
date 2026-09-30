@@ -35,7 +35,8 @@ func absorb_ally_damage(target: Unit, dmg: int) -> int:
 	if unit.hp <= 0:
 		unit.die()
 	elif unit.is_inside_tree():
-		# 演出：塔盾亮起守护特效（扩散环+粒子+飘字），提示这次伤害被格挡
-		unit.burst_fx(DataRegistry.hero_fx("hero_11").color, "格挡")
+		# 演出：塔盾亮起守护特效（扩散环+粒子+飘字），提示这次伤害被自己**分担**了 1 点
+		# 【2026-09-30·用户口径「将塔盾的技能弹字改为分担」】原来弹的是「格挡」⇒ 现在弹「分担」。
+		unit.burst_fx(DataRegistry.hero_fx("hero_11").color, "分担")
 	battle.log_message.emit("%s 的塔盾代替承受 1 点伤害。" % unit.display_name)
 	return dmg - 1

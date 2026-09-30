@@ -76,6 +76,103 @@ func _run() -> void:
 	print("PROBE|E_预设替补|need=%s|名单=%s|选中=%s(下标%d)|分数=%s" % [
 		DataRegistry.sub_need_label(String(ctxE.get("need", ""))), str(_b.enemy_roster),
 		String(_b.enemy_roster[idxE]), idxE, _scores_txt(["hero_25", "hero_11", "hero_16", "hero_36", "hero_32"], ctxE)])
+	# ---- F：【2026-09-29 追加】动态替补判据①扩成「**合力斩杀**」（用户口径：「如果对方已经死了两人，
+	#      并且最后一人血量小于下回合 AI 和替补一起能造成的伤害，首要需求就是斩杀」）----
+	#      盘面 = 我方两人够得到玩家最后一人（够不到就没人参与合力），对面已死 2 人；
+	#      **目标血量按"我方两人合计攻击力 + 1"现算** ⇒ 队伍自己差一点收不掉，必须靠替补补上这一刀。
+	_clear()
+	_spawn("hero_26", 1, Vector2i(3, 1))
+	_spawn("hero_16", 1, Vector2i(1, 1))
+	_spawn("hero_23", 0, Vector2i(3, 3))
+	# 替补的合法落点 = 本方墓碑格 + 出生区空格。出生区通常离战场很远 ⇒ 想验"合力斩杀"就得有**墓碑格**
+	#   （真实里就是"刚阵亡那人的格子"）⇒ 这里在目标旁边立一座本方碑（`true` 就是"我方碑"的简写口径）。
+	_b.graves[Vector2i(3, 2)] = true
+	var tgtF: Unit = null
+	var sum_atk := 0
+	for u in _b.units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction == DataRegistry.Faction.ENEMY:
+			sum_atk += u.effective_atk()
+		else:
+			tgtF = u
+	if tgtF != null:
+		# ⚠️ 本探针自带牌组里有圣光(hero_22) ⇒ 它会在回合末 `call_deferred()` 给全队发 [圣盾]，
+		#   飘到这一格上会把"合力斩杀"整条判成"收不掉"（第一版探针就踩了这个坑）。
+		#   口径是"没盾时能不能收" ⇒ 这里先清掉，下面再单独加一面盾做对照。
+		tgtF.remove_status(StatusDB.SHIELD)
+		tgtF.max_hp = sum_atk + 1
+		tgtF.hp = sum_atk + 1
+		tgtF._update_hp_label()
+	_b.player_dead = 2
+	var candsF: Array = _b._dynamic_sub_candidates()
+	var cellsF: Array = _b._sub_legal_cells_for_ai()
+	var scanF := _b._sub_kill_scan(candsF, cellsF)
+	print("PROBE|F_合力斩杀|我方合计攻=%d|目标血=%d|合法落点=%d" % [sum_atk, sum_atk + 1, cellsF.size()])
+	if scanF.is_empty():
+		print("PROBE|F_合力斩杀|候选池=%d|scan=❌ 没有斩杀计划" % candsF.size())
+	else:
+		print("PROBE|F_合力斩杀|候选池=%d|scan=%s→%s|需要%.0f=队友%.0f+替补%.0f|对面剩%d人|solo=%s" % [
+			candsF.size(), String(scanF["hero"]), str(scanF["cell"]), float(scanF["need"]),
+			float(scanF["team"]), float(scanF["sub"]), int(scanF["foe_alive"]), str(bool(scanF["solo"]))])
+	var dynF := _b._dynamic_sub_pick()
+	print("PROBE|F_合力斩杀|_dynamic_sub_pick()=%s" % str(dynF))
+	# 同盘面加一面 [圣盾]：盾整次免伤、只挡一笔 ⇒ 应判"收不掉"（合力 6+5 − 最大那笔 5 = 6 < 7）
+	if tgtF != null:
+		tgtF.add_status(StatusDB.SHIELD)
+		var scanSh := _b._sub_kill_scan(candsF, cellsF)
+		print("PROBE|F_合力斩杀·带圣盾|scan=%s" % ("❌ 收不掉（盾吃掉最大那一笔）" if scanSh.is_empty() else str(scanSh)))
+		tgtF.remove_status(StatusDB.SHIELD)
+	# ---- G：【2026-09-29 晚·用户「为什么说的上塔盾，结果上了个超新星」】预设席那条路的**收尾优先覆盖**
+	#      必须"日志说的"与"实际上的"是同一个人。这里摆一个"需求制想上坦克、收尾优先想上能补刀的人"的盘面，
+	#      然后**真的跑一次 `_place_enemy_sub()`**，把"需求制建议 / 收尾优先选的人 / 实际上场的人"三者打出来。
+	_clear()
+	_spawn("hero_26", 1, Vector2i(3, 1))
+	_spawn("hero_16", 1, Vector2i(1, 1))
+	_spawn("hero_23", 0, Vector2i(3, 3))       # 玩家方：贴着下面那座碑的一血目标
+	_spawn("hero_34", 0, Vector2i(1, 4))
+	# ⚠️ 本探针的 `_spawn()` 返回 void（不是 Unit）⇒ 只能按格子把它找回来（写 `var t := _spawn(...)` 会解析报错、
+	#   整个脚本加载失败、场景什么都不做 = 看着像"卡住"）。
+	var tgtG: Unit = null
+	for u in _b.units:
+		if u != null and is_instance_valid(u) and u.alive and u.faction != DataRegistry.Faction.ENEMY and u.cell == Vector2i(3, 3):
+			tgtG = u
+	# ⚠️ 墓碑必须是**字典**（真实口径 `{ "fn": 阵营, "hero": id }`）：`_free_sub_cell_for()` 会读 `gd["fn"]`，
+	#   塞个 `true` 进去会在真实落位那条路上抛错、协程当场死掉 ⇒ `await` 永远等不到（探针就卡死在这）。
+	_b.graves[Vector2i(3, 2)] = { "fn": DataRegistry.Faction.ENEMY, "hero": "hero_11" }
+	if tgtG != null:
+		tgtG.remove_status(StatusDB.SHIELD)
+		tgtG.hp = 1                              # 一血目标 ⇒ "补上来就能收"的人多半不是需求制那个
+	_b.enemy_roster = ["hero_11", "hero_25", "hero_16", "hero_36"]   # 塔盾/战锤/波盾/梅林
+	var ctxG := _b._sub_ctx()
+	var need_idxG := _b._best_enemy_sub_idx()
+	var need_name := String(_b.enemy_roster[need_idxG]) if need_idxG < _b.enemy_roster.size() else "（越界）"
+	var fin_idxG := _b._sub_finish_hero_pick(_b._sub_legal_cells_for_ai(), need_idxG)
+	var fin_name := (String(_b.enemy_roster[fin_idxG]) if fin_idxG >= 0 and fin_idxG < _b.enemy_roster.size() else "无（不覆盖）")
+	var expect_hid := String(_b.enemy_roster[fin_idxG if fin_idxG >= 0 else need_idxG])
+	_b._pending_enemy_sub = 1
+	# ⚠️ 判"实际上场的是谁"要按**实例 id 差集**找新冒出来的那个（这个探针的 `_b` 还挂着 Main.tscn 自带牌组，
+	#   按"下标 >= n0"找会误抓到别人 —— 第一版就抓成了 hero_28）。
+	var before := {}
+	for u in _b.units:
+		before[u.get_instance_id()] = true
+	var roster0 := _b.enemy_roster.size()
+	# ⚠️ **不 `await`**：这一支是协程，落位发生在第一个 `await` 之前；若它中途抛错，`await` 会永远等不到
+	#   （探针卡死、既没输出也没报错）。不 await + 等固定帧数 ⇒ 出错时只会看到"实际上场=（空）"。
+	_b._place_enemy_sub()
+	for i in 20:
+		await get_tree().process_frame
+	var landed := ""
+	for u in _b.units:
+		if u != null and is_instance_valid(u) and u.alive and not before.has(u.get_instance_id()) \
+				and u.faction == DataRegistry.Faction.ENEMY:
+			landed = String(u.hero_id)
+			break        # ⚠️ 取**第一个**新冒出来的（`units` 按落位顺序追加；这片盘面里可能一次落好几个人）
+	var note := "名单 %d→%d" % [roster0, _b.enemy_roster.size()]
+	print("PROBE|G_收尾优先覆盖日志|SUB_FINISH_W=%.0f|需求=%s|需求制建议=%s(下标%d)|收尾优先=%s|**实际上场=%s**|%s|%s" % [
+		_b._sub_finish_w(), DataRegistry.sub_need_label(String(ctxG.get("need", ""))),
+		need_name, need_idxG, fin_name, landed, note,
+		("PASS（日志说的与实际一致）" if landed == expect_hid else "FAIL（说的与实际不是一个人！）")])
 	await _done()
 
 ## 逐人打分（只为日志对照）

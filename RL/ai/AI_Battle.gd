@@ -607,6 +607,22 @@ const REDCAP_BLAST_DMG := 13.0        # 自爆伤害（`heroes/hero_40_红帽.gd
 const EXPOSURE_TOTAL_W := 0.0
 const EXPOSURE_HP_MAX := 15.0         # 「脆皮」的界限（键：想让 18 血的长剑也算就写 18）
 const EXPOSURE_OUT_MIN := 8.0         # 「有输出」的界限（**写死**：这是"脆皮输出"这个词的口径，不是旋钮）
+# 【2026-09-29·用户报「AI 好像不会应对玩家的长剑，会出现站在一条直线的情况」】㉛「**AoE 形状总账**」
+#   （键 `AOE_RIDER_TOTAL_W`，默认 0 = 逐位不变）。**口径**：
+#     `罚 = W × Σ_{我方活着的单位里、**㉖ 管不到的那些**} 它在当前格因对手 AoE **形状**会额外挨的血`
+#   那几笔就是 `_aoe_riders_on()` 的三族（白游侠散射 / 长剑剑气 / 红帽自爆），逐条真规则写在那个函数上面。
+#   ⚠️ **为什么 ①.8 已经把它们折进"挨打合计"了还要再开一项**：那笔钱能走到分数的路只有三条，而且都很窄 ——
+#     · ⑦核心风险是 **max 型**（`RISK_W × max_我方[…]`）⇒ "排成一条线"只要没让谁变成全队最危险**就一分不涨**；
+#     · ㉖暴露总量是 Σ 型，但**门票 = 脆皮输出**（血上限 ≤ `EXPOSURE_HP_MAX` 且 `_output_potential()` ≥ `EXPOSURE_OUT_MIN`）；
+#     · ⑥`MOVE_ACCEPT_DAMAGE` 那把软扣分**只在"未交战"时**生效。
+#     ⇒ 中盘 / 坦与半肉 / 或"多挨那一下不够成为全队最大值"时，站进剑气里几乎免费；而队形两项
+#       （`FORM_COHESION_W` 梦里 5.0 · `FORM_SPREAD_CELL_W` 梦里 3.0/格）**正在给"靠拢"发钱** ⇒
+#       两个单位排在同一条轴线上反而是它算出来的好棋（用户看到的就是"AI 站成一条直线"）。
+#   ⚠️ **与 ㉖ 不重复计价**：本项**只给 ㉖ 门外的单位补账**（坦 / 半肉 / 后勤 / 无输出）——
+#     脆皮输出那部分已经由 ㉖ 按"全部挨打合计"罚过一遍（其中就含这三笔 rider），这里不再计它。
+#   ⚠️ 只在**末态**结算（与 ⑳㉑㉒㉓㉖ 同层，中途恒 0；纯站位量）。
+#   ⚠️ 剂量：首版值写体感值，**未过剂量批**（建议 0 / 2 / 4 三臂）；`_term_defs` 里能读到本项读数。
+const AOE_RIDER_TOTAL_W := 0.0
 # ---- 【2026-09-20 新增·默认关】"原地不动"候选（`STAY_OPTION`）----
 # 起因（用户实机日志 + 读代码）：
 #   日志行 `装甲堡垒 移动 (2,1)→(3,1)(保持/拉距、避威胁(-2伤)、下回合挨打4.0(1人/最大4)、规则B罚0.0) → 不攻击 [本步 Δ-3.3]`
@@ -1172,6 +1188,8 @@ var w_redcap_blast_ally := REDCAP_BLAST_ALLY_W
 # 【2026-09-26·用户拍板选项 2】㉖ 脆皮输出的暴露总量（见 `const EXPOSURE_TOTAL_W` 处说明）
 var w_exposure_total := EXPOSURE_TOTAL_W
 var w_exposure_hp_max := EXPOSURE_HP_MAX
+# 【2026-09-29·默认关】㉛ AoE 形状总账（见 `const AOE_RIDER_TOTAL_W` 处说明）
+var w_aoe_rider_total := AOE_RIDER_TOTAL_W
 # 【2026-09-20·默认关】"原地不动"候选（见 `const STAY_OPTION` 处说明）。默认 0 ⇒ 逐位不变。
 var w_stay_option := STAY_OPTION
 # 【2026-09-20 已删·用户拍板】`w_threat_alloc` / `THREAT_ALLOC_W`（⑮分摊总量）随分摊族一起删（见 `_dead_fold()` 上方说明）。
@@ -1473,6 +1491,8 @@ func set_weights(t: Dictionary) -> void:
 			# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关）
 			"EXPOSURE_TOTAL_W": w_exposure_total = float(v)
 			"EXPOSURE_HP_MAX": w_exposure_hp_max = float(v)
+			# 【2026-09-29·默认关】㉛ AoE 形状总账（见 const AOE_RIDER_TOTAL_W 处说明）
+			"AOE_RIDER_TOTAL_W": w_aoe_rider_total = float(v)
 			# 【2026-09-20·默认关】"原地不动"候选（1 = 允许；见 const STAY_OPTION 处说明）
 			"STAY_OPTION": w_stay_option = int(v)
 			# 【2026-09-20 已删·用户拍板】`THREAT_SUM_CAP`（见文件上方「整族删除」说明）。
@@ -3040,15 +3060,29 @@ func pick_sub_cell(sim: Sim, hero_id: String, cells: Array) -> Vector2i:
 	# （3 人阵容 ⇒ 打死它 = 直接判负对方）时，把"这一格能不能打到它、能不能一击打死"抬到压倒性位置。
 	# `w_sub_finish_w = 0`（默认）⇒ 这一段一次都不算 ⇒ 逐位不变。
 	var fin_foe: SimUnit = null
+	var fin_team := 0.0
+	var fin_top := 0.0
 	if w_sub_finish_w > 0.0:
+		# 【2026-09-29·用户实测「你随便替补两个人，8 血不是随便杀吗」】**这条原来只在"对面只剩 1 个"时开**
+		#   ⇒ 对面场上还有 3 个人时，替补落位**根本不去挑"能补刀的那个残血目标"**（用户看到的正是它）。
+		#   现在：把"这一格能不能**打死某个残血敌人**"作为主判据 —— 在所有敌人里挑**能被这一刀收掉、
+		#   且血最少**的那个（血并列时优先"对面就剩它一个"的那个 = 收官价值更高）。
+		#   一个都收不掉时退回"对面只剩 1 个"的老口径（那时"往它靠"仍然有意义）。
 		var alive_n := 0
+		var last_foe: SimUnit = null
 		for i in sim.units.size():
 			var t0: SimUnit = sim.units[i]
 			if t0 != null and t0.alive and t0.fn != DataRegistry.Faction.ENEMY:
 				alive_n += 1
-				fin_foe = t0
-		if alive_n != 1:
-			fin_foe = null
+				last_foe = t0
+		var killable := _finish_target_choice(sim, hero_id, cells, mv, ar)
+		fin_foe = killable if killable != null else (last_foe if alive_n == 1 else null)
+		if fin_foe != null:
+			# 【2026-09-29·用户口径「首要需求就是斩杀」】队友这一回合够得到它的**真实伤害**合计
+			#   （见 `_team_hit_pool()`）—— 与替补这一手合起来能杀就已经值得为它选格。
+			var pool := _team_hit_pool(sim, fin_foe)
+			fin_team = float(pool[0])
+			fin_top = float(pool[1])
 	for c in cells:
 		var cell: Vector2i = c
 		var s := 0.0
@@ -3073,8 +3107,21 @@ func pick_sub_cell(sim: Sim, hero_id: String, cells: Array) -> Vector2i:
 			var fd := approach_dist(sim, cell, fin_foe.cell)
 			if fd <= mv + ar:
 				s += w_sub_finish_w
-				if fin_foe.hp <= atk:
-					s += w_sub_finish_w * 0.5      # 能一击斩杀：再抬一档
+				# 【2026-09-29·用户口径「首要需求就是斩杀」】原来这里拿**面板攻击力**比血量
+				#   （`fin_foe.hp <= atk`）⇒ 坚固 −1 / 圣盾整次免伤 / 塔盾代扛 全看不见。
+				#   现在改成与 `pick_sub_hero()` / `Battle._finish_kill_hero_pick()` **同一把尺**：
+				#   替补这一手的真实伤害 + 队友够得到它的真实伤害合计 ≥ 它的剩余血 ⇒ 合力能杀（+w/2）；
+				#   替补**单独**就能收 ⇒ 再 +w/2（盾在则单独收不了：那一刀会被盾吃掉）。
+				var sub_u := _sub_probe_unit(hero_id, cell)
+				var sh := 0.0 if sub_u == null else _adj_foe_hit_on(sim, fin_foe, sub_u)
+				var need := float(fin_foe.hp)
+				var total := fin_team + sh
+				if fin_foe.shield:
+					total -= maxf(sh, fin_top)
+				if total >= need:
+					s += w_sub_finish_w * 0.5
+					if sh >= need and not fin_foe.shield:
+						s += w_sub_finish_w * 0.5      # 能一击斩杀：再抬一档
 			else:
 				s -= float(fd) * 1.0               # 打不到它：加倍往它靠（③ 那支只有 0.5/格）
 		if s > best_s:
@@ -3086,11 +3133,16 @@ func pick_sub_cell(sim: Sim, hero_id: String, cells: Array) -> Vector2i:
 ## 调用方（`Battle._place_enemy_sub`）只在 `_sub_finish_w() > 0` 且**对面只剩 1 个存活单位**时调用。
 ## 为什么需要它：现有选人（`Battle._best_enemy_sub_idx`）只看 身价/缺前排/后勤/替补技 ⇒ 可能补上来一个
 ## 够不到、也打不死那个残血的坦克/辅助，白占一个名额。这里直接问"谁能补上来就收官"。
-## 打分（越大越好），对每个候选替补，取它在**所有合法落点**里离目标最近的那一格：
-##   ① 够得到（`approach_dist ≤ spawn_move + spawn_attack_range`）且 `def.atk ≥ 目标当前血`
-##      ⇒ **补上来就是收官那一刀** ⇒ `1000 + 攻击力`
-##   ② 够得到但打不死 ⇒ `100 + 攻击力`（能参与合围）
-##   ③ 都够不到 ⇒ `1/距离`（越近越好）
+## 打分（越大越好），对每个候选替补，取它在**所有合法落点**里最优的那一格：
+##   ① 够得到（`approach_dist ≤ spawn_move + spawn_attack_range`）且**这一手的真实伤害** ≥ 目标当前血
+##      ⇒ **补上来就是收官那一刀** ⇒ `1000 + 真实伤害`（真实伤害 = `_adj_foe_hit_on()`：含攻击者倍率技、
+##      回合开始攻加成、受击侧 重伤/坚固/塔盾；目标带 [圣盾] 时那一刀会被吃掉 ⇒ 不算单杀）
+##   ② 够得到，**自己打不死、但它 + 队友够得到它的伤害合计 ≥ 目标当前血** ⇒ `500 + 真实伤害`（合力斩杀）
+##   ③ 够得到但合起来也打不死 ⇒ `100 + 真实伤害`（能参与合围）
+##   ④ 都够不到 ⇒ `1/距离`（越近越好）
+## ⚠️ ② 是 2026-09-29 新增（用户口径「首要需求就是斩杀，如果对方已经死了两人、最后一人血量小于
+##   下回合 AI 和替补一起能造成的伤害」）—— 旧版只认"替补自己一刀 ≥ 血"，也拿**面板攻击力**当伤害
+##   （看不见坚固/盾）⇒ 那个局面判不出来。优先级仍是"能单独收 > 能合力收 > 只能参与"。
 ## ⚠️ 只改"选谁"，不改"能不能上"：`roster` 空 ⇒ 返回 ""；`cells` 空或全选不出 ⇒ 返回 `roster[0]`
 ##    （= 调用方原逻辑的兜底，保证行为不会比改动前更差）。
 func pick_sub_hero(sim: Sim, roster: Array, cells: Array) -> String:
@@ -3100,11 +3152,19 @@ func pick_sub_hero(sim: Sim, roster: Array, cells: Array) -> String:
 	for i in sim.units.size():
 		var t: SimUnit = sim.units[i]
 		if t != null and t.alive and t.fn != DataRegistry.Faction.ENEMY:
-			last = t
+			# 【2026-09-29·用户「你随便替补两个人，8 血不是随便杀吗」】目标从"最后一个敌人"改成
+			#   **当前血最少的那个敌人**（最便宜、最可能一刀收掉的那个）；血并列时保持先出现的那个。
+			if last == null or int(t.hp) < int(last.hp):
+				last = t
 	if last == null or cells.is_empty():
 		return String(roster[0])
 	var best_id := String(roster[0])
 	var best_s := -INF
+	# 【2026-09-29】队友这一回合够得到它的真实伤害合计（`_team_hit_pool()` ⇒ [Σ, 最大那一笔]）。
+	var pool := _team_hit_pool(sim, last)
+	var team := float(pool[0])
+	var top := float(pool[1])
+	var need := float(last.hp)
 	for r in roster:
 		var hid := String(r)
 		var def = DataRegistry.get_hero(hid)
@@ -3112,19 +3172,209 @@ func pick_sub_hero(sim: Sim, roster: Array, cells: Array) -> String:
 			continue
 		var mv: int = DataRegistry.spawn_move(def)
 		var ar: int = DataRegistry.spawn_attack_range(def)
-		var atk: int = def.atk
 		var near := 1 << 30
+		var reach_ok := false
+		var sub_hit := 0.0
 		for c in cells:
-			near = mini(near, approach_dist(sim, c, last.cell))
+			var cell: Vector2i = c
+			var d := approach_dist(sim, cell, last.cell)
+			near = mini(near, d)
+			if d > mv + ar:
+				continue
+			reach_ok = true
+			var sub_u := _sub_probe_unit(hid, cell)
+			if sub_u != null:
+				sub_hit = maxf(sub_hit, _adj_foe_hit_on(sim, last, sub_u))
 		var s := 0.0
-		if near <= mv + ar:
-			s = (1000.0 if atk >= last.hp else 100.0) + float(atk)
+		if reach_ok:
+			var total := team + sub_hit
+			if last.shield:
+				total -= maxf(sub_hit, top)     # 盾整次免伤、只挡一笔 ⇒ 扣掉最大的那一笔
+			var solo: bool = sub_hit >= need and not last.shield
+			if solo:
+				s = 1000.0 + sub_hit
+			elif total >= need:
+				s = 500.0 + sub_hit
+			else:
+				s = 100.0 + sub_hit
 		else:
 			s = 1.0 / float(maxi(near, 1))
 		if s > best_s:
 			best_s = s
 			best_id = hid
 	return best_id
+
+# ============ 【2026-09-29·用户口径「首要需求就是斩杀」】替补「合力斩杀」============
+# 用户原话：「如果对方已经死了两人，并且最后一人血量小于下回合 AI 和替补一起能造成的伤害，
+#   首要需求就是斩杀」。旧判据只认**替补自己这一手**能不能打死（`Battle._sub_best_kill()` /
+#   `pick_sub_hero()` 的 1000 档），而且拿**面板攻击力**当伤害 ⇒ 看不见攻击者倍率技（小阴影 / 赏金猎人 /
+#   嬉皮死神的 ×2）、受击侧的 重伤 +1 / 坚固 −1 / 塔盾代扛 / [圣盾] 整次免伤。
+# 现在两件事一起做：
+#   ① **需要 = 目标剩余血**、**可用 = 我方够得到它的单位这一击的真实伤害 + 替补这一手的真实伤害** ——
+#      后者走 `_adj_foe_hit_on()`（与 ㉑ 单点威胁、`Battle._unit_hit_on()` **同一把尺**）；
+#   ② 排序按**收官价值**（打死它之后对面还剩几个 ⇒ 与 ⑩终局项同一组数：1→0 = 900 > 2→1 = 90 > 3→2 = 10）
+#      ⇒ "对面只剩 1 个"永远排第一（这就是用户那句"首要需求"）。
+# ⚠️ 站位口径沿用既有近似：替补"够得到"= `approach_dist(落点, 目标) ≤ 出生移动 + 射程`（先走再打）。
+#   更严的"站定即能开火"（`_cell_in_range()`）只有撤人换替补那条路（`Battle._finish_kill_hero_pick()`）用。
+
+## 造一个"站在 `cell` 的替补"模拟单位（**不插进 `sim`**：伤害那把尺子只读它自己的属性与 `sim.units`）。
+## 属性来源与 `_sim_spawn_sub()` **逐项相同**（含 `spawn_move` / `spawn_attack_range` 的出生期加成与
+## `_sim_apply_hero_fixups()`）⇒ "探针算出来的这一击"与"真上场之后那一击"同源。
+func _sub_probe_unit(hid: String, cell: Vector2i) -> SimUnit:
+	var def = DataRegistry.get_hero(hid)
+	if def == null:
+		return null
+	var nu := SimUnit.new()
+	nu.fn = DataRegistry.Faction.ENEMY
+	nu.hero_id = hid
+	nu.cell = cell
+	nu.max_hp = def.max_hp
+	nu.hp = def.max_hp
+	nu.hp0 = nu.hp
+	nu.atk = def.atk
+	nu.eatk = def.atk
+	nu.move = DataRegistry.spawn_move(def)
+	nu.emove = nu.move
+	nu.atk_range = DataRegistry.spawn_attack_range(def)
+	nu.atk_type = def.attack_type
+	nu.skills = def.skills.duplicate()
+	nu.name = hid
+	_sim_apply_hero_fixups(nu)
+	nu.sim_index = -1
+	return nu
+
+## 【2026-09-29 新增】替补 `hero_id` 从合法落点打 `t` 能打出的**最大真实一击**
+##   （先"站定即能开火"，再"几何距离 ≤ 出生移动力 的空格开火" —— 与 `Battle._finish_kill_hero_pick()`
+##   同一套判据，这里只问"这一刀多重"，用来回答"这一刀能不能收掉它"）。
+func _finish_reach_hit(sim: Sim, hero_id: String, t: SimUnit, cells: Array, mv: int, ar: int) -> float:
+	if t == null or not t.alive:
+		return 0.0
+	var sub := _sub_probe_unit(hero_id, Vector2i(-99, -99))
+	if sub == null:
+		return 0.0
+	var best := 0.0
+	for c in cells:
+		var cell: Vector2i = c
+		if approach_dist(sim, cell, t.cell) > mv + ar:
+			continue
+		sub.cell = cell
+		if _cell_in_range(sim, sub, cell, t.cell):
+			best = maxf(best, _adj_foe_hit_on(sim, t, sub))
+		for f_c in grid.all_cells():
+			var f: Vector2i = f_c
+			if f == cell or grid.distance(cell, f) > mv:
+				continue
+			if sim.occ.has(f):
+				continue                 # 站不了人的格
+			sub.cell = f
+			if _cell_in_range(sim, sub, f, t.cell):
+				best = maxf(best, _adj_foe_hit_on(sim, t, sub))
+	return best
+
+## 【2026-09-29 新增·用户「你随便替补两个人，8 血不是随便杀吗」】选"最该被这一刀收掉"的敌人：
+##   ① 优先**血最少**的（最便宜的一刀）；② 血并列时优先"对面就剩它一个"的那个（收官价值高）；
+##   ③ 一个都不在射程/都收不掉 ⇒ 返回 null（调用方退回老口径）。
+func _finish_target_choice(sim: Sim, hero_id: String, cells: Array, mv: int, ar: int) -> SimUnit:
+	var best: SimUnit = null
+	var alive_n := 0
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t != null and t.alive and t.fn != DataRegistry.Faction.ENEMY:
+			alive_n += 1
+	for i in sim.units.size():
+		var t2: SimUnit = sim.units[i]
+		if t2 == null or not t2.alive or t2.fn == DataRegistry.Faction.ENEMY or t2.shield:
+			continue
+		if _finish_reach_hit(sim, hero_id, t2, cells, mv, ar) < float(int(t2.hp)):
+			continue                     # 这一刀收不掉它 ⇒ 不算候选目标
+		if best == null or int(t2.hp) < int(best.hp):
+			best = t2
+	return best
+
+
+## 返回 `[Σ伤害, 最大的那一笔]`（第二项给 [圣盾] 扣减用：盾整次免伤、只挡一笔）。
+func _team_hit_pool(sim: Sim, t: SimUnit) -> Array:
+	var sum := 0.0
+	var top := 0.0
+	if t == null or not t.alive:
+		return [sum, top]
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if approach_dist(sim, u.cell, t.cell) > u.emove + u.atk_range:
+			continue                       # 先走再打也够不到 ⇒ 这一手不参与合力
+		var one := _adj_foe_hit_on(sim, t, u)
+		if one <= 0.0:
+			continue
+		sum += one
+		top = maxf(top, one)
+	return [sum, top]
+
+## 替补「合力斩杀」总扫描：候选英雄 × 合法落点 × 每个敌方目标过一遍，
+## 返回**最值得的那一个斩杀计划**（`{}` = 没人能参与斩杀）：
+##   { "hero", "cell", "foe_idx", "need", "team", "sub", "total", "solo", "foe_alive", "rank" }
+## 排序键 = `收官价值 × 1000 + (单独能收 ? 900 : 0) + 余量`（余量 = 可用 − 需要、封顶 900
+##   ⇒ 绝不会盖过"打的是不是最后一个"与"能不能单独收"这两件更硬的事）。
+func sub_kill_scan(sim: Sim, cands: Array, cells: Array) -> Dictionary:
+	if cands.is_empty() or cells.is_empty():
+		return {}
+	var foe_alive := 0
+	for i in sim.units.size():
+		var c0: SimUnit = sim.units[i]
+		if c0 != null and c0.alive and c0.fn != DataRegistry.Faction.ENEMY:
+			foe_alive += 1
+	if foe_alive == 0:
+		return {}
+	var best := {}
+	var best_rank := -INF
+	for ti in sim.units.size():
+		var t: SimUnit = sim.units[ti]
+		if t == null or not t.alive or t.fn == DataRegistry.Faction.ENEMY:
+			continue
+		var need := float(t.hp)
+		if need <= 0.0:
+			continue
+		var pool := _team_hit_pool(sim, t)
+		var team := float(pool[0])
+		var top := float(pool[1])
+		var val := _kill_value(foe_alive)
+		for hid_v in cands:
+			var hid := String(hid_v)
+			var def = DataRegistry.get_hero(hid)
+			if def == null:
+				continue
+			var reach: int = DataRegistry.spawn_move(def) + DataRegistry.spawn_attack_range(def)
+			for c_v in cells:
+				var c: Vector2i = c_v
+				if approach_dist(sim, c, t.cell) > reach:
+					continue
+				var sub_u := _sub_probe_unit(hid, c)
+				if sub_u == null:
+					continue
+				var sh := _adj_foe_hit_on(sim, t, sub_u)
+				var total := team + sh
+				if t.shield:
+					total -= maxf(sh, top)
+				if total < need:
+					continue               # 合起来也收不掉 ⇒ 不参与
+				var solo: bool = sh >= need and not t.shield
+				var rank := val * 1000.0 + (900.0 if solo else 0.0) + minf(total - need, 900.0)
+				if rank > best_rank:
+					best_rank = rank
+					best = {
+						"hero": hid, "cell": c, "foe_idx": ti, "need": need,
+						"team": team, "sub": sh, "total": total, "solo": solo,
+						"foe_alive": foe_alive, "rank": rank,
+					}
+	return best
+
+## 打死"对面还剩 `foe_alive` 个"里的这一个值多少 —— 与 ⑩终局项同一组数（1000/100/10/0 按存活数），
+## 取**边际值**：1→0 = 900、2→1 = 90、3→2 = 10。
+func _kill_value(foe_alive: int) -> float:
+	const CURVE := [1000.0, 100.0, 10.0, 0.0]
+	var n := clampi(foe_alive, 1, 3)
+	return float(CURVE[n - 1]) - float(CURVE[n])
 
 # 超时收尾：对每个候选状态，让尚未行动的敌人依次各自贪心选一步内的最优动作。
 # 这样即使没搜完也返回"每个敌人都行动过"的完整计划，不会出现有人站着不动。
@@ -3280,7 +3530,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var tg2: SimUnit = pre.units[at2]
 				if tg2 == null or not tg2.alive:
 					continue
-				var dm2 := _hit_after_target_mods(pre, tg2, tg2.cell, float(pu.eatk))
+				var dm2 := _sim_hit_est(pre, pu, tg2)
 				if dm2 > alt_dmg:
 					alt_dmg = dm2
 					alt_combo = aa2
@@ -3336,7 +3586,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var tg3: SimUnit = pre.units[at3]
 				if tg3 == null or not tg3.alive:
 					continue
-				var dm3 := _hit_after_target_mods(pre, tg3, tg3.cell, float(pu.eatk))
+				var dm3 := _sim_hit_est(pre, pu, tg3)
 				alt_alts.append({ "combo": aa3, "t": at3, "dmg": dm3, "name": tg3.name })
 			# 每个目标只留"最疼的那一手"
 			var best_by_t := {}
@@ -3523,6 +3773,17 @@ func _plain_incoming(end_sim: Sim, idx: int, cell: Vector2i) -> String:
 		line += "　⚠️ 被位移后：" + "；".join(bits)
 	return line
 
+## 【2026-09-29 晚·用户「赏金猎人打复仇者的伤害计算怎么有问题，3伤」】**日志/诊断里算"这一刀多少伤"的唯一入口**。
+##   攻击者侧 = `u.eatk`（模拟里已含"远程被贴身 ⇒ 基础攻击压 1"）× `_sim_mult()`（倍率技 + 沉默/贴身两道门槛），
+##   再过受击侧修正（重伤 +1 / 坚固 −1 / 塔盾代扛 / [圣盾]）。
+##   ⚠️ 原来这些地方直接写 `_hit_after_target_mods(..., u.eatk)` ⇒ **倍率技整个丢了**：赏金猎人打带[嘲讽]的目标
+##   写成 3、真实 6（2026-09-24 `DamageModel` 那次收编修的是"结算"，**没修到这些打印/诊断路径**）；
+##   而真正结算那一刀用的是 `u.eatk * _sim_mult(...)`（见 `_apply`）⇒ **决策是对的，只有日志在骗人**。
+func _sim_hit_est(sim: Sim, u: SimUnit, t: SimUnit) -> float:
+	if u == null or t == null:
+		return 0.0
+	return _hit_after_target_mods(sim, t, t.cell, float(int(u.eatk) * _sim_mult(sim, u, t)))
+
 ## 把一步动作写成一句人话（不含任何分数）。
 func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> String:
 	var mv: Variant = a.get("move")
@@ -3531,7 +3792,7 @@ func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> St
 		return "敲掉障碍 %s（清路）" % str(a.get("atk_obs", "?"))
 	if atk >= 0 and atk < replay.units.size():
 		var t: SimUnit = replay.units[atk]
-		var dmg := _hit_after_target_mods(sim, t, t.cell, float(ur.eatk))
+		var dmg := _sim_hit_est(sim, ur, t)
 		var extra := ""
 		if float(t.hp) <= dmg:
 			extra = "，这一击能击杀"
@@ -3686,7 +3947,7 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 		var tg: SimUnit = sim.units[at]
 		if tg == null or not tg.alive:
 			continue
-		var dm := _hit_after_target_mods(sim, tg, tg.cell, float(iu.eatk))
+		var dm := _sim_hit_est(sim, iu, tg)
 		if dm > best_dmg:
 			best_dmg = dm
 			best_combo = aa
@@ -3838,10 +4099,11 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 		if atk >= 0 and atk < replay.units.size():
 			var t: SimUnit = replay.units[atk]
 			line += " → 攻击 %s" % t.name
-			if t.hp <= ur.eatk:
-				line += "（此击可击杀 hp%d≤攻%d）" % [t.hp, ur.eatk]
+			var hit := int(_sim_hit_est(replay, ur, t))
+			if t.hp <= hit:
+				line += "（此击可击杀 hp%d≤这一刀%d）" % [t.hp, hit]
 			else:
-				line += "（造成%d伤，剩hp%d）" % [ur.eatk, maxi(t.hp - ur.eatk, 0)]
+				line += "（造成%d伤，剩hp%d）" % [hit, maxi(t.hp - hit, 0)]
 		else:
 			# 【2026-09-20 新增·只为诊断】没攻击时把"原地够得到几个"也打出来（与落点那项互补）：
 			# 两项都是 0 ⇒ 本回合**根本够不到人**（只能走位）；>0 ⇒ **能打却没打**（那才需要查账）。
@@ -3886,7 +4148,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 			var tg: SimUnit = sim.units[at]
 			if tg == null or not tg.alive:
 				continue
-			var dm := _hit_after_target_mods(sim, tg, tg.cell, float(iu.eatk))
+			var dm := _sim_hit_est(sim, iu, tg)
 			if dm > best_dmg:
 				best_dmg = dm
 				best_combo = aa
@@ -3971,6 +4233,7 @@ func _term_defs() -> Array:
 		["㉘堡垒挡刀", "+TANK_SCREEN_W(%.2f) × Σ_我方单位（含**装甲堡垒自己那一格**）[ 关掉嘲讽门的挨打合计 − 实际挨打合计 ] × 血量池折算，按对手普攻总输出封顶（= **装甲堡垒站在这一格替全队挡下了多少刀**；站到「谁也没挡住」的位置 = 0 分）。⚠️ 只认 hero_48（塔盾替队友挨的那点血已进 ③血量账，再加是重复计价）· 只在末态结算 · 与 ㉕ 取值范围不重叠（两个键别同时开）" % w_tank_screen],
 		["㉙buff被抢", "−BUFF_DENY_W(%.2f) × Σ_{末态仍留着的道具格}[ 类型价 × (我方**本回合**够得到过它 ? 1 : 0) × (对面**下回合**够得到它 ? 1 : 0) ]（两侧都用「路网步数 ≤ 移动力」这把尺；类型价取**对面吃掉能得的那一份** ⇒ 它已带盾的盾道具算 0、回血道具在 `HEAL_CREDIT_W>0` 时按面值 1.2）。补的是 ⑧ 的盲区：⑧ 只在踩上去那一刻付钱、且 AI 看不到「玩家下回合会来吃」这件事 ⇒ 现在「要么现在吃掉、要么别停在它旁边」。只在末态结算" % w_buff_deny],
 		["㉖暴露总量", "−EXPOSURE_TOTAL_W(%.2f) × Σ_{我方**脆皮输出**} 挨打合计（脆皮 = 面板血上限 ≤ EXPOSURE_HP_MAX(%.0f)；有输出 = `_output_potential()` ≥ EXPOSURE_OUT_MIN(%.0f) ⇒ 后勤/纯辅助/坦克不进。⑦ 是 **max 型 + 按核心系数归一** ⇒ 13 血挨 10 伤只值 0.82 分；本项按**点数**计。只在末态结算，与 ⑦ 共用一次 `_incoming_incs()`）" % [w_exposure_total, w_exposure_hp_max, EXPOSURE_OUT_MIN]],
+		["㉛AoE形状", "−AOE_RIDER_TOTAL_W(%.2f) × Σ_{我方**㉖ 管不到**的单位（坦/半肉/后勤/无输出）} 它在当前格因对手 AoE **形状**会额外挨的血（三族见 `_aoe_riders_on()`：白游侠散射 / 长剑剑气 / 红帽自爆）。⚠️ 与 ㉖ **不重复计**（脆皮输出那部分由 ㉖ 按全部挨打合计罚）；**只管形状、不管普通挨打** ⇒ 不会变成「人人各自躲」。只在末态结算" % w_aoe_rider_total],
 		["红帽·血线", "−REDCAP_HP_FLOOR_W(%.2f) × max(0, 廉价解真实单击合计 + 1 − 红帽末态血)（廉价解 = 够得到她的 `<远程>`（打死她不吃自爆）· 血 ≤ REDCAP_CHEAP_HP(%.0f)（换掉不亏）· 能挂沉默的人；**不封顶**；**只在末态结算**）" % [w_redcap_hp_floor, w_redcap_cheap_hp]],
 		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 3 点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
 		["红帽·沉默风险", "−REDCAP_SILENCE_GUARD_W(%.2f) × (1 + **全额**挨打合计)（触发 = 能挂沉默的人**够得到她末态格**（按同一把尺逐个问，**不经过开火位截断**）**或**她当前被沉默；被沉默期间阵亡 ⇒ **不自爆**，`heroes/hero_40_红帽.gd:8`）" % w_redcap_silence_guard],
@@ -4061,6 +4324,9 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	# 【2026-09-22 新增·默认关】㉒隔断（与 `_evaluate()` 末尾那一行同口径，否则 Σ 自校验会漂）
 	if end_of_turn and w_split != 0.0:
 		d["㉒隔断"] = w_split * _split_parts(sim)
+	# 【2026-09-29 新增·默认关】㉛ AoE 形状总账（与 `_evaluate()` 末尾那一行同口径 ⇒ Σ 自校验不漂）
+	if end_of_turn and w_aoe_rider_total != 0.0:
+		d["㉛AoE形状"] = _aoe_rider_total(sim)
 	# 【2026-09-21 新增·默认关】B 档英雄特化三个动作项（⑰沉默计价 / ⑱荆棘封锁 / ⑲麻痹零攻）也要逐项列出来，
 	# 否则它们会落在「其它(未列)」里看不懂。口径与 `_evaluate()` 里那一段**逐行对应**（同一条 if、同一个公式）。
 	if w_silence != 0.0 or _any_hero_key(["SILENCE_VALUE_W"]):
@@ -5021,13 +5287,22 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 		var tidx := int(a["atk"])
 		var t: SimUnit = sim.units[tidx]
 		if t.alive:
+			# 【2026-09-30·用户口径·与真实侧同步】反击判定的距离要用"**命中那一刻**"的落点，
+			#   不是"位移之后"的落点。真实侧见 `src/Battle.gd::_apply_attack` 的 `atk_cell_at_hit`。
+			#   病灶：长角 `on_attack` 会先把目标撞开 1 格，反击判定排在它之后 ⇒ 用新位置算距离，
+			#   规则里"距离>1 必须双方都是远程"就把被撞飞的远程单位的反击资格掐掉了。
+			#   影响面只有"长角把贴身目标撞开 1 格"（超新星推的是旁边的别人、暗域换位/血锁拉人后仍贴身）。
+			var u_cell_at_hit := u.cell
+			var t_cell_at_hit := t.cell
 			# 【RL 修正】古拉博士(hero_14)吸血要按**目标本次攻击前**的 HP 判定，
 			# 真实规则见 src/Battle.gd `_attack_hp_before = target.hp`（结算伤害**之前**记录，
 			# 见 `_apply_attack` 3322 行）。这里在扣血前先存一份。
 			var t_hp_before: int = t.hp
 			# 长角：自己结算基础伤害——击退则 1 倍、不能击退则 2 倍（与真实 handles_base_damage 一致）
 			if u.hero_id == "hero_32" and not u.silenced:
-				_sim_do_longhorn(sim, u, t)
+				# 【2026-09-30·用户口径】把"命中那一刻"的落点传进去 —— 反击是在这个函数**内部**调的
+				#   （本分支随后就 return），外面那处 `_sim_counter_check` 走不到长角这条路径。
+				_sim_do_longhorn(sim, u, t, u_cell_at_hit, t_cell_at_hit)
 				_sim_consume_atk_item(u)   # 攻击结算完成：一次性攻击道具消耗（真实 _finish_attack）
 				u.attacked = true
 				_sim_flush_pending(sim)
@@ -5197,7 +5472,8 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					# 宿魂：令目标附体（负墟免疫则不绑定、攻+1）。后附覆盖先附（与真实一致）
 					if not _sim_neg_immunity(sim, t):
 						t.possessed_by = u.sim_index
-			_sim_counter_check(sim, u, t)
+			# 【2026-09-30·用户口径】传"命中那一刻"的落点（见上面 `u_cell_at_hit` 那段）
+			_sim_counter_check(sim, u, t, u_cell_at_hit, t_cell_at_hit)
 			# 【RL 修正】太阳斩(hero_29)：每次攻击后攻击力-1（真实 Battle 在结算完命中效果、
 			# 判定反击**之前**调 `_hero(attacker).on_after_attack()`，见 src/Battle.gd `_apply_attack`）。
 			# 模拟原来把 eatk 当静态值，于是同一回合"连打两下"时第二下仍按加成后的攻击算。
@@ -6160,12 +6436,17 @@ func _sim_possess_mirror(sim: Sim, caster: SimUnit, dmg: int) -> void:
 
 # 长角：自己结算基础伤害——先把目标沿"攻击者->目标"直线方向击退 1 格（能退则 1 倍伤害），
 # 不能击退（界外/被占/被挡）则 2 倍伤害；击退后若仍贴身则目标可反击（与真实一致）。
-func _sim_do_longhorn(sim: Sim, u: SimUnit, t: SimUnit) -> void:
+## 【2026-09-30·用户口径】`u_hit` / `t_hit` = **命中那一刻**双方站的格子（可选，默认"用当前位置"）：
+##   长角这一招**自带击退**，而反击排在击退之后 ⇒ 判"有没有资格反击"必须按命中那一刻的距离，
+##   否则"被撞飞的远程单位"会被规则里"距离>1 必须双方都是远程"掐掉反击资格。
+##   ⚠️ 长角这条路径在 `_apply` 里**提前 return**（反击只在本函数内部调一次）⇒ 参数必须从这里传进来。
+func _sim_do_longhorn(sim: Sim, u: SimUnit, t: SimUnit,
+		u_hit: Vector2i = Vector2i(-99, -99), t_hit: Vector2i = Vector2i(-99, -99)) -> void:
 	var hd := u.eatk * _sim_mult(sim, u, t)
 	var kb := _sim_knockback_away(sim, t, u.cell)
 	# 真实 heroes/hero_32_长角.gd:17-18：撞飞/重击都是 `take_damage(..., is_attack=true)`
 	_sim_hit_no_counter(sim, t, hd * (1 if kb else 2), true)
-	_sim_counter_check(sim, u, t)
+	_sim_counter_check(sim, u, t, u_hit, t_hit)
 
 # 把 target 沿"from_cell -> target"正后方推 1 格；成功返回 true（界外/被单位/障碍/墓碑挡则失败）
 func _sim_knockback_away(sim: Sim, target: SimUnit, from_cell: Vector2i) -> bool:
@@ -6532,7 +6813,13 @@ func _pull_reaper_ready(sim: Sim, u: SimUnit) -> bool:
 # 反击判定（与真实规则一致）：普通单位每回合一次；复仇者无限反击；眩晕/已死/**攻击力为 0** 不反。
 # 距离=1（近战互搏 / 贴身）：照常反击。
 # 距离>1（远程对射）：仅当双方都是远程、且被攻击方没有被敌人贴身时，才全额反击。
-func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
+## 【2026-09-30·用户口径】`u_hit` / `t_hit` = **命中那一刻**双方站的格子（可选）：
+##   反击"有没有资格"必须按这一对算距离 —— 长角的 `on_attack` 会先把目标撞开 1 格，
+##   而反击结算排在它之后；按新位置算会把"被打中时明明贴身"的远程单位判成"距离 2 且攻击者是近战 ⇒ 不能反击"。
+##   两个参数默认 `(-99,-99)` = 没传 ⇒ 退回"当前位置"，与改动前逐位一致。
+##   ⚠️ 下面"够不够得到攻击者"（`dist_c > t.atk_range`）仍按**当前位置**算：那是"这一枪打不打得到"。
+func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit,
+		u_hit: Vector2i = Vector2i(-99, -99), t_hit: Vector2i = Vector2i(-99, -99)) -> void:
 	# 【RL 修正】真实 `_play_counter` 开头会先 `_sync_ranged_adjacent()`（注释就写着
 	# "反击前先同步远程被贴状态"），因为反击伤害用的是 `counterer.effective_atk()`——
 	# 刚被打的那一下若把人推/拉/换到贴身位置，这里必须先刷新标记再算反击伤害。
@@ -6541,7 +6828,9 @@ func _sim_counter_check(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 		return
 	if t.eatk <= 0:
 		return   # 攻击力为 0（麻痹等）打不出反击：与真实规则一致（也不占用"每回合一次"名额）
-	var dist_c := grid.distance(u.cell, t.cell)
+	# 【2026-09-30·用户口径】"有没有资格反击"用**命中那一刻**的距离（调用方传；没传就用当前位置）
+	var dist_c := grid.distance(u_hit if u_hit.x != -99 else u.cell,
+		t_hit if t_hit.x != -99 else t.cell)
 	if dist_c > 1:
 		# 远程对射：攻击方与反击方都必须是远程；被攻击方被贴身则反击不了
 		if u.atk_type != DataRegistry.AttackType.RANGED:
@@ -7408,6 +7697,10 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   与 ⑳㉑ **同一层**：只在"全队都行动完"的末态结算（纯站位量，中途结算会来回跳）。
 	if end_of_turn and w_split != 0.0:
 		score += w_split * _split_parts(sim)
+	# 【2026-09-29 新增·默认关】㉛ AoE 形状总账（见 `const AOE_RIDER_TOTAL_W` 处说明）
+	#   与 ⑳㉑㉒㉓㉖ **同一层**：只在末态结算（纯站位量，中途结算会来回跳）。
+	if end_of_turn and w_aoe_rider_total != 0.0:
+		score += _aoe_rider_total(sim)
 	# 【2026-09-26 新增·默认全 0】红帽（hero_40）四条用法 + 止损（见 `const REDCAP_HP_FLOOR_W` 处说明）：
 	#   ①保命血线 ②击杀回合防替补 ③有沉默就保护 ④没有廉价解时反过来蓄爆 ⑤保不住时队友别贴着她。
 	#   与上面 ⑳㉑㉒㉓㉕ **同一层**（只在末态结算，中途恒 0）；全 0 ⇒ 门一次比较就跳过。
@@ -7669,12 +7962,33 @@ func _exposure_total(sim: Sim, incs: Array) -> float:
 		var inc: float = float(incs[i]) if i < incs.size() else 0.0
 		if inc <= 0.0:
 			continue                      # 挨不到打 ⇒ 没有暴露
-		if float(u.max_hp) > w_exposure_hp_max:
-			continue                      # 血厚的不进（坦克/战士照旧由 ⑦ 管）
-		if _output_potential(u.hero_id) < EXPOSURE_OUT_MIN:
-			continue                      # 没输出的不进（后勤/纯辅助）
-		total += inc
+		if _exposure_covered(u):
+			total += inc
 	return -w_exposure_total * total
+
+## ㉖ 的**门票**（两道门，抽出来给 ㉛ 共用，避免两处口径漂）：
+##   面板血上限 ≤ `EXPOSURE_HP_MAX`（脆皮）**且** 输出潜力 ≥ `EXPOSURE_OUT_MIN`（有输出）。
+func _exposure_covered(u: SimUnit) -> bool:
+	if float(u.max_hp) > w_exposure_hp_max:
+		return false                      # 血厚的不进（坦克/战士照旧由 ⑦ 管）
+	if _output_potential(u.hero_id) < EXPOSURE_OUT_MIN:
+		return false                      # 没输出的不进（后勤/纯辅助）
+	return true
+
+## ㉛ AoE 形状总账（见 `const AOE_RIDER_TOTAL_W` 处说明）：只给 **㉖ 门外**的单位补账 ⇒ 不重复计价。
+func _aoe_rider_total(sim: Sim) -> float:
+	if w_aoe_rider_total == 0.0:
+		return 0.0
+	var total := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if _exposure_covered(u):
+			continue                      # ㉖ 已经按"全部挨打合计"罚过它（含这三笔）⇒ 这里不再计
+		for rdr in _aoe_riders_on(sim, u, u.cell):
+			total += float(rdr[1])
+	return -w_aoe_rider_total * total
 func _core_raw(sim: Sim, u: SimUnit) -> float:
 	var base := _unit_value(sim, u)
 	if w_risk_core_output_w <= 0.0:
@@ -9001,8 +9315,33 @@ func _aoe_on_ray(from: Vector2i, dir: Vector2i, cell: Vector2i) -> bool:
 		cur += dir
 	return false
 
+## 【2026-09-29 晚·用户「暗域在 1,6 怎么打到 3,3 的长剑？」】**"暗域会从哪一格打过来"** = 换位那一下
+##   它自己站的格。真实时序：单位先**走到开火格**、再结算伤害，`on_attack` 里的
+##   `_swap_units(attacker, target)` 换的是**当时这两个单位的格子** ⇒ 目标落到的是**暗域的开火格**
+##   （贴着目标那一圈），**不是它回合开始时站的那一格**。
+##   ⚠️ 原来这里直接用 `a.cell`（起点格）⇒ 只有"原地开火"时才对；一旦暗域是**走过去**打的，
+##   日志就会写出"（3,3）的长剑被换到（1,6）"这种隔了 5 格的鬼话（用户当场抓出来）。
+##   取"离起点最近的那个能开火的格"（= 少走一步的走法），找不到回 (-99,-99)。
+func _threat_fire_cell(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> Vector2i:
+	if _threat_fire_ok_at(sim, a, a.cell, target_cell, threatened):
+		return a.cell                       # 原地就够得到 ⇒ 不挪
+	var budget := _threat_emove_next(sim, a)
+	if budget <= 0:
+		return Vector2i(-99, -99)
+	var best := Vector2i(-99, -99)
+	var best_d := 1 << 30
+	for c in _sim_walk_cells(sim, a.cell, budget, a.skills.has(DataRegistry.Skill.INFILTRATE)):
+		if not _threat_fire_ok_at(sim, a, c, target_cell, threatened):
+			continue
+		var d := grid.distance(a.cell, c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
 ## 【2026-09-26·用户要求】**位移落点重算**：对手四条位移的**真规则**（逐条照抄 `heroes/*.gd` 与 `src/Battle.gd`）——
-##   ① **暗域 hero_27** `on_attack` → `Battle._swap_units()` ⇒ 它打到我 ⇒ **我落到它原来站的那一格**（换位）。
+##   ① **暗域 hero_27** `on_attack` → `Battle._swap_units()` ⇒ 它打到我 ⇒ **我落到它开火那一格**
+##      （⚠️ 2026-09-29 修：原来写成"落到它原来站的那一格" ⇒ 它走过去打时会算出隔好几格的落点，见 `_threat_fire_cell()`）。
 ##   ② **血锁 hero_41** → `Battle._pull_to()` ⇒ 把我**拉到它面前一格**（它自己的邻格里"离我最近"的那个空格）。
 ##   ③ **长角 hero_32** → `_knockback(target, unit.cell)` ⇒ 把我沿"它→我"方向**再推一格**（出界/被占/障碍/墓碑 ⇒ 推不动 ⇒ 改 2 倍伤害、不位移）。
 ##   ④ **超新星 hero_21** → 它打**我旁边那个队友** ⇒ 我（作为"目标相邻的敌人"）被 `_knockback(我, 队友格)` **推离那个队友一格**。
@@ -9015,9 +9354,11 @@ func _displace_landing_cells(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		if a == null or not a.alive or a.fn == t.fn or a.silenced or a.stunned:
 			continue
 		match a.hero_id:
-			"hero_27":                                   # 暗域：换位
+			"hero_27":                                   # 暗域：换位（落点 = 它**开火那一格**，不是起点格）
 				if _threat_can_hit(sim, a, cell, t):
-					_add_landing(out, sim, cell, a.cell, a)
+					var fc27 := _threat_fire_cell(sim, a, cell, t)
+					if fc27.x != -99:
+						_add_landing(out, sim, cell, fc27, a)
 			"hero_41":                                   # 血锁：拉人
 				if _threat_can_hit(sim, a, cell, t):
 					_add_landing(out, sim, cell, _pull_landing(sim, a.cell, cell), a)
@@ -9040,8 +9381,8 @@ func _displace_landing_cells(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 func _add_landing(out: Array, sim: Sim, from_cell: Vector2i, c: Vector2i, mover: SimUnit = null) -> void:
 	if c.x == -99 or c == from_cell:
 		return
-	# ⚠️ **换位的落点就是位移者自己那一格**（它本来占着）⇒ `mover` 传进来时，那一格的占位是**它自己**、
-	#   不算"站不住"（它会走开）——第一版漏了这条，换位落点会被整条丢掉。
+	# ⚠️ **换位的落点就是位移者开火时站的那一格**（它本来可能占着 ⇒ `mover` 传进来时那一格
+	#   不算"站不住"）；但**它要是走过去打的，落点就不是它起点格**（见 `_threat_fire_cell()` 那段）。
 	var occ_self: bool = mover != null and c == mover.cell
 	if not occ_self and sim.occ.has(c):
 		return

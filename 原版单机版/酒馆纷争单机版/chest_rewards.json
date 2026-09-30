@@ -1,0 +1,563 @@
+{
+ "11000000": [
+  {
+   "typeid": 10800041,
+   "value": 3,
+   "weight": 3
+  },
+  {
+   "typeid": 10800041,
+   "value": 3,
+   "weight": 3
+  },
+  {
+   "typeid": 10800042,
+   "value": 3,
+   "weight": 11
+  }
+ ],
+ "11000001": [
+  {
+   "typeid": 10800041,
+   "value": 3,
+   "weight": 3
+  },
+  {
+   "typeid": 10800027,
+   "value": 1,
+   "weight": 200
+  },
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 50
+  }
+ ],
+ "11100000": [
+  {
+   "typeid": 10800001,
+   "value": 5,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100001": [
+  {
+   "typeid": 10800018,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100002": [
+  {
+   "typeid": 10800013,
+   "value": 5,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100003": [
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100004": [
+  {
+   "typeid": 10800001,
+   "value": 5,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100005": [
+  {
+   "typeid": 10800030,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100006": [
+  {
+   "typeid": 10800027,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800010,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100007": [
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800031,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100008": [
+  {
+   "typeid": 10800027,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 5,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100009": [
+  {
+   "typeid": 10800030,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100010": [
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800010,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100011": [
+  {
+   "typeid": 10800017,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 5,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100012": [
+  {
+   "typeid": 10800010,
+   "value": 3,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100013": [
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100014": [
+  {
+   "typeid": 10800018,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100015": [
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100016": [
+  {
+   "typeid": 10800021,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100017": [
+  {
+   "typeid": 10800030,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100018": [
+  {
+   "typeid": 10800027,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100019": [
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100020": [
+  {
+   "typeid": 10800029,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100021": [
+  {
+   "typeid": 10800020,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100022": [
+  {
+   "typeid": 10800029,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800022,
+   "value": 2,
+   "weight": 1
+  }
+ ],
+ "11100023": [
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100024": [
+  {
+   "typeid": 10800029,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100025": [
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100026": [
+  {
+   "typeid": 10800029,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100027": [
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800008,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100028": [
+  {
+   "typeid": 10800029,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100029": [
+  {
+   "typeid": 10800024,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800013,
+   "value": 2,
+   "weight": 1
+  },
+  {
+   "typeid": 10800002,
+   "value": 1,
+   "weight": 1
+  }
+ ],
+ "11100099": [
+  {
+   "typeid": 10800004,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 1,
+   "weight": 1
+  },
+  {
+   "typeid": 10800004,
+   "value": 1,
+   "weight": 1
+  }
+ ]
+}

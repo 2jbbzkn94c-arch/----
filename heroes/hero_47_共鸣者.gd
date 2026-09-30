@@ -32,6 +32,12 @@ func on_side_turn_start(faction: int) -> void:
 	for u in list:
 		u.echo_set = sums[u]
 		u.refresh_stats()
+		# 【2026-09-30·用户口径「共鸣者要"共鸣"」】取样赋值完（技能真生效）⇒ 每个共鸣者各弹一次「共鸣」。
+		#   颜色/文案走 `HERO_FX["hero_47"]`（原来这条整条没登记 ⇒ 查表拿到白字空文案 = 什么都不弹）。
+		#   ⚠️ 只在这一处弹：`on_become_hero()`（古灵精怪变身成共鸣者）那条路**不弹** ——
+		#   变身本身已经飘了「变身」，再叠一个就是两个字样（风语者那次的老毛病）。
+		var kd := DataRegistry.hero_fx("hero_47")
+		u.burst_fx(kd.color, kd.text)
 
 ## 变身为共鸣者：立即按当前队友取和（插队变身也不耽误当回合）
 func on_become_hero() -> void:

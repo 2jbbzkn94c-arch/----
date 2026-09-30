@@ -1768,8 +1768,17 @@ func _build() -> void:
 		var marks_row := Control.new()
 		marks_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var row_w: float = float(slot_n) * DeathMark.SLOT_D + float(maxi(slot_n - 1, 0)) * MARK_GAP
-		marks_row.custom_minimum_size = Vector2(row_w + MARK_EDGE_PAD, DeathMark.SLOT_D)
-		# 靠外缘摆（与名字框同一侧）：左行贴左、右行贴右 —— 与名字框的 SHRINK 口径一致
+		# 【2026-09-30·修「红方的死亡标记又贴边了、和别的不一样」】这一排的位置账（**三条缺一不可**）：
+		#   ① **行宽 = `row_w + MARK_EDGE_PAD × 2`**：两份 pad 是"最外那枚离名字框外沿的距离"
+		#      （左右各一份的余量都要留出来，行才够宽装下"pad + 三枚 + pad"）；
+		#   ② 行**不铺满**、按侧对齐（左行 `SHRINK_BEGIN` 贴列左、右行 `SHRINK_END` 贴列右）
+		#      ⇒ 整排落在列的对应外缘、靠内一侧不会多出空当；
+		#   ③ 行内**局部 x 两排同式** = `MARK_EDGE_PAD + i * 步距`（2/3 两条合起来自动把 pad 留在外侧）。
+		#   病根（`RL/probe/阵亡标记间距自检.gd` 实测）：原来行宽只多留一份 pad、局部 x 又把 pad 加进去
+		#   ⇒ 行 150 装不下"pad + 三枚"，右行那枚出界被 Godot 夹回 ⇒ 红方整排落在列中间偏左，
+		#   **离屏边 136px，而蓝方 24px** —— 看着就是"红方贴边、间隔和别人不一样"。
+		#   改后实测：蓝 x=24/68/112（离左 24）· 红 x=658/614/570（离右 24）· 两侧节距都是 44 ✔
+		marks_row.custom_minimum_size = Vector2(row_w + MARK_EDGE_PAD * 2.0, DeathMark.SLOT_D)
 		marks_row.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN if is_left \
 			else Control.SIZE_SHRINK_END
 		col_box.add_child(marks_row)
@@ -1779,11 +1788,12 @@ func _build() -> void:
 			_top_stack_blue = marks_row
 		else:
 			_top_stack_red = marks_row
+		var step: float = DeathMark.SLOT_D + MARK_GAP
 		for i in slot_n:
 			var mk := DeathMark.new(side_fn)
-			# pad 在外侧：左行的 pad 在左（标记从 pad 处起排）、右行的 pad 在右（标记从 0 起排）
-			mk.position = Vector2((MARK_EDGE_PAD if is_left else 0.0)
-				+ float(i) * (DeathMark.SLOT_D + MARK_GAP), 0.0)
+			# 局部 x：**两排同式** `MARK_EDGE_PAD + i * 步距` —— "贴哪一边"由行的对齐方式决定
+			#   （左行贴列左 ⇒ pad 落在右侧＝外侧；右行贴列右 ⇒ pad 落在左侧＝外侧）
+			mk.position = Vector2(MARK_EDGE_PAD + float(i) * step, 0.0)
 			marks_row.add_child(mk)
 			(_my_marks if mine else _op_marks).append(mk)
 	# 阵亡演出层：加在状态栏之后 ⇒ 同 z_index 下画在状态栏之上（弹窗类浮层是更晚 join 的，仍在其上）

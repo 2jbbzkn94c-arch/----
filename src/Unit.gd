@@ -57,11 +57,16 @@ var hex_radius := 44.0
 # 【2026-09-29·用户报「英雄背景的颜色没有填满六边形」】阵营**底色那一层**要铺到格子边界：
 #   病灶：`Battle` 建棋子时给的是 `hex_size * 0.9`（棋子本体故意比格子小一圈），而底色与本体共用
 #   同一个多边形 ⇒ 底色边缘离格子边界还差 10%（≈8px），露出的那圈地面看着就是"颜色没填满"。
-#   ⇒ 底色单独放大 `FACTION_HEX_FILL` 倍（0.9 × 1.10 ≈ 0.99 格半径），**本体（人物图）与所有标记
-#     仍按 `hex_radius` 走**（人物大小不变，只有底色铺满）。
-#   ⚠️ 取 1.10 而不是 1/0.9≈1.111：留一线给格子那道黑线，别让半透明的底色盖住格线（盖了会发浑）。
-#      想再收一点就调小（1.0 = 与人物一样大、退回改动前），想更满就调到 1.111。
-const FACTION_HEX_FILL := 1.10
+#   ⇒ 底色单独放大 `FACTION_HEX_FILL` 倍，**本体（人物图）与所有标记仍按 `hex_radius` 走**（人物大小不变）。
+#   ⚠️ 原来取 1.10（≈0.99 格半径，只给格线留 0.69px）：当时底色是半透明的 ⇒ 压住格线也只是"发浑"一点；
+#     底色改**不透明**之后（见 `_faction_color`）就变成**真的把格线吃掉一块**：
+#     黑线宽 2.8px、画在格边上（两侧各 1.4px），而棋子边离格边只有 0.69px ⇒ 每枚棋子各吃掉格线 0.71px。
+#   【2026-09-30·用户报「两个棋子交界处的线和其他线粗细不一样了」】就是上面这条：两枚棋子夹着的那条线
+#     被两边各吃 0.71px ⇒ 只剩 **1.38px**（一边有棋子 2.09px、两边都没棋子 2.80px）—— 三种粗细。
+#   ⇒ 收到 **1.08**：棋子 apothem 66.85px、格边 68.79px ⇒ 让出 **1.94px ≥ 格线半宽 1.4px**
+#     ⇒ 任何情况下棋子都碰不到格线，全场格线一律 2.8px（棋子半径只少了 1.2px，肉眼几乎看不出）。
+#     想再收一点就调小（1.0 = 与人物一样大、退回改动前），想更满就调到 1.111（会重新吃线）。
+const FACTION_HEX_FILL := 1.08
 
 # 【2026-09-28·用户口径】棋子内部的**图层契约**：
 #   · **0 = 背景**：`_hex`（阵营色六边形）与 `_art_hex`（人物图）；
@@ -84,6 +89,8 @@ const ACTION_Z := 14
 
 var _hex: Polygon2D
 var _art_hex: Polygon2D          # 【2026-09-27】人物本体那一层（贴在纯色六边形之上；没出图的英雄为 null 效果）
+var _shadow: Polygon2D = null    # 【2026-09-30】棋子投影（相对 −1：垫在底色之下，**只画轮廓外的月牙带**；`SHADOW_DROP = 0` 时不建）
+var _dome: Polygon2D = null      # 【2026-09-30】穹顶渐变（上亮下暗、无轮廓；见 `DOME_*` 常量）
 var _art: Texture2D = null       # 英雄卡面图（`DataRegistry.hero_card_art`）；null = 还没出图 ⇒ 保持原来的纯色棋子
 var _label: Label
 var _atk_label: Label
@@ -139,6 +146,18 @@ func _build_visual() -> void:
 	_hex.polygon = _hex_points(hex_radius * FACTION_HEX_FILL)
 	_hex.color = _faction_color(faction)
 	add_child(_hex)
+	# 【2026-09-30·用户口径「将英雄的棋子立体感增加」】投影：垫在底色**之下**（相对 −1 ⇒ 绝对 1，
+	#   低于本棋子的 2），整体往下偏一点 ⇒ 看着像"立"在棋盘上（`SHADOW_DROP = 0` 时整块不建）。
+	if SHADOW_DROP > 0.0:
+		_shadow = Polygon2D.new()
+		# 【2026-09-30·用户报「六边形里面还有一个六边形形状的阴影」】⚠️ 投影**不能画成"整体下移的六边形"**：
+		#   压在棋子底下那一块毫无用处（今天底色不透明 ⇒ 被盖住；今天之前底色半透明 ⇒ 会**透出来**，
+		#   它的边就是一条"错位的小六边形"轮廓，正是用户原话「阴影的外框没有贴合实际六边形格子」）。
+		#   ⇒ 只画**棋子轮廓外面那一圈**（月牙带 = 下移后的下半圈 − 原下半圈），棋子底下一点都不画。
+		_shadow.polygon = _shadow_crescent(_hex_points(hex_radius * FACTION_HEX_FILL), SHADOW_DROP * fs)
+		_shadow.color = Color(0.02, 0.01, 0.01, SHADOW_ALPHA)
+		_shadow.z_index = -1
+		add_child(_shadow)
 
 	# 【2026-09-27·用户要求】棋子上也放"人物本体"：在纯色六边形**之上**再贴一层同多边形的贴图
 	#   （`Polygon2D` 自带"按多边形裁剪" ⇒ 放大到顶满也不溢出卡边）。
@@ -157,6 +176,31 @@ func _build_visual() -> void:
 	_art_hex.antialiased = true
 	add_child(_art_hex)
 	_apply_hex_art()
+	# 【2026-09-30·用户口径「将英雄的棋子立体感增加 / 不要有那么明显的一个框」】穹顶渐变：
+	#   贴着六边形（`_hex_points`，与人物图同一形状）铺一层竖向渐变 —— 上亮 → 中间透明 → 下暗，
+	#   **只按上下打光、不勾任何轮廓** ⇒ 整块看着是凸起来的，而不是"描了个框"。
+	#   UV 按六边形的包围盒归一化（Ⅴ 从上到下 0→1），所以渐变正好铺满这一格。
+	# 【2026-09-30·用户口径「把卡面 上面白 下面黑的效果去掉」】⇒ 竖向那两段（`DOME_TOP_A` / `DOME_BOTTOM_A`）
+	#   都写成 **0**，这层现在**只剩左右那点收边暗部**（`DOME_SIDE_A`）。⚠️ 因此这里的开关必须把
+	#   `DOME_SIDE_A` 也算上 —— 否则竖向一归零、整层不建，左右分量会跟着一起消失（用户要的是"只去掉上下"）。
+	#   三个都写 0 = 整层不建（棋子 = 平的阵营底色 + 投影）。
+	if DOME_TOP_A > 0.0 or DOME_BOTTOM_A > 0.0 or DOME_SIDE_A > 0.0:
+		_dome = Polygon2D.new()
+		# ⚠️ 【2026-09-30·用户报「六边形里面还有一个六边形形状的阴影」】多边形必须与底色**完全同形同大**
+		#   （也乘 `FACTION_HEX_FILL`）：原来用的是 `hex_radius` ⇒ 渐变只铺到"人物图那一圈"（底色的 0.909），
+		#   底色外圈没被压暗 ⇒ 底下那圈亮边又读成一个内嵌的小六边形（用户说"像之前背景没占满格子"）。
+		var poly := _hex_points(hex_radius * FACTION_HEX_FILL)
+		_dome.polygon = poly
+		var gt := _make_dome_texture()
+		_dome.uv = _bbox_uv(poly, Vector2(gt.get_width(), gt.get_height()))   # ⚠️ uv 单位 = 贴图像素（见 `_bbox_uv`）
+		_dome.texture = gt
+		_dome.z_index = FRAME_Z   # 压人物图(0)之上、标记(MARKER_Z)之下
+		add_child(_dome)
+	# 【2026-09-30·用户报「为什么六边形里面还有一个六边形形状的阴影」】⚠️ **凡是"按到六边形边界的
+	#   距离"算的明暗，都会在棋子里面画出一个小一号的六边形**（第四/五版那层 `_edge` 就是这么来的：
+	#   它沿着六条边铺一圈渐变 ⇒ 看着像"六边形里套了个六边形"；改成方向权重也只是淡一点，形状还在）。
+	#   ⇒ **整层删掉**，立体感只由"竖向渐变（`_dome`）+ 投影"两样给：
+	#   明暗只随**上下**变化，完全不跟六边形的轮廓走 ⇒ 里面不会再出现第二个六边形。
 
 	# 名字行（**只在"这张卡还没有卡面图"时建**，规则见 `_update_name_label`）
 	_update_name_label()
@@ -227,7 +271,7 @@ func _build_visual() -> void:
 	# 【2026-09-30·用户口径「英雄卡面，负面效果起始点太靠右了」】右端从"贴牌面右缘 `+R`"收到
 	#   `R × (0.866 − DEBUFF_RIGHT_INSET)` ⇒ 整行往左挪、待在平顶六边形的直边段里
 	#   （原来那一行右端到 `+R`，而六边形在那个高度只有 `±0.866R` ⇒ 字压在斜边上）。
-	_debuff_label.size = Vector2(hex_radius * (1.0 + HEX_SIDE_HALF - DEBUFF_RIGHT_INSET), 14.0 * fs)
+	_debuff_label.size = Vector2(hex_radius * (1.0 + HEX_HALF_W_AT_ROW - DEBUFF_RIGHT_INSET), 14.0 * fs)
 	_debuff_label.add_theme_color_override("font_color", Color(0.78, 0.5, 1.0))
 	_debuff_label.visible = false
 	add_child(_debuff_label)
@@ -237,9 +281,101 @@ func _build_visual() -> void:
 	#   附体魂线之下。这里最后一次性设，免得以后往这段里加标记时忘了设 z
 	#   （变身时补建的攻击图标在 `update_atk_icon()` 里自己设）。
 	for c: CanvasItem in get_children():
-		if c == _hex or c == _art_hex:
-			continue
+		if c == _hex or c == _art_hex or c == _shadow or c == _dome:
+			continue   # 背景(0) / 投影(−1) / 穹顶(`FRAME_Z`) 的层级各自已经定好，不套 MARKER_Z
 		c.z_index = MARKER_Z
+
+
+## 【2026-09-30·用户口径「将棋子立体化 / 不要有那么明显的一个框」】造那张"穹顶"贴图：
+##   顶 `DOME_TOP_A` 的暖白 → `DOME_TOP_STOP` 处透明 → `DOME_BOTTOM_STOP` 起转黑 → 底 `DOME_BOTTOM_A` 的纯黑。
+## 【同日第十二版·用户问「现在是只有上下有立体效果吗？左右怎么没有」】⚠️ 上一版只按**上下**打光（贴图是 1 列
+##   的竖向渐变）⇒ 左右两条边毫无明暗，棋子读成"一根管子"。现在补上**左右分量**：
+##   按 |x|（0 = 中线 / 1 = 最左最右）从 `DOME_SIDE_INNER` 起、往两边加到 `DOME_SIDE_A` 的压暗。
+##   ⚠️ 为什么这样补**不会**再画出"内层六边形"（第四/五版那个坑）：那张贴图是"**位置**的二维函数"
+##   —— 竖着的一段 + 横着的一段，等值线是"竖线/横线拼出来的圆角曲线"，**不是六条边**；
+##   而当年那层是按"到六边形边界的距离"算的 ⇒ 等值线必然是六边形。**这条界线不能越**。
+##   ⚠️ 贴图是 96×96 的二维图（旧版 4×96 的横竖都够用？不够：横向只有 4 列，铺开后左右分量会被采样成 4 段），
+##   所以改成逐像素生成 + `static` 缓存（全参数都是常量 ⇒ 整局只算一次，所有棋子共用一张）。
+static var _dome_tex_cache: Texture2D = null
+func _make_dome_texture() -> Texture2D:
+	if _dome_tex_cache != null:
+		return _dome_tex_cache
+	var n := 96
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for iy in n:
+		var v := float(iy) / float(n - 1)                              # 0 = 顶 / 1 = 底
+		var vert := _dome_vertical(v)
+		for ix in n:
+			var nx := absf(float(ix) / float(n - 1) * 2.0 - 1.0)        # 0 = 中线 / 1 = 最左·最右
+			var s := DOME_SIDE_A * smoothstep(DOME_SIDE_INNER, 1.0, nx)
+			var a := vert.a + s * (1.0 - vert.a)                       # 黑色压在竖向明暗之上
+			if a <= 0.0001:
+				img.set_pixel(ix, iy, Color(0, 0, 0, 0))
+				continue
+			# 预乘还原：颜色 = (竖向着色 × 它的 α) / 总 α
+			img.set_pixel(ix, iy, Color(vert.r * vert.a / a, vert.g * vert.a / a, vert.b * vert.a / a, a))
+	_dome_tex_cache = ImageTexture.create_from_image(img)
+	return _dome_tex_cache
+
+## 竖向那一维的明暗（= 旧版 `GradientTexture2D` 的四段折线，逐段线性）。
+func _dome_vertical(v: float) -> Color:
+	if v <= DOME_TOP_STOP:
+		var c := DOME_COLOR
+		c.a = DOME_TOP_A * (1.0 - v / maxf(DOME_TOP_STOP, 0.0001))
+		return c
+	if v < DOME_BOTTOM_STOP:
+		return Color(0, 0, 0, 0)
+	return Color(0, 0, 0, DOME_BOTTOM_A * (v - DOME_BOTTOM_STOP) / maxf(1.0 - DOME_BOTTOM_STOP, 0.0001))
+
+## 把一组点按"自己的包围盒"映射成 UV（Ⅴ：从上 0 → 下 `texture_size.y`）⇒ 贴图正好铺满这个多边形。
+## ⚠️ 【2026-09-30·用户报「英雄卡面被糊了一层白色」】**`Polygon2D.uv` 的单位是"贴图像素"而不是 0~1**
+##   （它的 `texture_scale = 1` 就是"贴图按原像素大小贴上去"）——第一版返回 0~1 的归一化 UV，
+##   而渐变贴图只有 4×96 ⇒ 所有顶点都落在贴图**第 0 个像素**上，整块面取到的都是渐变最顶端的白色
+##   ⇒ 卡面被糊了一层均匀的白。现在按贴图尺寸缩放后再交出去。
+func _bbox_uv(pts: PackedVector2Array, tex_size: Vector2) -> PackedVector2Array:
+	var mn := Vector2(INF, INF)
+	var mx := Vector2(-INF, -INF)
+	for p in pts:
+		mn = Vector2(minf(mn.x, p.x), minf(mn.y, p.y))
+		mx = Vector2(maxf(mx.x, p.x), maxf(mx.y, p.y))
+	var span := Vector2(maxf(mx.x - mn.x, 0.001), maxf(mx.y - mn.y, 0.001))
+	var out := PackedVector2Array()
+	for p in pts:
+		out.append(Vector2((p.x - mn.x) / span.x * maxf(tex_size.x, 1.0),
+				(p.y - mn.y) / span.y * maxf(tex_size.y, 1.0)))
+	return out
+
+
+## 【2026-09-30·用户报「六边形里面还有一个六边形形状的阴影」】算"整体下移 drop 像素后露在**轮廓之外**的那条月牙带"：
+##   把六边形下移 `drop`，与原来的六边形相减 —— 留下的只是**下半圈外面**的一条带（左右两个尖角附近收成 0 宽）。
+##   用途：投影。棋子底色半透明 ⇒ 只要投影有哪怕一点压在棋子下面，都会从底色里透出一条"错位的六边形边"。
+##   ⚠️ 顶点顺序按 `_hex_points()`：0=右尖 · 1=右下 · 2=左下 · 3=左尖 · 4=左上 · 5=右上（平边朝上/下）。
+##   顺序不对（返回空多边形）= 不画投影，不会画出乱七八糟的东西。
+func _shadow_crescent(pts: PackedVector2Array, drop: float) -> PackedVector2Array:
+	if pts.size() != 6 or drop <= 0.0:
+		return PackedVector2Array()
+	# 平边必须朝上/下（1、2 是最低的两点；0、3 是最左/最右点），否则不画
+	if pts[1].y < pts[0].y or pts[2].y < pts[3].y or pts[0].x < pts[3].x:
+		return PackedVector2Array()
+	var off := PackedVector2Array()
+	for p in pts:
+		off.append(p + Vector2(0.0, drop))
+	# 两个"收口"点：内圈的下半圈边界（3→2 / 0→1）与外圈的上半圈边界（4'→3' / 5'→0'）的交点
+	var cl = Geometry2D.segment_intersects_segment(pts[3], pts[2], off[4], off[3])
+	var cr = Geometry2D.segment_intersects_segment(pts[0], pts[1], off[5], off[0])
+	if cl == null or cr == null:
+		return PackedVector2Array()
+	var out := PackedVector2Array()
+	out.append(cl)         # 左收口点
+	out.append(off[3])     # 左尖（下移后）
+	out.append(off[2])     # 左下
+	out.append(off[1])     # 右下
+	out.append(off[0])     # 右尖（下移后）
+	out.append(cr)         # 右收口点
+	out.append(pts[1])     # 右下（原位）
+	out.append(pts[2])     # 左下（原位）
+	return out
+
 
 # 数值图标（攻击/血量）：素材白底已在 DataRegistry 抠透明并记录主体尺寸(w/h/cx/cy)。
 # 保持长宽比缩放到"外接框边长=box"内（宽高谁大以谁定基准），并把主体中心精确放到 center。
@@ -313,26 +449,109 @@ func _hex_points(r: float) -> PackedVector2Array:
 		pts.append(Vector2(cos(a), sin(a)) * r)
 	return pts
 
-# 【2026-09-27·用户要求】棋子六边形的阵营底色**透明度**：
+# 【2026-09-27·用户要求】棋子六边形的阵营底色**浓度**：
 #   原来 alpha = 1.0 ⇒ 六边形把木纹整块盖死；卡面图上线后下面还垫着一层实心色，看着很重。
 #   只改**底色这一层**（`_hex.color`）——卡面贴图（`_art_hex`）不受影响，仍是不透明的原色。
-#   想更透就往下调（0.40 ≈ 很透 / 0.70 ≈ 只压一层淡色），只改这一个常量。
-const FACTION_FILL_ALPHA := 0.55
+#   想更淡就往下调（0.40 ≈ 很淡 / 0.70 ≈ 只压一层淡色），只改这一个常量。
+# 【2026-09-30·用户报「英雄走的时候，棋盘线条的图层在英雄的上面」】⚠️ 根因不是图层顺序（棋子 z=2 > 棋盘 z=1），
+#   而是**底色是半透明的**：英雄卡面图里人像之外大块是透明的（实测透明面积 51%~78%），
+#   透过底色的那 45% 正好把**棋盘的黑格线**露出来 ⇒ 棋子走过格线时那条黑线就"画在英雄身上"。
+#   ⇒ 底色改成**不透明**，但把浓度**预混**进颜色里（`C×mix + 地面平均色×(1−mix)`）⇒ 观感与半透明时一模一样，
+#     而棋盘（格线/地面）再也透不上来。地面平均色 = 地图 `地面贴图_酒馆木地板_美化版.jpg` 实测 (0.461, 0.296, 0.219)。
+#   ⚠️ 以后想让棋子更亮/更艳就调 `FACTION_FILL_MIX` 往 1.0 走（1.0 = 原色、完全实心），
+#     换地图（`Battle.BATTLE_BG_MAPS`）后想再贴合地面就把 `FACTION_FLOOR_TONE` 重新量一次。
+const FACTION_FILL_MIX := 0.72
+const FACTION_FLOOR_TONE := Color(0.461, 0.296, 0.219)
 
 # ---- 牌面状态字那一行的横向摆位（减益紫字右对齐用）----
-# 平顶六边形（`_hex_points`：顶点在 0°/60°…）的"直边段"（|y| ≤ R/2）半宽 = R·cos30° = 0.866R；
-# 牌面那两行状态字（增益金 / 减益紫）落在 y = 0.44R 处，正好还在直边段里。
-const HEX_SIDE_HALF := 0.8660254        # cos30°：直边段的半宽（单位 = hex_radius）
+# ⚠️ 几何口径（`_hex_points`：顶点在 0°/60°…，即**上下平边、左右尖角**的六边形）：
+#   它在高度 y 处的半宽 = `R − |y|/√3`。两行状态字落在 y = 0.44R ⇒ 那一行的半宽 = R × 0.746。
+const HEX_HALF_W_AT_ROW := 0.7459        # 1 − 0.44/√3：状态字那一行（y=0.44R）处六边形的半宽（单位 = hex_radius）
 ## 【2026-09-30·用户口径「英雄卡面，负面效果起始点太靠右了」】**减益紫字那一行右端内缩多少**
-##   （单位 = hex_radius）。原来那一行右对齐到牌面右缘 `+R` —— 而六边形在那个高度只有 `±0.866R`
-##   ⇒ 字压在/探出斜边上、看着"太靠右"。现在右端收到 `R × (0.866 − 这个数)`：整行往左挪、待在牌面里。
-##   想再往中间挪就加大（0.30 / 0.45），写 0 = 回到贴右缘（旧观感）。
-const DEBUFF_RIGHT_INSET := 0.18
+##   （单位 = hex_radius）。原来那一行右对齐到牌面右缘 `+R` —— 而六边形在那个高度只有 `±0.746R`
+##   ⇒ 字压在/探出斜边上、看着"太靠右"。现在右端收到 `R × (0.746 − 这个数)` = `0.686R`：
+##   整行往左挪、待在牌面里。想再往中间挪就加大（0.20 / 0.35），写 0 = 回到贴右缘（旧观感）。
+const DEBUFF_RIGHT_INSET := 0.06
 
+# ---- 【2026-09-30·用户口径「将英雄的棋子立体感增加」】棋子的"厚度"：投影 + 一层**穹顶渐变** ----
+# 画在**人物图之上、标记之下**：
+#   · 投影：垫在阵营底色**之下**（相对 −1），整体往下偏一点 ⇒ 棋子像一块"立"在棋盘上的牌子；
+#     ⚠️ 只画"轮廓之外的那条月牙带"（`_shadow_crescent`）—— 底色是半透明的，投影压在棋子底下会透出来。
+#   · 穹顶渐变：贴着六边形铺一层"上亮 → 中间透明 → 下暗"的竖向渐变 ⇒ 整块看着是**凸起来的**；
+#     ⚠️ 多边形与底色**同形同大**（都乘 `FACTION_HEX_FILL`）—— 小一圈就会露一圈没压暗的亮边。
+# 【同日第二版·「棋子的边缘过渡效果不好，太突兀了，要循序渐进的凸起来」】第一版"一条硬棱 + 一条柔光"
+#   （只有两级过渡）⇒ 突兀；第二版改成 6 条分段渐变的内棱。
+# 【同日第三版·「不要有那么明显的一个框啊」】第二版那一圈渐变内棱**整体删掉** —— 它沿六条边说一圈，
+#   不管多柔和都读成"给棋子描了个框"。换成**没有轮廓线的**穹顶渐变（只按上下打光），
+#   `PieceBevel` 那个嵌类与 `BEVEL_*` 常量一并删除。
+# 【同日第四版·「边缘过渡还是差一点，我要那种从最外层往里缓慢升高的感觉」】在穹顶渐变之上再加一层
+#   **"边棱明暗"贴图**：按"到六边形边界的距离"算明暗，从最外一圈往里 18px 平滑收掉
+#   （贴图用六边形 SDF 逐像素生成，整局按尺寸缓存）。
+# 【同日第五版·「六边形的边上有一个框，这个框和框里面的颜色递进不好」】第四版把**六条边一起压暗**
+#   ⇒ 绕一圈闭合，读成"框"；改成只在朝上/朝下两条边做明暗（上高光 0.16 / 下暗部 0.24）。
+# 【同日第六版·「为什么六边形里面还有一个六边形形状的阴影」】⚠️ 根因：**只要明暗是"到边界距离"的函数，
+#   等值线就一定是小一号的六边形** —— 第五版把它调淡只是让那个影子变浅，形状还在。
+#   ⇒ 那一层**整个删掉**（含贴图生成函数与 `EDGE_*` 常量）。立体感只留"竖向渐变（`_dome`）+ 投影"：
+#   明暗只随**上下**变、完全不跟六边形轮廓走 ⇒ 棋子里面不会再出现第二个六边形。
+# 【同日第七版·「还是有啊…阴影的外框没有贴合实际六边形格子，像之前背景没占满格子」】⚠️ 删掉边棱层之后
+#   里面那个六边形**还剩两处**、都不是"明暗跟着轮廓走"，而是**"画的尺寸/位置与底色对不上"**：
+#   ① 穹顶渐变只铺到 `hex_radius`（人物图那圈 = 底色的 0.909）⇒ 底色外圈没被压暗、底下露出一圈亮边
+#      ——就是用户说的"像背景没占满格子"；改成与底色**同形同大**。
+#   ② 投影是"整体下移的六边形"⇒ 它的边从**底色**里透出来（当时底色还是半透明的 `FACTION_FILL_ALPHA = 0.55`），
+#      看着就是"错位的小六边形"；改成只画轮廓**之外**的月牙带（`_shadow_crescent`），棋子底下一点不画。
+# ⚠️ 全部随 `hex_radius` 缩放（基准 39）。`SHADOW_DROP = 0` 关投影，`DOME_*_A` 都写 0 关穹顶渐变。
+# 【同日第八版·用户口径「能不能让棋子的立体感比棋盘强，把棋盘立体感弄低点」】棋盘那层压到约 4 成
+#   （见 `src/BoardView.gd` 的 `EDGE_*`），棋子这边**顺带各加约 1/4** ⇒ 两者从"棋盘强于棋子"翻过来：
+#   起伏幅度（硬棱峰值，白+黑）棋子 0.48 / 棋盘 0.26 ≈ **1.85 倍**（改前是 0.38 / 0.62 ≈ 0.61 倍，棋盘更强）；
+#   把棋盘那两道淡柔光也算进去是 0.48 / 0.35 ≈ 1.37 倍。想再拉大就动这四个数。
+# 【同日第九版·用户报「英雄走的时候，棋盘线条的图层在英雄的上面」】⚠️ 不是图层顺序（棋子 2 > 棋盘 1），
+#   是**底色半透明**：人像之外大块透明（实测 51%~78% 面积）⇒ 棋盘黑格线从那里透上来，棋子一走动
+#   那条线就像画在英雄身上。⇒ 底色改成**不透明**（并把浓度预混进颜色，见 `_faction_color`）。
+# 【同日第十版·用户问「棋子下面为什么会有阴影伸到下方格子」】⚠️ 因为棋子几乎占满整格、底下没有余量：
+#   格子 apothem 68.79px、棋子底色 apothem 68.10px ⇒ **只差 0.69px**；黑格线宽 2.8px（画在格边上、两侧各
+#   1.4px）⇒ 棋子底边到"格线外沿"总共只有 **2.09px**。原来 `SHADOW_DROP = 3.6`（×fs = 6.60px）⇒ 越过本格
+#   边界 **5.91px**，其中 1.40px 被黑线盖住、**剩下 4.51px 直接铺在下方格子的地面上**（就是用户看到的那条）。
+#   ⇒ 压到 **1.1**（×fs = 2.02px ≤ 2.09px）：整条投影都落进"自己这一格的格线范围内" ⇒ 一格都不越界，
+#     只把贴身那一圈地面/格线压暗一点（接触阴影）。想让投影再露出来只能先给格子留余量
+#     （`FACTION_HEX_FILL` 调小）——但用户要的就是"棋子铺满格子"，所以这里只能贴地。
+#   【2026-09-30 后补】`FACTION_HEX_FILL` 后因"格线粗细不一"收到 **1.08**（见文件头那个常量）⇒
+#     棋子边离格边 0.69 → **1.93px**、到格线外沿 2.09 → **3.33px** ⇒ 投影其实又可以放大了
+#     （上限 `SHADOW_DROP ≤ 3.33 / fs ≈ 1.81`）；现值仍留 1.1（保守、贴地），要更明显的投影再往上加。
+# 【同日第十一版·用户口径「增加棋子的立体感」】⚠️ 投影那边**动不了**（第十版已顶到格线外沿，再大就伸进下方格子）
+#   ⇒ 立体感全压在穹顶渐变上：顶端 0.20 → **0.28**、底端 0.28 → **0.40**，并把覆盖范围拉开
+#   （高光 `TOP_STOP` 0.10 → **0.14**、暗部 `BOTTOM_STOP` 0.56 → **0.50**）；接触阴影 0.32 → **0.40**。
+#   起伏幅度（上亮+下暗）棋子 0.48 → **0.68** / 棋盘 0.26 ⇒ 比值 **1.85 → 2.6 倍**。
+#   ⚠️ 再要更立体就继续动这四个数（0.34 / 0.48 已很"圆"）；**别去动"按到边界距离"的明暗**（会画出内层六边形，见第六版）。
+# 【同日第十三版·用户口径「现在棋子的颜色有点暗」】⚠️ 上一版把"暗"堆在**下半部一大片**上（`BOTTOM_STOP = 0.50`
+#   起就转黑、到底 0.40）＋左右各 0.18 ⇒ 棋子下半截比地面还暗（实测底色亮度 0.43、压完只剩 **0.26**，而地面 0.33）。
+#   ⇒ 改法**不是简单调淡**，而是把明暗"**挪**"：中间那一大片（v 0.20~0.62）保持原色不压，
+#     高光加浓并往上多铺（0.28 → **0.34**、`TOP_STOP` 0.14 → **0.20**），
+#     黑只留在**最下面 1/3**（`BOTTOM_STOP` 0.50 → **0.62**）且减淡（0.40 → **0.26**），两侧 0.18 → **0.08**；
+#     底色本身也提亮（`FACTION_FILL_MIX` 0.55 → **0.72** —— 阵营色更足、不再被地面色拉灰）。
+#   起伏幅度 0.68 → **0.60**（棋盘 0.26 ⇒ 仍 **2.3 倍**），但整枚棋子的**平均亮度上去了**。
+# 【同日第十五版·用户口径「把卡面 上面白 下面黑的效果去掉」】⇒ `DOME_TOP_A` 0.34 → **0.0**、
+#   `DOME_BOTTOM_A` 0.26 → **0.0**：竖向那两段**关掉**（人像上不再有白顶/黑底）。**只关上下** ——
+#   左右那点收边暗部（`DOME_SIDE_A = 0.08`）留着（它是第十二版用户专门要的，量也小）；
+#   要把左右也一起关掉，就把 `DOME_SIDE_A` 也写 0（三个都 0 ⇒ 整层不建，棋子 = 平的阵营底色 + 投影）。
+#   `DOME_TOP_STOP` / `DOME_BOTTOM_STOP` 留着不动：哪天想把上下加回来，改这两个 alpha 就行。
+const DOME_TOP_A := 0.0                 ## 渐变顶端（白）的浓度（0 = 关掉"上面白"）
+const DOME_TOP_STOP := 0.20             ## 白 → 透明 的过渡位置（0 = 顶 / 1 = 底）
+const DOME_BOTTOM_STOP := 0.62          ## 透明 → 黑 的起点
+const DOME_BOTTOM_A := 0.0              ## 渐变底端（黑）的浓度（0 = 关掉"下面黑"）
+const DOME_COLOR := Color(1.0, 0.99, 0.96)   ## 顶端的高光色（微微偏暖；底端固定用纯黑）
+const DOME_SIDE_A := 0.08               ## 【第十二版】左右两侧往里的暗部浓度（0 = 只按上下打光，回到上一版）
+const DOME_SIDE_INNER := 0.55           ## 从多靠边开始起暗：|x| ≤ 这个值不压暗（0 = 中线 / 1 = 最左·最右）
+const SHADOW_DROP := 1.1                ## 投影往下偏多少（像素 × fs；0 = 不画投影）
+const SHADOW_ALPHA := 0.40              ## 投影浓度
+
+## 阵营底色：**不透明**（`FACTION_FILL_MIX` 是"阵营色 vs 地面平均色"的配比，不是 alpha）。
+## ⚠️ 别改回半透明：底下的棋盘（黑格线 / 地面）会从人像的透明区透上来，看着像"格线画在英雄身上"。
 func _faction_color(f: int) -> Color:
-	if f == DataRegistry.Faction.PLAYER:
-		return Color(0.25, 0.55, 0.9, FACTION_FILL_ALPHA)
-	return Color(0.85, 0.32, 0.28, FACTION_FILL_ALPHA)
+	var pure := Color(0.25, 0.55, 0.9) if f == DataRegistry.Faction.PLAYER else Color(0.85, 0.32, 0.28)
+	var m := FACTION_FILL_MIX
+	return Color(pure.r * m + FACTION_FLOOR_TONE.r * (1.0 - m),
+			pure.g * m + FACTION_FLOOR_TONE.g * (1.0 - m),
+			pure.b * m + FACTION_FLOOR_TONE.b * (1.0 - m), 1.0)
 
 # Battle 在造成重击(如嬉皮死神双倍)前调用：本次受击的伤害数字用紫粉放大样式
 func set_big_hit_style() -> void:
@@ -398,9 +617,9 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 	# 伤害数字统一红色、水平居中在卡面中心；**只有重击**(_dmg_style=2，如嬉皮死神双倍)
 	# 靠字号放大区分。反击一律用普通字号——否则 1 点反击也显示成大字，看起来像重击。
 	if _dmg_style == 2:
-		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -52, true)
+		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -52, true, NUMBER_FONT_MUL)
 	else:
-		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -46)
+		_float_text("-%d" % dmg, Color(1.0, 0.18, 0.12), -32, -46, false, NUMBER_FONT_MUL)
 	_dmg_style = 0   # 一次伤害只套用一种样式
 	AudioManager.play("hit")
 	# [附体]镜像：宿魂受到的伤害 >0 时，其被附体目标同受同等伤害（Battle 统一结算）
@@ -682,20 +901,25 @@ func _shake() -> void:
 	t.tween_property(_hex, "position", Vector2.ZERO, 0.12)
 
 # 伤害/治疗飘字（挂在父节点以固定在棋盘坐标，上浮并淡出）
-func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, big := false) -> void:
+# 【2026-09-29·用户要求「将伤害数字放大点」】数值飘字（伤害/治疗）的字号与描边在这里单独乘一个系数
+#   —— 只放大**数字**，"圣盾/被动/免疫负面"这类词条飘字维持原样。嫌大嫌小只改这一个数。
+const NUMBER_FONT_MUL := 1.35
+## 【2026-09-29·用户要求】拖拽撤下时跟随鼠标那枚**虚化影子**的不透明度（1 = 不虚化）。
+const DRAG_GHOST_ALPHA := 0.5
+func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, big := false, size_mul := 1.0) -> void:
 	var parent := get_parent()
 	if parent == null or not is_inside_tree():
 		return
 	var k := hex_radius / 54.0   # 视觉反馈随棋盘放大(基准:旧 hex60 → radius54)
 	var lbl := Label.new()
 	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", maxi(14, int((26.0 if big else 21.0) * k)))
+	lbl.add_theme_font_size_override("font_size", maxi(14, int((26.0 if big else 21.0) * k * size_mul)))
 	lbl.add_theme_color_override("font_color", color)
 	lbl.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k)))
+	lbl.add_theme_constant_override("outline_size", maxi(2, int((5.0 if big else 4.0) * k * (1.0 + (size_mul - 1.0) * 0.6))))
 	lbl.z_index = 120
 	lbl.position = global_position + Vector2(xoff * k, yoff * k)
-	lbl.size = Vector2(64.0 * k, 28.0 * k)
+	lbl.size = Vector2(64.0 * k * size_mul, 28.0 * k * size_mul)   # 盒子一起放大，数字才不会被裁
 	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	parent.add_child(lbl)
 	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。
@@ -709,7 +933,7 @@ func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, b
 
 # 治疗飘字（供 Battle 调用）：被治疗者显示 +血量数值，并冒一圈绿色粒子
 func float_heal(amount: int) -> void:
-	_float_text("+%d" % amount, HEAL_COLOR)
+	_float_text("+%d" % amount, HEAL_COLOR, -32, -46, false, NUMBER_FONT_MUL)   # 与伤害数字同字号
 	heal_fx()
 
 # 治疗主色（与被治疗飘字同色）
@@ -836,6 +1060,23 @@ func flash_passive(with_text := true) -> void:
 		_passive_border.modulate.a = 0.0
 		_passive_border.visible = false)
 
+## 【2026-09-29·用户要求】拖拽撤下时，**场上的棋子留在原地**、跟着鼠标走的是一个**虚化的影子**；
+##   撤下之后再让棋子播一段**消失动画**（不是"啪一下没了"）。
+##   本函数造的就是那份"只有外观"的副本：投影 / 阵营底色 / 人物图 / 穹顶四层，**不带**名字、
+##   数值图标、状态字、选中/行动描边与任何标识（所以看着是"影子"而不是第二枚棋子）。
+##   调用方负责 `add_child()` / 摆位置 / 压 `modulate.a` / 演完 `queue_free()`；
+##   本函数**不改单位自身的任何状态**（位置、z、alive 都不动）。
+func make_visual_copy() -> Node2D:
+	var g := Node2D.new()
+	# ⚠️ 名字**留给调用方起**（`Battle._start_drag_ghost()` = "DragGhost" / `_play_vanish_copy()` = "WithdrawFx"）：
+	#   同名同父的节点会被引擎改名（"@Xxx@N"）⇒ 调试/探针按名字找就会找错人。
+	for n in [_shadow, _hex, _art_hex, _dome]:
+		if n == null or not is_instance_valid(n):
+			continue                 # `_shadow` / `_dome` 是开关项（常量为 0 时不建）⇒ 允许缺
+		var c := (n as Polygon2D).duplicate() as Polygon2D
+		g.add_child(c)
+	return g
+
 func die() -> void:
 	if not alive:
 		return
@@ -868,6 +1109,34 @@ func set_selected(sel: bool) -> void:
 			z_index = 2
 			scale = Vector2.ONE
 	set_highlight_ring(sel)
+
+# 【2026-09-30·用户报「可攻击目标显示没了」】⚠️ 根因：阵营底色改成**不透明**之后（见 `_faction_color`），
+#   棋盘画在**格子上**的"可攻击黄格"被棋子整个盖住（棋子 z=2 > 棋盘 z=1）⇒ 选中英雄后看不出能打谁。
+#   ⇒ 由 `Battle._refresh_target_rings()` 把"被占住的目标格"标到**棋子自己身上**。
+# 【2026-09-30·用户口径「把可攻击目标黄色改为框选」】第一版是往人像上糊一层**黄色薄罩**（`Polygon2D`，
+#   α 0.32）—— 用户要的是**框选**：现在改成**六边形描边**（`Line2D`），与金色选中边（`set_highlight_ring`）
+#   同一套画法：半径 `hex_radius + 5.0`（**比金边的 +2 靠外**，两圈能同时看到、不互相压）、
+#   线宽 `3.5 × fs`（与金边一致）、层 `FRAME_Z`。颜色仍由调用方给（黄=可攻击 / 橙·金=敌方预览）。
+#   ⚠️ 框是"贴着棋子边沿"画的：`+5` 那圈的外接半径 76.5px、apothem 66.3px，而棋子底色 apothem 66.9px
+#   ⇒ 正好压在棋子边缘内侧一线，不会探到隔壁格子里去。
+const TARGET_RING_A := 0.9
+var _target_ring: Line2D = null      # 可攻击/可预览的"框选"描边（没被标记过则为 null）
+func set_target_ring(on: bool, col := Color(1.0, 0.9, 0.45)) -> void:
+	if not on:
+		if _target_ring != null:
+			_target_ring.visible = false
+		return
+	if not is_inside_tree():
+		return   # 未入树（已释放/尚未加入场景）：不建特效，安全退（与 `set_acting_ring` 同款）
+	if _target_ring == null:
+		_target_ring = Line2D.new()
+		_target_ring.points = _hex_points(hex_radius + 5.0)
+		_target_ring.closed = true
+		_target_ring.width = 3.5 * (hex_radius / 54.0)   # 与金色选中边同宽
+		_target_ring.z_index = FRAME_Z
+		add_child(_target_ring)
+	_target_ring.default_color = Color(col.r, col.g, col.b, TARGET_RING_A)
+	_target_ring.visible = true
 
 # 高亮描边（选中己方 / 预览敌方共用同一粗细的金边，保证视觉一致）
 func set_highlight_ring(on: bool) -> void:

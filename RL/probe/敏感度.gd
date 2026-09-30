@@ -64,6 +64,10 @@ const KEY_VAR := {
 	# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（扁平键，全队生效）
 	"EXPOSURE_TOTAL_W": "w_exposure_total",
 	"EXPOSURE_HP_MAX": "w_exposure_hp_max",
+	# 【2026-09-29·用户「AI 好像不会应对玩家的长剑？会出现站在一条直线的情况」】㉛ **AoE 形状总账**
+	#   （见 `src/BattleAI.gd` 的 `const AOE_RIDER_TOTAL_W` 处说明）：Σ 白游侠散射 / 长剑剑气 / 红帽自爆
+	#   这三族"形状"多挨的血，**只收 ㉖ 门外的单位** ⇒ 与上面两键不重复计价。默认 0 = 关。
+	"AOE_RIDER_TOTAL_W": "w_aoe_rider_total",
 	# 【2026-09-28·用户拍板】㉗**血锁开团**（动作层两键，见 `src/BattleAI.gd` 的 `const PULL_OPEN_W`）：
 	#   包围增量 / 拉出来落单（后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才付）。
 	"PULL_OPEN_W": "w_pull_open",

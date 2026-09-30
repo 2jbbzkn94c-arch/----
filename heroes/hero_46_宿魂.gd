@@ -6,7 +6,11 @@ class_name HeroSoul
 func on_attack(target: Unit) -> void:
 	if target == null or not target.alive:
 		return
-	battle._possess_attach(unit, target)
+	# 【2026-09-30·用户口径「宿魂要"附体"」】`_possess_attach()` 现在回一个 bool（**真的挂上了才 true**）
+	#   ⇒ 只有真挂上才弹「附体」（被[圣盾]整段挡下 / 被负墟免疫 / 打的是队友 —— 都不弹）。
+	#   颜色与文案走 `HERO_FX["hero_46"]`（原来这条整条没登记 ⇒ 查表拿到白字空文案 = 什么都不弹）。
+	if battle._possess_attach(unit, target):
+		fx()
 
 ## 【2026-09-30·用户报「怎么宿魂打有圣盾的单位也能附体」】[附体] 是"命中附加的负面状态"
 ##   ⇒ 与毒蛇淑女[猛毒]/战锤麻痹/沉默术士同一类：认这一项，`Battle._apply_attack()` 才会在

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/probe/长角击退反击自检.gd" id="1"]
+
+[node name="LonghornKnockbackCounterCheck" type="Node"]
+script = ExtResource("1")

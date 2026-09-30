@@ -1290,6 +1290,8 @@ function Get-RuleScoreKeys {
              'REDCAP_TRADE_W', 'REDCAP_BLAST_ALLY_W',
              # 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关；血上限是它的第二道门）
              'EXPOSURE_TOTAL_W', 'EXPOSURE_HP_MAX',
+    # 【2026-09-29·㉛】AoE 形状总账（用户报「AI 不会应对玩家的长剑」后新增；默认 0 = 关）
+    'AOE_RIDER_TOTAL_W',
              # 【2026-09-28·用户拍板】㉗**血锁开团**（见 `src/BattleAI.gd` 的 `const PULL_OPEN_W` 处说明）：
              #   「拉过来包围」= 拉到"队友还能打到它"的落点才给分（判据 `_threat_can_hit(落点)`）；
              #   「拉出来落单」= 拉成孤立、**且我方有活着且未被沉默/眩晕的嬉皮死神**（孤立 ×2 是它的倍率）。
