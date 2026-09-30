@@ -27,6 +27,11 @@ func play_strike_fx(target: Unit) -> void:
 	_strike_slash_sent = true
 	_fly_slash_toward(target.cell)
 
+## 【2026-09-30·用户口径「长剑敲障碍物，刀光不能飞出去，要和其他近战一样」】
+##   ⇒ 长剑**不重写** `play_strike_fx_cell()`（原来重写过、把刀光飞出去了）：敲障碍物时就出
+##   `Battle._melee_obstacle_hit()` 里那道**原地**刀光，与所有近战英雄一模一样。
+##   （那条飞出去的刀光只属于"**主动打单位**"这一招，见 `play_strike_fx()`。）
+
 func on_attack(target: Unit) -> void:
 	_fly_slash_if_not_sent(target)
 	if target and target.alive:

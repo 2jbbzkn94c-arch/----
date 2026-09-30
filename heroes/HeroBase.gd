@@ -80,6 +80,14 @@ func play_attack_fx(_target: Unit) -> void:
 func play_strike_fx(_target: Unit) -> void:
 	pass
 
+## 【2026-09-30·用户报「打障碍物的时候没有刀光」】同 `play_strike_fx()`，但目标用**格子**表示 ——
+##   障碍物没有 `Unit`。Battle 在**近战敲障碍的出招那一刻**调它（`_melee_obstacle_hit()`）。
+##   默认空实现 ⇒ **今天没有任何英雄重写它**（长剑敲障碍也走 Battle 那道原地刀光，
+##   用户口径「长剑敲障碍物，刀光不能飞出去，要和其他近战一样」）；留着是给以后"想在敲障碍这一刻
+##   加自己演出"的英雄留的口子，改它不影响任何现役英雄。
+func play_strike_fx_cell(_cell: Vector2i) -> void:
+	pass
+
 ## 能否拾取**金矿**（默认不能：金矿只有黄金矿工可拾，其他人踩到不消费、金矿留在格上）。
 ## 这是"是不是金矿的拾取者"的判定；捡到之后的收益见 on_pickup_gold()。
 func can_pickup_gold() -> bool:

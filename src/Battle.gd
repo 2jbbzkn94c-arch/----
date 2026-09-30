@@ -5027,9 +5027,19 @@ func _launch_obstacle_projectile(u: Unit, cell: Vector2i, for_enemy: bool = fals
 		_impact_obstacle(w_u.get_ref() as Unit, cell, for_enemy))
 
 # 近战攻击障碍物：攻击者向障碍轻挥（小前冲+回位），命中后结算
+# 【2026-09-30·用户报「打障碍物的时候没有刀光」】原来这条路径**一道刀光都没有**（刀光只挂在
+#   `_play_melee_hit()`/`_play_counter()` 那两条"打单位"的路上）⇒ 打障碍与打单位观感不一致。
+#   现在与打单位同一套口径：
+#     · 出招那一刻：`HeroBase.play_strike_fx_cell(cell)`（默认空实现，给"想在敲障碍这一刻加自己演出"的英雄留口子）；
+#     · 命中那一刻：`_spawn_melee_slash_cell()` 那道**原地**刀光。
+# 【同日追加·用户口径「长剑敲障碍物，刀光不能飞出去，要和其他近战一样」】⚠️ 这条路径**不看**
+#   `skips_melee_slash()`：那个开关的语义是"**主动打单位**时别出原地那道（我自己会飞一道）"，
+#   而敲障碍时长剑**没有**飞行刀光（它那条飞的道只挂在打单位那两条路上）⇒ 这里必须**一律出原地那道**，
+#   否则长剑敲障碍就变成空手。同理，长剑**不再重写** `play_strike_fx_cell()`。
 func _melee_obstacle_hit(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var apos := board_view.cell_world_center(u.cell)
 	var swing_to := apos.lerp(board_view.cell_world_center(cell), 0.3)
+	_hero(u).play_strike_fx_cell(cell)   # 出招那一刻（与打单位同口径）
 	# 【2026-09-29】绑在攻击者身上（见 `_play_entrance_anim()` 那条说明）：单位被释放时动画当场作废
 	var t := u.create_tween()
 	t.tween_property(u, "position", swing_to, 0.1)
@@ -5045,6 +5055,8 @@ func _melee_obstacle_hit(u: Unit, cell: Vector2i, for_enemy: bool = false) -> vo
 				_play_attack_sfx(u, true)
 				if not _replay_mode:
 					AudioManager.play_hero_voice(u.display_name, "attack")
+				# 原地刀光：与打单位同一时机（命中那一刻）、同一套 `MELEE_SLASH_*` 常量；**所有英雄一律出**
+				_spawn_melee_slash_cell(u, cell)
 				_impact_obstacle(u, cell, for_enemy)))
 
 # 障碍受击命中：命中火花演出 + 结算伤害（仅直接攻击的伤害，伐木工额外99）
@@ -5879,12 +5891,19 @@ class MeleeSlash:
 ##   英雄可用 `skips_melee_slash()` 声明"我不出原地这道"（长剑自己飞一道出去，见 `heroes/hero_18_长剑.gd`）。
 ##   ⚠️ headless（RL 跑批 / 探针）：**不建节点**（纯演出）⇒ 跑批时序与逐位结果零影响。
 func _spawn_melee_slash(attacker: Unit, target: Unit) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	_spawn_melee_slash_cell(attacker, target.cell)
+
+## 同"原地那道刀光"，但目标用**格子**表示 —— 障碍物没有 Unit（用户报「打障碍物的时候没有刀光」）。
+##   几何/时长/观感全部共用 `MELEE_SLASH_*`：弧出现在**攻击者身前**、朝目标格方向。
+func _spawn_melee_slash_cell(attacker: Unit, cell: Vector2i) -> void:
 	if DisplayServer.get_name() == "headless":
 		return
-	if attacker == null or not is_instance_valid(attacker) or target == null or not is_instance_valid(target):
+	if attacker == null or not is_instance_valid(attacker):
 		return
 	var a := board_view.cell_world_center(attacker.cell)
-	var b := board_view.cell_world_center(target.cell)
+	var b := board_view.cell_world_center(cell)
 	var gap := a.distance_to(b)
 	var dir := (b - a)
 	dir = dir.normalized() if dir.length() > 0.001 else Vector2.RIGHT   # 同格（换位等异常）：随便给个方向
