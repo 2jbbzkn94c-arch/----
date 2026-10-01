@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cb1kjqt6pqtfc"]
+
+[ext_resource type="Script" path="res://arena/对账复盘.gd" id="1_audit"]
+
+[node name="ArenaAudit" type="Node"]
+script = ExtResource("1_audit")

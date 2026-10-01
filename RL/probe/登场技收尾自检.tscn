@@ -1,0 +1,6 @@
+﻿[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/probe/登场技收尾自检.gd" id="1"]
+
+[node name="OnEnterFinish" type="Node"]
+script = ExtResource("1")

@@ -51,11 +51,6 @@ func _ready() -> void:
 	# 【2026-09-28·用户要求】菜单页背景音乐（原版 BGM_Main）
 	AudioManager.play_music("menu")
 	_build()
-
-## 【2026-09-28·用户要求】点英雄池英雄：先响原版 `Click_SelectActor`，再走原来的处理
-func _on_pool_card_clicked(hid: String) -> void:
-	AudioManager.play("select_actor")
-	_on_hex_clicked(hid)
 	set_process_input(true)   # 触摸跟踪（轻点 vs 按住拖动池）
 	if GameState.net_edit_mode:
 		_show_team_view()   # 联机大厅叠层打开：直接进选人页
@@ -64,6 +59,17 @@ func _on_pool_card_clicked(hid: String) -> void:
 	if GameState.replay_back_to_list:
 		GameState.replay_back_to_list = false
 		_open_replays()
+	# 【2026-10-01·用户报「联机模式编辑卡组怎么没用了」】⚠️ 上面这三段原来**被误插进了**
+	#   `_on_pool_card_clicked()`（2026-09-28 加"点英雄卡响音效"那次改动把 `_ready()` 的尾巴
+	#   一起吞进了新函数）⇒ 三个后果：① 联机大厅点「编辑卡组」叠层打开 Menu 后**停在主菜单、
+	#   不切选人页**（就是用户报的现象）；② `set_process_input(true)` 没执行 ⇒ 触摸跟踪
+	#   （轻点 vs 按住拖动池）失效；③ `replay_back_to_list` 变成"点英雄卡时"才读 ⇒
+	#   "录像看完回列表"失效。现在各回各位。
+
+## 【2026-09-28·用户要求】点英雄池英雄：先响原版 `Click_SelectActor`，再走原来的处理
+func _on_pool_card_clicked(hid: String) -> void:
+	AudioManager.play("select_actor")
+	_on_hex_clicked(hid)
 
 # 【2026-09-27·用户实机「向左一点取，右边有些线条弄进来了」】封面"看得见画面哪一段"的横向取景：
 #   0 = 贴最左、0.5 = 居中（原来的固定行为）、1 = 贴最右。只影响"铺满裁切"裁掉哪一边，

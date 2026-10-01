@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+PROBE|A_first_match|state=1|风语者 buff=0 base=2 emove=2 ｜ 烛火 buff=1 base=3 emove=4 ｜ 圣光 buff=1 base=2 emove=3
+PROBE|B_after_double_restart|state=1|风语者 buff=0 base=2 emove=2 ｜ 烛火 buff=0 base=3 emove=3 ｜ 圣光 buff=0 base=2 emove=2
+PROBE|C_after_extra_side_skills|state=1|风语者 buff=0 base=2 emove=2 ｜ 烛火 buff=1 base=3 emove=4 ｜ 圣光 buff=1 base=2 emove=3
+PROBE|END

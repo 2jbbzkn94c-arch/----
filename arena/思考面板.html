@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>思考面板 · 战旗GDScript AI</title>
+<style>
+  :root { --bg:#14161a; --card:#1d2027; --line:#2c313b; --fg:#e6e8ec; --dim:#8b93a1;
+          --good:#5ec27a; --bad:#e0645f; --hi:#e8b64c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:13px/1.5 "Microsoft YaHei",system-ui,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:#171a20; border-bottom:1px solid var(--line);
+           padding:10px 16px; display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+  header b { color:var(--hi); font-weight:600; }
+  header .sep { color:var(--line); }
+  main { display:grid; grid-template-columns:1.15fr 1fr; gap:14px; padding:14px 16px 40px; align-items:start; }
+  .col { display:flex; flex-direction:column; gap:14px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+  section > h2 { margin:0 0 10px; font-size:13px; color:var(--dim); font-weight:600; letter-spacing:.05em; }
+  .pick { font-size:17px; color:var(--hi); margin:0 0 6px; }
+  .pick small { color:var(--dim); font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:3px 6px; border-bottom:1px solid #23262e; white-space:nowrap; }
+  th { color:var(--dim); font-weight:500; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .bar { height:5px; border-radius:3px; background:#2b303a; position:relative; min-width:60px; }
+  .bar i { position:absolute; top:0; bottom:0; left:0; border-radius:3px; }
+  .dead { color:var(--dim); }
+  .tag { display:inline-block; padding:0 5px; margin-right:3px; border-radius:4px; background:#2b303a; color:#cfd4dd; font-size:11px; }
+  .tag.atk { background:#4a2f2f; color:#ffb3ae; }
+  .tag.shield { background:#26405c; color:#a9d4ff; }
+  .mine td:first-child { color:#8fd6a5; }
+  .foe td:first-child { color:#f0a09b; }
+  .flex { display:flex; gap:14px; flex-wrap:wrap; }
+  .kv { color:var(--dim); }
+  .kv b { color:var(--fg); font-weight:600; }
+  .hist td { font-size:12px; }
+  .muted { color:var(--dim); }
+  .empty { color:var(--dim); padding:8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span><b id="eng">—</b></span>
+  <span class="sep">|</span>
+  <span class="kv">难度 <b id="tier">—</b></span>
+  <span class="kv">局 <b id="match" title="点击复制完整局号" style="cursor:pointer">—</b></span>
+  <span class="kv">我方 <b id="side">—</b></span>
+  <span class="kv">阶段 <b id="phase">—</b></span>
+  <span class="kv">回合 <b id="turn">—</b></span>
+  <span class="kv">本阶段剩余 <b id="remain">—</b></span>
+  <span class="kv">这一手想了 <b id="think">—</b></span>
+  <span class="kv">合法动作 <b id="legal">—</b></span>
+  <span class="kv muted" id="cache"></span>
+</header>
+<main>
+  <div class="col">
+    <section>
+      <h2>预测 vs 实际（拿我算的下一手局面，对裁判给的真局面）</h2>
+      <div id="diff"><div class="empty">—</div></div>
+    </section>
+    <section>
+      <h2>这一手</h2>
+      <div class="pick" id="pick">等待第一手…</div>
+      <div class="muted" id="pickIntent"></div>
+    </section>
+    <section>
+      <h2>整回合计划（AI 一次算完，逐步提交）</h2>
+      <div id="plan"><div class="empty">—</div></div>
+    </section>
+    <section>
+      <h2>候选对比（1 层估值：敌掉 / 我掉（含反击）/ 总分）</h2>
+      <div id="cands"><div class="empty">—</div></div>
+    </section>
+    <section>
+      <h2>评分分项（起手 → 计划末态，只看非零项）</h2>
+      <div id="score"><div class="empty">—</div></div>
+    </section>
+  </div>
+  <div class="col">
+    <section>
+      <h2>我方场上</h2>
+      <div id="mine"><div class="empty">—</div></div>
+    </section>
+    <section>
+      <h2>对手已登场</h2>
+      <div id="foe"><div class="empty">—</div></div>
+    </section>
+    <section>
+      <h2>地形 / 我未上场</h2>
+      <div id="terrain" class="muted">—</div>
+    </section>
+    <section>
+      <h2>最近几手</h2>
+      <div id="hist"><div class="empty">—</div></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const int = v => (v === null || v === undefined) ? null : Math.round(v);
+const fx = v => (v === null || v === undefined) ? '—' : (Math.round(v * 10) / 10).toFixed(1);
+const cell = c => (c && c[0] >= 0) ? `(${c[0]},${c[1]})` : '—';
+
+function marks(ms) {
+  if (!ms || !ms.length) return '';
+  return ms.map(m => `<span class="tag ${m.includes('盾') ? 'shield' : (m.includes('攻') ? 'atk' : '')}">${m}</span>`).join('');
+}
+
+function unitsTable(rows, cls, usedIds) {
+  if (!rows || !rows.length) return '<div class="empty">—</div>';
+  const used = new Set(usedIds || []);
+  let h = `<table><tr><th>单位</th><th>位</th><th class="num">血</th><th class="num">攻</th><th class="num">动</th><th>状态</th><th>行动</th></tr>`;
+  for (const u of rows) {
+    const act = (u.attacked ? '已出手' : (u.moved ? '已移动' : '待动'));
+    const cu = used.has(u.id) ? ' <span class="tag">本回合已反击过</span>' : '';
+    h += `<tr class="${cls}"><td>${u.name}<span class="muted"> ${u.id}</span>${cu}</td><td>${cell(u.cell)}</td>
+      <td class="num">${u.hp}/${u.maxHp}</td><td class="num">${u.atk}${u.atk !== u.baseAtk ? `<span class="muted">(${u.baseAtk})</span>` : ''}</td>
+      <td class="num">${u.move}</td><td>${marks(u.marks) || '<span class="muted">—</span>'}</td><td class="muted">${act}</td></tr>`;
+  }
+  return h + '</table>';
+}
+
+function renderPlan(rows) {
+  if (!rows || !rows.length) return '<div class="empty">—</div>';
+  let h = `<table><tr><th>#</th><th>谁</th><th>移动</th><th>攻击</th></tr>`;
+  rows.forEach((r, i) => {
+    const atk = r.obs && r.obs[0] >= 0 ? `拆障碍 ${cell(r.obs)}` : (r.atk || '<span class="muted">—</span>');
+    h += `<tr><td class="muted">${i + 1}</td><td>${r.who}</td><td>${cell(r.move)}</td><td>${atk}</td></tr>`;
+  });
+  return h + '</table>';
+}
+
+function renderCands(rows) {
+  if (!rows || !rows.length) return '<div class="empty">—</div>';
+  let h = `<table><tr><th></th><th>动作</th><th class="num">敌掉</th><th class="num">我掉</th><th class="num">总分</th><th class="num">③血量账</th><th class="num">②身价</th><th class="num">⑦风险</th></tr>`;
+  for (const r of rows) {
+    const mark = r.chosen ? '<span style="color:var(--hi)">▶ 选中</span>' : '<span class="muted">　</span>';
+    const lost = r.hp_lost > 0 ? `<span style="color:var(--bad)">−${r.hp_lost}</span>` : '0';
+    h += `<tr><td>${mark}</td><td>${r.label}${r.killed ? ' <span class="tag atk">击杀</span>' : ''}${r.countered ? ' <span class="tag atk">会被反击</span>' : ''}</td>
+      <td class="num">${r.dmg > 0 ? '−' + r.dmg : '0'}</td><td class="num">${lost}</td>
+      <td class="num" style="color:${r.score >= 0 ? 'var(--good)' : 'var(--bad)'}">${fx(r.score)}</td>
+      <td class="num muted">${fx(r.hp_acc)}</td><td class="num muted">${fx(r.worth)}</td><td class="num muted">${fx(r.risk)}</td></tr>`;
+  }
+  return h + '</table><div class="muted" style="margin-top:6px">「我掉」里已经含了敌人的反击伤害；1 层估值只看这一手之后的局面，不含整回合后续</div>';
+}
+
+function renderScore(s) {
+  if (!s || !s.terms) return '<div class="empty">—</div>';
+  const head = `<div class="flex" style="margin-bottom:8px">
+      <span class="kv">起手 <b>${fx(s.now)}</b></span>
+      ${s.end !== undefined ? `<span class="kv">末态 <b style="color:var(--hi)">${fx(s.end)}</b></span>
+      <span class="kv">净变化 <b style="color:${s.end - s.now >= 0 ? 'var(--good)' : 'var(--bad)'}">${(s.end - s.now >= 0 ? '+' : '') + fx(s.end - s.now)}</b></span>` : ''}
+    </div>`;
+  const mx = Math.max(...s.terms.map(t => Math.max(Math.abs(t[1] || 0), Math.abs(t[2] || 0))), 1);
+  let h = `<table><tr><th>项</th><th class="num">起手</th><th class="num">末态</th><th>量级</th></tr>`;
+  for (const t of s.terms) {
+    const v = (t[2] !== null && t[2] !== undefined) ? t[2] : t[1];
+    const w = Math.min(100, Math.abs(v) / mx * 100);
+    const col = v >= 0 ? 'var(--good)' : 'var(--bad)';
+    h += `<tr><td>${t[0]}</td><td class="num">${t[1] === null ? '—' : fx(t[1])}</td>
+      <td class="num" style="color:${col}">${t[2] === null ? '—' : fx(t[2])}</td>
+      <td><div class="bar"><i style="width:${w}%;background:${col}"></i></div></td></tr>`;
+  }
+  return head + h + '</table>';
+}
+
+function renderTerrain(t, pool) {
+  if (!t) return '—';
+  const parts = [];
+  if (t.obstacles && t.obstacles.length) parts.push('障碍 ' + t.obstacles.map(o => `${cell(o.cell)}(耐久${o.hp})`).join(' '));
+  if (t.buffs && t.buffs.length) parts.push('道具 ' + t.buffs.map(b => `${cell(b.cell)}:${b.kind}`).join(' '));
+  if (t.gold && t.gold.length) parts.push('金块 ' + t.gold.map(cell).join(' '));
+  if (t.bombs && t.bombs.length) parts.push('炸弹 ' + t.bombs.map(cell).join(' '));
+  let h = `<div>${parts.join('　') || '—'}</div>`;
+  if (pool && pool.length) {
+    h += '<div style="margin-top:6px">未上场：' + pool.map(p =>
+      `<span class="tag">${p.name}${p.status === 'dead' ? '(亡)' : (p.status === 'quit' ? '(撤)' : '')}</span>`).join('') + '</div>';
+  }
+  return h;
+}
+
+function renderDiff(d) {
+  if (!d || Object.keys(d).length === 0) return '<div class="empty">等下一手来对账…</div>';
+  const act = d.act ? `<div class="muted" style="margin-bottom:6px">上一手：${d.act}${d.why ? ' ｜ 我算的：' + d.why : ''}</div>` : '';
+  if (d.skip) return act + `<div class="muted">不比对：${d.skip}</div>`;
+  const mine = (d.items || []).filter(i => i.side === '我');
+  const rest = (d.items || []).filter(i => i.side !== '我');
+  let head = mine.length === 0
+    ? `<div style="color:var(--good);margin-bottom:6px">✓ 我这边 0 处出入（裁判与我算的一致）</div>`
+    : `<div style="color:var(--bad);margin-bottom:6px">✗ 我这边 ${mine.length} 处出入</div>`;
+  const row = (i, hot) => `<tr><td style="color:${i.side === '我' ? 'var(--bad)' : 'var(--dim)'}">${i.side}</td>
+      <td>${i.who}</td><td class="muted">${i.field}</td><td>${i.want}</td>
+      <td style="color:${hot ? 'var(--hi)' : 'var(--dim)'}">${i.got}</td></tr>`;
+  let h = head;
+  if (d.items && d.items.length) {
+    h += `<table><tr><th>方</th><th>谁</th><th>项</th><th>我算的</th><th>裁判的</th></tr>`
+      + mine.map(i => row(i, true)).join('')
+      + rest.map(i => row(i, false)).join('') + '</table>';
+  }
+  if (rest.length && mine.length === 0) h += `<div class="muted" style="margin-top:6px">另有 ${rest.length} 处非我方差异（对手登场/环境变化，正常）</div>`;
+  return act + h;
+}
+
+function renderHist(rows) {
+  if (!rows || !rows.length) return '<div class="empty">—</div>';
+  let h = `<table class="hist"><tr><th>时刻</th><th>阶段</th><th class="num">回合</th><th>选择</th><th class="num">耗时</th><th class="num">出入</th></tr>`;
+  for (const r of rows.slice(0, 14)) {
+    const d = r.diff || {};
+    const n = d.n_mine || 0;
+    const cellTxt = d.skip ? '<span class="muted">—</span>'
+      : (n > 0 ? `<span style="color:var(--bad)">${n}</span>` : '<span style="color:var(--good)">0</span>');
+    h += `<tr><td class="muted">${r.at}</td><td>${r.phase}</td><td class="num">${r.turn}</td>
+      <td>${r.pick ? r.pick.note : ''}</td><td class="num muted">${r.thinkMs}ms</td><td class="num">${cellTxt}</td></tr>`;
+  }
+  return h + '</table>';
+}
+
+async function tick() {
+  try {
+    const j = await (await fetch('/state', { cache: 'no-store' })).json();
+    const n = j.now || {};
+    if (!n.engine) return;
+    $('eng').textContent = n.engine;
+    $('tier').textContent = n.tierName;
+    $('match').textContent = n.match || '—';
+    $('match').onclick = () => { navigator.clipboard.writeText(n.match || ''); $('match').textContent = (n.match || '') + '（已复制）'; };
+    $('side').textContent = n.side;
+    $('phase').textContent = n.phase + (n.actingSide ? `（${n.actingSide} 行动）` : '');
+    $('turn').textContent = n.turn;
+    $('remain').textContent = n.remainingMs ? (n.remainingMs / 1000).toFixed(1) + 's' : '—';
+    $('think').textContent = n.thinkMs ? n.thinkMs + 'ms' : '0ms';
+    $('legal').textContent = n.legalCount + ' 个' + (n.legalKinds ? '（' + Object.entries(n.legalKinds).map(([k, v]) => k + ' ' + v).join('，') + '）' : '');
+    $('cache').textContent = n.cachePlan ? '计划缓存：开' : '计划缓存：关（每手重搜）';
+    $('pick').textContent = n.pick ? n.pick.note : '';
+    $('pickIntent').textContent = n.pick ? n.pick.intent : '';
+    $('plan').innerHTML = renderPlan(n.plan);
+    $('cands').innerHTML = renderCands(n.cands);
+    $('diff').innerHTML = renderDiff(n.diff);
+    $('score').innerHTML = renderScore(n.score);
+    $('mine').innerHTML = unitsTable(n.mine, 'mine');
+    $('foe').innerHTML = unitsTable(n.foe, 'foe', n.counter_used);
+    $('terrain').innerHTML = renderTerrain(n.terrain, n.pool);
+    $('hist').innerHTML = renderHist(j.history);
+  } catch (e) { /* 引擎正在思考/退出：下个周期再试 */ }
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

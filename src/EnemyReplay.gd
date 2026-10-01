@@ -165,6 +165,21 @@ func _do_step_action(u: Unit, step: Dictionary, refs: Array, my_session: int) ->
 	# 为什么会失效：计划是回合开始时按"预测的残局"一次性排好的（预测与真实结算哪怕差一点，
 	# 后面针对同一目标的步骤就会落空）。补算在主线程跑一次短搜索（1.2s 预算），结果同样要过合法性检查。
 	if wanted and not acted and _unit_ok(u) and not u.attacked_this_turn:
+		# 【2026-10-01·取证·用户报「为什么有是主动撤人打不死的情况」】把"安排了攻击却没打出去"的
+		#   **现场**打出来（只读）：实际站位 / 目标在哪 / 距离 / 我的射程 / 是不是"远程被贴身"
+		#   —— 这几种原因在日志里长得一模一样，只有这一行能分开。
+		if battle._CONSOLE_AI_LOG:
+			var tdbg: Unit = null
+			if a.has("atk") and int(a["atk"]) >= 0:
+				tdbg = _resolve_unit(a.get("tgt", null), refs, int(a["atk"]))
+			var tinfo := "目标已不在场上/已死"
+			if tdbg != null and is_instance_valid(tdbg) and tdbg.alive:
+				tinfo = "目标 %s@%s ｜ 距离 %d vs 我的射程 %d ｜ 我实际站在 %s%s" % [
+					tdbg.display_name, DataRegistry.cell_txt(tdbg.cell),
+					battle.grid.distance(u.cell, tdbg.cell), int(u.attack_range),
+					DataRegistry.cell_txt(u.cell),
+					("（**远程被贴身 ⇒ 射程被压成 1**）" if u.attack_range <= 1 and u.attack_type == DataRegistry.AttackType.RANGED else "")]
+			print("[回放·没打成] %s：这一手安排了攻击、但没打出去 ⇒ %s" % [u.display_name, tinfo])
 		if my_session != battle._session_id or not battle.is_inside_tree():
 			return   # 已重开/场景已释放：不再补算
 		await _gap(STEP_GAP)   # 补算前留一拍，别让"原本那一招"和"补的这一招"粘成一段

@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/probe/斩杀撤人批量自检.gd" id="1"]
+
+[node name="FinishWithdrawBatch" type="Node"]
+script = ExtResource("1")

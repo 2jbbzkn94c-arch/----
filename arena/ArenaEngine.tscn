@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://barena0001eng"]
+
+[ext_resource type="Script" path="res://arena/ArenaEngine.gd" id="1_engine"]
+
+[node name="ArenaEngine" type="Node"]
+script = ExtResource("1_engine")

@@ -3395,7 +3395,7 @@ func _tp_attack_actions(sim: Sim, idx: int) -> Array:
 	if u.skills.has(DataRegistry.Skill.LOGISTICS):
 		return out   # 后勤：不能主动攻击
 	for t in _valid_targets(sim, u, u.cell):
-		if _redhood_kill_unsafe(sim, u, t):
+		if _redhood_kill_unsafe(sim, u, t, u.cell):
 			continue
 		out.append({ "move": null, "atk": int(t) })
 	for oc in sim.obstacles.keys():
@@ -3666,15 +3666,55 @@ func pick_sub_cell(sim: Sim, hero_id: String, cells: Array) -> Vector2i:
 	for c in cells:
 		var cell: Vector2i = c
 		var s := 0.0
-		# ① / ②：本回合能不能打到人？打到谁最疼（身价）
+		# ① / ②：本回合**真的**能不能打到人？打到谁最疼（身价）
+		# 【2026-10-01 晚·用户「回合开始的替补点位，AI 是不是考虑不到位啊：替补上来个大骑士，然后放在了
+		#   谁都打不到的地方」】**判据换成与动作生成同一把尺**：
+		#   原来这里只问 `approach_dist(cell, t.cell) <= mv + ar`（= "几何上够得着"）⇒ 两处不同源：
+		#     · 大骑士 `hero_24` 是**直线冲锋**（`_move_cells()` 里那条轴向直线）⇒ 从这一格出发，
+		#       真实能站的格远少于"路网 ≤ mv 格"那一圈（用户实机日志就是这么写的：
+		#       「名义上够得着（最近 4 格 ≤ 9）却**一条攻击候选都没有**」）；
+		#     · 还漏了 视线 / 身体占位 / **嘲讽门**（够得到嘲讽者就只能打它）。
+		#   ⇒ 现在：把探针放进模拟盘 → 用 `_move_cells()` 取"**按这个英雄真实的移动方式**这回合能站的格"
+		#     （含直线冲锋 / 宿魂瞬移 / 渗透"可穿不可停" / 炸弹格规则）→ 逐个候选开火格问
+		#     `_threat_fire_ok_at()`（射程＋视线＋身体＋嘲讽门）。
+		#   ⚠️ 站着不动那一格也要算上（`fire_cells` 的第 0 项）—— `_move_cells()` 只给"走过去的格"。
+		var sub_p := _sub_probe_unit(hero_id, cell)
+		var had_occ := false
+		var old_occ = null
+		var fire_cells: Array = [cell]
+		if sub_p != null:
+			sub_p.sim_index = sim.units.size()
+			sim.units.append(sub_p)
+			had_occ = sim.occ.has(cell)
+			old_occ = sim.occ.get(cell, null)
+			if not had_occ:
+				sim.occ[cell] = sub_p
+			_sim_refresh_pins(sim)
+			if not sub_p.stunned and sub_p.emove > 0:
+				for mc in _move_cells(sim, sub_p).keys():
+					fire_cells.append(mc)
 		for i in sim.units.size():
 			var t: SimUnit = sim.units[i]
 			if t == null or not t.alive or t.fn == DataRegistry.Faction.ENEMY:
 				continue
-			if approach_dist(sim, cell, t.cell) <= mv + ar:
+			var can_hit := false
+			if sub_p != null:
+				for fc in fire_cells:
+					var f: Vector2i = fc
+					if _threat_fire_ok_at(sim, sub_p, f, t.cell, t):
+						can_hit = true
+						break
+			if can_hit:
 				s += 100.0 + _unit_value(sim, t)
 			else:
 				s -= float(approach_dist(sim, cell, t.cell)) * 0.5   # ③ 离战场多近（路网）
+		if sub_p != null:
+			# 用完还原（下面还有 ④ 与 `fin_foe` 那两段要按**原来**的盘面算）
+			sim.units.pop_back()
+			if had_occ:
+				sim.occ[cell] = old_occ
+			else:
+				sim.occ.erase(cell)
 		# ④ 下回合更安全：站这儿有多少敌人够得到我（越少越好）
 		for j in sim.units.size():
 			var e: SimUnit = sim.units[j]
@@ -3824,6 +3864,27 @@ func _sub_probe_unit(hid: String, cell: Vector2i) -> SimUnit:
 	#   ⇒ 探针单位如果带着这个值，就会被算成"能一刀收"（其实它刚落位、还没共鸣，真打出去是 0/1 伤）。
 	#   ⇒ 探针一律把 echo 关掉（-1）：与"新落位的替补"的真实状态一致。
 	nu.echo_set = -1
+	# 【2026-10-01 晚·用户「11 血的红帽，你从高攻往下排，找一个 6 攻、1 个 5 攻，不就收掉了吗？
+	#   为什么第一刀限定死了长剑？」】**登场 +攻 必须与搜索侧同源**：
+	#   `_sim_spawn_sub()`（搜索里真落位那一路）对太阳斩明确做过 `nu.eatk += 3`
+	#   （`heroes/hero_29_太阳斩.gd::on_enter()`：`sun_bonus = 3` ⇒ 登场那一刀 3+3 = **6**；
+	#     `src/Battle.gd` 的 `FINISH_HEROES` 注释也是按"能收 6 血"把它列进去的），
+	#   而这个探针（④ 体检 / `pick_sub_cell` / 选人估算都用它）**漏了这一步** ⇒ 模拟里太阳斩只有
+	#   3 攻 ⇒ 用户那局"太阳斩 6 + 影丸 5 = 11"的合力被判成「第一刀 长剑 削 3 ⇒ 第二刀没人做得到」。
+	#   ⚠️ 只补这一条：其余 `on_enter`（波盾给盾 / 风语者 +1 移动 / 梅林治疗换位）都不改"这一刀多重"，
+	#     猎颅者的"登场伤害 = 它的攻击力"另有专门一路（见 `Battle._finish_kill_hero_pick()` 的登场技分支）。
+	if nu.hero_id == "hero_29":
+		nu.eatk += 3
+	# 【2026-10-01 晚·用户「**坠炮手只有 3 攻，为什么说可以收掉 4 血的红帽**」】**把"永久加成"一次性钉死**：
+	#   `_sim_sync_pins()` 里的 `pin_buffs` 是"第一次刷新时**反推**"出来的 —— `pin_buffs = eatk − base_atk`，
+	#   而 `base_atk = (1 if pin_flag else atk) + atk_mod`（**被贴身时基础攻压成 1**）。
+	#   ⚠️ 探针单位原来 `pin_init = false` ⇒ 谁先刷新它、它就按那一格反推：④ 的斩杀格扫描是**逐个格**来的，
+	#   只要**第一格恰好是"被贴身"的格**，`pin_buffs` 就被记成 `3 − 1 = 2` ⇒ 之后**每一格**都按
+	#   `atk + 2` 算（3 攻的坠炮手被算成 **5 攻**）⇒ 体检打出"能收 5 血的红帽"，真打出去只有 3 伤
+	#   （[替补·诊断] 复核没过 → 兜底只打 3）。⇒ 这里**按面板值定死**：永久加成 = `eatk − atk`
+	#   （登场 +3 这类），`pin_init = true` ⇒ 之后 `_sim_sync_pins()` 只按当前格叠加"是否贴身"，不再乱推。
+	nu.pin_init = true
+	nu.pin_buffs = nu.eatk - nu.atk
 	_sim_apply_hero_fixups(nu)
 	nu.sim_index = -1
 	return nu
@@ -4869,7 +4930,7 @@ func _term_defs() -> Array:
 		["㉖暴露总量", "−EXPOSURE_TOTAL_W(%.2f) × Σ_{我方**脆皮输出**} 挨打合计（脆皮 = 面板血上限 ≤ EXPOSURE_HP_MAX(%.0f)；有输出 = `_output_potential()` ≥ EXPOSURE_OUT_MIN(%.0f) ⇒ 后勤/纯辅助/坦克不进。⑦ 是 **max 型 + 按核心系数归一** ⇒ 13 血挨 10 伤只值 0.82 分；本项按**点数**计。只在末态结算，与 ⑦ 共用一次 `_incoming_incs()`）" % [w_exposure_total, w_exposure_hp_max, EXPOSURE_OUT_MIN]],
 		["㉛AoE形状", "−AOE_RIDER_TOTAL_W(%.2f) × Σ_{我方**㉖ 管不到**的单位（坦/半肉/后勤/无输出）} 它在当前格因对手 AoE **形状**会额外挨的血（三族见 `_aoe_riders_on()`：白游侠散射 / 长剑剑气 / 红帽自爆）。⚠️ 与 ㉖ **不重复计**（脆皮输出那部分由 ㉖ 按全部挨打合计罚）；**只管形状、不管普通挨打** ⇒ 不会变成「人人各自躲」。只在末态结算" % w_aoe_rider_total],
 		["红帽·血线", "−REDCAP_HP_FLOOR_W(%.2f) × max(0, 廉价解真实单击合计 + 1 − 红帽末态血)（廉价解 = 够得到她的 `<远程>`（打死她不吃自爆）· 血 ≤ REDCAP_CHEAP_HP(%.0f)（换掉不亏）· 能挂沉默的人；**不封顶**；**只在末态结算**）" % [w_redcap_hp_floor, w_redcap_cheap_hp]],
-		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 3 点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
+		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 攻击力点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
 		["红帽·沉默风险", "−REDCAP_SILENCE_GUARD_W(%.2f) × (1 + **全额**挨打合计)（触发 = 能挂沉默的人**够得到她末态格**（按同一把尺逐个问，**不经过开火位截断**）**或**她当前被沉默；被沉默期间阵亡 ⇒ **不自爆**，`heroes/hero_40_红帽.gd:8`）" % w_redcap_silence_guard],
 		["红帽·蓄爆", "+REDCAP_TRADE_W(%.2f) × max(0, 这一炸能换到的 − 她自己的身价)（**只在「对方没有廉价解」时**：末态血 ≤ 最大反击伤害 ⇒ 自爆时机握在自己手里；且相邻敌人 ≥ 2、净赚才给。量纲 = **分**：净赚 4.75 ⇒ W=0.5 时 +2.4 分）" % w_redcap_trade],
 		["红帽·自爆换命", "+REDCAP_BLAST_SELF_W(%.2f) × [Σ_被这**任何一顶**红帽的自爆炸死的**我方**单位身价 − Σ_被炸死的**对面**单位身价×%.2f]（用户 2026-10-01「给 AI 打爆红帽爆炸时增加个评估」：她那一炸**打死谁就按谁的身价全价标一遍** —— 打爆她换来的是「⑦/㉖ 那两笔她带来的威胁消失」，本项就是给「换命」那一半单独标价。默认 0 = 关；噩梦 = 1.0）" % [w_redcap_blast_self, PLAYER_VALUE_MULT]],
@@ -5210,8 +5271,8 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 		var targets := _valid_targets(sim, u, mc)
 		if targets.size() > 0 and not u.attacked and can_attack:
 			for t in targets:
-				if _redhood_kill_unsafe(sim, u, t):
-					continue   # 会点杀红帽且她身旁有己方单位：自爆13伤不划算，不打这一击
+				if _redhood_kill_unsafe(sim, u, t, mc):
+					continue   # 会点杀红帽且她身旁有己方单位（含我走过去之后）：自爆13伤不划算，不打这一击
 				combos.append({ "move": null if mc == u.cell else mc, "atk": t })
 		elif not u.attacked and can_attack:
 			# 无目标可打，仅移动
@@ -5364,25 +5425,86 @@ func _sim_cell_has_pickup(sim: Sim, u: SimUnit, cell: Vector2i) -> bool:
 		return true
 	return false
 
-# 红帽(hero_40)点杀风险：该击能把红帽打死（无圣盾且伤害≥其血），
-# 而她死前会对"相邻的敌对阵营单位"自爆 13 —— 若**我方**有单位贴着她，点杀很亏，应避免。
+# 红帽(hero_40)点杀风险：该击能把红帽打死（无圣盾且**这一击的真实伤害**≥其血），
+# 而她死前会对"相邻的敌对阵营单位"自爆 13 —— 若**我方**有单位（含出手者本人走过去之后）贴着她，
+# 点杀很亏，应避免。
+# ⚠️ **两道例外（都放行）**：① 她是**对面场上最后一个活人**（`_redhood_is_last_enemy()`）；
+#   ② 这一炸**只带得走出手者自己**、而它本来就是快死的人（血 ≤ `REDCAP_CHEAP_HP`）⇒ **残血换命不亏**
+#   （用户 2026-10-01 口径，同一句 2026-09-26 也写在本文件头那段机制说明里）。
 # ⚠️ 【2026-10-01】机制改成"只炸敌人"之后这条判据**一字不用改**（下面那道 `v.fn == u.fn` 看的正是
 #    "我方有没有人贴着她" ⇒ 我方就是她的敌人），只是把描述里的"己方"写明白是**出手方的己方**。
+# 【2026-10-01·用户报「怎么 AI 不考虑红帽自爆了，直接把 AI 自己炸死了」】修两个漏判（都会让 AI
+#   "以为自己安全"地把她点杀掉）：
+#     ① **伤害用面板 `eatk`** ⇒ 漏掉倍率技（嬉皮死神/小阴影/赏金猎人…`_sim_mult`）与**长角"退不动就 2 倍"**：
+#        长角面板 2 打 4 血的红帽，它判"打不死 ⇒ 安全"，可这一击其实是 **4 点**（她背后被堵）
+#        ⇒ 真把她打死了，13 点自爆全落在贴着她的自己人头上。现在用"这一击的真实伤害"
+#        （`eatk × 倍率 × (长角退不动 ? 2 : 1)`，再过一遍目标侧修正 `_hit_after_target_mods`）。
+#     ② **出手者本人按"现在站哪儿"算** ⇒ "走过去再打"这条候选（`move + atk`）里，出手者此刻还不在她身边，
+#        本函数就判"身边没人 ⇒ 打得"；等它真走过去、打死她，**它自己**就吃满 13 点。
+#        现在把候选落点 `from_cell` 传进来：出手者按**落点**判（其余队友仍按当前位置）。
 # target 传入的是 sim.units 里的下标（生产路径），兼容直接传对象（测试）。
-func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
+# `from_cell` = 这一步的落点（"原地打"传 `u.cell` 或省略）。
+func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant,
+		from_cell: Vector2i = Vector2i(-99, -99)) -> bool:
+	var at_cell: Vector2i = u.cell if from_cell.x == -99 else from_cell
 	var t: SimUnit = sim.units[int(target)] if target is int else target
 	if t == null or t.hero_id != "hero_40" or not t.alive:
+		return false
+	# 【2026-10-01·用户口径「也不能写死啊，如果红帽就是对方最后一个，必须要杀死」】
+	#   她已经是对方**场上唯一活着的人** ⇒ 打死她对面就**没人了**（≡ 判负对面）⇒ 自爆那 13 点认了，
+	#   **不拦这一击**。（标准队伍 ≥3 人：她既然是最后一个活人，对面累计阵亡必然已到 `LOSS_DEATH_COUNT - 1`
+	#   ⇒ 她这一死就够判负线，怎么算都是赢。）
+	if _redhood_is_last_enemy(sim, t):
 		return false
 	# 【2026-09-26·用户点名】被[沉默]或[眩晕]期间阵亡 ⇒ **根本不会自爆**（`heroes/hero_40_红帽.gd:8`）
 	#   ⇒ 这时候点杀她是**安全**的，不该再躲这一击（原来漏了这道门 ⇒ 白让一手）。
 	if t.silenced or t.stunned:
 		return false
-	if t.shield or t.hp > u.eatk:
+	# ①这一击的**真实伤害**（不是面板 eatk）：倍率 + 长角"退不动 2 倍"，再按目标侧规则修正
+	#   （重伤 +1 / 坚固 −1 / 相邻塔盾代扛 −1；[圣盾]不在这里，单独判）。
+	var one := float(u.eatk) * _sim_mult(sim, u, t)
+	if u.hero_id == "hero_32" and _kb_landing(sim, at_cell, t.cell).x == -99:
+		one *= 2.0   # 长角：退不动 ⇒ 2 倍伤害（`_kb_landing()` 是纯计算，不动盘面）
+	if not t.shield:
+		one = _hit_after_target_mods(sim, t, t.cell, one, true)
+	if t.shield or float(t.hp) > one:
 		return false   # 这一击打不死，没有自爆风险
+	# 数一遍"这一炸会带走我方的谁"：自爆范围 = 她那格的 6 邻格 ⇒ `grid.distance == 1`；
+	#   出手者本人按**这一步的落点**算（别的队友按当前位置）。
+	var self_adj := false
+	var others_adj := 0
 	for v in sim.units:
-		if v.alive and v.fn == u.fn and grid.distance(v.cell, t.cell) == 1:
-			return true   # 有己方单位贴着她，点杀会把她炸到己方
-	return false
+		if v == null or not v.alive or v.fn != u.fn:
+			continue
+		var vc: Vector2i = at_cell if v == u else v.cell
+		if grid.distance(vc, t.cell) != 1:
+			continue
+		if v == u:
+			self_adj = true
+		else:
+			others_adj += 1
+	# 【2026-10-01·用户口径「如果打死红帽 AI 是残血，而且周围没有队友的话，是允许用残血换掉对方红帽的」】
+	#   （同一句话 2026-09-26 就写在本文件头那段机制说明里：她这个机制下"**残血单位换掉她不亏**"）
+	#   ⇒ 只剩出手者**自己**会吃这一炸（`others_adj == 0`）、而它本来就是快死的人
+	#   （血 ≤ `REDCAP_CHEAP_HP` = 用户 2026-09-26 定的"残血/廉价解"口径）⇒ 拿一个残血换掉对面红帽 = 赚 ⇒ **不拦**。
+	#   ⚠️ 只要**还有别的**我方单位贴着她，就照旧拦（那一炸会连队友一起带走）。
+	if self_adj and others_adj == 0:
+		if float(u.hp) <= _wh(u.hero_id, "REDCAP_CHEAP_HP", w_redcap_cheap_hp):
+			return false
+	return self_adj or others_adj > 0   # 有己方单位贴着她（含"我走过去贴着她"）⇒ 点杀会把她炸到自己人
+
+## 【2026-10-01·用户口径「也不能写死啊，如果红帽就是对方最后一个，必须要杀死」】
+##   她是不是**对手场上唯一活着的人**（判据 = `sim.units` 里 `fn == t.fn` 且 `alive` 的只有她；
+##   替补席上还坐着人不算 —— 那也不影响：标准队伍 ≥3 人，她既然是最后一个活人，
+##   对面累计阵亡必然已到 `LOSS_DEATH_COUNT - 1` ⇒ 这一死就够判负线）。
+##   ⚠️ 与"沉默/眩晕不自爆"（下面那道门）**不冲突**：那个是"她死了不炸"，这个是"炸了也认"。
+func _redhood_is_last_enemy(sim: Sim, t: SimUnit) -> bool:
+	for v in sim.units:
+		if v == null or v == t or not v.alive:
+			continue
+		if v.fn == t.fn:
+			return false   # 对面还有别的活人 ⇒ 打死她换不来胜利，这一击不值得挨自爆
+	return true
 
 func _move_cells(sim: Sim, u: SimUnit) -> Dictionary:	# 大骑士：沿 6 个轴向直线冲锋（与玩家一致，避免规划与执行轨迹不符）。
 	# 途中被单位/墓碑/**障碍物**阻挡即停：障碍同样挡冲锋，防止 AI 计划穿墙。
@@ -6840,10 +6962,14 @@ func _sim_spawn_sub(sim: Sim, fn: int, hid: String, cell: Vector2i) -> void:
 				if h_best == null or v.hp < h_best.hp:
 					h_best = v
 		if h_best != null:
-			# 真实是 `take_damage(3, false, false, "被%s锁定重创", true)`：不无视圣盾 / is_attack=true / 非反击
+			# 真实是 `take_damage(effective_atk(), false, false, "被%s锁定重创", true)`：不无视圣盾 / is_attack=true / 非反击
+			# 【2026-10-01·对齐原版·用户「猎颅者登场吃了个攻击 buff，是打 5 血还是 3 血」】伤害 = 登场那一刻的
+			#   **有效攻击力**（原版 `SkillShock` 预制体上 `ApplyFactor=0` ⇒ `Calculate` 里取 `self.AttackFactor`）
+			#   ⇒ 吃攻击 buff（含落点道具）会涨：3 → 5。模拟里直接用登场单位 `nu.eatk`。
+			#   ⚠️ 若模拟此刻还没把落点道具算进 `nu.eatk`，这里退化成面板值（= 改动前的 3）⇒ 不会比原来更差。
 			var had_shield: bool = h_best.shield
 			var hp_before: int = h_best.hp
-			_sim_take_damage(sim, h_best, 3, false, true, false)
+			_sim_take_damage(sim, h_best, nu.eatk, false, true, false)
 			# 真实 `_add_status_msg(best, STUN)` **无条件**跟随（没有存活判断）→ 打死也照挂眩晕；
 			# 两条真实闸门保留：① 这一击一点血都没打掉（[坚固]减到 0 等，不算打中）→ 状态不生效；
 			#   ② 负墟免疫负面。
@@ -9087,7 +9213,7 @@ func _redcap_one(sim: Sim, u: SimUnit) -> Dictionary:
 ##   ⚠️ 为什么只能在末态这样估：`_sim_flush_subs()` 有一道 `fn != sim.active_fn → continue` 的门
 ##     （真实规则：**非行动方**阵亡延到该方回合开始才补位）⇒ 我方回合里打死的人，替补**不在本窗口内落位**，
 ##     模拟永远看不到它。真实落位格 = `Battle._free_sub_cell_for()` = **优先本方墓碑格**（就是刚死那人的格子）。
-##   每张替补的威胁 = 登场技（5 个有 `on_enter` 的英雄里只有猎颅者会打人：打"血最低的敌人"3 点 + [眩晕]）
+##   每张替补的威胁 = 登场技（5 个有 `on_enter` 的英雄里只有猎颅者会打人：打"血最低的敌人"、伤害 = 它的攻击力 + [眩晕]）
 ##     + 它从墓碑格出发**够不够得到她**（`spawn_move` + `spawn_attack_range`；一律按"能走到就算"⇒ 偏保守）。
 func _redcap_sub_threat(sim: Sim, u: SimUnit) -> float:
 	var opp: int = DataRegistry.Faction.PLAYER if u.fn == DataRegistry.Faction.ENEMY else DataRegistry.Faction.ENEMY
@@ -9117,7 +9243,10 @@ func _redcap_sub_threat(sim: Sim, u: SimUnit) -> float:
 			continue
 		var entry := 0.0
 		if hid == "hero_39" and lowest:
-			entry = 3.0                   # `Battle._hurt_lowest_enemy_stun`：3 点 + [眩晕]（src/Battle.gd:4168）
+			# 【2026-10-01·对齐原版】登场伤害 = 猎颅者**登场那一刻的 `effective_atk()`**（原来写死 3.0）。
+			#   这里 pick/末态阶段它还没上场，拿不到"落点道具 / 加攻光环"那一部分 ⇒ 用**面板攻击力**
+			#   `def.atk`（现役 = 3，与改动前逐位相同；面板若变，这里自动跟上）。
+			entry = float(def.atk) + 0.0  # + [眩晕]（`Battle._hurt_lowest_enemy_stun`；眩晕不计分）
 		best = maxf(best, entry)          # 登场技只要落地就发生（不看距离）
 		var atk := float(def.atk)
 		if hid == "hero_29":

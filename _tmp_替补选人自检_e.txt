@@ -1,0 +1,6 @@
+ERROR: Failed to read the root certificate store.
+   at: get_system_ca_certificates (platform/windows/os_windows.cpp:2582)
+SCRIPT ERROR: Parse Error: Function "_dynamic_sub_pick()" is a coroutine, so it must be called with "await".
+   at: GDScript::reload (res://RL/probe/替补选人自检.gd:118)
+ERROR: Failed to load script "res://RL/probe/替补选人自检.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)

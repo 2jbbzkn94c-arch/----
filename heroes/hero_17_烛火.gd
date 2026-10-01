@@ -19,4 +19,5 @@ func on_move() -> void:
 	#   出这一圈（`fx()`），被烧的人只留掉血数字（大号，`set_big_hit_style()`）与受击闪/抖。
 	for v in enemies:
 		v.set_big_hit_style()
+		battle.kill_intro_side(unit, v, unit.effective_atk(), true)   # 波及致死也弹击杀卡面（用户报）
 		v.take_damage(unit.effective_atk(), false, false, "被%s的烛火灼烧" % unit.display_name, true)

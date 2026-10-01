@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://g7v1yhrxh38a"]
+
+[ext_resource type="Script" path="res://arena/桥保真自检.gd" id="1_chk"]
+
+[node name="BridgeChk" type="Node"]
+script = ExtResource("1_chk")

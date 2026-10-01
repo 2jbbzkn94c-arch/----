@@ -17,6 +17,8 @@ func on_attack(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
+			# 【2026-09-30·用户报「超新星技能波及到的目标死亡时候，不弹击杀特效」】击穿致死也弹卡面
+			battle.kill_intro_side(unit, v, unit.effective_atk(), true)
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)
 
 func on_attack_dead(target: Unit) -> void:
@@ -27,4 +29,6 @@ func on_attack_dead(target: Unit) -> void:
 	for v in battle._same_side_adjacent(target):
 		if not battle._knockback(v, target.cell):
 			v.set_big_hit_style()
+			# 同上：波及致死也弹击杀卡面
+			battle.kill_intro_side(unit, v, unit.effective_atk(), true)
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)

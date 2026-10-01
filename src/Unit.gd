@@ -903,12 +903,23 @@ func _shake() -> void:
 # 【2026-09-29·用户要求「将伤害数字放大点」】数值飘字（伤害/治疗）的字号与描边在这里单独乘一个系数
 #   —— 只放大**数字**，"圣盾/被动/免疫负面"这类词条飘字维持原样。嫌大嫌小只改这一个数。
 const NUMBER_FONT_MUL := 1.35
+## 【2026-09-30·用户口径「伤害数字和技能弹字不要一起出来…弹字不要挤在一起」】**同一枚棋子**上两个字
+##   （典型：古拉博士 `_leech()` 先 `fx()` 弹「吸血」、紧接着 `_heal()` 弹「+N」）之间的**最小间隔**（秒）：
+##   不足就把**后面那个往后排**（它先透明待命、到点才亮起来并开始上浮）。
+##   ⚠️ 排队只按"同一单位"算 ⇒ **不同棋子之间互不影响**（敌人挨打那一下的数字照旧即时）。
+##   `0` = 不排队（回到改动前）。想更松/更紧只改这一个数。
+const FLOAT_TEXT_STAGGER := 0.4
+var _float_text_next_t := 0.0    # 本棋子"下一个飘字最早能出现的时刻"（`Time.get_ticks_msec()` 秒口径）
 ## 【2026-09-29·用户要求】拖拽撤下时跟随鼠标那枚**虚化影子**的不透明度（1 = 不虚化）。
 const DRAG_GHOST_ALPHA := 0.5
 func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, big := false, size_mul := 1.0) -> void:
 	var parent := get_parent()
 	if parent == null or not is_inside_tree():
 		return
+	# 【2026-09-30·用户口径「弹字不要挤在一起」】排队：与上一个字挤在一起就往后排（见 `FLOAT_TEXT_STAGGER`）
+	var now := Time.get_ticks_msec() / 1000.0
+	var delay := maxf(0.0, _float_text_next_t - now)
+	_float_text_next_t = now + delay + FLOAT_TEXT_STAGGER
 	var k := hex_radius / 54.0   # 视觉反馈随棋盘放大(基准:旧 hex60 → radius54)
 	var lbl := Label.new()
 	lbl.text = text
@@ -930,9 +941,15 @@ func _float_text(text: String, color: Color, xoff: int = -32, yoff: int = -46, b
 	parent.add_child(lbl)
 	# 把 tween 绑到 label 上，避免单位被释放时终止动画导致飘字残留。
 	# 扣血/回血数字停留更久：先完整上浮 1.0s（期间不透明），再 0.7s 淡出。
+	# 【2026-09-30·用户口径「弹字不要挤在一起」】要排队的那个先**透明待命**，到点再亮起来并开始上浮
+	#   ⇒ 同一枚棋子上「吸血」→「+N」会一个接一个出现，而不是两行叠在一起。
 	var rise := 0.5
 	var fade := 0.7
 	var t := lbl.create_tween()
+	if delay > 0.0:
+		lbl.modulate.a = 0.0
+		t.tween_interval(delay)
+		t.tween_callback(func(): lbl.modulate.a = 1.0)
 	t.tween_property(lbl, "position", lbl.position + Vector2(0, -30.0 * k), rise)
 	t.tween_property(lbl, "modulate:a", 0.0, fade)
 	t.tween_callback(lbl.queue_free)

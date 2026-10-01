@@ -18,6 +18,8 @@ func on_attack(target: Unit) -> void:
 	battle._add_status_msg(target, StatusDB.FREEZE)
 	for v in battle._same_side_adjacent(target):
 		v.set_big_hit_style()
+		# 【2026-09-30·用户报「技能波及到的目标死亡时候，不弹击杀特效」】散射致死也弹击杀卡面
+		battle.kill_intro_side(unit, v, unit.effective_atk(), true)
 		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, StatusDB.FREEZE)
 	battle.sweep_obstacles_around(target.cell)   # 散射波及到的相邻障碍：各 -1 耐久
@@ -30,6 +32,8 @@ func on_attack_dead(target: Unit) -> void:
 	# 死亡目标：仍冰冻其相邻敌人（目标本体已亡，不再冰冻自身）
 	for v in battle._same_side_adjacent(target):
 		v.set_big_hit_style()
+		# 同上：波及致死也弹击杀卡面
+		battle.kill_intro_side(unit, v, unit.effective_atk(), true)
 		v.take_damage(unit.effective_atk(), false, false, "被%s的散射波及" % unit.display_name, true)
 		battle._add_status_msg(v, StatusDB.FREEZE)
 	battle.sweep_obstacles_around(target.cell)   # 散射波及到的相邻障碍：各 -1 耐久

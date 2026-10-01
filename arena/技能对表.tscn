@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://g8etypxefxoa"]
+
+[ext_resource type="Script" path="res://arena/技能对表.gd" id="1_tab"]
+
+[node name="SkillTab" type="Node"]
+script = ExtResource("1_tab")

@@ -21,5 +21,8 @@ func on_died() -> void:
 		if v.faction == unit.faction:
 			continue
 		if battle.grid.distance(unit.cell, v.cell) == 1:
+			# 【2026-09-30·用户报「技能波及到的目标死亡时候，不弹击杀特效」】自爆炸死相邻敌人也弹卡面
+			#   （`is_attack = false`：自爆不是"攻击伤害"，与下面 `take_damage` 的默认口径一致）
+			battle.kill_intro_side(unit, v, 13, false)
 			v.take_damage(13, false, false, "被%s扑街自爆波及" % unit.display_name)
 			battle.log_message.emit("红帽扑街，波及 %s！" % v.display_name)
