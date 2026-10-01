@@ -60,7 +60,6 @@ const KEY_VAR := {
 	"REDCAP_SUB_RISK_W": "w_redcap_sub_risk",
 	"REDCAP_SILENCE_GUARD_W": "w_redcap_silence_guard",
 	"REDCAP_TRADE_W": "w_redcap_trade",
-	"REDCAP_BLAST_ALLY_W": "w_redcap_blast_ally",
 	# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（扁平键，全队生效）
 	"EXPOSURE_TOTAL_W": "w_exposure_total",
 	"EXPOSURE_HP_MAX": "w_exposure_hp_max",

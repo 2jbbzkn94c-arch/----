@@ -11,7 +11,7 @@ func applies_status_on_hit() -> bool:
 func on_attack(target: Unit) -> void:
 	if target == null or not target.alive:
 		return
-	if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
+	if not target._shield_block_status:   # 这一击一点血都没打掉（不算打中）：不播命中/机制演出
 		fx()
 		# 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】
 		#   原来这里还有一句 `fx_on_target(target)`（在目标格也爆一环）⇒ 去掉，只留施法者自己那圈。

@@ -5,6 +5,9 @@ extends Node
 ##   ① 「用小骷髅去挡反击」这条路**不能**被弊掉（用户原话：「你这样就会把用小骷髅去挡反击的路径给弊了」）；
 ##   ② 「英雄不能把骷髅要用的攻击位盲抢了」（用户原话：「英雄先走位，其他不参与。那英雄不就会把敌人附近的格子给占了」）。
 ##
+## ⚠️ 【2026-10-01】本探针两臂验的键已从 `SUMMON_SLOT_ONLY` 换成 **`SUMMON_PREPLAN`**
+##   （"召唤物先单独定一手、不进阶段 1 联合枚举"；用户「有召唤物的局…直接先走召唤物，能打敌人就打敌人，
+##   打不到敌人就走开，不要挡住队友路线」）。S1/S2 两条红线（反击吸收 / 唯一攻击位）在新方案下同样要成立。
 ## 机制事实（三处铁证，见 `src/BattleAI.gd` 的 `const SUMMON_SLOT_ONLY`）：
 ##   `heroes/summon_骷髅兵.gd::on_turn_end()` = 「己方回合结束：干净淡出离场」（沉默也照散）；
 ##   `Battle._end_side()` 是**本方**回合结束的结算点；面板 = **攻 1 / 血 1 / 无特性**。
@@ -49,11 +52,11 @@ func _run() -> void:
 		_sha("res://RL/ai/AI_Battle.gd"), WEIGHTS, str(ARMS), SEARCH_CAP_MS])
 	# 假通过守卫：fork 里没有这个键就直接失败（否则两臂结果相同会被误读成"改了没影响"）
 	var probe_ai = FORK.new(_grid)
-	var has_key: bool = probe_ai.get("w_summon_slot_only") != null
-	print("PROBE|GUARD|has_w_summon_slot_only=%s" % str(has_key))
+	var has_key: bool = probe_ai.get("w_summon_preplan") != null
+	print("PROBE|GUARD|has_w_summon_preplan=%s" % str(has_key))
 	probe_ai = null
 	if not has_key:
-		print("PROBE|GUARD|FAIL|fork 里还没有 w_summon_slot_only ⇒ 先跑 _rebuild_sync.ps1 重建两份副本再跑本探针")
+		print("PROBE|GUARD|FAIL|fork 里还没有 w_summon_preplan ⇒ 先跑 _rebuild_sync.ps1 重建两份副本再跑本探针")
 		print("PROBE|END")
 		get_tree().quit(1)
 		return
@@ -172,7 +175,7 @@ func _build(descs: Array, slot_only: int, obs: Dictionary = {}) -> Dictionary:
 	ai.log_decisions = false
 	ai.time_budget_ms = SEARCH_CAP_MS
 	ai.set_weights(_nm)
-	ai.set_weights({ "SUMMON_SLOT_ONLY": int(slot_only) })
+	ai.set_weights({ "SUMMON_PREPLAN": int(slot_only) })
 	var sim = ai.build_state(descs, occ, {}, {}, obs, {}, {})
 	return { "sim": sim, "ai": ai }
 

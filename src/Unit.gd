@@ -114,7 +114,8 @@ var _attack_dot: Label    # 可攻击标识（红色）
 var _marker_host: Control # 红绿标识容器（整体居中）
 var _was_counter_damage := false   # 本次受伤是否为反击伤害
 var _dmg_style := 0                # 本次受击伤害数字样式：0=普通 2=重击(紫/放大), Battle 施加前标记
-var _shield_block_status := false  # 本次"带状态攻击"被圣盾整段挡下:伤害与后续状态都不生效
+var _shield_block_status := false  # 本次攻击**一点血都没打掉**（不算打中，如[坚固]减到 0）：命中附带的负面状态不生效。
+								   # ⚠️【2026-10-01】与[圣盾]**无关**：盾只挡伤害，带盾挨打时这一位不会被置起。见 Battle._apply_attack
 
 func _init(def: DataRegistry.HeroDef, faction_ := 0, cell_ := Vector2i.ZERO, radius: float = 44.0) -> void:
 	hero_id = def.id
@@ -637,16 +638,12 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 # 负面免疫由英雄脚本自己声明（HeroBase.immune_to_negative），Unit 不认识具体英雄；
 # 判定用状态 key（与 add/remove 同 key）。[附体] 同为负面标记，负墟同样免疫（命中计数攻+1）。
 #
-# 圣盾的语义：**挡住"那一次带伤害的攻击"**——伤害不结算，该次攻击附带的状态也不生效
-# （见 Battle._apply_attack 的 _shield_block_status）。而"纯状态施加"（雪拳移动后冰冻这种
-# 没有伤害的）用 pierce_shield=true 穿过圣盾：盾保留、状态照常挂上。
+# 【2026-10-01·用户口径 + 对齐原版】[圣盾] **只挡伤害，不挡技能效果**：
+#   负面状态照常挂上，盾也**不会因为状态而消费**（盾只在 `take_damage()` 里挡下那一次伤害后解除）。
+#   原版反编译（Assembly-CSharp.dll）可证：`BuffInvincible` 的全部实现只有"把伤害归零 + AfterDefence
+#   自我消耗"，`Unit.AddBuff` 里**没有任何盾判定** ⇒ 毒蛇[猛毒] / 战锤麻痹 / 沉默 / 宿魂[附体] 一律照挂。
+#   `pierce_shield` 参数保留（hero_26 与 tests/ 下的自检还在传），但盾已不看它 —— 传不传结果一样。
 func add_status(s: String, pierce_shield: bool = false) -> void:
-	# 圣盾：负面状态施加时消费掉圣盾并抵消本次负面（不带伤害的"纯状态施加"用 pierce_shield 越过）
-	# 圣盾判定在负墟免疫之前：带盾的负墟被负面命中先被盾挡下，不算"被负面命中"，不触发 +1 攻
-	if StatusDB.is_negative(s) and has_status(StatusDB.SHIELD) and not pierce_shield:
-		remove_status(StatusDB.SHIELD)
-		_float_text("[圣盾]", Color(0.5, 0.8, 1.0), -32, -92)   # 文字抬高，避免压住伤害数字
-		return
 	# 负面免疫（负墟 hero_44 等）：规则全在英雄脚本自己的钩子里，这里只负责问一句、通知一声。
 	# 免疫者同样不挂状态；on_negative_blocked() 由英雄决定收益（负墟：同帧去重后攻击力+1）。
 	if behavior != null and StatusDB.is_negative(s) and behavior.immune_to_negative():

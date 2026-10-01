@@ -22,7 +22,7 @@ func on_attack_dead(target: Unit) -> void:
 	_silence(target)
 
 func _silence(target: Unit) -> void:
-	if not target._shield_block_status:   # 圣盾挡下整次攻击：不播命中/机制演出
+	if not target._shield_block_status:   # 这一击一点血都没打掉（不算打中）：不播命中/机制演出
 		fx()
 		fx_on_target(target)   # 目标已亡时自身会跳过（HeroBase.fx_on_target 内判 alive）
 	battle._add_status_msg(target, StatusDB.SILENCE)

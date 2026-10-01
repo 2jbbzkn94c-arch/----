@@ -10,4 +10,5 @@ func on_move() -> void:
 	fx()
 	# 【2026-09-29·用户口径「打一片时只要施法者身上的特效，别人不需要有技能效果」】去掉逐目标爆环
 	for v in enemies:
-		battle._add_status_msg(v, StatusDB.FREEZE, true)   # 纯状态施加(无伤害)：穿圣盾，不消耗盾
+		battle._add_status_msg(v, StatusDB.FREEZE, true)   # 纯状态施加(无伤害)。第三参 pierce_shield 是历史遗留：
+														   # 【2026-10-01】盾已不再挡任何状态，传不传都一样

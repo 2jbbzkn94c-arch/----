@@ -1282,12 +1282,15 @@ function Get-RuleScoreKeys {
              #   `const SILENCE_VALUE_W` 那块说明。规则键 22 → 26。
              # 【2026-09-26·用户口述四条】红帽（hero_40）「扑街自爆」的用法（见 `src/BattleAI.gd` 的
              #   `const REDCAP_HP_FLOOR_W` 处说明）：①保命血线 ②击杀回合防替补 ③有沉默就保护
-             #   ④没有廉价解时蓄爆 ⑤保不住时队友别贴着她；`REDCAP_CHEAP_HP` = "残血"线（默认 5）。
+             #   ④没有廉价解时蓄爆 ⑥自爆换命；`REDCAP_CHEAP_HP` = "残血"线（默认 5）。
              #   值写在 `hero_40` 段（`_wh` 覆盖读），扁平键只是兜底（默认 0 = 关）。规则键 26 → 32。
              #   ⚠️ ② 在 RL 跑批里量不到（`RL/harness/对局.gd` 从不发生替补 ⇒ rosters 恒空）。
+             #   【2026-10-01】⑤ `REDCAP_BLAST_ALLY_W`（保不住时队友别贴着她）**已删**：机制改成
+             #     "红帽自爆只对**敌人**"之后，我方红帽不可能再炸到队友 ⇒ 该键恒 0、留着只会误导。
+             #     同日补上 ⑥ `REDCAP_BLAST_SELF_W`（新增时漏登记）⇒ 净效果：键表条数不变。
              'SILENCE_VALUE_W', 'THORN_PIN_SUP_W', 'THORN_PIN_RANGED_W', 'PARALYZE_ZERO_W',
              'REDCAP_HP_FLOOR_W', 'REDCAP_CHEAP_HP', 'REDCAP_SUB_RISK_W', 'REDCAP_SILENCE_GUARD_W',
-             'REDCAP_TRADE_W', 'REDCAP_BLAST_ALLY_W',
+             'REDCAP_TRADE_W', 'REDCAP_BLAST_SELF_W',
              # 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关；血上限是它的第二道门）
              'EXPOSURE_TOTAL_W', 'EXPOSURE_HP_MAX',
     # 【2026-09-29·㉛】AoE 形状总账（用户报「AI 不会应对玩家的长剑」后新增；默认 0 = 关）
@@ -1500,6 +1503,17 @@ function Get-RuleScoreKeys {
              #   与 `TWO_PHASE_P1_BEAM`/`TWO_PHASE_DEDUP` 同类：**算力分配键、不进自动搜索**。
              #   ⇒ 规则键 37 → 38、可注入 45 → 46。
              'SUMMON_SLOT_ONLY',
+             # 【2026-10-01·用户「有召唤物的局…直接先走召唤物，能打敌人就打敌人，打不到敌人就走开，
+             #   不要挡住队友路线」】召唤物**先单独定一手**、不进阶段 1 的联合枚举（见 `src/BattleAI.gd`
+             #   的 `const SUMMON_PREPLAN` 处说明；算力键、不进自动搜索）。规则键 45 → 46（可注入 52 → 53）。
+             'SUMMON_PREPLAN',
+             # 【2026-10-01·用户「还是太长，有死灵的局，把进入 2 阶段的套数减少到 12」】有召唤物时
+             #   送进阶段 2 的阵型数（见 `src/BattleAI.gd` 的 `const SUMMON_LAYOUTS` 处说明；算力键）。
+             #   规则键 46 → 47（可注入 53 → 54）。
+             'SUMMON_LAYOUTS',
+             # 【2026-10-01·用户「还是好慢啊」】有召唤物时的**内层宽度**（见 `src/BattleAI.gd` 的
+             #   `const SUMMON_INNER` 处说明；算力键）。规则键 47 → 48（可注入 54 → 55）。
+             'SUMMON_INNER',
              # 【2026-09-29 晚·用户「只有能算出斩杀的时候才换人，其他时候一律按需求替补」】
              #   替补选人"让搜索自己回答该上谁"（`Battle._sub_idx_by_search()`）：按候选各跑一次轻量搜索，
              #   **只有比需求制多收人头**才覆盖它。算力分配键、不进自动搜索；默认 0 = 关。

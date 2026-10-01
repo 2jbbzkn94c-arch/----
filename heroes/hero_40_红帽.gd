@@ -1,5 +1,5 @@
 extends HeroBase
-## 红帽：扑街时，对相邻的所有单位（含己方队友）造成13点伤害。强退时不触发。
+## 红帽：扑街时，对相邻的**敌方**单位造成13点伤害（**不再误伤己方**）。强退时不触发。
 ## 自爆波及到的相邻障碍物各掉 1 点耐久（技能波及障碍要掉耐久）。
 class_name HeroRedhood
 
@@ -15,6 +15,10 @@ func on_died() -> void:
 	battle.sweep_obstacles_around(unit.cell)   # 自爆波及到的相邻障碍：各 -1 耐久
 	for v in battle.units:
 		if v == null or not is_instance_valid(v) or not v.alive:
+			continue
+		# 【2026-10-01·用户「把红帽的技能效果改成只对敌人造成爆炸伤害」】只炸**敌对阵营**：
+		#   同阵营（含她自己）一律跳过 —— 原来这里是"相邻的**所有**单位（含己方队友）"。
+		if v.faction == unit.faction:
 			continue
 		if battle.grid.distance(unit.cell, v.cell) == 1:
 			v.take_damage(13, false, false, "被%s扑街自爆波及" % unit.display_name)

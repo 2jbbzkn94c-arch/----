@@ -57,6 +57,9 @@ class SimUnit:
 	# 但"下一次攻击 +1"的**一次性道具**叠在上面 —— 2026-09-20 修 bug，见 `src/Unit.gd:414` 的说明）。
 	# ⇒ sim 侧：`echo_set` 只用来标记"是不是共鸣者"，道具 +1 照常进 `eatk`（不再有旧守卫）。
 	var echo_set := -1
+	# 【2026-10-01·用户「给 AI 打爆红帽爆炸时增加个评估」】**被红帽扑街自爆炸死的单位下标**（只记一次，
+	#   给 ⑥`REDCAP_BLAST_SELF_W` 按身价算账用）。空 = 这一局没被自爆带走过人。
+	var blast_killed: Array = []
 	#   [荆棘](THORN)：不能移动。真实 `Unit.effective_move()` 遇到 STUN/THORN 直接返回 0。
 	#   本 sim 的既有做法是直接把 `emove` 记成 0（效果等价，已 MATCH），这里补上状态存在性字段，
 	#   不改移动力算法。
@@ -380,6 +383,8 @@ var last_tp_phase1_ms := 0        # 阶段 1（走位）耗时
 var last_tp_phase2_ms := 0        # 阶段 2（出手）耗时
 var last_tp_layouts_built := 0    # 阶段 1 一共产出多少套阵型
 var last_tp_layouts_used := 0     # 经漏斗送进阶段 2 的阵型数（受 TWO_PHASE_LAYOUTS 封顶）
+# 【2026-10-01·`SUMMON_LAYOUTS`】本次搜索**实际**用的漏斗上限（有召唤物时可能被换小）；0 = 还没跑过。
+var last_tp_layout_cap := 0
 var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个数
 # 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】阶段 1 的两笔去重账：
 #   `evals` = 真正跑了多少次完整 `_evaluate`（= 没去重时的候选条数）；`dups` = 其中"同末态"被丢掉的条数。
@@ -396,6 +401,10 @@ var last_tp_p2_dups := 0          # 阶段 2 被"同末态去重"丢掉的条数
 #   这四笔账**只统计、不改行为**（与 `evals/dups` 同一口径），用来看"召唤队那 655s 到底花在哪一层"。
 var last_tp_p1_hero_kids := 0     #   英雄落点生成的子条目数
 var last_tp_p1_summon_kids := 0   #   召唤物落点生成的子条目数
+# 【2026-10-01·`SUMMON_PREPLAN`】本次搜索里"召唤物先单独定了几个"（只进 `[搜索分账]` 日志，纯取证）。
+var last_summon_pre_n := 0
+# 【2026-10-01】其中"当前打不到、留到英雄走完再定"的有几个（纯取证；见 `_search_two_phase()` 那段）。
+var last_summon_late_n := 0
 var last_tp_p1_hero_evals := 0    #   英雄条目里真正评分的（过完去重）
 var last_tp_p1_summon_evals := 0  #   召唤物条目里真正评分的
 var last_polish_swaps := 0          # 复查换掉了几手（0 = 没换 = 原计划已经够好）
@@ -581,7 +590,7 @@ const TANK_SCREEN_W := 0.0
 #   本键是**位置就绪**的代理（"我这个坦克是不是紧邻着某个更靠后的队友"，与队友临时落点无关）
 #   ⇒ 只有它能进 `_layout_score()`（阶段 1 逐层排阵型时用）。值与 ㉘ 同量纲（1 份 = 1 个脆皮队友 ≈ 1 分）。
 # ============ 【2026-09-26·用户口述四条·默认全 0】红帽（hero_40）「扑街自爆」的用法 ============
-# 机制（`heroes/hero_40_红帽.gd`）：5攻 / 13血；**阵亡时**对相邻的**所有**单位（含己方队友）造成 13 点
+# 机制（`heroes/hero_40_红帽.gd`）：5攻 / 13血；**阵亡时**对相邻的**敌对阵营**单位造成 13 点
 #   **非攻击**伤害（坚固不减、圣盾照挡），相邻障碍各 −1 耐久；⚠️ 脚本第 8 行：**被[沉默]或[眩晕]期间阵亡
 #   ⇒ 完全不触发**。⇒ 她是个"走路的炸弹"，但**远程站圈外打死她一分不吃**、**残血单位换掉她不亏**、
 #   **沉默术士打死她连炸都没有**（`heroes/hero_34_沉默术士.gd::on_attack_dead` 的注释就是拿红帽举例的）。
@@ -594,8 +603,10 @@ const TANK_SCREEN_W := 0.0
 #   ③ `REDCAP_SILENCE_GUARD_W`「有沉默就保护」：能挂沉默的人够得到她 ⇒ 单独再罚一笔（被沉默后阵亡**不自爆**）。
 #   ④ `REDCAP_TRADE_W`「蓄爆档」：**对方没有廉价解时反过来用** —— 血线**低于**她会吃到的最大反击伤害
 #      ⇒ 自爆的**时机握在自己手里**（她自己选一手炸在哪儿），按"这一炸能换到多少 − 她自己的身价"给分。
-#   ⑤ `REDCAP_BLAST_ALLY_W`「保不住就止损」：下回合对方真实伤害合计（`_incoming_total_on`）≥ 她的血
-#      ⇒ 她大概率要炸 ⇒ **队友别贴着她**（13 点连自己人一起炸；会被炸死的队友额外再加一份）。
+#   ⑤ `REDCAP_BLAST_ALLY_W`「保不住就止损」**已删（2026-10-01）**：它算的是"下回合她大概率要炸 ⇒
+#      **队友别贴着她**（13 点连自己人一起炸）"。可用户当天把机制改成"**只对敌人**造成爆炸伤害"
+#      （`heroes/hero_40_红帽.gd`）⇒ **我方红帽不可能再炸到自己队友** ⇒ 这一项恒为 0、留着只会误导。
+#      依据读数与删除范围见 `Data/Progress_tracking/1_通用策略.md` 的「已删 / 已判死登记表」。
 # 为什么全是"末态"项：与 ⑳㉑㉒㉓㉕ 同层（只在 `_evaluate(sim, end_of_turn=true)` 结算）⇒ 中途恒 0，
 #   不污染逐步日志、也不影响中途排序与剪枝。
 # ⚠️ 新评分项 ⇒ 值要靠剂量批定；② 在 RL 跑批里量不到（`RL/harness/对局.gd` 从不发生替补）⇒ 只能靠探针 + 实机验。
@@ -604,8 +615,26 @@ const REDCAP_CHEAP_HP := 5.0          # 用户的"残血"口径：血 ≤ 5 的�
 const REDCAP_SUB_RISK_W := 0.0
 const REDCAP_SILENCE_GUARD_W := 0.0
 const REDCAP_TRADE_W := 0.0
-const REDCAP_BLAST_ALLY_W := 0.0
+
+# 【2026-10-01·用户「怎么 AI 直接不顾自己被爆炸巨额伤害，也要打爆我的红帽」→「给 AI 打爆红帽爆炸时增加个评估」】
+#   **⑥ `REDCAP_BLAST_SELF_W`「自爆换命」**（键，默认 0 = 关）：**任何一顶红帽**那一炸**炸死了谁**，
+#   就按**那些单位的身价全价**记一遍 —— 炸死的是**我方**（AI 自己人）⇒ 罚；炸死的是**对面** ⇒ 给我方记功。
+#   ⇒ "AI 主动打爆对面红帽"这条路（她炸的是**我方**）自然被罚到。
+#   **病灶（实测）**：自爆炸死我方单位这件事，账上**其实记了**（`②身价` 那一份消失 + `③血量账` 掉血），
+#   但**记太便宜** —— 探针 `RL/probe/红帽自爆逐单位账自检.tscn` 实测那一刀：
+#     打之前 −163.02 ⇒ 打之后 −58.08（**Δ+104.94**，AI 大赚）；其中"我方折一个"的代价只有
+#     `②身价 −18.80` ＋ `③血量账 −6.00`，而它换来的是 `⑦核心风险 +39.7`、`㉖暴露总量 +36.0`
+#     （她死了，这两笔"她会来打我"的威胁账一起消失）。
+#   ⇒ 本项就是给"换命"那一半**单独标价**：`Σ_被我方自爆炸死的单位 身价`（默认按**全价**；
+#     W = 1 ⇒ 折一个身价 18.8 的单位就多罚 18.8 分，与"她要来打我"的收益对撞）。
+#   ⚠️ 口径说明（避免与既有项打架）：②身价 已经收过"单位消失"，本项是**再收一遍**——这是**有意的**:
+#     用户要的是"别拿自己人换她"，而 ②身价 是**全局守恒**的那些账（谁死都一样不划算），
+#     单独这一路要的是"**这一刀**值不值"。W 就是这份加价的力度旋钮。
+#   ⚠️ **对称**：我方红帽被对面打爆、炸死对面的人时，同样按"炸死几个"给**我方**加分（对面 AI 也会疼）。
+#   ⚠️ 只在末态结算（与 ①③④ 同层），0 = 关 ⇒ 生产三档逐位不变。
 const REDCAP_BLAST_DMG := 13.0        # 自爆伤害（`heroes/hero_40_红帽.gd:19` 的 13；写死：这是机制事实）
+# 【2026-10-01·见文件头那段说明】⑥「自爆换命」的力度：按"被炸死的我方单位身价"全价的多少倍罚。默认 0 = 关。
+const REDCAP_BLAST_SELF_W := 0.0
 # 【2026-09-26·用户拍板选项 2】㉖「**脆皮输出的暴露总量**」（键 `EXPOSURE_TOTAL_W`，默认 0 = 逐位不变）。
 #   用户口径：「**即使没有沉默，也不应该把脆皮输出这样暴露**」（起因：他那局 AI 把 13 血的红帽留在
 #   "下回合挨 10 伤"的格子上，只为凑一次击杀）。**病灶是 ⑦ 的量级**：⑦核心风险 = `RISK_W ×
@@ -1200,7 +1229,8 @@ var w_redcap_cheap_hp := REDCAP_CHEAP_HP
 var w_redcap_sub_risk := REDCAP_SUB_RISK_W
 var w_redcap_silence_guard := REDCAP_SILENCE_GUARD_W
 var w_redcap_trade := REDCAP_TRADE_W
-var w_redcap_blast_ally := REDCAP_BLAST_ALLY_W
+# 【2026-10-01·用户要求】⑥「自爆换命」（见 const REDCAP_BLAST_SELF_W 处说明）。0 = 关。
+var w_redcap_blast_self := REDCAP_BLAST_SELF_W
 # 【2026-09-26·用户拍板选项 2】㉖ 脆皮输出的暴露总量（见 `const EXPOSURE_TOTAL_W` 处说明）
 var w_exposure_total := EXPOSURE_TOTAL_W
 var w_exposure_hp_max := EXPOSURE_HP_MAX
@@ -1253,9 +1283,15 @@ var w_tp_p1_beam := TWO_PHASE_P1_BEAM
 var w_tp_dedup := TWO_PHASE_DEDUP
 # 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（见 `const TWO_PHASE_LAYOUTS` 处说明）。
 var w_tp_layouts := TWO_PHASE_LAYOUTS
+# 【2026-10-01】场上有召唤物时送进阶段 2 的阵型数（0 = 不生效；见 `const SUMMON_LAYOUTS` 处说明）。
+var w_summon_layouts := SUMMON_LAYOUTS
+# 【2026-10-01】有召唤物时的**内层宽度**（0 = 不生效；见 `const SUMMON_INNER` 处说明）。
+var w_summon_inner := SUMMON_INNER
 # 【2026-09-24·用户「做L1」】阶段 2 的"同末态去重"（见 `const TWO_PHASE_P2_DEDUP` 处说明）。默认 0 ⇒ 逐位不变。
 var w_tp_p2_dedup := TWO_PHASE_P2_DEDUP
 var w_summon_slot_only := SUMMON_SLOT_ONLY   # 【2026-09-24】召唤物阶段 1 只走"能打到人的格"（见 const 处说明）
+# 【2026-10-01】召唤物**先单独定一手**（不进阶段 1 枚举；见 `const SUMMON_PREPLAN` 处说明）。默认 0 = 逐位不变。
+var w_summon_preplan := SUMMON_PREPLAN
 # 【2026-09-25】「挨打合计」的同局面记忆化（见 `const INC_MEMO` 处说明：⑥⑦㉕ 重复问同一批查询）。默认 0 ⇒ 逐位不变。
 var w_inc_memo := INC_MEMO
 # 【2026-09-25】阶段 2 的内层宽度（见 `const TWO_PHASE_INNER` 处说明）。默认 0 ⇒ 沿用 `beam / 8`。
@@ -1501,13 +1537,13 @@ func set_weights(t: Dictionary) -> void:
 			# 【2026-09-28·默认关】"血锁开团"两键（见 const PULL_OPEN_W 处说明）：包围增量 / 拉出来落单
 			"PULL_OPEN_W": w_pull_open = float(v)
 			"PULL_ISOLATE_W": w_pull_isolate = float(v)
-			# 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 止损（见 const REDCAP_HP_FLOOR_W 处说明）
+			# 【2026-09-26·默认全 0】红帽（hero_40）四条用法 + 自爆换命（见 const REDCAP_HP_FLOOR_W 处说明）
 			"REDCAP_HP_FLOOR_W": w_redcap_hp_floor = float(v)
 			"REDCAP_CHEAP_HP": w_redcap_cheap_hp = float(v)
 			"REDCAP_SUB_RISK_W": w_redcap_sub_risk = float(v)
 			"REDCAP_SILENCE_GUARD_W": w_redcap_silence_guard = float(v)
 			"REDCAP_TRADE_W": w_redcap_trade = float(v)
-			"REDCAP_BLAST_ALLY_W": w_redcap_blast_ally = float(v)
+			"REDCAP_BLAST_SELF_W": w_redcap_blast_self = float(v)
 			# 【2026-09-26·选项 2】㉖ 脆皮输出的暴露总量（默认 0 = 关）
 			"EXPOSURE_TOTAL_W": w_exposure_total = float(v)
 			"EXPOSURE_HP_MAX": w_exposure_hp_max = float(v)
@@ -1534,10 +1570,16 @@ func set_weights(t: Dictionary) -> void:
 			"TWO_PHASE_DEDUP": w_tp_dedup = int(v)
 			# 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】阶段 2 的漏斗宽度（算力分配键，见 const 处说明）
 			"TWO_PHASE_LAYOUTS": w_tp_layouts = maxi(int(v), 1)
+			# 【2026-10-01】有召唤物时的漏斗宽度（见 `const SUMMON_LAYOUTS` 处说明）
+			"SUMMON_LAYOUTS": w_summon_layouts = int(v)
+			# 【2026-10-01】有召唤物时的内层宽度（见 `const SUMMON_INNER` 处说明）
+			"SUMMON_INNER": w_summon_inner = int(v)
 			# 【2026-09-24·用户「做L1」】阶段 2"同末态去重"（1 = 开；见 const TWO_PHASE_P2_DEDUP 处说明）
 			"TWO_PHASE_P2_DEDUP": w_tp_p2_dedup = int(v)
 			# 【2026-09-24·用户拍板「改」】召唤物（骷髅兵）阶段 1 只枚举"能打到人的落点"（见 const 处三处铁证）
 			"SUMMON_SLOT_ONLY": w_summon_slot_only = int(v)
+			# 【2026-10-01】召唤物先单独定一手（1 = 开；见 `const SUMMON_PREPLAN` 处说明）
+			"SUMMON_PREPLAN": w_summon_preplan = int(v)
 			"SUB_BY_SEARCH": w_sub_by_search = int(v)
 			# 【2026-09-25】「挨打合计」记忆化（1 = 开；见 const INC_MEMO 处说明）
 			"INC_MEMO": w_inc_memo = int(v)
@@ -1854,6 +1896,20 @@ const SEARCH_MODE := 0
 #   不注入时**逐位不变**）。过去它是写死的常量，T24 只能靠"改常量 + 重建两份副本 + 跑同一个局面"比 16/32；
 #   提升成键之后才能像别的旋钮一样跑**配对剂量批**（`难度体检 -Mode funnel`，臂 `fn8 / fn16(对照) / fn32 / fn64`）。
 const TWO_PHASE_LAYOUTS := 16
+# 【2026-10-01·用户「还是太长，有死灵的局，把进入 2 阶段的套数减少到 12」】**按局面动态收窄漏斗**：
+#   场上有**召唤物**（死灵法师那队）时，送进阶段 2 的阵型数从 `TWO_PHASE_LAYOUTS` 换成 `SUMMON_LAYOUTS`。
+#   为什么只在这种局降：阶段 2 的完整计划数 = `阵型数 × 内层宽度`，而**阵型里的落点组合随单位数膨胀**
+#   ⇒ 同样的漏斗宽度在召唤队上贵得多（T41 批实测：召唤队单步最久中位 102s vs 其余 6 队 ≤ 36s）。
+#   ⚠️ 判据 = `enemy_idxs`（本回合**要行动的我方单位**）里有没有召唤物 ⇒ 只管"我方死灵法师"那一侧；
+#     对面（玩家）的死灵法师召唤的骷髅在**玩家回合**行动，不进这次搜索。
+#   0 = 不生效（**逐位不变**，沿用 `TWO_PHASE_LAYOUTS`）· >0 = 有召唤物时就用这个套数。
+const SUMMON_LAYOUTS := 0
+# 【2026-10-01·用户「还是好慢啊」（读数：阶段1 10.4s + 阶段2 29.2s = 39.7s）】**有召唤物时连内层宽度也收窄**。
+#   为什么还要这一档：`SUMMON_LAYOUTS` 只砍了漏斗（16 → 12），可阶段 2 的完整计划数 = `阵型数 × 内层宽度`
+#   ⇒ 12 × 16 = 192 个计划仍要 29.2s（**单次 `_evaluate` 21ms**，而 3 单位局只要 8~9ms ⇒ 4 单位局的
+#   评分本身贵了 2.5~3 倍）。两处一起降才够：8 × 8 = 64 个计划。
+#   0 = 不生效（**逐位不变**，沿用 `TWO_PHASE_INNER`）· >0 = 有召唤物时内层就用这个值（内部夹到 ≥ 4）。
+const SUMMON_INNER := 0
 # 【2026-09-23 深夜·用户「查一下 25 秒都花在哪儿」+ 两局实测分账】**阶段 1 的每层保留宽度**独立成一个键。
 #   病灶（实机两局读数）：`[搜索分账] 阶段1 10.6~11.6s：阵型 400 套 → 送阶段2 16 套 · 阶段2 13.7~14.5s`
 #   —— 阶段 1 沿用 `BEAM`（噩梦 400）⇒ 花掉 ~45% 预算去枚举 400 套阵型，而下游**只用 16 套**
@@ -1909,6 +1965,22 @@ const TWO_PHASE_P2_DEDUP := 0
 #   ⚠️ 判定用**安全超集**（只看"路网距离 ≤ 射程"，不查视线/嘲讽门/贴身）⇒ 只会多留、绝不误删真攻击位。
 #   0 = 关（**逐位不变**；分账照旧统计，见 `last_tp_p1_summon_*`）· 1 = 开。
 const SUMMON_SLOT_ONLY := 0
+# 【2026-10-01·用户「有召唤物的局，可不可以召唤物的路径简单点，直接先走召唤物，能打敌人就打敌人，
+#   打不到敌人就走开，不要挡住队友路线」】**召唤物先单独定一手**（键 `SUMMON_PREPLAN`）。
+#   病灶：联合枚举把召唤物也算一层 ⇒ 层数 = 单位数 ⇒ 状态数 ≈ ∏(候选数)；实测召唤队单步最久中位
+#   102s、32 局里 31 局撞满 `TIME_BUDGET_MS = 40000` ⇒ 后半段只能转 `_greedy_finish()` 贪心收尾。
+#   规则（用户口述，逐条对应）：
+#     ① **能打到敌人就打**：在 `_actions_for()` 的完整动作（含"走＋打"）里挑有目标的，**能击杀 > 伤害最高**；
+#     ② **打不到就走开**：候选 = 它走得到的空格，取"**离最近的敌人最远**"的那一格（往后撤 ⇒ 既不挡
+#        队友的路线、也不占前压位），只走位不出手；
+#     ③ 实在没地方走 ⇒ 原地不动。
+#   ⚠️ 与用户 2026-09-24 **当场否掉**的那版区别在**顺序**：那版是"英雄先走位、召唤物排最后贪心"
+#     ⇒ 英雄会盲抢攻击位（用户原话「英雄不就会把敌人附近的格子给占了」）；本版**召唤物先定** ⇒
+#     英雄在它站定之后才规划，看得见它站哪 ✓。「小骷髅先上去吃反击」那条线也保住：能打到敌人时
+#     它就站在攻击位上出手。
+#   ⚠️ 代价（用户已知情）：召唤物的站位不再由搜索优化 ⇒ "骷髅站哪能让英雄打得更顺"这类协同会丢。
+#   0 = 关（**逐位不变**）· 1 = 开（召唤物不进阶段 1 枚举）。
+const SUMMON_PREPLAN := 0
 # 【2026-09-25·用户「死灵法师在场的时候还是会超时」】**同一次评估内「挨打合计」只算一遍**（键 `INC_MEMO`）。
 #   病灶（逐行读码 + 探针实测）：`_incoming_total_on()` 是引擎里最贵的一次查询（逐敌人查"走位＋射程＋视线＋
 #   嘲讽门＋坚固/塔盾修正"，含 BFS 与 `los_blocked`），而**同一份 sim、同一批 (单位, 格)** 在一次 `_evaluate()`
@@ -2594,7 +2666,19 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var beam := _beam()
 	# 【2026-09-23 深夜·默认关】阶段 1 的每层宽度（`TWO_PHASE_P1_BEAM`）：0 = 沿用 `BEAM`（逐位不变）；
 	#   >0 = 只留这么多条线（至少 `TWO_PHASE_LAYOUTS`，否则漏斗没东西可送）。见 const 处那两局实测分账。
-	var p1_beam: int = beam if w_tp_p1_beam <= 0 else maxi(int(w_tp_p1_beam), maxi(w_tp_layouts, 1))
+	# 【2026-10-01·用户「有死灵的局，把进入 2 阶段的套数减少到 12」】本回合的漏斗宽度：
+	#   场上有召唤物（死灵法师那队）⇒ 用 `SUMMON_LAYOUTS`；否则沿用 `TWO_PHASE_LAYOUTS`（逐位不变）。
+	#   判据只看 `enemy_idxs`（要行动的**我方**单位）—— 见 `const SUMMON_LAYOUTS` 处说明。
+	var lay_n: int = maxi(w_tp_layouts, 1)
+	var sm_here := false                       # 本回合我方有召唤物在场吗（内层收窄也看它）
+	for i in enemy_idxs:
+		if _is_summon_idx(sim, int(i)):
+			sm_here = true
+			if w_summon_layouts > 0:
+				lay_n = maxi(int(w_summon_layouts), 1)
+			break
+	last_tp_layout_cap = lay_n                 # 【取证】分账日志里"上限"那一栏用它
+	var p1_beam: int = beam if w_tp_p1_beam <= 0 else maxi(int(w_tp_p1_beam), lay_n)
 	# ⚠️ 内层宽度必须是整数：这里用 **8.0** 走浮点除再 `int()` 取整，避免编辑器那条
 	#   `INTEGER_DIVISION`（"Integer division. Decimal part will be discarded."）警告 ——
 	#   `beam` 恒为正 ⇒ 截断与整数除完全等价，行为逐位不变（2026-09-23 用户报的那条警告）。
@@ -2605,6 +2689,10 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	#   ⇒ 让 inner 跟着 beam 一起涨没有依据。
 	#   0 = 沿用 `beam / 8`（**逐位不变**）· >0 = 就用这个值（内部夹到 ≥ 4）。
 	var inner := maxi(4, int(beam / 8.0)) if w_tp_inner <= 0 else maxi(int(w_tp_inner), 4)
+	# 【2026-10-01·用户「还是好慢啊」】有召唤物时内层也收窄（见 `const SUMMON_INNER` 处说明）——
+	#   完整计划数 = 阵型数 × 内层宽度，只砍漏斗不够（192 个计划 × 21ms/次 = 29.2s）。
+	if sm_here and w_summon_inner > 0:
+		inner = maxi(int(w_summon_inner), 4)
 	# 【2026-09-23 深夜③】阶段 2 的 `IDLE_HIT_PENALTY` 判据：**在阶段 1 动任何人之前**先记下
 	#   "这个单位本回合有没有能打到人的出招"（与现役 `search()` 里那段同一把尺子）。
 	var start_can_hit: Dictionary = {}
@@ -2637,7 +2725,30 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	#     ② **阵型没排完时，不计"个人暴露"三项**（⑥规则B阈值 / ⑦核心暴露 / ⑮必死折）——它们描述的是
 	#        "我站这儿会不会挨打"，而队友还没挪过来挡在前面，这时算出来的数既不完整、又依赖决定顺序。
 	#        （⚠️ 只对**阶段 1 的排序**这么做；`SEARCH_MODE = 0` 与阶段 2 的完整评分一律照旧把这三项算满。）
-	var layouts: Array = [_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets))]
+	# ---------- 【2026-10-01·用户「直接先走召唤物」】召唤物先单独定一手（不进下面那张联合枚举） ----------
+	#   为什么放在这里：`start_can_hit` / `start_targets`（阶段 2 的闲置罚判据）必须在**任何人动之前**算好
+	#   —— 上面那两段已经算完了，所以此刻动手是安全的。
+	#   ⚠️ 定完就把它记进初始 `done` ⇒ 阶段 1 只枚举**英雄**的走位，层数直接少掉召唤物的份。
+	var sm_pre_path: Array = []
+	var sm_pre_done: Dictionary = {}
+	var sm_pre_n := 0
+	var sm_late: Array = []                   # 【2026-10-01】当前打不到、留到"英雄走完"再定的召唤物下标
+	last_summon_pre_n = 0                     # 【取证】本次搜索"召唤物先定了几个"（只进分账日志）
+	last_summon_late_n = 0                    # 【取证】其中"打不到、留到后面再定"的有几个
+	if w_summon_preplan > 0:
+		for i in enemy_idxs:
+			if not _is_summon_idx(sim, int(i)):
+				continue
+			sm_pre_done[i] = true                    # 无论定没定出来，都不再进联合枚举
+			var sa: Dictionary = _tp_summon_preplan(sim, int(i))
+			if sa.is_empty():
+				sm_late.append(int(i))               # 打不到 ⇒ 等英雄走完再看（见阶段 1 之后那段）
+				continue
+			_apply(sim, int(i), sa)
+			sm_pre_path.append({ "idx": int(i), "action": sa })
+			sm_pre_n += 1
+			last_summon_pre_n = sm_pre_n
+	var layouts: Array = [_tp_state(sim, sm_pre_path, sm_pre_done, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets))]
 	var timed_out := false
 	while true:
 		var pending := false
@@ -2726,7 +2837,7 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		#   "原地出手 / 敲相邻障碍 / 不打"（它自己就按 `u.moved` 卡住移动）⇒ 规则照样守住，
 		#   而且挪过位的单位**该打的这一下不会白丢**。
 		var gw_in: Array = []
-		for st0 in layouts.slice(0, mini(layouts.size(), maxi(w_tp_layouts, 1))):
+		for st0 in layouts.slice(0, mini(layouts.size(), lay_n)):
 			gw_in.append(_tp_state(st0["sim"], st0["path"], {}, float(st0["score"])))
 		var gw1: Array = _greedy_finish(gw_in, enemy_idxs)
 		last_tp_layouts_used = gw_in.size()                                   # 【取证】送进收尾的阵型数
@@ -2735,13 +2846,38 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 			last_search_ms = Time.get_ticks_msec() - t0   # 走位阶段就超时也要打日志（否则这一回合控制台什么都没有）
 			_print_decision(sim, gw1[0])
 		return gw1[0]["path"] if gw1.size() > 0 else (layouts[0]["path"] as Array)
+	# ---------- 【2026-10-01·用户「其他队友走动一下，他就可以打到了」】打不到的召唤物"后走" ----------
+	#   时间线：阶段 1 已经把**英雄**的落点排完了（召唤物被 `sm_pre_done` 挡在枚举外）⇒ 此刻的 `siml`
+	#   就是"队友都站好了"的局面 ⇒ 路已经通了 ⇒ 再问一次"现在能不能打到"。
+	#   ⚠️ **每套入选阵型分别算**（前 `lay_n` 套）：不同阵型里队友站的位置不同 ⇒ 骷髅能走的路也不同。
+	#   ⚠️ 仍然打不到 ⇒ **原地不动**（不再往后撤 —— 英雄已经走完，"让路"这时候没意义了）。
+	#   ⚠️ 这一步**不动评分**：`_tp_state` 的 `score` 是阶段 1 的代理分（只用于排序漏斗），
+	#     真正定胜负的是阶段 2 之后的 `_plan_score()` —— 它在**改完之后**的局面里算，所以追加的这一步
+	#     会照常被算进末态分（这也是它为什么安全）。
+	if w_summon_preplan > 0 and sm_late.size() > 0:
+		for li in mini(layouts.size(), lay_n):
+			var stl: Dictionary = layouts[li]
+			var siml: Sim = stl["sim"]
+			for i in sm_late:
+				var idxl := int(i)
+				if idxl < 0 or idxl >= siml.units.size():
+					continue
+				var su: SimUnit = siml.units[idxl]
+				if su == null or not su.alive or su.attacked:
+					continue
+				var sa2: Dictionary = _tp_summon_preplan(siml, idxl)
+				if sa2.is_empty():
+					continue
+				_apply(siml, idxl, sa2)
+				(stl["path"] as Array).append({ "idx": idxl, "action": sa2 })
+				last_summon_late_n += 1
 	# ---------- 阶段 2：再安排谁打谁（不再移动） ----------
 	last_tp_layouts_built = layouts.size()                 # 【取证】阶段 1 产出多少套阵型
 	last_tp_phase1_ms = Time.get_ticks_msec() - t0         # 【取证】阶段 1 花了多久
 	var t_p2 := Time.get_ticks_msec()                      # 【取证】阶段 2 计时起点
 	var best: Dictionary = {}
 	var best_wiped: Dictionary = {}
-	var layout_n := mini(maxi(w_tp_layouts, 1), layouts.size())
+	var layout_n := mini(lay_n, layouts.size())
 	# 【2026-09-23 深夜⑱·用户拍板 A】**保送"全员原地"那套阵型进阶段 2**。
 	#   为什么必须保送：模式 2 的阶段 2 是**唯一**还会发"移动+攻击"整套组合的地方（`_tp_attack_actions()`
 	#   开头 `if w_search_mode >= 2: return _actions_for(sim, idx)`），而它对**已经在阶段 1 挪过位**的单位
@@ -3022,6 +3158,72 @@ func _permute_rec(a: Array, k: int, out: Array) -> void:
 		var t2: Variant = a[k]
 		a[k] = a[i]
 		a[i] = t2
+
+## 【2026-10-01·用户「直接先走召唤物，能打敌人就打敌人，打不到敌人就走开，不要挡住队友路线」】
+##   给**一个召唤物**定下这一回合唯一的一手（返回 `{ "move", "atk" }`；空字典 = 原地不动）。
+##   规则逐条：
+##     ① **能打到敌人就打**：在 `_actions_for()` 的完整动作（含"走＋打"组合）里挑有目标的那些，
+##        取「**能击杀** > **伤害最高**」——`_actions_for()` 已经保证了射程／视线／身体／嘲讽门／
+##        "远程被贴身"这些合法性，这里只管挑最狠的那一手。
+##     ② 【2026-10-01 改】**打不到 ⇒ 返回空**（不再"往一边走"，也不再"往后撤"）：由调用方记进
+##        "待后定"名单，等英雄全部走完再拿当时的路况重算 —— 用户原话「其他队友走动一下，他就可以
+##        打到了」。⚠️ 一个单位一回合**只能移动一次** ⇒ "先走开让路"与"等队友让开后走到攻击位"
+##        物理上不能兼得，用户选了后者（所以"让路"这条规则整个删掉了）。
+##   ⚠️ "不能行动"（眩晕／本回合已出手）⇒ 返回空 ⇒ 调用方照样把它标成"处理过了"，不进联合枚举。
+##   ⚠️ 距离一律走 `walk_dist()`（路网距离，与 `_tp_summon_slot_moves()` 同一把尺）。
+func _tp_summon_preplan(sim: Sim, idx: int) -> Dictionary:
+	if idx < 0 or idx >= sim.units.size():
+		return {}
+	var u: SimUnit = sim.units[idx]
+	if u == null or not u.alive or u.stunned or u.attacked:
+		return {}
+	# ① 能打到敌人 ⇒ 挑最狠的一手（能击杀 > 伤害最高）
+	var best: Dictionary = {}
+	var best_kill := false
+	var best_dmg := -1.0
+	var free_atk := _sim_free_atk(u)
+	for a in _actions_for(sim, idx):
+		var ti := int(a.get("atk", -1))
+		if ti < 0 or ti >= sim.units.size():
+			continue
+		var tg: SimUnit = sim.units[ti]
+		if tg == null or not tg.alive:
+			continue
+		var dmg := _hit_after_target_mods(sim, tg, tg.cell, free_atk, true)
+		var kill := dmg >= float(tg.hp)
+		var better := false
+		if best.is_empty():
+			better = true
+		elif kill and not best_kill:
+			better = true
+		elif kill == best_kill and dmg > best_dmg:
+			better = true
+		if better:
+			best = a
+			best_kill = kill
+			best_dmg = dmg
+	if not best.is_empty():
+		return best
+	# ② 【2026-10-01 改】**打不到 ⇒ 返回空**（不再"往一边走"）。
+	#   用户原话：「现在是只要打不到，就往一边走，但实际上**其他队友走动一下，他就可以打到了**」。
+	#   病灶：阶段 1 是**逐层**决定落点的，召唤物原来在**阶段 1 之前**就把手定死了 ⇒ 等队友挪开时
+	#   它已经动完（而它**本方回合结束就消散** ⇒ 没有"下回合再来"这回事）⇒ 那条协同线根本不存在。
+	#   ⇒ 现在返回空，由调用方把它记进"**待后定**"名单，等英雄全部走完再拿**当时的路况**重算一次
+	#   （见 `_search_two_phase()` 里那段 `sm_late`）。
+	#   ⚠️ 顺带说明**为什么不能"先走开让路、再走回来打"**：一个单位一回合**只能移动一次**（`_actions_for()`
+	#   按 `u.moved` 卡住移动）⇒ "让路"与"等队友让开后走到攻击位"物理上不能兼得。用户选了后者。
+	return {}
+
+## 【2026-10-01】`u` 从 `cell` 出发、到**最近的敌人**的路网距离（场上没敌人 ⇒ 返回一个很大的数，
+##   这样"往后撤"会退化成"随便走一格"—— 但那种局面本来也不会来问）。
+func _tp_nearest_foe_dist(sim: Sim, u: SimUnit, cell: Vector2i) -> int:
+	var best := 1 << 20
+	for j in sim.units.size():
+		var e: SimUnit = sim.units[j]
+		if e == null or not e.alive or e.fn == u.fn:
+			continue
+		best = mini(best, walk_dist(sim, cell, e.cell))
+	return best
 
 func _tp_move_actions(sim: Sim, idx: int) -> Array:
 	var out: Array = [{ "move": null, "atk": -1 }]   # 原地
@@ -3836,7 +4038,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 	if w_search_mode >= 1:
 		txt += "\n     [搜索分账] 阶段1（走位）%.1fs：阵型 %d 套 → 送阶段2 %d 套（上限 %d）" % [
 			float(last_tp_phase1_ms) / 1000.0, last_tp_layouts_built, last_tp_layouts_used,
-			maxi(w_tp_layouts, 1)]
+			(last_tp_layout_cap if last_tp_layout_cap > 0 else maxi(w_tp_layouts, 1))]
 		txt += " · 阶段2（出手）%.1fs：完整计划 %d 个" % [
 			float(last_tp_phase2_ms) / 1000.0, last_tp_leaves]
 		# 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】把阶段 1 的**去重账**打出来：
@@ -3867,6 +4069,9 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			last_tp_p1_summon_kids, last_tp_p1_summon_evals]
 		if w_summon_slot_only > 0:
 			txt += "（召唤物只走攻击位：开）"
+		if w_summon_preplan > 0:
+			txt += "（召唤物先单独定 %d 手、不进联合枚举；其中 %d 手是「打不到 ⇒ 等队友走完再定」）" % [
+				last_summon_pre_n, last_summon_late_n]
 		if last_polish_swaps > 0 or w_tp_polish > 0:
 			txt += " · 复查（逐单位改良）：换 %d 手 / +%.1f 分 / %.0fms" % [
 				last_polish_swaps, last_polish_gain, float(last_polish_ms)]
@@ -4666,7 +4871,7 @@ func _term_defs() -> Array:
 		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 3 点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
 		["红帽·沉默风险", "−REDCAP_SILENCE_GUARD_W(%.2f) × (1 + **全额**挨打合计)（触发 = 能挂沉默的人**够得到她末态格**（按同一把尺逐个问，**不经过开火位截断**）**或**她当前被沉默；被沉默期间阵亡 ⇒ **不自爆**，`heroes/hero_40_红帽.gd:8`）" % w_redcap_silence_guard],
 		["红帽·蓄爆", "+REDCAP_TRADE_W(%.2f) × max(0, 这一炸能换到的 − 她自己的身价)（**只在「对方没有廉价解」时**：末态血 ≤ 最大反击伤害 ⇒ 自爆时机握在自己手里；且相邻敌人 ≥ 2、净赚才给。量纲 = **分**：净赚 4.75 ⇒ W=0.5 时 +2.4 分）" % w_redcap_trade],
-		["红帽·止损", "−REDCAP_BLAST_ALLY_W(%.2f) × Σ_相邻队友[ 身价/20 + (会被 %.0f 点炸死 ? 1 : 0) ]（**只在**「下回合挨打合计 ≥ 她的血」时算：她大概率要炸，别让自己人贴着）" % [w_redcap_blast_ally, REDCAP_BLAST_DMG]]
+		["红帽·自爆换命", "+REDCAP_BLAST_SELF_W(%.2f) × [Σ_被这**任何一顶**红帽的自爆炸死的**我方**单位身价 − Σ_被炸死的**对面**单位身价×%.2f]（用户 2026-10-01「给 AI 打爆红帽爆炸时增加个评估」：她那一炸**打死谁就按谁的身价全价标一遍** —— 打爆她换来的是「⑦/㉖ 那两笔她带来的威胁消失」，本项就是给「换命」那一半单独标价。默认 0 = 关；噩梦 = 1.0）" % [w_redcap_blast_self, PLAYER_VALUE_MULT]],
 	]
 
 ## 【2026-09-20 新增·诊断专用】把 `_evaluate()` 的每一项**单独算出来**，供逐项打印。
@@ -5159,7 +5364,9 @@ func _sim_cell_has_pickup(sim: Sim, u: SimUnit, cell: Vector2i) -> bool:
 	return false
 
 # 红帽(hero_40)点杀风险：该击能把红帽打死（无圣盾且伤害≥其血），
-# 而她死前会对"相邻的所有敌人"自爆13——若她身边有己方单位，点杀很亏，应避免。
+# 而她死前会对"相邻的敌对阵营单位"自爆 13 —— 若**我方**有单位贴着她，点杀很亏，应避免。
+# ⚠️ 【2026-10-01】机制改成"只炸敌人"之后这条判据**一字不用改**（下面那道 `v.fn == u.fn` 看的正是
+#    "我方有没有人贴着她" ⇒ 我方就是她的敌人），只是把描述里的"己方"写明白是**出手方的己方**。
 # target 传入的是 sim.units 里的下标（生产路径），兼容直接传对象（测试）。
 func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant) -> bool:
 	var t: SimUnit = sim.units[int(target)] if target is int else target
@@ -6633,11 +6840,17 @@ func _sim_spawn_sub(sim: Sim, fn: int, hid: String, cell: Vector2i) -> void:
 					h_best = v
 		if h_best != null:
 			# 真实是 `take_damage(3, false, false, "被%s锁定重创", true)`：不无视圣盾 / is_attack=true / 非反击
-			var will_block: bool = h_best.shield   # 这一击被圣盾挡下时真实 `_shield_block_status` → 附带状态不生效
+			var had_shield: bool = h_best.shield
+			var hp_before: int = h_best.hp
 			_sim_take_damage(sim, h_best, 3, false, true, false)
 			# 真实 `_add_status_msg(best, STUN)` **无条件**跟随（没有存活判断）→ 打死也照挂眩晕；
-			# 两条真实闸门保留：① 伤害被圣盾挡下 → 状态不生效；② 负墟免疫负面。
-			if not will_block and not _sim_neg_immunity(sim, h_best):
+			# 两条真实闸门保留：① 这一击一点血都没打掉（[坚固]减到 0 等，不算打中）→ 状态不生效；
+			#   ② 负墟免疫负面。
+			# ⚠️【2026-10-01·用户口径「盾不能挡技能效果，只能挡伤害」+ 对齐原版】[圣盾] **不再**是闸门：
+			#   盾挡下伤害 ≠ 没打中 ⇒ 带盾单位照样吃眩晕。`had_shield` 就是用来把"盾挡下伤害"
+			#   排除在"0 伤害"之外的（否则盾挡后 hp 同样不变、会被误判成没打中）。
+			var no_damage: bool = (not had_shield) and h_best.hp == hp_before
+			if not no_damage and not _sim_neg_immunity(sim, h_best):
 				_sim_apply_stun(h_best)
 	# 【RL 修正】真实 `_grant_sub_aura_after_enter(nu)`（src/Battle.gd:4645-4660 → 风语者
 	# `on_ally_entered`，heroes/hero_43_风语者.gd:64-73）：**本方场上仍有存活、未受控的风语者**时，
@@ -6697,8 +6910,10 @@ func _sim_kill(sim: Sim, t: SimUnit) -> void:
 ## 阵亡时英雄专属效果（模拟侧）。
 ## 真实派发点：src/Battle.gd `_on_unit_died` → `_hero(u).on_died()`。
 func _sim_on_died(sim: Sim, t: SimUnit) -> void:
-	# 【RL 修正】红帽(hero_40)：扑街时对**相邻的所有单位（含己方队友）**造成 13 点伤害，
+	# 【RL 修正】红帽(hero_40)：扑街时对**相邻的敌对阵营单位**造成 13 点伤害，
 	# 并波及相邻障碍各 -1 耐久；被[沉默]/[眩晕]期间阵亡则不触发。
+	# 【2026-10-01·用户「把红帽的技能效果改成只对敌人造成爆炸伤害」】原来是"相邻的**所有**单位
+	#   （含己方队友）"⇒ 现在**同阵营一律跳过**（与 `heroes/hero_40_红帽.gd` 同一处判据，必须同源）。
 	# 真实规则见 heroes/hero_40_红帽.gd 的 on_died。模拟原来完全没有阵亡技，
 	# 于是 AI 会若无其事地把红帽点杀在自家队友身边。
 	# 实测 hero_40·阵亡（红帽 (2,4) 被 (2,3) 的敌人打死、队友在 (1,4)）：
@@ -6711,9 +6926,15 @@ func _sim_on_died(sim: Sim, t: SimUnit) -> void:
 			var v: SimUnit = sim.units[i]
 			if v == null or not v.alive or v == t:
 				continue
+			if v.fn == t.fn:
+				continue   # 【2026-10-01】只炸敌对阵营（原来是"含己方队友"）
 			if grid.distance(t.cell, v.cell) == 1:
 				# 非攻击伤害：真实 heroes/hero_40_红帽.gd:19 传默认 is_attack=false（坚固不减、圣盾照挡）
+				# 【2026-10-01】自爆**打死了谁**要记下来（给 ⑥ 按身价算账；`_sim_hit_no_counter` 之后才知死活）
+				var was_alive: bool = bool(v.alive)
 				_sim_hit_no_counter(sim, v, 13, false)
+				if was_alive and not bool(v.alive):
+					t.blast_killed.append(i)
 	# 【RL 修正】死灵法师(hero_33)：阵亡时**他召唤的骷髅兵一起消散**
 	# （真实 heroes/hero_33_死灵法师.gd::on_died → `battle._skeleton_owner_gone(s)` →
 	#  `_on_unit_died(s)`：召唤物不立碑、不计胜负死亡数）。模拟原来不处理，于是"杀死死灵法师"
@@ -8144,7 +8365,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   与 ⑳㉑㉒㉓㉖ **同一层**：只在末态结算（纯站位量，中途结算会来回跳）。
 	if end_of_turn and w_aoe_rider_total != 0.0:
 		score += _aoe_rider_total(sim)
-	# 【2026-09-26 新增·默认全 0】红帽（hero_40）四条用法 + 止损（见 `const REDCAP_HP_FLOOR_W` 处说明）：
+	# 【2026-09-26 新增·默认全 0】红帽（hero_40）四条用法 + 自爆换命（见 `const REDCAP_HP_FLOOR_W` 处说明）：
 	#   ①保命血线 ②击杀回合防替补 ③有沉默就保护 ④没有廉价解时反过来蓄爆 ⑤保不住时队友别贴着她。
 	#   与上面 ⑳㉑㉒㉓㉕ **同一层**（只在末态结算，中途恒 0）；全 0 ⇒ 门一次比较就跳过。
 	if end_of_turn and _redcap_on():
@@ -8677,15 +8898,15 @@ func _nearest_enemy_dist_terrain(sim: Sim, cell: Vector2i) -> int:
 	return best
 
 # ==================== 【2026-09-26】红帽（hero_40）「扑街自爆」的用法 ====================
-# 口径与动机见 `const REDCAP_HP_FLOOR_W` 处那大段说明（用户 2026-09-26 口述四条 + 一条止损）。
+# 口径与动机见 `const REDCAP_HP_FLOOR_W` 处那大段说明（用户 2026-09-26 口述四条 + 2026-10-01 追加的「自爆换命」）。
 # 全部**只在末态**结算（`_evaluate(sim, end_of_turn=true)`，与 ⑳㉑㉒㉓㉕ 同层）；扁平键 + `hero_40` 段全 0
 # ⇒ 这个门一次比较就返回 false ⇒ 四档与 RL 跑批逐位不变、也一分钱开销都不付。
 func _redcap_on() -> bool:
 	if w_redcap_hp_floor != 0.0 or w_redcap_sub_risk != 0.0 or w_redcap_silence_guard != 0.0 \
-			or w_redcap_trade != 0.0 or w_redcap_blast_ally != 0.0:
+			or w_redcap_trade != 0.0 or w_redcap_blast_self != 0.0:
 		return true
 	return _any_hero_key(["REDCAP_HP_FLOOR_W", "REDCAP_SUB_RISK_W", "REDCAP_SILENCE_GUARD_W",
-			"REDCAP_TRADE_W", "REDCAP_BLAST_ALLY_W"])
+			"REDCAP_TRADE_W", "REDCAP_BLAST_SELF_W"])
 
 ## 逐项分账（键名同时就是日志里那几行的名字）。`_evaluate()` 与 `_eval_breakdown()` **共用本函数**
 ##   ⇒ 两处的口径不可能漂移（那个 Σ 自校验不会差）。
@@ -8693,21 +8914,63 @@ func _redcap_terms(sim: Sim) -> Dictionary:
 	var d := {}
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
-		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY or u.hero_id != "hero_40":
-			continue                      # 只看**我方活着的红帽**（召唤物/替补都不可能是她）
+		if u == null or u.hero_id != "hero_40":
+			continue                      # 召唤物/替补都不可能是她
+		# 【2026-10-01·修上一轮的实现错误】原来这里还要求 `u.fn == ENEMY`（**只看我方红帽**）⇒
+		#   "AI 打爆**对面**红帽、自己挨炸"那件事**整个被跳过**、一分钱都没进 ⑥
+		#   （探针 `红帽自爆逐单位账自检` 里只有通用账 ②身价/③血量账 动过，⑥ 恒 0）。
+		#   现在遍历**所有**红帽：①③④ 那些"护着自家人"的项在 `_redcap_one()` 里靠 `mine` 只对我方算，
+		#   ⑥ 对两边都算（它记的是"这一炸炸死了谁、对 AI 是赚是亏"）。
+		# 【2026-10-01】⚠️ 这里原来还有 `not u.alive ⇒ continue` ⇒ **"她刚被打死"那一帧算不到 ⑥**
+		#   （`_redcap_one()` 里 ①③④⑤ 都要求她活着，但 ⑥「自爆换命」恰恰只在**她死了**时才有意义）
+		#   ⇒ 改成"活着 OR 这一局炸死过人"都进：活着的走原来那几项，死了的只剩 ⑥。
 		var t := _redcap_one(sim, u)
 		for k in t.keys():
 			d[k] = float(d.get(k, 0.0)) + float(t[k])
 	return d
 
+## 【2026-10-01·用户「给 AI 打爆红帽爆炸时增加个评估」】⑥「自爆换命」的取值：
+##   把 `u.blast_killed`（她这一局炸死的单位，自爆那一刻记下的下标）逐个按**身价**标价：
+##     · 炸死的是**我方**（她是对面的红帽、AI 主动打爆她）⇒ **扣分** `−W × 身价`
+##     · 炸死的是**对面**（我方红帽被对面打爆、把她自己人一起带走）⇒ **加分** `+W × 身价 × PLAYER_VALUE_MULT`
+##   ⚠️ 去重：同一个下标只算一次（`blast_killed` 是累计表）。
+func _redcap_blast_self_val(sim: Sim, u: SimUnit, w_self: float) -> float:
+	var out_v := 0.0
+	var seen_bl := {}
+	for bi in (u.blast_killed as Array):
+		var bidx := int(bi)
+		if bidx < 0 or bidx >= sim.units.size() or seen_bl.has(bidx):
+			continue
+		seen_bl[bidx] = true
+		var bv: SimUnit = sim.units[bidx]
+		if bv == null:
+			continue
+		var vv := _unit_value(sim, bv)
+		if bv.fn == u.fn:
+			out_v -= vv * w_self                      # 自己人被炸死：这份代价再罚一遍
+		else:
+			out_v += vv * PLAYER_VALUE_MULT * w_self  # 对面被炸死：给我方记功
+	return out_v
+
 func _redcap_one(sim: Sim, u: SimUnit) -> Dictionary:
-	var w_floor := _wh(u.hero_id, "REDCAP_HP_FLOOR_W", w_redcap_hp_floor)
-	var w_sub := _wh(u.hero_id, "REDCAP_SUB_RISK_W", w_redcap_sub_risk)
-	var w_sil := _wh(u.hero_id, "REDCAP_SILENCE_GUARD_W", w_redcap_silence_guard)
-	var w_trade := _wh(u.hero_id, "REDCAP_TRADE_W", w_redcap_trade)
-	var w_ally := _wh(u.hero_id, "REDCAP_BLAST_ALLY_W", w_redcap_blast_ally)
-	var out := { "血线": 0.0, "替补风险": 0.0, "沉默风险": 0.0, "蓄爆": 0.0, "止损": 0.0 }
-	if w_floor == 0.0 and w_sub == 0.0 and w_sil == 0.0 and w_trade == 0.0 and w_ally == 0.0:
+	# 【2026-10-01】"这是我方的红帽吗"：①③④ 是**护着自家人**的项（保命血线 / 蓄爆主动权 / 防替补）
+	#   ⇒ 只对我方红帽有意义；对面那顶只算 ⑥（`_redcap_terms()` 现在两边的红帽都进来）。
+	var mine: bool = (u.fn == DataRegistry.Faction.ENEMY)
+	var w_floor := (_wh(u.hero_id, "REDCAP_HP_FLOOR_W", w_redcap_hp_floor) if mine else 0.0)
+	var w_sub := (_wh(u.hero_id, "REDCAP_SUB_RISK_W", w_redcap_sub_risk) if mine else 0.0)
+	var w_sil := (_wh(u.hero_id, "REDCAP_SILENCE_GUARD_W", w_redcap_silence_guard) if mine else 0.0)
+	var w_trade := (_wh(u.hero_id, "REDCAP_TRADE_W", w_redcap_trade) if mine else 0.0)
+	var out := { "血线": 0.0, "替补风险": 0.0, "沉默风险": 0.0, "蓄爆": 0.0 }
+	var w_self_early := _wh(u.hero_id, "REDCAP_BLAST_SELF_W", w_redcap_blast_self)
+	var has_blast: bool = not (u.blast_killed as Array).is_empty()
+	# 【2026-10-01】⚠️ 她**已经死了**时（被 AI 打爆那一帧）上面几项全无意义（`line`/`hp`/沉默都无从谈起）
+	#   ⇒ 直接只算 ⑥。这也是"打爆她"那条路上唯一会命中的一项。
+	if not u.alive:
+		if w_self_early != 0.0 and has_blast:
+			out["自爆换命"] = _redcap_blast_self_val(sim, u, w_self_early)
+		return out
+	if w_floor == 0.0 and w_sub == 0.0 and w_sil == 0.0 and w_trade == 0.0 \
+			and w_self_early == 0.0:
 		return out
 	var cheap_hp := _wh(u.hero_id, "REDCAP_CHEAP_HP", w_redcap_cheap_hp)
 	var hp := float(u.hp)
@@ -8804,20 +9067,19 @@ func _redcap_one(sim: Sim, u: SimUnit) -> Dictionary:
 	if w_trade != 0.0 and line <= 0.0:
 		# ④ **只在"对方没有廉价解"时**用（用户口径）：这时低血不是危险，而是"自爆主动权"
 		out["蓄爆"] = w_trade * _redcap_trade_gain(sim, u)
-	if w_ally != 0.0 and inc_all >= hp:
-		# ⑤ 下回合对方真实伤害合计能打死她 ⇒ 她大概率要炸 ⇒ 自己人别贴着
-		var pen := 0.0
-		for j in sim.units.size():
-			var v: SimUnit = sim.units[j]
-			if v == null or not v.alive or v == u or v.fn != u.fn:
-				continue
-			if grid.distance(v.cell, u.cell) != 1:
-				continue
-			pen += _unit_value(sim, v) / 20.0
-			if not _shield_next_turn(sim, v) and REDCAP_BLAST_DMG >= float(v.hp):
-				pen += 1.0                # 会被这 13 点炸死（圣盾可整次挡下）⇒ 那一份是真阵亡，不是掉血
-		if pen > 0.0:
-			out["止损"] = -w_ally * pen
+	# 【2026-10-01】⑤「止损」`REDCAP_BLAST_ALLY_W` **已删**：它算的是"我方红帽要炸 ⇒ 我方队友别贴着"。
+	#   机制改成"只对敌人"之后，我方红帽**不可能再炸到自己队友** ⇒ 这一项恒 0 ⇒ 删掉（见登记表）。
+
+	# ---- 【2026-10-01·用户要求】⑥ 「自爆换命」：她那一炸**打死了谁**，按**身价全价**再标一遍价 -------
+	#   口径与理由见 `const REDCAP_BLAST_SELF_W` 处那段；这里只算数：
+	#     · 炸死的是**我方**（AI 自己人；典型就是"AI 打爆对面红帽、她炸了我们"）⇒ **扣分**（`−W × 身价`）
+	#     · 炸死的是**对面**（我方红帽那一炸带走了玩家的人）⇒ **加分**（`+W × 身价 × PLAYER_VALUE_MULT`）
+	#   ⚠️ 她的 `blast_killed` 是"这一局累计"（同名者只记一次）⇒ 用 `dead_ids` 去重，同一个单位只算一次。
+	var w_self := w_self_early
+	if w_self != 0.0 and has_blast:
+		var self_pen := _redcap_blast_self_val(sim, u, w_self)
+		if self_pen != 0.0:
+			out["自爆换命"] = self_pen
 	return out
 
 ## ② 的输入：**本回合被打死的敌方英雄**（= 新立起的墓碑格）+ 对方**替补名单**，逐张**最坏**。
@@ -9617,7 +9879,8 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 	# ④ 盾（现在有 / 本回合末要发下来）：整次免伤并消费 ⇒ **挡掉最小的一次**
 	# 【2026-09-26 用户口径改】原来挡"最大的一次"⇒ 等于替我们省下最疼的那一击、**低估了挨打**；
 	#   对手的合理解法是**拿最便宜的一击（poke）破盾**、把大伤害留到盾没了再打 ⇒ 估计要按"盾只吃掉最小那笔"算。
-	#   ⚠️ 只改**估计**（本函数）；真实结算里盾怎么挡由 `Unit.add_status/_shield_block_status` 那套说了算，一字未动。
+	#   ⚠️ 只改**估计**（本函数）；真实结算里盾由 `Unit.take_damage()` 消费（**只挡伤害、不挡状态**，
+	#   【2026-10-01 用户口径】），本函数一字未动。
 	if _shield_next_turn(sim, t) and inst.size() > 0:
 		var blocked: float = (0.0 if low == INF else low)
 		total = maxf(total - blocked, 0.0)
@@ -9660,7 +9923,8 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 ##      沿"攻击者 → 目标"的**轴向**、从目标**身后第一格**一路穿到出界，路径上**所有敌人**各吃一次
 ##      `unit.effective_atk()`（**穿墙穿人、不挡后面**）。
 ##   ③ 【2026-09-27·用户报「AI 不会处理玩家的红帽」】**对手红帽 hero_40 的扑街自爆**
-##      （`heroes/hero_40_红帽.gd:6` `on_died`）：对**相邻的所有单位**（含她自己的队友）造成 **13 点**伤害。
+##      （`heroes/hero_40_红帽.gd:6` `on_died`）：对**相邻的敌对阵营单位**造成 **13 点**伤害
+##      （⚠️ 2026-10-01 用户改口径：**只炸敌人、不再误伤己方**）。
 ##      ⚠️ 触发门 = 她死的那一刻**未被[沉默]/[眩晕]**（`:8` 的 `skill_allowed` 同款）。
 ##      ⚠️ **只在"她这一回合真的可能死"时才算**（`_redcap_blast_threat()` = 她的血 ≤ **我方对她的最大单击**）
 ##         —— 否则"她把血打满时旁边站个人也吃 13"就太离谱。这条正是用户报的病：
@@ -9688,7 +9952,9 @@ func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		if kind == 0:
 			continue
 		# ③ 对手红帽：**她这一回合真的可能死**才算自爆（判据 = 她的血 ≤ 我方对她的最大单击），
-		#    并且本单位得**与她相邻**（自爆范围 = 她那一格的 6 邻格，含她自己的队友）。
+		#    并且本单位得**与她相邻**（自爆范围 = 她那一格的 6 邻格）。
+		#    ⚠️ 【2026-10-01】机制改成"**只炸敌对阵营**"之后这条判据**不受影响**：这里的 `a` 是**对面**的红帽、
+		#      `t` 是**我方**单位 ⇒ 我方本来就是她的敌人 ⇒ 照样吃这 13 点（只有"她自己的队友"不再被波及）。
 		if kind == 3:
 			if not _redcap_blast_threat(sim, a):
 				continue

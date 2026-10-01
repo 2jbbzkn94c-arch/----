@@ -88,9 +88,9 @@ func _arm(tag: String, w40: Dictionary) -> void:
 	var terms: Dictionary = ai._redcap_terms(end) if ai._redcap_on() else {}
 	var shown := "（不进分账）"
 	if not terms.is_empty():
-		shown = "血线=%.2f 替补=%.2f 沉默=%.2f 蓄爆=%.2f 止损=%.2f" % [
+		shown = "血线=%.2f 替补=%.2f 沉默=%.2f 蓄爆=%.2f 自爆换命=%.2f" % [
 			float(terms.get("血线", 0.0)), float(terms.get("替补风险", 0.0)), float(terms.get("沉默风险", 0.0)),
-			float(terms.get("蓄爆", 0.0)), float(terms.get("止损", 0.0))]
+			float(terms.get("蓄爆", 0.0)), float(terms.get("自爆换命", 0.0))]
 	# 末态逐单位（便于手核"为什么那个合计是 0"）
 	var dump: Array[String] = []
 	for i in end.units.size():

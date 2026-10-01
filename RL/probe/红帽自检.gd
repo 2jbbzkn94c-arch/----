@@ -28,9 +28,10 @@ func _run() -> void:
 	print("PROBE|CFG|噩梦.json hero_40 段 = %s" % str(nm.get("hero_40", {})))
 	var ai_nm = FORK.new(_grid)
 	ai_nm.set_weights(nm)
-	print("PROBE|CFG|AI 里的值 = 门:%s ①%.1f 残血线%.0f ②%.1f ③%.1f ④%.1f ⑤%.1f" % [
+	# 【2026-10-01】⑤「止损」`REDCAP_BLAST_ALLY_W` 已随机制（只炸敌人）删除 ⇒ 这里不再打印它。
+	print("PROBE|CFG|AI 里的值 = 门:%s ①%.1f 残血线%.0f ②%.1f ③%.1f ④%.1f ⑥%.1f" % [
 		str(ai_nm._redcap_on()), ai_nm.w_redcap_hp_floor, ai_nm.w_redcap_cheap_hp, ai_nm.w_redcap_sub_risk,
-		ai_nm.w_redcap_silence_guard, ai_nm.w_redcap_trade, ai_nm.w_redcap_blast_ally])
+		ai_nm.w_redcap_silence_guard, ai_nm.w_redcap_trade, ai_nm.w_redcap_blast_self])
 	_arm("① 全 0（关）⇒ 应「不进分账」", 3, {}, [], {})
 	_arm("① 满血13 · 只挨火枪手4 ⇒ 4+1−13<0 ⇒ 0", 13, {"REDCAP_HP_FLOOR_W": W1}, [F("hero_09", 4, 4)], {})
 	_arm("① 残血3 · 只挨火枪手4 ⇒ −(4+1−3) = −2.00", 3, {"REDCAP_HP_FLOOR_W": W1}, [F("hero_09", 4, 4)], {})
@@ -58,12 +59,7 @@ func _run() -> void:
 	_arm("② 同上但红帽不是血最低（队友2血）⇒ 登场技不打她、单击仍在3 ⇒ −1.00", 3,
 			{"REDCAP_SUB_RISK_W": W1}, [], {"dead": dead_near, "roster": ["hero_39"], "ally_low": true})
 	_arm("② 对照：没打死人（没有墓碑）⇒ 0", 3, {"REDCAP_SUB_RISK_W": W1}, [], {"roster": ["hero_39"]})
-	_arm("⑤ 血3 · 挨打合计4≥3 · 队友(满血)相邻 ⇒ 止损 = −身价/20", 3, {"REDCAP_BLAST_ALLY_W": W1},
-			[F("hero_09", 4, 4)], {"ally_adj": true})
-	_arm("⑤ 同盘但队友**不**相邻 ⇒ 0", 3, {"REDCAP_BLAST_ALLY_W": W1}, [F("hero_09", 4, 4)], {"ally_far": true})
-	_arm("⑤ 同盘 · 相邻队友只剩5血（会被13炸死）⇒ 那份再 +1 ⇒ ≈ −1.94", 3, {"REDCAP_BLAST_ALLY_W": W1},
 			[F("hero_09", 4, 4)], {"ally_adj_weak": true})
-	_arm("⑤ 对照：挨打合计 4 < 血 13 ⇒ 0（她还不会炸）", 13, {"REDCAP_BLAST_ALLY_W": W1},
 			[F("hero_09", 4, 4)], {"ally_adj": true})
 	print("PROBE|END")
 	get_tree().quit(0)
@@ -142,9 +138,9 @@ func _arm(tag: String, hp: int, w40: Dictionary, foes: Array, opt: Dictionary) -
 	var terms: Dictionary = ai._redcap_terms(sim) if on else {}
 	var shown := "（不进分账）"
 	if not terms.is_empty():
-		shown = "血线=%.2f 替补=%.2f 沉默=%.2f 蓄爆=%.2f 止损=%.2f" % [
+		shown = "血线=%.2f 替补=%.2f 沉默=%.2f 蓄爆=%.2f 自爆换命=%.2f" % [
 			float(terms.get("血线", 0.0)), float(terms.get("替补风险", 0.0)), float(terms.get("沉默风险", 0.0)),
-			float(terms.get("蓄爆", 0.0)), float(terms.get("止损", 0.0))]
+			float(terms.get("蓄爆", 0.0)), float(terms.get("自爆换命", 0.0))]
 	print("PROBE|%s|血%d｜①普攻=%s｜探针线=%.1f(沉默者在程=%s)｜挨打合计=%.1f｜替补威胁=%.1f ⇒ %s｜分=%.2f" % [
 		tag, int(u.hp), (("、".join(bits)) if bits.size() > 0 else "∅"), line, str(sil_reach), inc, sub_t,
 		shown, float(ai._evaluate(sim, true))])

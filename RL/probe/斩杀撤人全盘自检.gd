@@ -110,11 +110,29 @@ func _run() -> void:
 	# S26 **边界**：已死 0 名、场上 3 个（2 + 4 + 4 = 10 > 9）⇒ 门槛拦住。
 	#   ⚠️ 探针的 `extra_hp` 把"额外对手"**统一压成同一个血**（`hero_05` 只有这一个旋钮）⇒ 想要
 	#      "2+3+4 = 正好 9"这种组合做不到；这里就取 2+4+4 = 10 当"刚过界"的样本。
-	await _case("S26 已死0名·三个最低之和=10（>9）⇒ 门槛拦住", false, Vector2i(2, 3), 2, Vector2i(2, 2),
-			["hero_40"], 0, 0, false, false, 2, false, 0, false, 4)
+	# S26 已死 0 名、三个之和 2 + 9 + 9 = 20 > 18（新界 = 9 × 本回合可撤 2 次）⇒ 门槛拦住。
+	#   ⚠️ 原来这里用的是 extra_hp=4（2+4+4=10 > 旧的 9）—— 门槛按可撤次数放大到 18 之后，10 已经**不再越界**。
+	await _case("S26 已死0名·三个最低之和=20（>18）⇒ 门槛拦住", false, Vector2i(2, 3), 2, Vector2i(2, 2),
+			["hero_40"], 0, 0, false, false, 2, false, 0, false, 9)
 	# S27 已死 0 名、三个都残（2 + 3 + 3 = 8 ≤ 9）⇒ 门槛放行 ⇒ 撤 + 收掉 2 血那个。
 	await _case("S27 已死0名·三个最低之和=8（≤9）⇒ 撤+收掉", true, Vector2i(2, 3), 2, Vector2i(2, 2),
 			["hero_40"], 0, 0, false, false, 2, false, 0, false, 3)
+	# ㉘ 【2026-10-01·用户实机「沉默术士只有 7 血，AI 没死人。随便替补两个就能斩杀，但没有」】**两刀合力**：
+	#    目标 7 血 > 名单里最高的那一击（太阳斩 6 攻、影丸 5 攻）⇒ **一个替补一刀收不掉**，
+	#    改前 ④ 会判"没人做得到" ⇒ pick 返回空 ⇒ **一次都不撤**（用户那局就是这么走的）。
+	#    改后：第一刀（削得最多的那位）被放行，剩下的血交给第二轮再撤一个收 ⇒ 期望"决定撤 + 目标没死但掉血"。
+	# S29 【2026-10-01·用户「这 9 血线的要求…现在 AI 可以替补两个人」】**门槛随"本回合可撤几次"放大**的边界：
+	#   已死 0 名 ⇒ 自己一个没死 ⇒ 本回合可撤 2 次 ⇒ 界 = 9 × 2 = 18；这里 2 + 8 + 8 = 18（正好 ≤）⇒ 放行、撤+收掉。
+	await _case("S29 已死0名·三个最低之和=18（=9×2 边界·≤）⇒ 撤+收掉", true, Vector2i(2, 3), 2, Vector2i(2, 2),
+			["hero_40"], 0, 0, false, false, 2, false, 0, false, 8)
+	# S30 倍率**不是死的 2**：我方（AI）已死 1 名 ⇒ 本回合只剩 1 次可撤（第 2 次踩判负线）⇒ 界回到 9，
+	#   同样的 2 + 8 + 8 = 18 就该被拦住（与 ①b 同一把尺子：①b 放行几次，这里放大几倍）。
+	await _case("S30 已死0名但我方已死1名·和=18（界回到9）⇒ 门槛拦住", false, Vector2i(2, 3), 2, Vector2i(2, 2),
+			["hero_40"], 0, 1, false, false, 2, false, 0, false, 8)
+	print("T|S28准备|hero_29 攻=%d｜hero_07 攻=%d" % [
+		int(DataRegistry.get_hero("hero_29").atk), int(DataRegistry.get_hero("hero_07").atk)])
+	await _case("S28 两刀合力·7血目标（期望撤·本轮只削一刀）", false, Vector2i(2, 3), 7, Vector2i(2, 2),
+			["hero_29", "hero_07"], 0, 0, false, false, 0, false, 0, false, 0, Vector2i(-99, -99), false, false, true)
 	print("T|END|PASS=%d FAIL=%d" % [_pass, _fail])
 	get_tree().quit(0)
 
@@ -129,7 +147,7 @@ func _case(nm: String, expect_kill: bool, tgt_cell: Vector2i, tgt_hp: int, victi
 		bench: Array, pdead: int, edead: int, ranged: bool, with_grave: bool,
 		extra_foe: int = 0, target_shield: bool = false, pending: int = 0, dynamic: bool = false,
 		extra_hp: int = 0, extra_cell: Vector2i = Vector2i(-99, -99), nodelim: bool = false,
-		all_acted: bool = false) -> void:
+		all_acted: bool = false, expect_cut: bool = false) -> void:
 	var hurt := await _fresh()
 	GameState.no_death_limit = nodelim
 	if dynamic:
@@ -168,6 +186,7 @@ func _case(nm: String, expect_kill: bool, tgt_cell: Vector2i, tgt_hp: int, victi
 	for i in 3:
 		await get_tree().process_frame
 	var units0 := battle.units.size()
+	var hp_before := int(tgt.hp)
 	battle._ai_finish_withdraw_pick()
 	var decided := battle._finish_withdraw_target != null
 	# ⚠️ 这几个字段要在**此刻**抄下来：apply 跑完会把自己清空（重置成 -99/-1/""）⇒ 之前读的是"被清空后"的值
@@ -184,7 +203,10 @@ func _case(nm: String, expect_kill: bool, tgt_cell: Vector2i, tgt_hp: int, victi
 	# 判读：期望"该收掉"的局面 = 必须决定撤 + 真收掉；期望"不该撤"的局面 = 不能**真的撤掉**
 	#   ⚠️ 注意：pick 阶段只看四道门，"已有待补名额"那道门在 apply 阶段才拦 ⇒ 这里判"有没有真的减员"。
 	var ok := false
-	if expect_kill:
+	if expect_cut:
+		# 【2026-10-01·两刀合力】期望"**决定撤**、且目标这一轮只被削掉、没收掉"（第二刀留给下一轮）
+		ok = decided and (not killed) and tgt != null and is_instance_valid(tgt) and int(tgt.hp) < hp_before
+	elif expect_kill:
 		ok = decided and killed
 	else:
 		ok = not decided or (not killed and battle.units.size() >= units0)
@@ -193,7 +215,7 @@ func _case(nm: String, expect_kill: bool, tgt_cell: Vector2i, tgt_hp: int, victi
 	else:
 		_fail += 1
 	print("T|%s|期望=%s|决定撤=%s|目标被收=%s|%s|撤谁=%s 落点=%s 换谁=%s(席次%d)" % [
-		nm, ("撤+收掉" if expect_kill else "不撤"), str(decided), str(killed),
+		nm, ("两刀合力（本轮只削一刀）" if expect_cut else ("撤+收掉" if expect_kill else "不撤")), str(decided), str(killed),
 		("PASS" if ok else "FAIL"),
 		(str(victim.display_name) if victim != null and is_instance_valid(victim) else "—"),
 		str(picked_cell), picked_hero, picked_idx])
