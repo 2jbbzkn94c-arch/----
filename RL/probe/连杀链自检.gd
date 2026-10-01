@@ -91,7 +91,7 @@ func _rebuild() -> void:
 				var sp := t.find(" hp")
 				var head := (t.substr(0, sp) if sp > 0 else t)
 				var at := head.split("@")
-				var u2 := battle._spawn_unit(String(at[0]), fn, str_to_var("Vector2i" + String(at[1])))
+				var u2 := battle._spawn_unit(String(at[0]), fn, _cv(str_to_var("Vector2i" + String(at[1]))))
 				if u2 == null:
 					continue
 				for tok in t.split(" "):
@@ -116,7 +116,14 @@ func _cells(t: String) -> Array:
 			continue
 		if not x.ends_with(")"):
 			x += ")"
-		var v: Variant = str_to_var("Vector2i" + x)
+		var v: Vector2i = _cv(str_to_var("Vector2i" + x))
 		if v != null:
 			out.append(v)
 	return out
+
+## 【2026-10-01】转储行里的坐标是**界面口径**（左上角 =(1, 1)）⇒ 这里 −1 换回引擎 0 基。
+func _cv(c) -> Vector2i:
+	if typeof(c) != TYPE_VECTOR2I:
+		return Vector2i.ZERO
+	var v: Vector2i = c
+	return Vector2i(v.x - DataRegistry.CELL_DISPLAY_OFFSET, v.y - DataRegistry.CELL_DISPLAY_OFFSET)

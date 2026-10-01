@@ -42,7 +42,7 @@ static func unit_desc(battle, u: Unit, poss_by: int = -1) -> Dictionary:
 		"atkdown": u.has_status(StatusDB.ATKDOWN),
 		"thorn": u.has_status(StatusDB.THORN),
 		# 共鸣者(hero_47)的 echo 状态：`echo_set >= 0` 时 `effective_atk()` 会**直接 return** 它
-		# （攻击力=队友攻击力之和，**覆盖**一切 buff/道具/被贴身），模拟侧要据此让"攻击道具 +1"不生效。
+		# （攻击力=队友攻击力之和，**覆盖**一切 buff/道具/被贴身），模拟侧要据此让"攻击道具那笔加成"不生效（现役 +2，见 `Battle.ATK_ITEM_BUFF`）。
 		"echo_set": u.echo_set,
 	}
 

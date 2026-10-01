@@ -323,6 +323,78 @@ var _finish_withdraw_target: Unit = null   # 要一刀收掉的那个玩家单�
 var _finish_withdraw_idx := -1             # 换谁上（`enemy_roster` 下标）；**动态替补时恒 -1**（没有席）
 var _finish_withdraw_hero := ""            # 换谁上（**英雄 id**，两条路都有效：预设替补席 / 动态替补池）
 var _finish_withdraw_cell := Vector2i(-99, -99)   # 替补给它选的落点（能一刀砍到目标的那一格）
+# 【2026-10-01·用户「主动撤人成功了，替补上来的人为什么不攻击啊」】落点旁边那两样东西：
+#   **开火格**（替补该站上去打的那一格）与**目标**（要收掉的那个玩家单位）。
+#   病灶：pick 侧认下这一格用的是"几何直判"（`_finish_pick_kills()`：射程＋视线＋身体＋嘲讽门＋真实一击 ≥ 血），
+#   可替补落位后那一手是**另一次搜索**（`_plan_enemy_late_sub()`，1200ms 短预算）⇒ 两边判据不同源：
+#   实测出现过"pick 说这格能一刀收、搜索却给了个只走位不出手的计划"（用户实机日志）。
+#   现在把 pick 已经验过的那一刀**记下来**，落位后**照着执行**（站到开火格 + 原地打目标），
+#   不再让第二次搜索去"重新发现"它 ⇒ 两处判据合一，也不会被短预算切掉。
+#   不适用时（换的是别人 / 目标已死 / 开火格被占）自动退回原来那条搜索路 ⇒ 其余局面逐位不变。
+var _finish_fire_cell := Vector2i(-99, -99)   # pick 验过的开火格（这次替补就落这一格）
+var _finish_fire_target: Unit = null          # 那一刀要打的人
+# 【2026-10-01·用户「没有预设替补池的你就所有英雄都试个遍啊？不需要这样。你就找几个特例啊」】
+#   **"值得为收尾一试"的名单**（只用于两处：主动撤人的一刀收尾、替补的"斩杀"判据）。
+#   用户点名 + 逐条对过脚本：
+#     · **能收 6 血** = 面板 3 × 2 倍 / 登场 +3：
+#         `hero_29` 太阳斩（`on_enter()`：`sun_bonus = 3` ⇒ 登场那一刀 3+3=**6**）
+#         `hero_30` 嬉皮死神（目标**孤立**时 ×2 ⇒ **6**）
+#         `hero_15` 小阴影（目标是**全场最低血**时 ×2 ⇒ **6**）
+#     · `hero_24` 大骑士：冲锋任意距离、攻击力 += 本次移动格数 ⇒ 远距离也能凑够
+#     · **无条件 3 伤**：`hero_39` 猎颅者（登场随机伤最低血敌人 3 + 眩晕，`on_enter` 里结算、不占出手）
+#                       `hero_45` 坠炮手（全场射程 + 无视阻挡 ⇒ 站在哪都能打）
+#                       `hero_31` 末日（移动后伤所有血低于它的角色）
+#     · **共鸣者 `hero_47`**（用户 2026-10-01「共鸣者也可以，**但是他只在回合开始的时候替补有效果**」）：
+#       它的攻击力 = 队友攻击力之和，只在**本方回合开始**那一刻结算（`hero_47::on_side_turn_start()`，
+#       给当时**在场上**的单位赋值）⇒ **能不能用要看"落位发生在哪个时点"**：
+#         · 回合开始的先补位（`_start_placing_subs`）⇒ echo 生效 ⇒ 能收尾；
+#         · 回合中途（死亡即时补位 / 斩杀撤人 / 中毒撤人）⇒ echo 关着 ⇒ 0 攻、收不掉任何目标。
+#       ⇒ 由 `_finish_hero_pool()` 里的 `_echo_active_here()` 按时点**进/出名单**。
+#       ⚠️ 用户实机验证过这条必要性：「共鸣者这个没修好啊，还是主动撤下，**上了个 0 攻**」——
+#         当时是靠"删掉 0 攻筛子"硬塞进来的，结果它被选中、落地只走位不出手。
+#     · **AOE 一组**（用户 2026-10-01「我加了几个 AOE，是为了替补斩杀的时候有会杀 2 个甚至 3 个的情况」）：
+#         `hero_10` 白游侠（远程攻击**一并伤害与目标相邻的敌人** + 冰冻）
+#         `hero_17` 烛火 / `hero_18` 长剑（同一族"AOE"标记，见 `DataRegistry.MECH_TAGS`）
+#         `hero_07` 影丸（`MECH_TAGS["AOE"]` 里没有它、是用户单独点名的；进池一并带上它的多倍/位移）
+#     · **位移一组**（用户 2026-10-01「是为了一些把脆皮藏起来的情况…可以把被藏好的脆皮拉出来，
+#       然后被队友集火斩杀」）：`hero_41` 血锁（拉人）/ `hero_27` 暗域（换位）/ `hero_46` 宿魂（渗透进去）
+#   ⚠️ 这一条**只管"收尾/斩杀"这一路**（`_finish_kill_hero_pick()` 与 `_dynamic_sub_pick()` 的判据①）；
+#      其余替补逻辑（需求制/救人/收尾优先/搜索选人）照旧看**完整**名单。
+const FINISH_HEROES: Array[String] = [
+	# 能收 6 血
+	"hero_29", "hero_30", "hero_15",
+	# 远程特例 / 无条件 3 伤
+	"hero_24", "hero_39", "hero_45", "hero_31",
+	# 共鸣者（仅回合开始有效，见上）
+	"hero_47",
+	# AOE：一次能收 2~3 个
+	"hero_10", "hero_17", "hero_18", "hero_07",
+	# 位移：把藏起来的脆皮拉出来给队友打
+	"hero_41", "hero_27", "hero_46",
+]
+
+# 把一份候选名单收窄成"收尾特例"（见 `FINISH_HEROES` 的说明）；没变就原样返回。
+func _finish_hero_pool(bench: Array) -> Array:
+	var out: Array = []
+	for h in bench:
+		var hid := String(h)
+		if not FINISH_HEROES.has(hid):
+			continue
+		if hid == "hero_47" and not _echo_active_here():
+			continue          # 见 `_echo_active_here()`：中途落位的共鸣者是 0 攻，别列进来
+		out.append(hid)
+	return out
+
+## 【2026-10-01·用户实机「共鸣者这个没修好啊，还是主动撤下，上了个 0 攻」】**这个时点落位的共鸣者，echo 生效吗**。
+##   规则（`heroes/hero_47_共鸣者.gd::on_side_turn_start()`）：攻击力 = 队友攻击力之和，只在**本方回合开始**
+##   那一刻给"当时**在场上**的单位"赋值 ⇒
+##     · **回合开始的先补位**（`_start_placing_subs`，落位发生在 `on_side_turn_start` 之前）⇒ echo **生效** ⇒ 能收尾；
+##     · **回合中途落位**（死亡即时补位 / 斩杀撤人 / 中毒撤人）⇒ echo **不生效** ⇒ **0 攻、收不掉任何目标**。
+##   ⚠️ 别用"面板攻击力"判：它面板就是 0；也别只看 `_sub_probe_unit()` 的 `echo_set = -1`
+##      （那是"替补席上还没上场的人"的口径）—— **已经在场上的共鸣者**走快照那条路、
+##      模拟里会带着整队攻击力之和，两把尺不一致 ⇒ 这里按时点直接把它排除/放行。
+func _echo_active_here() -> bool:
+	return _start_placing_subs
 # 【2026-09-28·斩杀撤人】"这一次落位必须用指定的人 / 指定的格"（只有斩杀撤人会设）：
 #   `_place_enemy_sub()` 一开头就看它，用完即清 ⇒ 正常替补流程逐位不变。
 var _forced_sub_cell := Vector2i(-99, -99)
@@ -3340,13 +3412,24 @@ func _seed_sandbox_roster(deck: Array, used: Dictionary, roster: Array) -> void:
 			continue
 		roster.append(hid)
 
-const OBSTACLE_DUR := 3
+# 障碍物耐久（开局那些木桶的"血"）：主动攻击一次 −1（伐木工额外 −99）、技能波及到各 −1，到 0 就消失。
+# 【2026-09-30·用户口径「障碍物改成2血」】原来 **3** ⇒ 现在 **2**（两次普攻/一次普攻+一次波及就拆掉）。
+#   ⚠️ 只有这一处写死了初值（`_place_obstacles()` 用它铺满所有障碍）—— AI 模拟侧（`src/BattleAI.gd`）
+#   一律从快照读**每格的剩余耐久**（`sim.obstacles[]`，"硬穿一格付 1 + 剩余耐久 步"也按剩余值算）
+#   ⇒ 改这一个数两边自动同步，不用动 sim，也不用重建派生副本。
+const OBSTACLE_DUR := 2
 # 炸弹陷阱伤害。炸弹"谁能放 / 放哪 / 自己免疫"全部由英雄脚本决定（hero_35_炸弹人.gd），
 # 这里只是"雷已经在盘面上之后"的地形规则伤害（规则书里任何一颗雷都是 5 点，与障碍耐久同类）。
 const BOMB_DAMAGE := 5
 # 金矿寿命（完整回合数，每轮开始减 1，到 0 风化）。金矿"谁会掉 / 掉哪格 / 谁能捡 / 捡了加什么"
 # 全部由英雄脚本决定（hero_42_黄金矿工.gd），这里只是"矿已经在盘面上之后"的地形寿命。
 const GOLD_LIFE := 3
+# 【2026-09-30·用户口径「将攻击力buff的加成为2」】攻击道具（`buff_items` 的 `"atk"`）的**一次性**加成值。
+#   原来在拾取处写死 `atk_use_buff += 1`（连日志文案一起写死 "+1"）；现在提成一个常量。
+#   ⚠️ **AI 模拟侧必须跟着走**：`src/BattleAI.gd` 里三处"踩到攻击道具"（真实 `+= 1` 的镜像）与
+#   `_buff_value()` 的 atk 类型价（= 道具面值，量纲见 `1_通用策略.md`）现在都读这个常量
+#   ⇒ 改这一个数就两边同步，不会"真实 +2、AI 以为 +1"。
+const ATK_ITEM_BUFF := 2
 func _place_obstacles() -> void:
 	# 预设障碍布局(坐标为代码坐标:用户左下角[1,1] 对应 x=列-1, y=7-行):
 	#   1) [3,3][3,4]          -> 中列两格（居中的一小段，不占出生行）
@@ -5616,9 +5699,11 @@ func _pickup_buff_at_cell(u: Unit) -> void:
 	buff_items.erase(u.cell)
 	buff_owner.erase(u.cell)
 	if btype == "atk":
-		u.atk_use_buff += 1   # 一次性：下一次攻1，攻击结算后消失
+		# 【2026-09-30·用户口径「将攻击力buff的加成为2」】+1 → **+`ATK_ITEM_BUFF`（= 2）**（见常量说明：
+		#   AI 模拟侧读同一个常量，改一处两边同步）。仍然是**一次性**：下一次攻击结算后清零。
+		u.atk_use_buff += ATK_ITEM_BUFF
 		u.refresh_stats()
-		log_message.emit("%s 拾取攻击道具：下一次攻击 +1。" % u.display_name)
+		log_message.emit("%s 拾取攻击道具：下一次攻击 +%d。" % [u.display_name, ATK_ITEM_BUFF])
 	elif btype == "move":
 		u.move_use_buff += 1   # 一次性：下一次移1，移动后消失
 		log_message.emit("%s 拾取移动道具：下一次移动力 +1。" % u.display_name)
@@ -6304,7 +6389,7 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：这一招的伤害是怎么来的 —— 攻方有效攻/多倍、
 	#   守方血量与状态。实战与回放两端各打一条，直接对差就能看出是"漏了一项加成"还是"多算了一项"。
 	if _obs_summon_log:
-		print("[伤害诊断] 回放=%s 段=%d 步=%d 攻=%s@%d,%d eatk=%d atk=%d buff=%d 多倍=%d 总=%d ｜ 守=%s@%d,%d hp=%d 状态=%s" % [
+		print("[伤害诊断] 回放=%s 段=%d 步=%d 攻=%s@%s eatk=%d atk=%d buff=%d 多倍=%d 总=%d ｜ 守=%s@%s hp=%d 状态=%s" % [
 			str(_replay_mode), _replay_frame, _replay_step, attacker.hero_id, attacker.cell.x, attacker.cell.y,
 			attacker.effective_atk(), attacker.atk, attacker.atk_buff, _bonus_damage(attacker, target), dmg,
 			target.hero_id, target.cell.x, target.cell.y, target.hp, str(target.statuses.keys())])
@@ -7541,7 +7626,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = tru
 		return   # 单位已释放：安全退
 	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：谁死了、是不是召唤物、当时哪一段。
 	if _obs_summon_log:
-		print("[阵亡诊断] 回放=%s 段=%d 步=%d %s(%s) id=%s 格=%d,%d 主人=%s 召唤物=%s" % [
+		print("[阵亡诊断] 回放=%s 段=%d 步=%d %s(%s) id=%s 格=%s 主人=%s 召唤物=%s" % [
 			str(_replay_mode), _replay_frame, _replay_step, u.hero_id, u.display_name, str(u.id),
 			u.cell.x, u.cell.y, str(u.summon_owner), str(DataRegistry.summons.has(u.hero_id))])
 	# 【2026-09-28·用户要求】英雄语音（原版音效）：阵亡喊一声
@@ -7633,7 +7718,7 @@ func _on_unit_died(u: Unit, leave_grave: bool = true, run_death_hook: bool = tru
 func _skeleton_owner_gone(s: Unit) -> void:
 	# 【探针观测位·2026-09-28】临时诊断（生产恒 false）：骷髅的"连带离场"是不是照常走到这一步。
 	if _obs_summon_log and s != null and is_instance_valid(s):
-		print("[离场诊断] 骷髅连带离场 回放=%s 段=%d 步=%d 格=%d,%d" % [
+		print("[离场诊断] 骷髅连带离场 回放=%s 段=%d 步=%d 格=%s" % [
 			str(_replay_mode), _replay_frame, _replay_step, s.cell.x, s.cell.y])
 	if s != null and is_instance_valid(s):
 		_on_unit_died(s)
@@ -7713,8 +7798,88 @@ func _replan_enemy_action(u: Unit) -> Dictionary:
 	if plan.is_empty():
 		return {}
 	if _CONSOLE_AI_LOG:
-		print("[补算] %s 原计划失效，就地重搜一招：%s" % [u.display_name, str(plan[0]["action"])])
+		print("[补算] %s 原计划失效，就地重搜一招：%s" % [u.display_name, plan[0]["action"]])
 	return _remap_action_targets(plan[0]["action"], pool)
+
+## 【2026-10-01·用户实机「他是落在贴身位置了，然后离开了一个」＋「他替补的是影丸，必须要不贴身才能收尾」】
+##   替补落位后那一手**不再交给 1200ms 短搜索**（它会给"走开一格、还不出手"或"从贴身位置走开"这种计划）。
+##   这里按**几何**直接算出最好的一手，优先级：
+##     ① **能直接收掉某个敌人**（真实一击 ≥ 它的血、它没带盾、且这一格打得到它）—— 单独收优先；
+##     ② 否则打**伤害最高**的那一下；
+##     ③ 打不到任何人的话，还要不要**走一步再打**？要 —— 尤其是**远程被贴身**那种局面：
+##        影丸(hero_07) 是远程，贴着目标时伤害被压成 1、**收不掉**；退开一格（不贴人）才是满额
+##        ⇒ 它“走开一格”本来是对的，只是短搜索走完不出手。所以这里**把"走 + 打"当成一个整体**来选：
+##        候选开火格 = 原地 ＋（若本回合还没移动过）走得到的空格；每个候选问一遍 `_threat_fire_ok_at()`
+##        （射程＋视线＋身体＋嘲讽门，与别的判据同一把尺），取"能收尾优先、其次伤害高"。
+##   ⚠️ 找不到任何能开火的格子 ⇒ 返回 `{}`，调用方退回搜索（那种局面搜索能挑个像样的落点）。
+##   入参 `pool` 与 `_plan_enemy_late_sub()` 同一口径（`pool[0]` 是替补自己，其余是玩家方），
+##   返回的动作里 `atk` 是**玩家方在 pool 里的下标**（调用方再经 `_remap_action_targets()` 换算）。
+func _sub_best_strike_here(nu: Unit, pool: Array) -> Dictionary:
+	var ai = _make_battle_ai()
+	if ai == null:
+		return {}
+	ai.difficulty = GameState.ai_difficulty
+	var snap := BattleSnapshot.collect(self, pool)
+	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+	var si := pool.find(nu)
+	if si < 0 or si >= sim.units.size():
+		return {}
+	var su = sim.units[si]
+	if su == null or not su.alive:
+		return {}
+	su.cell = nu.cell
+	# 候选开火格：原地 + 走得到的空格（`moved_this_turn` 时只能原地 —— 与真实规则同款）
+	var cands: Array = [nu.cell]
+	if not nu.moved_this_turn:
+		for c in ai._move_cells(sim, su).keys():
+			var cc: Vector2i = c
+			if cc != nu.cell:
+				cands.append(cc)
+	var best: Dictionary = {}
+	var best_key := -1.0
+	var best_txt := ""
+	for c_v in cands:
+		var fire: Vector2i = c_v
+		# 【2026-10-01·关键】把替补挪到候选开火格之后，**必须按真实刷新点重算"远程被贴身"**：
+		#   真实 `_finish_move()` → `_sync_ranged_adjacent()` 会把 `ranged_adjacent` 标为 false、
+		#   `effective_atk()` 从 1 恢复满额。不刷新的话**退开那一格仍然只有 1 伤**（`eatk` 是旧值）
+		#   ⇒ 退开永远显得没用 ⇒ 它会选"原地打 1 伤"——正是用户实机看到的"落在贴身位置"。
+		#   用户原话：「**他替补的是影丸，必须要不贴身才能收尾**」（远程贴身伤害压成 1，收不掉）。
+		var su2 = sim.units[si]
+		su2.cell = fire
+		if not sim.occ.has(fire):
+			sim.occ[fire] = su2
+		ai._sim_refresh_pins(sim)
+		var here_hit := 0.0
+		for ti in sim.units.size():
+			var t = sim.units[ti]
+			if t == null or not t.alive or int(t.fn) == int(DataRegistry.Faction.ENEMY):
+				continue
+			if bool(t.shield):
+				continue                          # 盾整次免伤 ⇒ 这一刀收不掉
+			if not ai._threat_fire_ok_at(sim, su2, fire, t.cell, t):
+				continue                          # 从这一格打不到它（射程/视线/身体/嘲讽门）
+			var hit := float(ai._adj_foe_hit_on(sim, t, su2))
+			if hit <= 0.0:
+				continue
+			var lethal := hit >= float(int(t.hp))
+			# 键：**能收尾** > 伤害；同分时**优先原地**（少一步移动 ⇒ 更稳）
+			var key := (100000.0 if lethal else 0.0) + hit + (0.5 if fire == nu.cell else 0.0)
+			if key > best_key:
+				best_key = key
+				here_hit = hit
+				best = { "move": (null if fire == nu.cell else fire), "atk": ti }
+				best_txt = "%s%s %s（约 %.0f 伤）" % [
+					("原地" if fire == nu.cell else ("走到 %s 再" % DataRegistry.cell_txt(fire))),
+					("一刀收掉" if lethal else "打"), String(t.name), hit]
+		if here_hit > 0.0:
+			sim.occ.erase(fire)               # 用完还原（下一个候选格重新占位）
+	if best.is_empty():
+		return {}
+	if _CONSOLE_AI_LOG:
+		print("[替补] %s 按几何选的一手（不走短搜索）：%s" % [nu.display_name, best_txt])
+	return best
 
 func _plan_enemy_late_sub(nu: Unit) -> void:
 	if not _enemy_plan_running or nu == null or not is_instance_valid(nu) or not nu.alive:
@@ -7725,6 +7890,83 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 	for u in units:
 		if u != null and is_instance_valid(u) and u.alive and u.faction != DataRegistry.Faction.ENEMY:
 			pool.append(u)
+	# 【2026-10-01·用户「主动撤人成功了，替补上来的人为什么不攻击啊」】**优先走"照着那一刀执行"**：
+	#   `_ai_finish_withdraw_apply()` 把 pick 验过的开火格与目标记在 `_finish_fire_*` 里
+	#   （pick 的判据 = `_finish_pick_kills()`：射程＋视线＋身体＋嘲讽门＋真实一击 ≥ 血，全是几何直判）。
+	#   这里若能把这两样认下来，就**不再跑第二次搜索** —— 直接让替补"原地开火"打那个目标。
+	#   为什么：两边判据不同源时实测出现过"pick 说这格能一刀收、落位后的 1200ms 短搜索却只给它
+	#   一个**只走位不出手**的计划"（就是用户看到的那一幕）。照着已经验过的那一刀执行 ⇒ 两处合一。
+	#   ⚠️ 五个前提都成立才走这一支，任何一条不成立都退回下面的搜索路（其余局面逐位不变）：
+	#     ① 有开火格与目标 ② 换的正是这位替补（英雄 id 相同）③ 目标还在场上且活着
+	#     ④ 替补此刻**真的站在**那一格（落位用它当 `_forced_sub_cell`，见 `_ai_finish_withdraw_apply()`）
+	#     ⑤ 这一刀真的够重（同一把 `_finish_pick_kills()` 尺子，防"落位那一拍里它被加了盾/被削弱"）。
+	#   用完即清（下一位替补不再复用）。
+	var forced_target := _finish_fire_target
+	var forced_fire := _finish_fire_cell
+	_finish_fire_target = null
+	_finish_fire_cell = Vector2i(-99, -99)
+	var forced_act: Dictionary = {}
+	if forced_target != null and is_instance_valid(forced_target) and forced_target.alive \
+			and forced_fire.x != -99 and forced_fire == nu.cell:
+		var fti := pool.find(forced_target)
+		if fti > 0:
+			# 复核这一刀（与 pick 的判据**同一把尺子**，三段全在 AI 侧公开接口上）：
+			#   ① 射程＋视线＋身体＋嘲讽门 ② 目标没带[圣盾] ③ 真实一击 ≥ 它的血。
+			var ai_f = _make_battle_ai()
+			if ai_f != null:
+				ai_f.difficulty = GameState.ai_difficulty
+				var snap_f := BattleSnapshot.collect(self, pool)
+				var sim_f = ai_f.build_state(snap_f["descs"], snap_f["occ"], snap_f["gold"], snap_f["grave"],
+						snap_f["obstacle"], snap_f["bomb"], snap_f["buff"], -1,
+						snap_f.get("rosters", {}), {}, snap_f.get("buff_owner", {}))
+				var sfi := pool.find(nu)
+				if sfi >= 0 and sfi < sim_f.units.size() and fti < sim_f.units.size() \
+						and sim_f.units[sfi] != null and sim_f.units[fti] != null:
+					var su_f = sim_f.units[sfi]
+					var st_f = sim_f.units[fti]
+					su_f.cell = nu.cell
+					if ai_f._threat_fire_ok_at(sim_f, su_f, nu.cell, st_f.cell, st_f) \
+							and not st_f.shield \
+							and ai_f._adj_foe_hit_on(sim_f, st_f, su_f) >= float(int(st_f.hp)):
+						forced_act = { "move": null, "atk": fti }
+						if _CONSOLE_AI_LOG:
+							print("[替补] %s 照着已验过的那一刀执行：原地打 %s（落点 %s 就是开火格）"
+									% [nu.display_name, forced_target.display_name, DataRegistry.cell_txt(nu.cell)])
+	if not forced_act.is_empty():
+		_enemy_refs.append(nu)
+		var fstep := { "idx": _enemy_refs.size() - 1, "action": _remap_action_targets(forced_act, pool) }
+		_tag_plan_identity([fstep], _enemy_refs)
+		_ai_plan.append(fstep)
+		return
+	# 【2026-10-01·诊断·用户实机「还是不出手」】没走"照那一刀执行"这一支时，把**没走的原因**打出来
+	#   （只读日志）：是没记下开火格/目标、还是替补没落在那一格（落点被占 ⇒ 退回了出生区）、
+	#   还是复核没过（这一刀不够重/被嘲讽门挡住）。这样"只走位不出手"一眼能看出卡在哪。
+	if _CONSOLE_AI_LOG:
+		var why := ""
+		if forced_target == null or forced_fire.x == -99:
+			why = "本次不是斩杀撤人（没记下开火格/目标）"
+		elif forced_fire != nu.cell:
+			why = "替补没落在开火格 %s（实际 %s）⇒ 那一刀从这儿打不出去" % [
+				DataRegistry.cell_txt(forced_fire), DataRegistry.cell_txt(nu.cell)]
+		elif pool.find(forced_target) <= 0:
+			why = "目标不在本次快照池里（下标 0 是替补自己）"
+		else:
+			why = "复核没过（这一刀不够重 / 被[嘲讽]门挡住 / 目标带盾）"
+		print("[替补·诊断] %s 没走「照那一刀执行」⇒ %s" % [nu.display_name, why])
+	# 【2026-10-01·用户实机「他是落在贴身位置了，然后离开了一个」】**别再赌那个 1200ms 短搜索**：
+	#   它实测会给出"从贴身位置走开一格、还不出手"的计划（用户两次实机都撞上：一次落在 (4,1) 只走位、
+	#   一次落在贴身位置反而离开）。替补落位后那一手本来就**只有一招**的意义（收尾 or 就近开火），
+	#   没必要交给搜索 —— 这里直接**按几何算最强一击**：从它实际站的格子，逐个敌人问"打得到吗 +
+	#   这一刀多重"，取"能打死优先、其次伤害最高"的那一手**原地执行**（不移动 ⇒ 不可能再出现"离开"）。
+	#   ⚠️ 只有"一个都够不到"时才退回搜索（那种局面搜索能挑个好落点走过去，仍比乱走强）。
+	var built := _sub_best_strike_here(nu, pool)
+	if not built.is_empty():
+		_enemy_refs.append(nu)
+		var bstep := { "idx": _enemy_refs.size() - 1, "action": _remap_action_targets(built, pool) }
+		_tag_plan_identity([bstep], _enemy_refs)
+		_ai_plan.append(bstep)
+		return
+	# 兜底（罕见）：连"走一步 + 开火"都够不到任何敌人 ⇒ 退回短搜索（它至少能挑个像样的落点）。
 	var snap := BattleSnapshot.collect(self, pool)   # 快照打包与常规回合共用同一处
 	var ai = _make_battle_ai()   # 噩梦档=候选（权重在此注入；本函数在主线程跑，文件 IO 安全），其余=生产 BattleAI
 	ai.difficulty = GameState.ai_difficulty
@@ -7982,7 +8224,8 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 				idx_pick = sb
 			next_id = enemy_roster.pop_at(idx_pick)
 		else:
-			var dyn := _dynamic_sub_pick()
+			# 【2026-10-01】`_dynamic_sub_pick()` 现在内部可能要 await（搜索选人走线程版）⇒ 调用处加 await
+			var dyn: Dictionary = await _dynamic_sub_pick()
 			if dyn.is_empty():
 				break
 			next_id = String(dyn.get("id", ""))
@@ -8001,6 +8244,13 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 		if cell.x == -99:
 			cell = _free_sub_cell_for(DataRegistry.Faction.ENEMY)
 			from_fallback = true
+			# 【2026-10-01·诊断·用户实机「还是不出手」】落到"出生区第一个空格"= 落点被否掉 ⇒
+			#   替补会站在够不到任何人的地方、这一手只能乱走。把那两样被否的原因打出来（只读日志）。
+			if _CONSOLE_AI_LOG and _finish_fire_cell.x != -99:
+				print("[替补落点] ⚠️ 原定那一格 %s 用不了（被占=%s｜是墓碑=%s）⇒ 退回出生区空格 %s（替补这一手多半够不到人）" % [
+					DataRegistry.cell_txt(_finish_fire_cell),
+					str(occupancy.has(_finish_fire_cell)), str(graves.has(_finish_fire_cell)),
+					DataRegistry.cell_txt(cell)])
 		# 规则 C（SUB_JOIN_RULE，**默认关闭**）：在同一批合法落点里挑"能立刻参战"的那一格。
 		# 关掉时这一行只多一次布尔判断（开关缓存），落点选法与改动前**逐位相同**。
 		# ⚠️ 动态替补／斩杀撤人已经自己选过落点 ⇒ 不再被规则 C 覆盖（与改动前同一条口径）。
@@ -8341,6 +8591,132 @@ func _sub_pick_argmax(list: Array, ctx: Dictionary, need: String) -> String:
 			best_hid = String(hid)
 	return best_hid
 
+## 【2026-10-01·用户「做」】**动态替补池的"搜索选人"**：与预设席那条 `_sub_idx_by_search()` 同一套路
+##   （逐候选**真跑一次搜索** → 重放末态 → **数玩家方阵亡数** + `_evaluate(末态)` 打分），
+##   区别是候选不是"席次"而是**英雄 id**、并且**把它放进模拟**（放在第一个合法落点上 ⇒ 让搜索自己
+##   决定它走哪、打谁）。
+##
+## 为什么需要它（用户原话：「之前不是让替补斩杀需求改成了真实演练之后看评分吗。所以我才加 AOE，
+##   考虑一次杀 2-3 个的情况」）：动态池那条路原来走静态估算 `sub_kill_scan()` —— 它**一次只算一个目标**
+##   （"替补这一击 + 队友能打到的伤害 ≥ 某个目标的血"）⇒ AOE 一刀收 2~3 个、位移把藏起来的脆皮拉出来
+##   这些**都算不进去**。真跑一次搜索则天然看得见：末态里死几个就数几个、`_evaluate` 也会为多收的人头出分。
+##
+## 成本控制（两道闸，见下面常量的说明）：
+##   ① 候选先过 `sub_kill_scan()`（静态粗筛，便宜）⇒ **一个都收不掉的英雄不参与搜索**；
+##   ② 最多搜 `DYN_SEARCH_TOPK` 个（按"面板攻击力"降序取，够重的先试），每个给 `DYN_SEARCH_MS` 预算。
+## 返回 `{ "id": 英雄 id, "cell": 落点, "kills": 数, "score": 末态分 }`；`{}` = 不值得改（没人多收人头 /
+##   拿不到模拟 / 线程出事）⇒ 调用方退回 ②救人 / ③需求 / ④兜底。
+const DYN_SEARCH_TOPK := 3
+## 每个候选的搜索预算（毫秒；**不是 0**：动态池这条路每次补位都要跑，`time_budget_ms = 0` 那种
+##   无上限搜索实测能跑到十几秒一个 ⇒ 三个候选就半分钟。给了预算之后"到点转贪心兜底"，
+##   结果仍可用；⚠️ 代价 = 同局面不保证逐位可复现（时钟切口）—— 这条与 `_sub_idx_by_search()` 的
+##   "钉不确定性"取向不同，是**成本换稳定**的有意取舍）。
+const DYN_SEARCH_MS := 4000
+
+var _dyn_pick_thread: Thread = null
+var _dyn_pick_done := false
+var _dyn_pick_result: Dictionary = {}
+var _dyn_pick_mutex := Mutex.new()
+
+func _dyn_pick_worker(cands: Array, cells: Array, need_hid: String) -> void:
+	var r := _dyn_pick_by_search(cands, cells, need_hid)
+	_dyn_pick_mutex.lock()
+	_dyn_pick_result = r
+	_dyn_pick_done = true
+	_dyn_pick_mutex.unlock()
+
+## 线程版入口（与 `_sub_idx_by_search_threaded()` 同一套：主线程每帧轮询、已重开/切场景就放弃）。
+func _dyn_pick_by_search_threaded(cands: Array, cells: Array, need_hid: String) -> Dictionary:
+	_dyn_pick_mutex.lock()
+	_dyn_pick_done = false
+	_dyn_pick_result = {}
+	_dyn_pick_mutex.unlock()
+	_dyn_pick_thread = Thread.new()
+	_dyn_pick_thread.start(_dyn_pick_worker.bind(cands, cells, need_hid))
+	var my_session := _session_id
+	while true:
+		if not is_inside_tree() or my_session != _session_id:
+			_dyn_pick_thread.wait_to_finish()
+			_dyn_pick_thread = null
+			return {}
+		_dyn_pick_mutex.lock()
+		var fin := _dyn_pick_done
+		_dyn_pick_mutex.unlock()
+		if fin:
+			break
+		if _dyn_pick_thread != null and _dyn_pick_thread.is_started() and not _dyn_pick_thread.is_alive():
+			push_error("动态替补选人线程异常退出（脚本报错？）→ 本次放弃，按需求制上人。")
+			break
+		await get_tree().process_frame
+	var res: Dictionary = {}
+	if _dyn_pick_thread != null:
+		_dyn_pick_thread.wait_to_finish()
+		_dyn_pick_thread = null
+		_dyn_pick_mutex.lock()
+		res = _dyn_pick_result
+		_dyn_pick_mutex.unlock()
+	return res
+
+## 线程体：见上面那段口径说明。**不碰场景节点**（只读几何/静态表 + 自带 AI 实例）⇒ 线程安全。
+func _dyn_pick_by_search(cands: Array, cells: Array, need_hid: String) -> Dictionary:
+	if cands.is_empty() or cells.is_empty():
+		return {}
+	var ai = _make_battle_ai()
+	if ai == null:
+		return {}
+	ai.difficulty = GameState.ai_difficulty
+	ai.log_decisions = false
+	ai.time_budget_ms = DYN_SEARCH_MS
+	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
+	# ① 静态粗筛：一个都收不掉的英雄不参与搜索（便宜的那把尺先过一遍）
+	if _sub_kill_scan(cands, cells).is_empty():
+		return {}
+	# ② 按"面板攻击力"降序取前 TOPK（够重的先试；AOE/位移英雄的面板通常不高，靠 TOPK 兜住）
+	var order: Array = []
+	for hid_v in cands:
+		var hid := String(hid_v)
+		if hid == need_hid:
+			continue                      # 需求制那位由调用方保证（这里不重复搜它）
+		var def = DataRegistry.get_hero(hid)
+		if def == null:
+			continue
+		# 【2026-10-01·用户实机「共鸣者…还是上了个 0 攻」】面板 0 攻的先剔掉（真跑搜索也救不了它：
+		#   它落地时 echo 还没结算 ⇒ 打不出伤害）。这条同时省下一个 TOPK 名额。
+		var probe = ai._sub_probe_unit(hid, Vector2i(-99, -99))
+		if probe == null or int(probe.eatk) <= 0:
+			continue
+		order.append({ "hid": hid, "atk": int(def.atk) })
+	order.sort_custom(func(a, b): return int(a["atk"]) > int(b["atk"]))
+	var cell: Vector2i = cells[0]
+	var snap := BattleSnapshot.collect(self)
+	var best: Dictionary = {}
+	var best_kills := -1
+	for k in mini(DYN_SEARCH_TOPK, order.size()):
+		var hid_s := String(order[k]["hid"])
+		var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
+				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+		var nu = ai._sub_probe_unit(hid_s, cell)
+		if nu == null:
+			continue
+		nu.sim_index = sim.units.size()
+		sim.units.append(nu)
+		if not sim.occ.has(cell):
+			sim.occ[cell] = nu
+		var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
+		var end_sim = ai._plan_end_state(sim, plan)
+		var kills := _count_foe_deaths(end_sim)
+		var sc: float = ai._evaluate(end_sim, true)
+		if _CONSOLE_AI_LOG:
+			print("[替补·动态搜索] 候选 %s（攻 %d）落 %s ⇒ 本回合可收玩家方 %d 个｜末态分 %.1f" % [
+				_hero_name(hid_s), int(order[k]["atk"]), DataRegistry.cell_txt(cell), kills, sc])
+		if kills > best_kills:
+			best_kills = kills
+			best = { "id": hid_s, "cell": cell, "kills": kills, "score": sc }
+	# ③ 只有"真的多收人头"才覆盖
+	if best.is_empty() or int(best.get("kills", 0)) <= 0:
+		return {}
+	return best
+
 ## 【2026-09-29·用户口径「首要需求就是斩杀」】替补「合力斩杀」：把候选名单 + 合法落点交给 AI 侧
 ##   （`BattleAI.sub_kill_scan()` —— 那边才是**唯一一把尺**：需要 = 目标剩余血，
 ##   可用 = 我方够得到它的单位这一击的真实伤害 + 替补这一手的真实伤害；
@@ -8370,14 +8746,30 @@ func _dynamic_sub_pick() -> Dictionary:
 	# ---- ① 能斩杀（2026-09-29 扩成「**合力斩杀**」：替补这一手 + 我方够得到它的真实伤害 ≥ 它的剩余血）----
 	#   ⚠️ 旧版 `_sub_best_kill()` 只认**替补自己**的面板攻击力 ≥ 目标血，且看不见坚固/塔盾/圣盾 ⇒
 	#      "最后一人 12 血、我方两人合计能打 10、替补 4 攻"这种局面判不出来（用户 2026-09-29 点名的正是它）。
-	if not cells.is_empty():
-		var plan := _sub_kill_scan(cands, cells)
+	# 【2026-10-01·用户「没有预设替补池的，只是主动撤人和替补的斩杀需求用那几个。如果需求是其他的，
+	#   还是从所有英雄里面挑」】**只有这一支（判据①"能斩杀"）把候选收窄成 `FINISH_HEROES`**；
+	#   下面的 ②救人 与 ③需求/④兜底**照旧用全英雄池** `cands`（那是"队伍缺什么"的问题，与收尾无关）。
+	var cands_finish: Array = _finish_hero_pool(cands)
+	if not cells.is_empty() and not cands_finish.is_empty():
+		# 需求制那位（③ 的结论）当**对照**：搜索选人只认"真的多收人头"，不比它多就退回它
+		var need_hid := _sub_pick_need_band(cands, ctx, need)
+		var plan := _sub_kill_scan(cands_finish, cells)
 		if not plan.is_empty():
 			if _CONSOLE_AI_LOG:   # 【2026-09-22】改挂总开关：原来挂 `_CONSOLE_SUB_LOG`(=false) ⇒ 这行永远看不见
 				print("[替补·动态] 判据①能斩杀（%s）→ 上 %s（这一手 %.0f｜队友合计 %.0f｜需要 %.0f｜对面剩 %d 人｜落点 %s）" % [
 					("单独收" if bool(plan["solo"]) else "合力收"), _hero_name(String(plan["hero"])),
 					float(plan["sub"]), float(plan["team"]), float(plan["need"]),
-					int(plan["foe_alive"]), str(plan["cell"])])
+					int(plan["foe_alive"]), DataRegistry.cell_txt(plan["cell"])])
+			# 【2026-10-01·用户「做」】**真跑一次搜索再定人**（AOE 一刀收 2~3 个才算得进去）：
+			#   静态扫描只认"单点一击能不能收掉" ⇒ AOE/位移那几位在它眼里跟单点英雄一样。
+			#   这里让搜索自己回答（数末态玩家方阵亡数 + 看末态评分）：收得更多才覆盖上面的静态结论。
+			var sr: Dictionary = await _dyn_pick_by_search_threaded(cands_finish, cells, need_hid)
+			if not sr.is_empty() and int(sr.get("kills", 0)) > 0:
+				if _CONSOLE_AI_LOG:
+					print("[替补·动态] 搜索选人 → **改上 %s**：本回合可收玩家方 %d 个（末态分 %.1f）；静态那把尺给的是 %s" % [
+						_hero_name(String(sr["id"])), int(sr["kills"]), float(sr["score"]),
+						_hero_name(String(plan["hero"]))])
+				return { "id": String(sr["id"]), "cell": sr.get("cell", plan["cell"]) }
 			return { "id": String(plan["hero"]), "cell": plan["cell"] }
 	# ---- ② 救人：只在"再死一个就判负"时（用户口径：只考虑 AI 已阵亡 2 人）----
 	if enemy_dead >= LOSS_DEATH_COUNT - 1:
@@ -8693,6 +9085,18 @@ func _apply_sub_ui_cleanup(fn: int) -> void:
 	if _sub_faction == fn:
 		_sub_faction = -1
 	sub_placed.emit()
+	# 【2026-09-30·用户报「联机模式，同时死了两个人，替补一个就卡住了，不给替补面板了」】
+	#   ⚠️ 原来这里**无条件** `_resume_after_sub()`：可"还有待补名额"时，这一句会**提前**把"先补位"阶段
+	#   收掉（`_defer_side_skills = false` + 广播 `side_skills` + 跑回合开始技 + 回到输入态），
+	#   等主机把本次落位广播回来、`_place_sub()` 去开**第二个**替补面板时，那个面板会被这条
+	#   已经跑完的恢复流程冲掉（`state` 被写回 `PLAYER_INPUT`、队伍面板刷新回只读态）
+	#   ⇒ 第二个及以后的替补面板再也不弹，回合就那么卡着。
+	#   主机/单机那条路本来就分得清（`_place_sub()` 里 `more_subs` 分支先开下一个面板、最后一个才恢复）
+	#   ⇒ 只有客户端会卡。⇒ 与主机**同款**：还有名额就只清 `PLACE_SUB` 占位、**不恢复**，
+	#   恢复交给广播回来那条 `_place_sub()`（最后一个名额补完时它自然会调 `_resume_after_sub()`）。
+	if _pending_subs_of(fn) > 0 and _roster_of(fn).size() > 0:
+		state = State.IDLE   # 与 `_place_sub()` 里同一句：清掉 PLACE_SUB 占位，等广播
+		return
 	_resume_after_sub()   # 恢复回合状态（本端保持输入，等待主机广播回来）
 
 # 权威落位（两端一致执行）：spawn + 收尾（清墓碑/恢复回合/广播）
@@ -9333,6 +9737,49 @@ func _ai_poison_withdraw_apply() -> void:
 # 用户原话：「这种情况要建立在**所有英雄已经行动**」⇒ 发起时机 = 计划回放**全部跑完之后**
 #   （与中毒撤人挂在同一处）⇒ 被撤下的那个单位本回合没有浪费任何一手。
 ## 判断"该不该为斩杀撤人"，并把"换谁、落哪"一起定下来（定不下来就一个都不设）。
+# ---- 【2026-10-01·用户口径】"对方够不够残"的三档门槛（主动撤人专用）----
+# 用户原话（第一版）：「主动撤人：1.对方已死亡 2 人，AI 所有英雄行动完之后，对方**单个最低血量 ≤ 8**；
+#   2.对方已死亡 1 人，…对方**两个人血量之和 < 6**；3.对方已死亡 0 人，…对方**三个人血量之和 < 9**」
+# 用户原话（2026-10-01 订正·**三档统一成"小于等于"**）：「**0 名是小于等于 9 · 1 名是小于等于 6**」
+#   ⇒ 判据 = 前 `3 − player_dead` 个（按血升序）之和 **≤** `[9, 6, 9][player_dead]`。
+#   （2 人阵亡那一档要说的是"单个最低血 ≤ 8"，写成 `sum ≤ 9` 只在"场上只剩 1 个"时完全等价；
+#     场上多于 1 个时以"最低的那 1 个 ≤ 9"为准 —— 这是三档统一后的口径，不再单独特判。）
+#   ⚠️ 0 人阵亡那一档取"**前 3 个**"之和：用户说的是"三个人"，而场上活着 3 个时"前 3 个"就是全部
+#      （活着不足 3 个时按实际有的取和 ⇒ 等价于"更低"，门槛更容易过）。
+const FINISH_HP_GATE_SUM := [9, 6, 9]     # 下标 = `player_dead`（0 / 1 / 2）；比较用 **≤**
+
+## 这一档要求"最低的这么多个"之和（= `3 − player_dead`，夹到 ≥ 1）。
+func _finish_gate_units() -> int:
+	return maxi(LOSS_DEATH_COUNT - player_dead, 1)
+
+## 这一档的"血量之和"门槛。
+func _finish_gate_need() -> int:
+	var i := clampi(player_dead, 0, FINISH_HP_GATE_SUM.size() - 1)
+	return int(FINISH_HP_GATE_SUM[i])
+
+## 玩家方活着的前 `k` 个（按血量升序）的血量之和。
+func _finish_gate_sum() -> float:
+	var hs: Array = []
+	for u in units:
+		if u == null or not is_instance_valid(u) or not u.alive:
+			continue
+		if u.faction == DataRegistry.Faction.ENEMY:
+			continue
+		hs.append(float(int(u.hp)))
+	hs.sort()
+	var k := mini(_finish_gate_units(), hs.size())
+	var s := 0.0
+	for i in k:
+		s += float(hs[i])
+	return s
+
+## 门槛是否成立（**≤**，见 `FINISH_HP_GATE_SUM` 处说明）。⚠️ 场上没人 ⇒ 视为不成立（调用方另有"没人了"那道门）。
+func _finish_hp_gate_ok() -> bool:
+	var s := _finish_gate_sum()
+	if s <= 0.0:
+		return false
+	return s <= float(_finish_gate_need())
+
 func _ai_finish_withdraw_pick() -> void:
 	_finish_withdraw_target = null
 	_finish_withdraw_idx = -1
@@ -9345,18 +9792,20 @@ func _ai_finish_withdraw_pick() -> void:
 	#   日志，而 `_ai_finish_withdraw_apply()` 那边其实什么都不做（它第一行就按 `state/match_over` 早退）。
 	if state == State.ENDED or GameState.match_over:
 		return
-	# ① **对手**已死 2 个（3 人阵容 ⇒ 打死场上最后一个 = 直接赢）。
-	#    ⚠️ 数的是 `player_dead`（对手），**不是 `enemy_dead`** —— 后者是**我自己**的阵亡数
-	#    （`_check_win()` 判负线数的就是自己）。这条最初写反了：卡在"我自己已死 2 个"上，
-	#    于是整项永远只在"再撤一个就自杀"的局面里才放行 ⇒ 要么不触发、要么自毁。
-	if player_dead != LOSS_DEATH_COUNT - 1:
-		# 【2026-09-29·用户实测「自由部署模式还是不会主动撤人」】这道门原来**静默 return** ⇒ 用户在实机里
-		#   既看不到"触发过"、也看不到"被哪道门挡了"。现在三道静默门都挂 `_CONSOLE_AI_LOG`（默认**开**）。
-		# 【2026-09-29 晚·用户「什么对面场上还有 3 个就不撤。这跟你撤不撤收尾有什么关系」】日志一律写**理由**，
-		#   不写"还剩几个"这种看着像条件、其实只是计数的话：这条门真正的理由是**撤下有代价**。
+	# ① 【2026-10-01·用户口径】**"不是每回合都试着斩杀"——加一道"对方已经够残了"的门**：
+	#   用户原话：「主动撤人：1.对方已死亡2人，AI所有英雄行动完之后，对方**单个最低血量 ≤ 8**
+	#   2.对方已死亡1人，…对方**两个人血量之和 < 6** 3.对方已死亡0人，…对方**三个人血量之和 < 9**」
+	#   （"AI 所有英雄行动完之后"这一点本来就成立：本函数挂在计划回放之后 ⇒ 该出手的都出完了。）
+	#   理由：撤下一个人 = 白送自己一个阵亡 ⇒ 只有"对面已经残到能被替补一刀收掉"时才值得赌；
+	#   对面满血（开场 3 人几十点血）时天天试着斩杀纯属白花时间。
+	#   ⚠️ 三档**统一**成一句话：把玩家方活着的单位**按血量升序**排，前 `3 − player_dead` 个的**血量之和**，
+	#   要 **≤** 对应档的门槛（`[9, 6, 9]` 按 `player_dead = 0 / 1 / 2`；用户订正口径：**三档都是"小于等于"**）。
+	#   ⚠️ "已死 N 名"之后场上通常还剩 3 / 2 / 1 个，但**替补会补人**、阵亡与补位可能不同步
+	#   ⇒ 这里一律按"场上活着的前 k 个"取，不假设人数。
+	if not _finish_hp_gate_ok():
 		if _CONSOLE_AI_LOG:
-			print("[斩杀撤人] 不撤：**玩家方**才阵亡 %d 名（判负线 %d 名）—— 此刻收掉他场上一个也**结束不了这一局**，而撤下一个人是白送自己一个阵亡，不划算。"
-					% [player_dead, LOSS_DEATH_COUNT])
+			print("[斩杀撤人] 不撤：玩家方还不够残（已死 %d 名 ⇒ 要求场上最低的 %d 个血量之和 ≤ %d，实际 %.0f）—— 撤下是白送自己一个阵亡，不值得为一个满血目标赌。"
+					% [player_dead, _finish_gate_units(), _finish_gate_need(), _finish_gate_sum()])
 		return
 	# ①b 撤下 = 视为阵亡 ⇒ **我自己**会多一个阵亡。自己已经死 2 个时再撤就是丢第 3 个、直接判负
 	#     （用户口径：「AI 只要没有死 2 个人，就可以主动撤人斩杀」）。
@@ -9440,7 +9889,7 @@ func _ai_finish_withdraw_pick() -> void:
 			#   是同一个人（`_finish_withdraw_victim()`）。用户报过"日志看着像在说别的事"，这一栏就是解药。
 			print("[斩杀撤人] 不撤：替补席没人能「落在合法落点、站定/走一步就一刀收掉」玩家方任何一个（共 %d 个：%s）｜要撤的人=%s｜替补席=%s｜合法落点=%s"
 				% [foes.size(), "、".join(hp_txt),
-					(str(victim.display_name) + "@" + str(victim.cell)) if (victim != null and is_instance_valid(victim)) else "（无）",
+					(str(victim.display_name) + "@" + DataRegistry.cell_txt(victim.cell)) if (victim != null and is_instance_valid(victim)) else "（无）",
 					str(enemy_roster), str(_sub_legal_cells_for_ai())])
 		return
 	# ③（旧口径的"这一回合真的一点办法都没有吗"那道门）**已并进 ②b** —— 判据不变（够得到 **且** 能一击
@@ -9458,6 +9907,13 @@ func _ai_finish_withdraw_pick() -> void:
 	_finish_withdraw_idx = int(pick.get("idx", -1))
 	_finish_withdraw_hero = String(pick.get("hero", ""))
 	_finish_withdraw_cell = pick["cell"]
+	# 【2026-10-01·用户「主动撤人成功了，替补上来的人为什么不攻击啊」】把 pick **已经验过的那一刀**
+	#   记下来（开火格 + 目标）：落位后照它执行，不再让第二次短搜索去"重新发现"——
+	#   病灶 = pick 用几何直判（`_finish_pick_kills()`）认下这一格，而落位后那一手是另一次 1200ms 搜索，
+	#   两边判据不同源 ⇒ 实测出现过"pick 说这格能一刀收、搜索却只给它一个走位不出手的计划"。
+	#   ⚠️ 只在真的挑出了人时才有值；用不到时（换别人 / 目标已死 / 开火格被占）自动退回搜索那条路。
+	_finish_fire_cell = Vector2i(pick.get("fire", Vector2i(-99, -99)))
+	_finish_fire_target = (pick.get("target") if pick.has("target") else tgt)
 	if _CONSOLE_AI_LOG:
 		# ⚠️ 这里以前写的是 `enemy_dead`（= **我方**阵亡数）却标成"对面已死" ⇒ 日志与事实相反
 		#   （探针实测：对面明明已死 2 个，日志打"对面已死 0 名"）。现在两个数都打出来、各自标名。
@@ -9498,9 +9954,29 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 	var bench: Array = enemy_roster.duplicate()
 	if not from_roster and _dynamic_sub_active():
 		bench = _dynamic_sub_candidates()
+		# 【2026-10-01·用户「没有预设替补池的你就所有英雄都试个遍啊？不需要这样。你就找几个特例啊」】
+		#   **本函数就是"收尾"这一件事**（它只在斩杀撤人里被调）⇒ 动态池收窄成 `FINISH_HEROES`。
+		#   病灶：动态池 = 全英雄池 − 本局出现过的 ⇒ 一局要逐个英雄跑"落点×开火格"全枚举
+		#   （每个候选还要建模拟单位 + 判真实一击），纯浪费；而"一刀收尾"这件事只跟这几位有关
+		#   （见 `FINISH_HEROES` 的逐条依据）。
+		#   ⚠️【2026-10-01 第二轮·用户纠正】"收窄"**只属于收尾/斩杀这一路**：
+		#      · 本函数（斩杀撤人的收尾）✅ 收窄
+		#      · `_dynamic_sub_pick()` 的**判据①斩杀** ✅ 收窄
+		#      · **其余需求（救人 / 缺前排 / 缺输出 / 缺射程 / 缺治疗 / 兜底）❌ 一律仍从全英雄池挑**
+		#        —— 第一版把收窄写在 `_dynamic_sub_candidates()` 的调用方（这里）⇒ 那些需求也被一起
+		#        锁死成这七位，是错的。详见 `_dynamic_sub_pick()` 里那段。
+		bench = _finish_hero_pool(bench)
+		if _CONSOLE_AI_LOG:
+			print("[斩杀撤人·④候选] 动态替补池收窄成「收尾特例」（%d 人）：%s" % [
+				FINISH_HEROES.size(), "、".join(FINISH_HEROES.map(func(h): return _hero_name(h)))])
 	if bench.is_empty():
 		if _CONSOLE_AI_LOG:
-			print("[斩杀撤人] 不撤：替补席是空的、动态替补也没开 ⇒ 没人可换。")
+			# 【2026-10-01】动态池被上面的名单筛空时，不能再说"替补席是空的、动态替补也没开"（那是假话）
+			if not from_roster and _dynamic_sub_active():
+				print("[斩杀撤人] 不撤：动态替补池里一个「收尾特例」都没有（名单：%s）⇒ 不值得为收尾换人。"
+						% "、".join(FINISH_HEROES.map(func(h): return _hero_name(h))))
+			else:
+				print("[斩杀撤人] 不撤：替补席是空的、动态替补也没开 ⇒ 没人可换。")
 		return { "idx": -1, "cell": Vector2i(-99, -99) }
 	if tgt == null or not tgt.alive:
 		return { "idx": -1, "cell": Vector2i(-99, -99) }
@@ -9515,8 +9991,8 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 	if skip != null and is_instance_valid(skip) and skip.alive and not cells.has(skip.cell):
 		cells.append(skip.cell)
 	if _CONSOLE_AI_LOG:
-		print("[斩杀撤人·④候选] 落点候选=%s｜要撤的人那一格=%s" % [str(cells),
-			(str(skip.cell) if (skip != null and is_instance_valid(skip)) else "—")])
+		print("[斩杀撤人·④候选] 落点候选=%s｜要撤的人那一格=%s" % [DataRegistry.cells_txt(cells),
+			(DataRegistry.cell_txt(skip.cell) if (skip != null and is_instance_valid(skip)) else "—")])
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
@@ -9550,6 +10026,8 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 	var best_atk := 1 << 30
 	var best_cell := Vector2i(-99, -99)
 	var best_was_still := false   # 当前最优解是不是"站定即能开火"（攻击力相同时优先它：少一步移动更稳）
+	# 【2026-10-01】当前最优解那一刀**从哪一格打出去**（= 替补该落的格，见 `_finish_fire_cell` 的说明）
+	var best_fire_cell := Vector2i(-99, -99)
 	# ⚠️ 遍历的是 `bench`（预设替补席 **或** 动态替补候选），不是固定的 `enemy_roster`：
 	#   配方档没有预设席时就靠这一支，选出来的人按 **英雄 id** 带回去（见 `best_hid`）。
 	var best_hid := ""
@@ -9571,15 +10049,24 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 		var sub = ai._sub_probe_unit(hid, Vector2i(-99, -99))
 		if sub == null:
 			continue
+		# 【2026-10-01·用户实机「共鸣者这个没修好啊，还是主动撤下，上了个 0 攻」】**0 攻候选必须出局**。
+		#   ⚠️ 我当天为了给 AOE 腾地方把这条删了，理由是"共鸣者在名单里、留着会误杀自己人"——**删错了**：
+		#   探针单位的 `echo_set` 被 `_sub_probe_unit()` 置成 -1，可**活着的 Unit 不是** ——
+		#   快照会把它的 `echo_set` 原样带进模拟（`build_state` 读 descs 的 `echo_set`）⇒
+		#   模拟里那个共鸣者是"**带着整队攻击力之和**"的（用户那局它算出 6），而真实规则里
+		#   **替补中途落位时 echo 还没结算**（`hero_47::on_side_turn_start()` 只给"回合开始那一刻在场上的人"赋值）
+		#   ⇒ 它落地时是 **0 攻**、根本打不出伤害。两把尺不一致 ⇒ 必须在这一层就把 0 攻的剔掉。
+		#   （`_sub_probe_unit()` 那条 -1 是给"替补席上还没上场的人"用的，对"已经在场上的共鸣者"不适用。）
 		if int(sub.eatk) <= 0:
-			continue   # 【2026-09-29 晚·用户「不能补个 0 攻的」】0 攻候选直接出局（打不出伤害 ⇒ 收不掉）
+			continue
 		var best_here := Vector2i(-99, -99)
 		var best_still := false
+		var best_fire := Vector2i(-99, -99)   # 【2026-10-01】那一刀从哪一格打出去（= 替补该落的格）
 		for c in cells:
 			var cell: Vector2i = c
 			var d_gate: int = ai.approach_dist(sim, cell, st.cell, false)
 			if _CONSOLE_AI_LOG:
-				print("[斩杀撤人·④试] %s 落 %s：走+打距离=%d vs 上限=%d" % [hid, str(cell), d_gate, mv + ar])
+				print("[斩杀撤人·④试] %s 落 %s：走+打距离=%d vs 上限=%d" % [hid, DataRegistry.cell_txt(cell), d_gate, mv + ar])
 			if d_gate > mv + ar:
 				continue                 # 连"走 + 打"都够不到它 ⇒ 这一格没戏
 			sub.sim_index = sim.units.size()
@@ -9593,6 +10080,7 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 			if still_ok:
 				best_here = cell
 				best_still = true
+				best_fire = cell          # 【2026-10-01】站定就能打 ⇒ 落点本身就是开火格
 				break
 			# ② 【2026-09-29 放宽·用户实测「普通模式噩梦还是不会替补斩杀」】**走一步再开火**：
 			#    原来是"必须站定就能开火"，理由是该格最稳（落位后追加的那一手是 1.2s 短搜索，
@@ -9618,6 +10106,7 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 				if move_ok:
 					best_here = cell       # 落点仍是"进场那一格"，走出去打是替补自己那一手的事
 					best_still = false
+					best_fire = f          # 【2026-10-01】那一刀从 f 打出去 ⇒ 替补直接落 f 更稳
 					break
 			if best_here.x != -99:
 				break
@@ -9631,6 +10120,7 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 			best_hid = hid
 			best_cell = best_here
 			best_was_still = best_still
+			best_fire_cell = best_fire
 	# 【2026-09-29·第五轮·修 S13（配方档·无预设替补席·动态替补池）】真正的病根**不在这里**，而在调用方：
 	#   `_ai_finish_withdraw_pick()` 拿 `idx < 0` 当"没人可换"，可动态池这条路的 `idx` **恒为 -1**
 	#   （池里没有"席次下标"）⇒ 上面明明挑出了人（探针实测：hero_45 落 (1,0) 一刀够重），
@@ -9653,10 +10143,11 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null) -> Dictionary:
 			near = mini(near, ai.approach_dist(sim, c2, st.cell, false))
 		var near_txt := ("走不到（被地形/单位挡死）" if near >= 99 else ("%d 格（比候选上限%s %d 格）" % [near, ("够" if near <= reach_max else "差"), absi(near - reach_max)]))
 		print("[斩杀撤人·④详情] 目标 %s@%s 血 %d｜候选 %d 人（%s，走+射上限 %d 格）｜最近合法落点到它 %s｜合法落点=%s" % [
-			_str_unit_name(tgt), str(tgt.cell), int(st.hp), bench.size(),
-			("预设替补席" if from_roster else "动态替补池"), reach_max, near_txt, str(cells)])
+			_str_unit_name(tgt), DataRegistry.cell_txt(tgt.cell), int(st.hp), bench.size(),
+			("预设替补席" if from_roster else "动态替补池"), reach_max, near_txt, DataRegistry.cells_txt(cells)])
 	# ⚠️ `idx` 只在"预设替补席"那条路上有意义；动态替补池没有席 ⇒ 回 -1，调用方按 `hero` 走。
-	return { "idx": (best_i if from_roster else -1), "hero": best_hid, "cell": best_cell }
+	return { "idx": (best_i if from_roster else -1), "hero": best_hid, "cell": best_cell,
+		"fire": best_fire_cell, "target": tgt }
 
 ## 小工具：日志里要显示名字（拿不到就让调用方看着办）
 func _str_unit_name(u: Unit) -> String:
@@ -9795,12 +10286,22 @@ func _ai_finish_withdraw_apply() -> void:
 	# 先把名额与落点备好，再撤：`_place_enemy_sub()` 会优先用 `_forced_sub_cell` 这一格
 	#   （就是上面算出来的"站定/走一步即能砍到目标"那格），不会被"规则 C／出生区第一个空格"改掉。
 	#   `_forced_sub_hero` 两条路都认：预设替补席按名字找，动态替补池直接用这个 id 落位。
-	_forced_sub_cell = cell
+	# 【2026-10-01·用户「主动撤人成功了，替补上来的人为什么不攻击啊」】落点改用**开火格**：
+	#   pick 认下的那一刀就是从这一格打出去的（站定即能开火 / 从落点走一步到这一格再开火，两条都验过）
+	#   ⇒ 让替补**直接落这一格**，它就能"原地开火"把那一刀打出去，不必再指望第二次搜索去走那一步。
+	#   ⚠️ 两个前提都成立才换：开火格已在盘上（不是 -99）、没被占、也不是墓碑（与 `_place_enemy_sub()` 同一道门）。
+	#   不成立就照旧用原落点（那时替补还是可能走过去打 —— 只是不再保证）。
+	var land_cell := cell
+	if _finish_fire_cell.x != -99 and not occupancy.has(_finish_fire_cell) \
+			and not graves.has(_finish_fire_cell):
+		land_cell = _finish_fire_cell
+	_forced_sub_cell = land_cell
 	_forced_sub_hero = hero_id
 	if _CONSOLE_AI_LOG:
-		print("[斩杀撤人] %s 出手全打完，仍收不掉 %s（血 %d）⇒ 撤下 %s，换 %s 落 %s 收尾。"
+		print("[斩杀撤人] %s 出手全打完，仍收不掉 %s（血 %d）⇒ 撤下 %s，换 %s 落 %s 收尾%s。"
 				% [str(victim.display_name), str(tgt.display_name), int(tgt.hp),
-					str(victim.display_name), hero_id, str(cell)])
+					str(victim.display_name), hero_id, str(land_cell),
+					("（那一刀从 %s 打出去 ⇒ 直接落这一格）" % str(land_cell)) if land_cell != cell else ""])
 	await _apply_withdraw(victim)
 	# 【2026-09-28·本轮补的关键一环】替补落位时 `_plan_enemy_late_sub()` 给它的那一手是**追加到
 	#   `_ai_plan` 尾部**的，可那个函数的头一道门就是 `if not _enemy_plan_running: return`，
@@ -9822,6 +10323,9 @@ func _ai_finish_withdraw_apply() -> void:
 ## 【2026-09-29 晚·用户要求「在控制台里把战局状态记录」⇒ 方便照盘复刻】**整盘状态转储**（一行、机器可读）。
 ##   前缀固定 `[战局转储]`；粘给我就能在探针里原样重建这一局（单位 id/格/血/攻/射/移/三个回合标记 + 碑/障碍/炸弹）。
 ##   只在 `_CONSOLE_AI_LOG`（默认开）下打；**只读、只打印**，不参与任何判定。
+##   ⚠️ 【2026-10-01】行内所有格子都是**给用户看的坐标（最上排最左 = (1,1)，即引擎 0 基 +1）**
+##      —— 与其余日志同一套口径（`DataRegistry.cell_txt()`）。
+##      解析这一行的脚本必须把它 **−1 换回 0 基**再用（探针侧统一走 `_cv()`，见 `RL/probe/战局复刻自检.gd`）。
 func _log_state_dump() -> void:
 	if not _CONSOLE_AI_LOG:
 		return
@@ -9839,21 +10343,24 @@ func _state_dump_line() -> String:
 			for sk in u.statuses.keys():
 				sts.append(String(sk))
 			us.append("%s@%s hp%d/%d atk%d r%d mv%d m%d/a%d/c%d%s" % [
-				String(u.hero_id), str(u.cell), int(u.hp), int(u.max_hp),
+				String(u.hero_id), DataRegistry.cell_txt(u.cell), int(u.hp), int(u.max_hp),
 				int(u.effective_atk()), int(u.attack_range), int(u.effective_move()),
 				int(u.moved_this_turn), int(u.attacked_this_turn), int(u.counter_used_this_turn),
 				(" st=%s" % ",".join(sts) if sts.size() > 0 else "")])
 		parts.append(("AI: " if fn == DataRegistry.Faction.ENEMY else "玩家: ") + " | ".join(us))
-	parts.append("碑=%s" % str(graves.keys()))
-	parts.append("障碍=%s" % str(obstacles.keys()))
-	parts.append("炸弹=%s" % str(bombs.keys()))
+	parts.append("碑=%s" % DataRegistry.cells_txt(graves.keys()))
+	parts.append("障碍=%s" % DataRegistry.cells_txt(obstacles.keys()))
+	parts.append("炸弹=%s" % DataRegistry.cells_txt(bombs.keys()))
 	# 【2026-09-29 晚·补全】buff / 金矿 / 道具归属（`buff_owner` = 格→阵营；金矿格 / 场上道具格）
 	var bo: Array = []
 	for c in buff_owner.keys():
-		bo.append("%s→%d" % [str(c), int(buff_owner[c])])
+		bo.append("%s→%d" % [DataRegistry.cell_txt(c), int(buff_owner[c])])
 	parts.append("buff格=%s" % (("[" + ", ".join(bo) + "]") if bo.size() > 0 else "[]"))
 	var gc: Variant = get("_gold_cells")
-	parts.append("金矿=%s" % (str((gc as Dictionary).keys()) if gc is Dictionary else "[]"))
+	parts.append("金矿=%s" % (DataRegistry.cells_txt((gc as Dictionary).keys()) if gc is Dictionary else "[]"))
+	# ⚠️ 坐标口径写在**这一段**（最后一栏），前缀仍是 `[战局转储] ` 原样
+	#   —— 解析脚本靠前缀切分，写在括号里会让它们全部失配（实测 `战局复刻自检` 当场 FAIL）。
+	parts.append("坐标=界面口径（左上角 (1, 1)）；脚本解析要 −1 换回 0 基")
 	return "[战局转储] " + "　‖　".join(parts)
 
 func _run_enemy_turn() -> void:
@@ -11517,7 +12024,7 @@ func _rec_fp(with_dead: bool = true) -> String:
 	for u in units:
 		if u == null or not is_instance_valid(u) or not u.alive:
 			continue
-		rows.append("%d@%d,%d:%d" % [u.faction, u.cell.x, u.cell.y, u.hp])
+		rows.append("%d@%s:%d" % [u.faction, DataRegistry.cell_txt(u.cell), u.hp])
 	rows.sort()
 	if not with_dead:
 		return ";".join(rows)

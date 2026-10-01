@@ -1,42 +1,42 @@
-# Godot���滺���뵼�����Զ����ɣ�����⣩
+# Godot引擎缓存与导入产物（自动生成，不入库）
 .godot/
 
-# ������Ʒ�������
+# 导出成品（体积大）
 export/
 
-# �༭��/ϵͳ��ʱ�ļ�
+# 编辑器/系统临时文件
 *.tmp
 Thumbs.db
 .DS_Store
 
-# Excel��ʱ����ʱ���ļ���~$ǰ׺��
+# Excel打开时的临时锁文件（~$前缀）
 ~$*
 
-# ���ؿ��տⲻ�ڹ����ڣ��������
+# 本地快照库不在工程内，无需忽略
 
-# ������ʱ����
+# 调试临时产物
 /.godot_*.log
 /.cap_probe_out/
 /tests/CapProbe.*
 
-# ������־�ļ�����Ŀ¼
+# 生成日志文件导出目录
 /log/
 
 
-# ���������õ� Godot �û�Ŀ¼��APPDATA �ض��򣬱�����Ⱦ�ֿ⣩
+# 本机测试用的 Godot 用户目录（APPDATA 重定向，避免污染仓库）
 /.godot_userdata/
 
-# ---- RL��ǿ��ѧϰ / ������ʩ��----
-# ֻ�ύ"���� + �ű� + spec + Ȩ�� + md ����"����������һ�ɲ����ֿ⡣
-# 1) ÿ���������measure.csv / raw_lines.log / worker �����������ļ�
+# ---- RL（强化学习 / 评估设施）----
+# 只提交"代码 + 脚本 + spec + 权重 + md 报告"，跑批产物一律不进仓库。
+# 1) 每格跑批产物：measure.csv / raw_lines.log / worker 输出，几万个文件
 RL/train/results/
-# 2) ͬ���ű����ݴ�Ŀ¼�������Ǵ� class_name �ĸ����������� Godot ��ȫ��������
+# 2) 同步脚本的暂存目录（里面是带 class_name 的副本，曾导致 Godot 抢全局类名）
 RL/train/_staging/
-# 3) ÿ�����ܳ����ĺ�ѡȨ�أ�925 �����ɰ� spec �������ɣ�
+# 3) 每个臂跑出来的候选权重（925 个，可按 spec 重新生成）
 RL/weights/cand_*.json
-# 4) �汾���գ����ػع��ã�7 MB��
+# 4) 版本快照（本地回滚用，7 MB）
 RL/backups/
-# 5) ����Ŀ¼�����־/���Բ�������Ŀ¼��Լ 100 MB����ֻ��������� *.md
+# 5) 报告目录里的日志/调试产物与子目录（约 100 MB），只保留顶层的 *.md
 RL/reports/*/
 RL/reports/*.log
 RL/reports/*.out
@@ -46,12 +46,12 @@ RL/reports/*.jobpid
 RL/reports/*.pid
 RL/reports/*.bak
 RL/reports/*.translation
-# 6) AI ͬ���ű���������ʱ������ɰ汸��
+# 6) AI 同步脚本产生的临时副本与旧版备份
 RL/ai/_new_*.gd
 RL/ai/_new_*.gd.uid
 RL/ai/_prev_*.gd
 RL/ai/_prev_*.gd.uid
-# RL 探针的一次性输出（跑完即弃，不入库）
+# RL 鎺㈤拡鐨勪竴娆℃€ц緭鍑猴紙璺戝畬鍗冲純锛屼笉鍏ュ簱锛?
 RL/probe/_*.txt
 RL/probe/_*.log
 
@@ -63,9 +63,11 @@ RL/probe/_*.log
 
 /ffmpeg-*/
 
-# APK 逆向工作目录（已移到项目外 D:\Game creating\战旗_原版资源提取）
+# APK 閫嗗悜宸ヤ綔鐩綍锛堝凡绉诲埌椤圭洰澶?D:\Game creating\鎴樻棗_鍘熺増璧勬簮鎻愬彇锛?
 /_apk_work/
 
-# TTS 产出的原始配音（大文件，不进库；成品 ogg 在 assets/audio/voice/）
-/Data/Voice/源音频/
+# TTS 浜у嚭鐨勫師濮嬮厤闊筹紙澶ф枃浠讹紝涓嶈繘搴擄紱鎴愬搧 ogg 鍦?assets/audio/voice/锛?
+/Data/Voice/婧愰煶棰?
 
+# 导出成品（192MB，不进库）
+发布/

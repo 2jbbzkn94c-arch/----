@@ -1334,6 +1334,32 @@ func spawn_attack_range(def: HeroDef) -> int:
 		r = 99   # 坠炮手：全场任意目标（弹道无视阻挡由 Unit/Battle 处理）
 	return r
 
+# ---------- 控制台里的格子坐标（**只影响日志文本，不改任何判定**）----------
+# 【2026-10-01·用户】「你这个坐标我有点看不懂，最上面那排左边两个的坐标改成 1，1 / 2，1，其他的以此类推」
+#   ⇒ 引擎内部一律还是 **0 基**（`Vector2i(0,0)` = 最上排最左），只有**打给用户看的日志**加这个偏移。
+#   ⚠️ 任何"机器读"的地方（`[战局转储]` 的解析、探针输出、录像/存档）都要求这一项为 **0**，
+#      否则外部按 0 基解析会整体错一格。要回到 0 基就把这里改 0 —— 一处改、全日志同步。
+const CELL_DISPLAY_OFFSET := 1
+const CELL_NONE := Vector2i(-99, -99)      # 哨兵值：这一栏"没有格子"
+
+## 一格 → 日志文本，如 `(1, 1)`（内部 (0,0)）；哨兵值显示成 `—`。
+func cell_txt(c) -> String:
+	if typeof(c) != TYPE_VECTOR2I:
+		return str(c)
+	var v: Vector2i = c
+	if v == CELL_NONE:
+		return "—"
+	return "(%d, %d)" % [v.x + CELL_DISPLAY_OFFSET, v.y + CELL_DISPLAY_OFFSET]
+
+## 一串格子 → 日志文本，如 `[(1, 1), (2, 1)]`；空 ⇒ `[]`。
+func cells_txt(arr) -> String:
+	if typeof(arr) != TYPE_ARRAY:
+		return str(arr)
+	var parts: Array = []
+	for c in (arr as Array):
+		parts.append(cell_txt(c))
+	return "[" + ", ".join(parts) + "]"
+
 # 属性表内容分“显示区”：①名字+近/远程+词条标签 ②基础属性 ③“技能”+技能描述 ④词条解释。
 # 各区由弹框负责用贴左短线分行；本函数只负责产出各区文本。
 func hero_info_zones(def: HeroDef) -> Array[String]:

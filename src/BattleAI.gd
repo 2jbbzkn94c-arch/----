@@ -75,7 +75,7 @@ class SimUnit:
 	var stunned := false    # 眩晕：不能移动/攻击/反击
 	var silenced := false   # 沉默：非关键词技能失效
 	var shield := false     # 圣盾：抵挡一次伤害
-	var atk_use_buff := 0   # 攻击道具:下一次攻击+1
+	var atk_use_buff := 0   # 攻击道具:下一次攻击 +`Battle.ATK_ITEM_BUFF`（现役 2，取自真实引擎常量）
 	var move_use_buff := 0  # 移动道具:下一次移动+1
 	var heavy := false      # 重伤：受到的伤害+1
 	# 【RL 修正】[坚固](装甲堡垒 hero_48)：受到**攻击**伤害 -1（与[重伤]可共存，先加后减、最低 0）。
@@ -402,6 +402,22 @@ var last_tp_p1_summon_evals := 0  #   召唤物条目里真正评分的
 var last_polish_swaps := 0          # 复查换掉了几手（0 = 没换 = 原计划已经够好）
 var last_polish_gain := 0.0         # 复查一共赚了多少分（末态评分口径）
 var last_polish_ms := 0             # 复查花了多久
+# ---- 【2026-09-30】"认账补手"（`PROMISE_REPAIR`，见 const 处说明）的取证 ----
+var last_repair_swaps := 0          # 补掉了几手（= 日志里那些"本可多赚"被真正换成计划的有几处）
+var last_repair_gain := 0.0         # 补手一共赚了多少分（完整 `_plan_score` 口径）
+var last_repair_tried := 0          # 一共试评了多少手（用来算"补一手的价钱"）
+var last_repair_ms := 0             # 补手花了多久
+var last_repair_lines: Array = []   # 每一处「换来的是哪一手 / 旧的那一手是哪一手 / 赚了几分」
+# 【2026-09-30·取证】最近一次 `_print_decision()` 打出的整段文本（探针直接读它，
+#   不必靠 stdout 抓；生产路径不看它）。⚠️ 只在 `log_decisions = true` 时被赋值。
+var last_decision_text := ""
+# 【2026-09-30·修正"本可多赚"那把尺子】`_print_decision()` 里"没选的那一手/为什么打的是它"
+#   要算**整份计划级**的分差时用的上下文（`_search_two_phase()` 在打印前填好）。
+#   ⚠️ 空 = 老口径（拿"计划的末态分"减"单手的替换分"）—— **那是两个不同基准**：计划那一侧已经
+#   把后面几步也打完了 ⇒ 差额里混着"后面几步的价值"，量级会被放大到与计划同阶（实测 60.4 分，
+#   而那份计划自己只有 84 分）。填上之后改走 `_plan_alt_gap()`：**把替代那一手放进整份计划里
+#   重放一遍再比**（= 与 `_repair_plan()` 逐字同一把尺子）。
+var _log_ctx: Dictionary = {}
 
 const MAX_MOVE_OPTIONS := 16
 # 黄金矿工：攻击力低于该值时视为"输出薄弱的成长型"，进一步提高吃矿优先级
@@ -1249,6 +1265,10 @@ var w_tp_inner := TWO_PHASE_INNER
 var w_funnel_div := FUNNEL_DIVERSITY
 # 【2026-09-25·用户「减少漏掉更值的那一手」】搜索后的"逐单位复查"（见 `const TWO_PHASE_POLISH` 处说明）。默认 0 ⇒ 逐位不变。
 var w_tp_polish := TWO_PHASE_POLISH
+# 【2026-09-30·用户拍板方向】"认账补手"（见 `const PROMISE_REPAIR` 处说明）。默认 0 ⇒ 逐位不变。
+var w_promise_repair := PROMISE_REPAIR
+var promise_repair_passes := PROMISE_REPAIR_PASSES
+var promise_repair_max_actions := PROMISE_REPAIR_MAX_ACTIONS
 # 【2026-09-25】记忆化表（键 = `sim 实例 id|单位下标|x|y|是否关嘲讽门`）+ 一个计数器（只在 0/1 之外想统计时用）。
 var _inc_memo: Dictionary = {}
 # 【已删 2026-09-20】原 var w_low_tier_engine（见上方 const 处的说明）。
@@ -1528,6 +1548,9 @@ func set_weights(t: Dictionary) -> void:
 			"FUNNEL_DIVERSITY": w_funnel_div = maxi(int(v), 0)
 			# 【2026-09-25】搜索后的逐单位复查（0 = 关；见 const TWO_PHASE_POLISH 处说明）
 			"TWO_PHASE_POLISH": w_tp_polish = maxi(int(v), 0)
+			# 【2026-09-30】"认账补手"（0 = 关；见 const PROMISE_REPAIR 处说明）
+			"PROMISE_REPAIR": w_promise_repair = maxi(int(v), 0)
+			"PROMISE_REPAIR_PASSES": promise_repair_passes = maxi(int(v), 1)
 			# 【2026-09-23·默认关】㉔破盾（用越低的伤害破盾越值，见 const SHIELD_BREAK_W 处说明）
 			"SHIELD_BREAK_W": w_shield_break = float(v)
 			# 【2026-09-23·默认关】㉕嘲讽吸火（坦克替后排挡下的那部分火力，见 const TAUNT_SOAK_W 处说明）
@@ -1931,6 +1954,26 @@ const TWO_PHASE_INNER := 0
 #   0 = 关（**逐位不变**）· 1 = 一趟 · 2 = 最多两趟（不再改进就停）。受 `TIME_BUDGET_MS` 约束（到点不再复查）。
 #   ⚠️ 性质：**贪心改良** —— 在引擎自己的尺子上单调不劣，但会放大评分函数的偏好 ⇒ 必须先过剂量批再落地。
 const TWO_PHASE_POLISH := 0
+# 【2026-09-30·用户「能不能把这种 AI 都发现自己意思被剪的项也加入到评估，最后根据评分选路径」】
+#   **"认账补手"**（键 `PROMISE_REPAIR`，0 = 关 = 逐位不变）。
+#   **病灶**：搜索给出计划之后，`_print_decision()` 逐步复查时会写出
+#   「⚠️ 没选的那一手更值：… 选它本可多赚 X 分 ⇒ 疑似被搜索漏掉（剪枝）」—— 那是**引擎自己认了账**
+#   （它承认存在一手按**完整评分**更值），可这条账**只写进日志**、从来没回到候选集里
+#   ⇒ 计划照旧用那一手更差的手。成因两处：① 阶段 1 一旦把某个单位的落点按**代理分**定进阵型，
+#   阶段 2 只给它"原地出手/不打"（`_actions_for()` 按 `moved` 卡住移动）⇒ 移动+攻击**整手**救不回来；
+#   ② 阶段 2 内层宽度（`TWO_PHASE_INNER`）只留前 N 条线 ⇒ 同一步的其它手被切掉。
+#   **本键（用户拍板的方向）**：把这类"认账"的项**加入评估**，最后**按评分选路径** ——
+#   搜索结束后，拿**最终计划**（以及复查用到的每一个起点）逐个单位试遍 `_actions_for()` **全部**候选
+#   （含移动+攻击整手），**每一手都按完整 `_plan_score`（与末态选计划同一把尺子）重算**，
+#   只留真正更高的那一手 ⇒ 选出来的计划在自己的尺子上**定义上就是最高的**。
+#   ⚠️ 与 `TWO_PHASE_POLISH` 的分工：polish 先做（单趟贪心、受它自己的档位约束），补手**后做** ——
+#     这样它的起点是"已经改良过的计划"，认账的手在**更好的局面**上再评一次。
+#   ⚠️ 成本：每个单位 × `_actions_for` 的候选数（通常 < 30）次"克隆 + 回放 + 一次完整 `_evaluate`"，
+#     而阶段 2 本来就跑 `leaves × inner` 次完整评分（实机日志：1484 次）⇒ 同一量级、只多几十次。
+#     仍受 `TIME_BUDGET_MS` 与 `abort_requested` 约束（到点/中断立刻停手）。
+const PROMISE_REPAIR := 0
+const PROMISE_REPAIR_PASSES := 2      # 最多几趟（一趟内每个单位只换一次；不再改进就停）
+const PROMISE_REPAIR_MAX_ACTIONS := 60   # 单个单位一趟最多试几手（防"单位多 × 候选多"爆掉）
 
 # ---- 【2026-09-25·用户「长剑是步臭棋…他本来可以打 6 伤」】搜索后的"逐单位复查"（`TWO_PHASE_POLISH`）----
 # 为什么需要它：阶段 1 是按**代理分**把阵型排进漏斗的，而"某个单位换一手"的那套阵型一旦掉出前 N，
@@ -2071,6 +2114,174 @@ func _polish_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: 
 	out["sim"] = _plan_end_state(sim, plan)
 	return out
 
+## 【2026-09-30·用户「能不能把这种 AI 都发现自己意思被剪的项也加入到评估，最后根据评分选路径」】
+##   **"认账补手"**（键 `PROMISE_REPAIR`，见 const 处说明）：把日志里那些"本可多赚 X 分"的项
+##   **真正加进候选、按评分重选一次计划**。
+##
+## 做法（一趟 = 逐个单位、每单位只换一次）：
+##   ① 单位下标按 `enemy_idxs` 的**原顺序**走（"谁先动"就是计划里的原子顺序，不新增顺序）；
+##   ② **计划里已经有动作**的单位：`base` = 计划**它自己那一步之前**的局面 ⇒ `_actions_for(base, i)`
+##      给的候选与它在真实回放里能选的一模一样（含"移动 + 攻击"整手）；
+##      该单位在计划里的**全部步**换成这一个动作（`_plan_replace_unit()`，位置不变）—— 与复查同款。
+##   ③ **整回合没动作**的单位：`base` = 回合开始局面（它本来就没动过）⇒ 允许它**新增**一手。
+##      ⚠️ 这一条是复查（`_polish_plan`）没有的：原复查只碰"计划里已经有动作"的单位 ⇒
+##      "该出手却没出手、而是把格让给队友"那一类漏，它救不回来。
+##   ④ 每一手都按**完整 `_plan_score`**（= 末态 `_evaluate(s, true)` − `IDLE_HIT_PENALTY` 罚，
+##      **与末态选计划完全同一把尺子**）打分，只接受**严格更高**的 ⇒ 选出来的计划在自己的尺子上
+##      定义上就是最高的。`NO_LOSS_FILTER` 的硬闸门一并复刻（不吃"我方全灭 = 判负"那条线）。
+##   ⑤ `PASSES` 趟内只要某一趟一个人都没换 ⇒ 立刻停（已收敛，不再白花时间）。
+##
+## 返回：改良后的状态字典（`path` / `score` / `sim` 三个字段与 `_polish_plan()` 同构）。
+func _repair_plan(sim: Sim, best: Dictionary, enemy_idxs: Array, start_can_hit: Dictionary,
+		deadline: int, start_targets: Dictionary = {}) -> Dictionary:
+	var t_r := Time.get_ticks_msec()
+	last_repair_swaps = 0
+	last_repair_gain = 0.0
+	last_repair_tried = 0
+	last_repair_lines = []
+	if best.is_empty() or not best.has("path"):
+		last_repair_ms = 0
+		return best
+	var plan: Array = (best["path"] as Array).duplicate(true)
+	var score := _plan_score(_plan_end_state(sim, plan), plan, enemy_idxs, start_can_hit, start_targets)
+	var swapped := false
+	for _pass in promise_repair_passes:
+		var improved := false
+		for i in enemy_idxs:
+			if abort_requested:
+				break
+			if deadline > 0 and Time.get_ticks_msec() >= deadline:
+				break
+			var idx := int(i)
+			# ① 这个单位在计划里的位置（-1 = 本回合没动作）
+			var slot := -1
+			for si in plan.size():
+				if int(plan[si]["idx"]) == idx:
+					slot = si
+					break
+			# ② `base` = 它自己那一步之前的局面（计划里没它 ⇒ 用回合开始的局面 = 允许新增一手）
+			var base: Sim = sim.clone()
+			var have_slot := slot >= 0
+			if have_slot:
+				for si2 in slot:
+					_apply(base, int(plan[si2]["idx"]), plan[si2]["action"])
+			var iu: SimUnit = base.units[idx]
+			if iu == null or not iu.alive:
+				continue   # 轮到它时它已经死了 ⇒ 换不了手（合法性与真实回放一致）
+			var acts: Array = _actions_for(base, idx)
+			# ③b 计划里**原本没它**时，`_actions_for()` 不会给出"整回合什么都不做"那个空动作
+			#    （它只在"纯移动"那一段里给有移动的动作）⇒ 这里补上，好让"新增一手"
+			#    能跟"维持原样（本回合不出手）"在**同一个尺子**上比一次。
+			if not have_slot:
+				acts = acts.duplicate()
+				acts.append({ "move": null, "atk": -1 })
+			var tried_here := 0
+			for a in acts:
+				if tried_here >= promise_repair_max_actions:
+					break
+				if abort_requested:
+					break
+				if deadline > 0 and Time.get_ticks_msec() >= deadline:
+					break
+				# ③ 计划里已有的那一手不必再评（它就是 `base` 的现状）
+				if have_slot and _same_action(plan[slot]["action"], a):
+					continue
+				tried_here += 1
+				last_repair_tried += 1
+				var cand := _plan_replace_unit(plan, idx, a)
+				var cs := _plan_end_state(sim, cand)
+				if w_no_loss_filter > 0 and _myside_wiped(cs, sim.active_fn):
+					continue
+				# 【2026-09-30·判据与日志**必须同一把尺子**】这里原来自己写
+				#   `_plan_score(cs, cand, enemy_idxs, start_can_hit, start_targets)`，与日志里
+				#   `_plan_alt_gap()` 的那一份**平行实现** ⇒ 实测出现"日志说这手更值 60.4 分、
+				#   补手却把它判成更差"的自相矛盾（同一局面、同一候选，两条路结论相反）。
+				#   现在统一走 `_plan_alt_gap()`（它自己从 `_log_ctx` 取那三张表）⇒ 日志与补手
+				#   在**同一份口径**上说话，不会再互相打脸。
+				var g := _plan_alt_gap(plan, idx, a)
+				var cs_sc := (score - float(g.get("gap", 0.0))) if bool(g["ok"]) \
+					else _plan_score(cs, cand, enemy_idxs, start_can_hit, start_targets)
+				if cs_sc > score + 0.0001:
+					last_repair_lines.append("%s %s：%s → %s（+%.1f 分）" % [
+						iu.name, DataRegistry.cell_txt(iu.cell), _action_text(plan[slot]["action"] if have_slot else {}),
+						_action_text(a), cs_sc - score])
+					last_repair_gain += cs_sc - score
+					last_repair_swaps += 1
+					score = cs_sc
+					plan = cand
+					slot = -1
+					for si3 in plan.size():
+						if int(plan[si3]["idx"]) == idx:
+							slot = si3
+							break
+					have_slot = true
+					swapped = true
+					improved = true
+			if abort_requested:
+				break
+		if not improved:
+			break
+	last_repair_ms = Time.get_ticks_msec() - t_r
+	var out := best.duplicate(true)
+	out["path"] = plan
+	out["score"] = score
+	out["sim"] = _plan_end_state(sim, plan)
+	if swapped:
+		last_repair_gain = score - _plan_score(_plan_end_state(sim, best["path"]), best["path"],
+			enemy_idxs, start_can_hit, start_targets)
+	return out
+
+## 【2026-09-30·修正"本可多赚"那把尺子】把**替代那一手放进整份计划里**重放一遍，再与现在的计划比：
+##   返回 `{"ok": bool, "gap": float}`，`gap > 0` = **现在的计划更值**（替代那一手会让总分少这么多）。
+##   ⚠️ 老口径（`_evaluate(计划终态) − _evaluate(pre 打出替代手)`）**基准不同**：计划那一侧把后面
+##   几步也打完了 ⇒ 差额里混着"后面几步的价值"（实测报出 60.4 分，而那份计划自己只值 84 分）。
+##   本函数与 `_repair_plan()` 的接受判据**逐字同一把尺子**：`_plan_replace_unit()` 换掉那一手、
+##   `_plan_end_state()` 重放、`_plan_score()`（末态 `_evaluate(s, true)` − 闲置罚）打分。
+##   `_log_ctx` 空（探针/老调用点没填上下文）⇒ `ok = false`，调用处退回老口径。
+## 返回值里顺带带上**两份计划的末态明细**（`bd_cur` / `bd_alt`）—— 调用处要打"分差明细"时直接复用，
+##   免得同一份末态又重放一遍（`_eval_breakdown` 不便宜）。
+func _plan_alt_gap(plan: Array, idx: int, alt: Dictionary) -> Dictionary:
+	if _log_ctx.is_empty() or plan.is_empty():
+		return { "ok": false, "gap": 0.0 }
+	var sim: Sim = _log_ctx.get("sim")
+	if sim == null:
+		return { "ok": false, "gap": 0.0 }
+	var eidx: Array = _log_ctx.get("enemy_idxs", [])
+	var can_hit: Dictionary = _log_ctx.get("start_can_hit", {})
+	var tg: Dictionary = _log_ctx.get("start_targets", {})
+	var alt_plan := _plan_replace_unit(plan, idx, alt)
+	var cur_end := _plan_end_state(sim, plan)
+	var alt_end := _plan_end_state(sim, alt_plan)
+	var cur := _plan_score(cur_end, plan, eidx, can_hit, tg)
+	var alt_sc := _plan_score(alt_end, alt_plan, eidx, can_hit, tg)
+	return { "ok": true, "gap": cur - alt_sc,
+		"bd_cur": _eval_breakdown(cur_end), "bd_alt": _eval_breakdown(alt_end) }
+
+## 两手是不是同一手（`_repair_plan()` 用来跳过"计划里已有的那一手"）。
+func _same_action(a: Dictionary, b: Dictionary) -> bool:
+	if int(a.get("atk", -1)) != int(b.get("atk", -1)):
+		return false
+	if a.get("move") != b.get("move"):
+		return false
+	if a.has("atk_obs") != b.has("atk_obs"):
+		return false
+	if a.has("atk_obs") and Vector2i(a["atk_obs"]) != Vector2i(b["atk_obs"]):
+		return false
+	return true
+
+## 一手的短文本（补手日志用）：`原地打 X` / `走 (a, b) 打 X`。空格子写"这一手（本回合没出手）"。
+func _action_text(a: Dictionary) -> String:
+	if a.is_empty():
+		return "这一手（本回合没出手）"
+	var mv: Variant = a.get("move")
+	var head := ("原地" if mv == null else ("走 %s" % str(Vector2i(mv))))
+	if a.has("atk_obs"):
+		return "%s 敲障碍 %s" % [head, str(Vector2i(a["atk_obs"]))]
+	var t := int(a.get("atk", -1))
+	if t < 0:
+		return "%s（不出手）" % head
+	return "%s 打 #%d" % [head, t]
+
 # ---- 主入口：返回最优行动序列 [{idx, action}] ----
 func search(sim: Sim, enemy_faction: int) -> Array:
 	# 【RL 修正】把"本次搜索指挥的一方"写进 active_fn（对齐 src/BattleAI.gd 的 `sim.me_faction = enemy_faction`）。
@@ -2098,6 +2309,13 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_polish_swaps = 0
 	last_polish_gain = 0.0
 	last_polish_ms = 0
+	# 【2026-09-30】"认账补手"的取证同样按每次搜索清零（见 `_repair_plan()`）。
+	last_repair_swaps = 0
+	last_repair_gain = 0.0
+	last_repair_tried = 0
+	last_repair_ms = 0
+	last_repair_lines = []
+	_log_ctx = {}   # 【2026-09-30】清掉上一局的日志上下文（只有真跑完两阶段搜索才会重新填）
 	var enemy_idxs: Array = []
 	for i in sim.units.size():
 		if sim.units[i].fn == enemy_faction and sim.units[i].alive:
@@ -2404,6 +2622,13 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				tg.append(tgt0)
 		start_can_hit[i] = tg.size() > 0
 		start_targets[i] = tg
+	# 【2026-09-30】日志/复查/补手共用的一份上下文（见 `_log_ctx` 与 `_plan_alt_gap()` 的说明）：
+	#   **在这里就填**、而不是等到打印那一刻 —— 因为"认账补手"（`_repair_plan()`）在打印**之前**跑，
+	#   它靠 `_plan_alt_gap()` 取的正是这三张表。⚠️ 两张表是**回合开始快照**（在阶段 1 动任何人之前算好），
+	#   与 `_plan_score()` 的闲置罚判据必须逐字一致，否则日志与补手会各算一套（实测出现过
+	#   "日志说这手更值 60.4 分、补手判它更差"的自相矛盾）。
+	_log_ctx = { "sim": sim, "enemy_idxs": enemy_idxs, "start_can_hit": start_can_hit,
+		"start_targets": start_targets }
 	# ---------- 阶段 1：先各自挪位（只走位、不出手） ----------
 	# 【2026-09-23 深夜⑥·用户实测「你算的是过程中的伤害吧：圣光先挪，那格那时还能被矿工打到，
 	#   暗域才挪过去挡在前面」】确认属实，而且是个独立的病：阶段 1 是**逐层**决定落点的，排在前面的层
@@ -2679,8 +2904,17 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	#   把"某个单位换一手更值、却被阶段 1 的代理分挤出漏斗"的那类漏，用完整 `_evaluate` 补回来。
 	if w_tp_polish > 0 and not abort_requested:
 		best = _polish_plan(sim, best, enemy_idxs, start_can_hit, deadline, start_targets)
+	# 【2026-09-30·用户「能不能把这种 AI 都发现自己意思被剪的项也加入到评估，最后根据评分选路径」】
+	#   "认账补手"（键 `PROMISE_REPAIR`，见 const 处说明）：把上面这套流程**自己认账**的那些手
+	#   （`_print_decision()` 里的「本可多赚 X 分 ⇒ 疑似被搜索漏掉」）真正**加进候选**，
+	#   用**与末态选计划同一把尺子**（完整 `_plan_score`）重选一次计划。
+	#   ⚠️ 顺序：复查（`TWO_PHASE_POLISH`）**先**、补手**后** —— 补手的起点因此是"已经改良过的计划"。
+	if w_promise_repair > 0 and not abort_requested:
+		best = _repair_plan(sim, best, enemy_idxs, start_can_hit, deadline, start_targets)
 	if log_decisions:
 		last_search_ms = Time.get_ticks_msec() - t0   # 【取证】本次搜索实际耗时（抬头行会写明）
+		# 【2026-09-30】`_log_ctx` 在本函数开头（`start_targets` 算完那一刻）就已填好 ——
+		#   复查/补手与日志共用它，这里不再重填（只补一次"计划已定"的注释）。
 		_print_decision(sim, best)
 	return best["path"]
 
@@ -3501,6 +3735,13 @@ func sub_kill_scan(sim: Sim, cands: Array, cells: Array) -> Dictionary:
 				var sub_u := _sub_probe_unit(hid, c)
 				if sub_u == null:
 					continue
+				# 【2026-10-01·用户实机「共鸣者…还是上了个 0 攻」】0 攻候选直接出局 —— 它打不出伤害，
+				#    "合力斩杀"里它那一份 `sh == 0`，却可能靠队友的 `team` 凑够 `total` 而被选中
+				#    ⇒ 上了个白板。⚠️ 别只信 `_sub_probe_unit()` 的 `echo_set = -1`：
+				#    那是"替补席上还没上场的人"的口径；**已经在场上的共鸣者**走的是另一条路
+				#    （快照带 `echo_set`），`Battle` 侧已按"落地时还没共鸣"剔除，这里也剔一遍。
+				if int(sub_u.eatk) <= 0:
+					continue
 				var sh := _adj_foe_hit_on(sim, t, sub_u)
 				var total := team + sh
 				if t.shield:
@@ -3630,6 +3871,13 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 		if last_polish_swaps > 0 or w_tp_polish > 0:
 			txt += " · 复查（逐单位改良）：换 %d 手 / +%.1f 分 / %.0fms" % [
 				last_polish_swaps, last_polish_gain, float(last_polish_ms)]
+		# 【2026-09-30·用户「能不能把这种 AI 都发现自己意思被剪的项也加入到评估，最后根据评分选路径」】
+		#   "认账补手"的账：试评了多少手、换掉几手、赚了多少分（同一把尺子：完整 `_plan_score`）。
+		if last_repair_swaps > 0 or w_promise_repair > 0:
+			txt += " · 补手（把「本可多赚」那些手加进候选重评）：试 %d 手 / 换 %d 手 / +%.1f 分 / %.0fms" % [
+				last_repair_tried, last_repair_swaps, last_repair_gain, float(last_repair_ms)]
+			for rl in last_repair_lines:
+				txt += "\n     ↳ 补上：%s" % String(rl)
 	# 【2026-09-23 用户要求】"**下回合这一格会挨多少伤**"必须留着（用户：「怎么把会受到多少伤害给删了」）
 	#   —— 它是**真数据**（挨打合计：对手能打到它的伤害总和 + 来源），不是评分。
 	#   与旧日志同一把尺子：在"本回合全部走完"的 `end_sim` 上、按**该单位这一步的落点**算。
@@ -3692,7 +3940,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var occ_ok := not (mc3 != null and pre.occ.has(mc3) and (pre.occ[mc3] as SimUnit) != pu)
 				if occ_ok:
 					var desc3 := ("在 %s 原地打 %s" % [str(pu.cell), alt_name]) if mc3 == null \
-						else ("从 %s 走到 %s 打 %s" % [str(pu.cell), str(mc3), alt_name])
+						else ("从 %s 走到 %s 打 %s" % [DataRegistry.cell_txt(pu.cell), DataRegistry.cell_txt(mc3), alt_name])
 					var s_alt2 := pre.clone()
 					_apply(s_alt2, idx, alt_combo)
 					# 【2026-09-28 晚·修·用户实机「负墟那一行：标题说少 0.8 分、明细加起来却是 −0.7」】
@@ -3702,9 +3950,15 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 					#   ⇒ 两边统一成 **`pre` 基准**：`bd_pre_alt`（pre 局面）− `bd_alt2`（pre 打出替代手）。
 					var bd_pre_alt := _eval_breakdown(pre)
 					var bd_alt2 := _eval_breakdown(s_alt2)
-					var gap := _evaluate(replay, false) - _evaluate(s_alt2, false)
+					# 【2026-09-30】分差改走 `_plan_alt_gap()`（**整份计划级**、与搜索选计划同一把尺子）：
+					#   老口径 `_evaluate(replay) − _evaluate(s_alt2)` 两边基准不同（计划那侧把后面几步
+					#   也打完了）⇒ "本可多赚"会被后面几步的价值污染（实测 60.4 分 vs 计划总分 84 分）。
+					var pa := _plan_alt_gap(path, idx, alt_combo)
+					var gap := (float(pa["gap"]) if bool(pa["ok"]) else _evaluate(replay, false) - _evaluate(s_alt2, false))
 					if gap < -0.5:
-						alt_note = "\n     ⚠️ 没选的那一手更值：%s（约 %.0f 伤），选它本可多赚 %.1f 分 ⇒ 疑似被搜索漏掉（剪枝）" % [
+						# ⚠️ 口径已改成"替代那一手放进整份计划里重放"⇒ 这一段现在指的是
+						#    **整份计划**更值，不是"这一手更值"（老措辞会让人以为只换一手就赚这么多）。
+						alt_note = "\n     ⚠️ 整份计划按这手改会更好：%s（约 %.0f 伤），选它本可多赚 %.1f 分 ⇒ 疑似被搜索漏掉（剪枝）" % [
 							desc3, alt_dmg, absf(gap)]
 					else:
 						alt_note = "\n     没选的那一手：%s（约 %.0f 伤）。换成它会少 %.1f 分 —— 现在这一手赢在「%s」，它只赢在「%s」" % [
@@ -3712,9 +3966,16 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 							_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)),
 							_plain_reason(bd0, bd_alt2, ur.skills.has(DataRegistry.Skill.TAUNT))]
 					# 【2026-09-23 深夜·用户拍板「加」】同一条明细也挂在这里（"没选的那一手"那一支）
-					# 【2026-09-28 晚】基准统一成**同一个局面（`pre`）**，口径与标题一致 = **现在这一手 − 替代那一手**：
-					#   `_evaluate(pre)`（现在这一手：留在 pre 没动）− `_evaluate(s_alt2)`（打出替代手）。
-					var g5 := _plain_gap_terms(bd_pre_alt, bd_alt2, _evaluate(pre, false) - _evaluate(s_alt2, false))
+					# 【2026-09-28 晚】基准统一成**同一个局面**，口径与标题一致 = **现在这一手 − 替代那一手**。
+					# 【2026-09-30·跟着标题一起改成"整份计划级"】两边的 `_eval_breakdown()` 也换成
+					#   **计划终态**（`end_of_turn = true`）：老口径拿的是 `pre` / `s_alt2` 两个**中途态**，
+					#   而标题现在算的是两份计划的**末态**分 ⇒ ⑳㉑㉒㉓㉕ 那几项只在末态结算的账
+					#   会"标题里有、明细里没有"（标题与明细又对不上，正是用户 09-28 抓过的那类）。
+					var g5 := ""
+					if bool(pa["ok"]):
+						g5 = _plain_gap_terms(pa["bd_cur"], pa["bd_alt"], float(pa["gap"]))
+					else:
+						g5 = _plain_gap_terms(bd_pre_alt, bd_alt2, _evaluate(pre, false) - _evaluate(s_alt2, false))
 					if g5 != "":
 						alt_note += "\n     分差明细（现在这一手 − 没选的那一手）：" + g5
 		# 【2026-09-23 用户要求·第三版】这一步**打的是这个目标，为什么不打那个**：
@@ -3751,14 +4012,19 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 					continue
 				var s4 := pre.clone()
 				_apply(s4, idx, o4["combo"])
-				var gap4 := _evaluate(replay, false) - _evaluate(s4, false)
-				scored.append({ "o": o4, "gap": gap4, "bd": _eval_breakdown(s4) })
+				# 【2026-09-30·与"没选的那一手"同一把尺子】改走 `_plan_alt_gap()`（**整份计划级**）：
+				#   老口径 `_evaluate(replay) − _evaluate(s4)` 两边基准不同（计划那侧把后面几步也打完了）
+				#   ⇒ 实测能报出"本可多赚 60.4 分"，而那份计划总分只有 84 分 ⇒ 假警报。
+				var p4 := _plan_alt_gap(path, idx, o4["combo"])
+				var gap4 := (float(p4["gap"]) if bool(p4["ok"]) else _evaluate(replay, false) - _evaluate(s4, false))
+				var bd4: Dictionary = (p4["bd_alt"] if bool(p4["ok"]) else _eval_breakdown(s4))
+				scored.append({ "o": o4, "gap": gap4, "bd": bd4 })
 			scored.sort_custom(func(a2, b2): return float(a2["gap"]) < float(b2["gap"]))
 			var lines: Array[String] = []
 			for i4 in mini(2, scored.size()):
 				var o5: Dictionary = scored[i4]["o"]
 				var mc5: Variant = (o5["combo"] as Dictionary).get("move")
-				var from5 := ("原地" if mc5 == null else ("从 %s 走到 %s" % [str(pu.cell), str(mc5)]))
+				var from5 := ("原地" if mc5 == null else ("从 %s 走到 %s" % [DataRegistry.cell_txt(pu.cell), DataRegistry.cell_txt(mc5)]))
 				# 【2026-09-23 深夜·用户报「为什么荆棘树人不去打烛火」】这里原来写 `maxf(gap, 0.0)` ⇒
 				#   **负的差距被截成 0.0** ⇒ 日志里"其实更值（被搜索漏掉）"和"真的打平"长得一模一样
 				#   （用户那条日志：荆棘树人 打圣光 与 走一步打烛火 两行都写"会少 0.0 分"，读不出真相）。
@@ -3874,6 +4140,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			iu.name, _plain_idle_reason(sim, chosen, ii), _plain_incoming(end_sim, ii, iu.cell)]
 	txt += "\n===== 本回合决策结束 ====="
 	print(txt)
+	last_decision_text = txt   # 【取证】同一份文本留一份（探针不必靠 stdout 抓）
 	if log_verbose:
 		_print_decision_detailed(sim, chosen)
 
@@ -4117,8 +4384,8 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 	if best_combo.is_empty():
 		return _plain_no_attack_why(sim, ii)
 	# 有得打却没打：把"补上这一手"的分数差翻译成人话
-	var mv_txt := ("在 %s 原地打 %s" % [str(iu.cell), best_name]) if best_combo.get("move") == null \
-		else ("从 %s 走到 %s 打 %s" % [str(iu.cell), str(best_combo["move"]), best_name])
+	var mv_txt := ("在 %s 原地打 %s" % [DataRegistry.cell_txt(iu.cell), best_name]) if best_combo.get("move") == null \
+		else ("从 %s 走到 %s 打 %s" % [str(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
 	var end_sim := sim.clone()
 	for st in (chosen["path"] as Array):
 		_apply(end_sim, int(st["idx"]), st["action"])
@@ -4211,7 +4478,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 			var near2: SimUnit = _nearest_player(replay, nc)
 			if near2 != null:
 				new_d = grid.distance(nc, near2.cell)
-			line += " 移动 %s→%s" % [str(ur.cell), str(nc)]
+			line += " 移动 %s→%s" % [DataRegistry.cell_txt(ur.cell), DataRegistry.cell_txt(nc)]
 			var reason: Array[String] = []
 			if u0.can_pickup_gold and sim.gold_cells.has(nc):
 				reason.append("捡金矿")
@@ -4336,8 +4603,8 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 				why.append("⚠️ 名义上够得着却一个候选都没有 ⇒ 查嘲讽门/视线/单位挡路/红帽点杀检查")
 			idle_txt += "\n   ↳ **没有任何能打到人的出招**：" + "；".join(why)
 		else:
-			var where_txt := ("在 %s 原地打 %s" % [str(iu.cell), best_name]) if best_combo.get("move") == null \
-				else ("从 %s 走到 %s 打 %s" % [str(iu.cell), str(best_combo["move"]), best_name])
+			var where_txt := ("在 %s 原地打 %s" % [DataRegistry.cell_txt(iu.cell), best_name]) if best_combo.get("move") == null \
+				else ("从 %s 走到 %s 打 %s" % [str(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
 			idle_txt += "\n   ↳ 本回合**能打到人**（最好一击：%s，预估 %.1f 伤）却没出手 —— 以下是「补上这一手 vs 不动」的逐项对比：" % [
 				where_txt, best_dmg]
 			var mc2: Variant = best_combo.get("move")
@@ -5239,7 +5506,11 @@ func _nearest_player(sim: Sim, cell: Vector2i, foe_fn: int = DataRegistry.Factio
 func _buff_value(_sim: Sim, u: SimUnit, btype: String) -> float:
 	match btype:
 		"atk":
-			return 1.0
+			# 【2026-09-30·用户口径「将攻击力buff的加成为2」】类型价 = **道具面值**（量纲：1.0 = 面值 1 倍，
+			#   见 `1_通用策略.md` 的 `BUFF_TAKE_WEIGHT` 行与 ㉙ 那行）⇒ 面值从 1 点伤害变 2 点，这里跟着
+			#   由 1.0 变 **`Battle.ATK_ITEM_BUFF`（现役 2.0）**：⑧ 的吃道具钱 = 2.0 × `BUFF_TAKE_WEIGHT`，
+			#   否则 AI 会**低估**攻击道具一半（真实 +2、它以为 +1）。
+			return float(Battle.ATK_ITEM_BUFF)
 		"move":
 			return 0.7
 		"shield":
@@ -5358,17 +5629,19 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				if bt != "":
 					sim.buff_taken += _buff_gain(sim, u, bt)   # 记录本回合吃到的道具价值（已按阵营定符号）
 					if bt == "atk":
-						# 【RL 修正】捡到攻击道具：真实 `Unit.atk_use_buff += 1` → `effective_atk()` **立刻 +1**
-						# （下次攻击结算时才消耗）。所以 eatk 要同步 +1（原来只记 atk_use_buff、eatk 不动，
-						# 于是"捡到道具的那一招"里所有读 effective_atk() 的效果都少算 1：烛火 on_move 灼烧、
+						# 【RL 修正】捡到攻击道具：真实 `Unit.atk_use_buff += Battle.ATK_ITEM_BUFF` → `effective_atk()` 立刻涨
+						# （下次攻击结算时才消耗）。所以 eatk 要同步涨同样的量（原来只记 atk_use_buff、eatk 不动，
+						# 于是"捡到道具的那一招"里所有读 effective_atk() 的效果都少算：烛火 on_move 灼烧、
 						# 长角基础伤害、涌电反噬、本次攻击…）。
 						# 实测新场景 hero_17·带道具·移动捡攻击后出招：真实目标 32/40（灼烧4+攻击4），模拟 33/40。
-						u.atk_use_buff += 1
+						# 【2026-09-30·用户口径「将攻击力buff的加成为2」】这里原来写死 `+= 1` / `eatk += 1`
+						#   ⇒ 改成读真实引擎那个常量，避免"真实 +2、AI 以为 +1"。
+						u.atk_use_buff += Battle.ATK_ITEM_BUFF
 						# 【2026-09-20 修 bug】原来这里对共鸣者加了 `if u.echo_set < 0` 守卫（因为真实的
-						# `effective_atk()` 曾直接 return echo 值、道具 +1 不生效）。真实侧已改成
+						# `effective_atk()` 曾直接 return echo 值、道具加成不生效）。真实侧已改成
 						# `max(echo_set + atk_use_buff, 0)`（用户报「共鸣者吃攻击buff无效」）⇒ 模拟必须跟着走，
 						# 否则 AI 会**低估**共鸣者吃道具后的这一下（预测≠真实）。
-						u.eatk += 1
+						u.eatk += Battle.ATK_ITEM_BUFF
 					elif bt == "move":
 						# 【RL 修正】捡到移速道具：真实 `effective_move()` 立刻 +1（move_use_buff 项），
 						# 且本次移动**不消耗**它（见 `_do_move` 的 prev_move_buff 语义）。
@@ -6720,10 +6993,11 @@ func _sim_pickup_at_cell(sim: Sim, t: SimUnit) -> void:
 	if bt2 != "":
 		sim.buff_taken += _buff_gain(sim, t, bt2)
 		if bt2 == "atk":
-			t.atk_use_buff += 1
+			# 【2026-09-30·用户口径「将攻击力buff的加成为2」】读真实引擎常量（原来写死 +1）
+			t.atk_use_buff += Battle.ATK_ITEM_BUFF
 			# 【2026-09-20 修 bug】去掉原来的 `if t.echo_set < 0` 守卫：真实 `effective_atk()` 已改成
-			# `max(echo_set + atk_use_buff, 0)`（用户报「共鸣者吃攻击buff无效」）⇒ 共鸣者吃道具也要 +1。
-			t.eatk += 1
+			# `max(echo_set + atk_use_buff, 0)`（用户报「共鸣者吃攻击buff无效」）⇒ 共鸣者吃道具也要加。
+			t.eatk += Battle.ATK_ITEM_BUFF
 		elif bt2 == "move":
 			t.move_use_buff += 1
 			t.emove += 1
@@ -6811,10 +7085,11 @@ func _sim_pull_target(sim: Sim, u: SimUnit, t: SimUnit) -> void:
 	if bt2 != "":
 		sim.buff_taken += _buff_gain(sim, t, bt2)
 		if bt2 == "atk":
-			t.atk_use_buff += 1
+			# 【2026-09-30·用户口径「将攻击力buff的加成为2」】读真实引擎常量（原来写死 +1）
+			t.atk_use_buff += Battle.ATK_ITEM_BUFF
 			# 【2026-09-20 修 bug】去掉原来的 `if t.echo_set < 0` 守卫：真实 `effective_atk()` 已改成
-			# `max(echo_set + atk_use_buff, 0)`（用户报「共鸣者吃攻击buff无效」）⇒ 共鸣者吃道具也要 +1。
-			t.eatk += 1
+			# `max(echo_set + atk_use_buff, 0)`（用户报「共鸣者吃攻击buff无效」）⇒ 共鸣者吃道具也要加。
+			t.eatk += Battle.ATK_ITEM_BUFF
 		elif bt2 == "move":
 			t.move_use_buff += 1
 			t.emove += 1
@@ -8462,6 +8737,33 @@ func _redcap_one(sim: Sim, u: SimUnit) -> Dictionary:
 	#   只有当"最大那笔确实来自廉价解"时才从这条线上减掉（否则盾是被别人那一笔吃掉的）。
 	if top_cheap > 0.0 and _shield_next_turn(sim, u) and top_cheap >= float(info.get("max", 0.0)) - 0.0001:
 		line = maxf(line - top_cheap, 0.0)
+	# 【2026-10-01·用户实机「AI 直接把我的红帽打到 4 血，对面是 2 个 3 攻和一个 2 攻**复仇者**。
+	#   我怀疑他考虑复仇者 4 伤反击」】⇒ **反击那一笔无条件进她的"血线"**。
+	#   `_incoming_total_on()` 量的是"**下回合对手主动打她**能打多少"，她贴在旁边的复仇者只按普攻算；
+	#   可她末态**站在敌人旁边**（不然下回合没法出手）⇒ 她**自己一出手**就要吃那一记反击
+	#   （复仇者未沉默时 ×2：攻 2 ⇒ **4 伤**，正好打死 4 血的她）⇒ 旧口径下"她紧挨着复仇者"
+	#   这件事在血线上**一分钱都不花**，于是 AI 敢把她压到"出手即被反杀"的血线。
+	#   ⚠️ **必须无条件加**（第一版写在"有廉价解"那个循环里 ⇒ 对面全是满血近战时一笔都不算，
+	#     恰好就是用户遇到的"2 个 3 攻 + 1 个 2 攻复仇者"）。口径与 `_redcap_trade_gain()`（④蓄爆）
+	#   里那一段**逐条同一把尺**：贴身的每个敌人各算一笔；眩晕 / 攻击力 ≤ 0 / 本回合已反击过
+	#   （复仇者除外）都反击不了；复仇者未沉默 ×2。取**最大的一笔**（她只出一手 ⇒ 只吃一次反击）。
+	#   ⚠️ 加在 `line` 上而不是单开一项：`line` 的本义就是"她这一格下回合要冒的险"，而
+	#     ① 血线 与 ④ 蓄爆 都以它为输入（④ 的门是 `line <= 0`）—— 有反击威胁时就不该判成"蓄爆档"
+	#     （那时候她一出手就会被反杀，主动权不在自己手里）。
+	var cnt_max := 0.0
+	for i in sim.units.size():
+		var ce: SimUnit = sim.units[i]
+		if ce == null or not ce.alive or ce.fn == u.fn:
+			continue
+		if grid.distance(ce.cell, u.cell) != 1:
+			continue
+		if ce.stunned or int(ce.eatk) <= 0:
+			continue
+		if ce.counter_used and ce.hero_id != "hero_23":
+			continue
+		var cb: int = 2 if (ce.hero_id == "hero_23" and not ce.silenced) else 1
+		cnt_max = maxf(cnt_max, float(int(ce.eatk) * cb))
+	line += cnt_max
 	if w_floor != 0.0 and line > 0.0:
 		# 「不封顶」（用户明确）：线高于血上限时本项退化成"尽量把血留满"，不是无解罚分。
 		out["血线"] = -w_floor * maxf(line + 1.0 - hp, 0.0)

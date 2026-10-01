@@ -41,9 +41,11 @@ var echo_set := -1              # 共鸣者：本回合攻击力"变为"所有�
 var branch_override := false   # 血锁：射程+2 且只能直线攻击
 var ramble_bonus := 0          # 大大骑士冲锋后攻击上升量
 var sun_bonus := 0             # 太阳斩：登场攻击+3，每次攻击/反击后-1，直到恢复正常
-var perm_atk := 0              # 永久攻击加成（攻击道具/金矿/涌电技师+1），变身重置攻击力时保留
+var perm_atk := 0              # 永久攻击加成（金矿 hero_42 / 涌电技师 hero_38 各 +1），变身重置攻击力时保留
 # 圣诞老人道具的一次性 buff：拾取后在下一次对应动作时生效，用掉即消失
-var atk_use_buff := 0          # 攻击 buff：下一次攻击伤害+ 该项，攻击结算后自减
+# 【2026-09-30·用户口径「将攻击力buff的加成为2」】攻击道具那笔 = `Battle.ATK_ITEM_BUFF`（现役 **2**，
+#   原来写死 1）——见 `Battle._pickup_buff_at_cell()` 的 `"atk"` 分支；AI 模拟侧读同一个常量。
+var atk_use_buff := 0          # 攻击道具 buff：下一次攻击伤害 + 该项（现役 2），攻击结算后清零
 var move_use_buff := 0         # 移动 buff：下一次移动力+ 该项，移动后自减
 var transform_base_id := ""    # 古灵精怪：变身后回溯本源（hero_28），便于每回合重新变身
 var last_transform_id := ""    # 古灵精怪：上一次变身后为了不重复变成同一对象
@@ -973,7 +975,8 @@ func float_tag_text(text: String, color: Color) -> void:
 	_float_text(text, color, -32, -88)
 
 # 数值"带增益"的判定口径（棋子上的数字 / 战斗内属性卡用黄色都看这两个函数）
-# 攻击力：回合增益（攻击道具/烈焰祭司/锤头鲨/负墟）+ 一次性道具增益（下一次攻击+1）+ 共鸣/太阳斩/冲锋
+# 攻击力：回合增益（烈焰祭司/锤头鲨/负墟）+ 一次性道具增益（攻击道具，下一次攻击 +`Battle.ATK_ITEM_BUFF`）
+#   + 共鸣/太阳斩/冲锋
 func atk_is_buffed() -> bool:
 	return atk_buff > 0 or atk_use_buff > 0 or echo_set >= 0 or sun_bonus > 0 or ramble_bonus > 0
 

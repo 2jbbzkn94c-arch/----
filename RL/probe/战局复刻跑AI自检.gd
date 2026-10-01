@@ -130,7 +130,7 @@ func _unit(t: String, fn: int) -> Dictionary:
 	var head := (t.substr(0, sp) if sp > 0 else t)
 	var at := head.split("@")
 	d["hero"] = String(at[0])
-	d["cell"] = str_to_var("Vector2i" + String(at[1])) if at.size() > 1 else Vector2i.ZERO
+	d["cell"] = _cv(str_to_var("Vector2i" + String(at[1]))) if at.size() > 1 else Vector2i.ZERO
 	for tok in t.split(" "):
 		var s := String(tok)
 		if s.begins_with("hp"):
@@ -157,7 +157,14 @@ func _cells(t: String) -> Array:
 			continue
 		if not x.ends_with(")"):
 			x += ")"
-		var v: Variant = str_to_var("Vector2i" + x)
+		var v: Vector2i = _cv(str_to_var("Vector2i" + x))
 		if v != null:
 			out.append(v)
 	return out
+
+## 【2026-10-01】转储行里的坐标是**界面口径**（左上角 =(1, 1)）⇒ 这里 −1 换回引擎 0 基。
+func _cv(c) -> Vector2i:
+	if typeof(c) != TYPE_VECTOR2I:
+		return Vector2i.ZERO
+	var v: Vector2i = c
+	return Vector2i(v.x - DataRegistry.CELL_DISPLAY_OFFSET, v.y - DataRegistry.CELL_DISPLAY_OFFSET)
