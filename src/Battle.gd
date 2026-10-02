@@ -568,6 +568,11 @@ var _waiting_side_skills_round := -1   # 联机等待端：行动方补位完成
 var _in_begin_phase := false      # 回合开始演出期（技能逐个触发中）：此间阵亡先排队，演出结束再弹替补面板
 var _start_placing_subs := false  # 正在"回合开始的先补位"阶段落位（跳过即时光环补发，技能阶段会统一触发）
 var _pending_enemy_sub := 0        # 敌方阵亡待替补数量（轮到敌方回合时按此数量补位）
+# 【2026-10-01 晚·用户「**你不能让转换回合的时机等替补的人上来、行动完之后才结束吗**？」】
+#   "落位"这一趟是不是正在跑（`_place_enemy_sub()` 的外壳置位/清位）。
+#   用途：① 同一拍里别挤两趟落位（中途那条协程 + 回合收尾那条会撞上）；
+#        ② 回合收尾（`_settle_pending_subs_before_turn_end()`）先**等在路上的那一趟跑完**再切边。
+var _sub_placing := false
 # 【2026-10-01·用户「现在主动撤人好像不会撤两个来斩杀」→「上」】**「斩杀撤人」这条链上本回合已经撤了几个**。
 #   正常替补照旧一回合只许一个（`_pending_enemy_sub` 那套规则不动）；**只有斩杀收尾**这条链允许最多
 #   `FINISH_WITHDRAW_MAX` 次（一个替补收不掉 ⇒ 再撤一个接着收）。每次敌方回合开始时清零。
@@ -6258,6 +6263,14 @@ const DEPLOY_DONE_HOLD := 2.2
 ##   0 = 关（逐位回到改动前）；嫌慢/嫌快就改这一个数（只影响敌方 AI 的中途补位）。
 const ENEMY_SUB_ENTER_GAP := 0.6
 
+## 【2026-10-01 晚·用户「你不能让转换回合的时机等替补的人上来、行动完之后才结束吗？」】
+##   敌方回合**收尾前**最多等"在路上的那趟落位"多久（毫秒）。
+##   ⚠️ 这是**等待的兜底**（万一那趟协程异常中断、把 `_sub_placing` 留在 true ⇒ 不许把回合卡死），
+##      **不是搜索的时间闸** —— "选人"那趟搜索照旧不设限（`sub_by_search_ms = 0`），
+##      所以它算多久这里就等多久（常规是几秒；几十秒也等）。等到这个上限还没完 ⇒ 干脆不等了，
+##      名额留到下个敌方回合开场照常落位（那时落位即能出手）。
+const SUB_SETTLE_WAIT_MS := 90000
+
 ## 【2026-09-28·用户口径「顺序：先棋盘效果，然后弹出卡组三选一」】开场演出只起一次；
 ##   在"弹卡组三选一 / 进部署"之前调用（各分支自己调，见 `_ready()`）。
 func _start_board_intro_once() -> void:
@@ -7229,9 +7242,14 @@ func _adjacent_obstacles(u: Unit) -> Array:
 #   HeroBase.can_place_bomb / bomb_place_cells / immune_to_bombs（实现见 hero_35_炸弹人.gd）
 
 # 炸弹落点的**地形合法性**原语（英雄脚本算可放格、落点校验、UI 高亮共用）：
-# 界内、无单位、无障碍、格上无已放炸弹、无增益道具与金矿
+# 界内、无单位、无障碍、**无墓碑**、格上无已放炸弹、无增益道具与金矿
+# 【2026-10-01·用户「怎么 AI 的炸弹人把炸弹放到了墓碑那格」】**补上墓碑那一格**：
+#   原来只查"单位/障碍/炸弹/道具·金矿"，没查 `graves` ⇒ 雷能放到墓碑格上。可墓碑格**谁也站不了**
+#   （只有替补顶碑落位那一条路），那颗雷基本是一颗死雷（还占着"可放格"的名额、AI 还会按价值给它打分）
+#   ⇒ 与"墓碑挡走位、不能落停"这套口径一致，**不放**。
 func bomb_cell_ok(cell: Vector2i) -> bool:
 	return grid.in_bounds(cell) and not occupancy.has(cell) and not obstacles.has(cell) \
+			and not graves.has(cell) \
 			and not bombs.has(cell) and not buff_items.has(cell)
 
 # 公共原语：英雄脚本在移动结算里申请进入"选格放炸弹"（炸弹人：本端真人手动选格）
@@ -7930,7 +7948,7 @@ func _replan_enemy_action(u: Unit) -> Dictionary:
 	ai.log_decisions = false                            # 临时补算，不重复打印决策说明
 	ai.time_budget_ms = 1200                            # 回合中途的小补算：别占满 10 秒（与 late_sub 同口径）
 	var sim = ai.build_state(descs, snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return {}
@@ -7958,7 +7976,7 @@ func _sub_best_strike_here(nu: Unit, pool: Array) -> Dictionary:
 	ai.difficulty = GameState.ai_difficulty
 	var snap := BattleSnapshot.collect(self, pool)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var si := pool.find(nu)
 	if si < 0 or si >= sim.units.size():
 		return {}
@@ -8153,7 +8171,7 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 	# 别让回合中途的补算也占满 10 秒（那会让对局卡顿）。
 	ai.time_budget_ms = 1200
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var plan: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	if plan.is_empty():
 		return
@@ -8205,7 +8223,7 @@ func _defer_enemy_sub_after_gap() -> void:
 const SUB_BY_SEARCH := 0
 var sub_by_search := SUB_BY_SEARCH      # 运行时可切（探针 A/B 用；权重档位将来也可写这里）
 const SUB_BY_SEARCH_TOPK := 2      # 候选只试前 2 名（成本护栏：每多一个候选就多一次搜索）
-const SUB_BY_SEARCH_MS := 2000
+const SUB_BY_SEARCH_MS := 0        # 0 = **不设时间闸**（默认；用户口径「定个时间上限，是不是可能算不出好结果呢」）
 var sub_by_search_ms := SUB_BY_SEARCH_MS  # 运行时可切（探针按预算 A/B）
 
 ## 【2026-09-29 晚·用户「AI 在思考替补的时候，游戏画面会卡住」】**替补选人那次搜索改跑后台线程**：
@@ -8302,11 +8320,15 @@ func _sub_idx_by_search(cells: Array, need_i: int, job = null) -> int:
 		return -1
 	ai.difficulty = GameState.ai_difficulty
 	ai.log_decisions = false
-	# 【2026-09-29 晚·钉不稳定性】这次内层搜索**关掉时间闸**（`time_budget_ms = 0` ⇒ `deadline = 0`，
-	#   引擎里所有 `if deadline > 0 and Time.get_ticks_msec() >= deadline` 的分段截断全部跳过）
-	#   ⇒ 同一盘面 + 同一参数**必定给同一个结果**（宽度由轻量权重封顶，不再由墙上时钟决定跑到哪）。
-	#   上一版用 `sub_by_search_ms`（800ms）当闸，可搜索实际要跑几秒 ⇒ 每次截断点不同 ⇒ 读数时好时坏。
-	ai.time_budget_ms = 0
+	# 【2026-10-01 晚·用户「**你不能让转换回合的时机等替补的人上来、行动完之后才结束吗**？你给他定个
+	#   时间上限，是不是可能算不出好结果呢」】**时间闸撤回 0（不截断）**：
+	#   上一版我给它加了 2 秒上限（为了压"落位拖到玩家回合"那个现象），可用户指出的更对 ——
+	#   ① 截断会把"选人"这趟搜索砍短 ⇒ **可能挑出更差的人**；② 真正的病根不是"算得慢"，
+	#     而是**回合切换没等它**。现在改成"**回合收尾前先把欠的替补补上并让它出手**"
+	#     （见 `_settle_pending_subs_before_turn_end()`），搜索就可以照原样**不设时间闸**跑完
+	#     （`time_budget_ms = 0` ⇒ 同一局面结果可复现，这也是当初关掉时间闸的本意）。
+	#   旋钮 `sub_by_search_ms` 留着（探针按预算 A/B / 以后要收窄就改它），默认值就是 0。
+	ai.time_budget_ms = maxi(int(sub_by_search_ms), 0)
 	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
 	# 【2026-10-01】把这次要跑的 AI 实例登记进工作包 ⇒ 重开 / 退出场景时能**先叫停**再 join
 	#   （否则这条线程关着时间闸，join 会把主线程冻满整趟搜索 —— 用户看到的"卡住"）。
@@ -8344,7 +8366,7 @@ func _sub_idx_by_search(cells: Array, need_i: int, job = null) -> int:
 			if pc.x != -99 and pc.y != -99:
 				cell_est = pc
 		var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 		var nu = ai._sub_probe_unit(hid, cell_est)
 		if nu == null:
 			continue
@@ -8392,7 +8414,23 @@ func _sub_by_search_from_weights() -> bool:
 func _hname(hid: String) -> String:
 	var d := DataRegistry.get_hero(hid)
 	return d.display_name if d != null else hid
+## 落位的外壳（**唯一入口**）：只负责"同一拍里不许挤两趟落位"。
+## 【2026-10-01 晚·用户「不能让转换回合的时机等替补的人上来、行动完之后才结束吗？」】
+##   原来这条函数可以被两处**同时**跑：`_defer_enemy_sub_after_gap()`（中途阵亡那条协程）与
+##   回合收尾的 `_settle_pending_subs_before_turn_end()`／斩杀撤人的 `_ai_finish_withdraw_apply()`。
+##   两者都在 `await` 点上让出主线程 ⇒ 可能**同一个待补名额被落两个人**（也违反用户口径"一个 1 个上"）。
+##   这里用 `_sub_placing` 把它串行化：在跑就当场退（名额留在 `_pending_enemy_sub`，谁想补谁稍后再来）。
+##   ⚠️ 外壳**只打包这一件事**：真正的落位逻辑逐字不动，见 `_place_enemy_sub_body()`。
 func _place_enemy_sub(mid_turn: bool = false) -> void:
+	if _sub_placing:
+		if _CONSOLE_SUB_LOG:
+			print("[替补] 已经有一趟落位在跑 ⇒ 这次跳过（待补名额仍是 %d 个）。" % _pending_enemy_sub)
+		return
+	_sub_placing = true
+	await _place_enemy_sub_body(mid_turn)
+	_sub_placing = false
+
+func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 	# 【2026-09-28·用户口径「AI 如果同时替补两个人的话，1 个 1 个上，登场音效完了再上另一个」】
 	#   本函数会在**同一帧里循环放下全部待补名额**（同时阵亡两人 ⇒ 两个人一起冒出来、两句登场台词叠着响）。
 	#   现在每放下一个就等它的"登场演出 + 台词"播完再继续（见循环末尾那次 `await`）。
@@ -8491,6 +8529,17 @@ func _place_enemy_sub(mid_turn: bool = false) -> void:
 		# ⚠️ 动态替补／斩杀撤人已经自己选过落点 ⇒ 不再被规则 C 覆盖（与改动前同一条口径）。
 		if from_fallback and _sub_join_rule_on():
 			cell = _sub_cell_by_rule_c(next_id, cell)
+		# 【2026-10-01 晚·用户「雪拳打红帽把自己反击死了，然后就不替补了，**等到我方回合才替补复仇者**」】
+		#   **落位前再确认一次"现在还是敌方回合"**：这条协程从"某单位阵亡"那一刻起（`_defer_enemy_sub_after_gap()`），
+		#   中间要过「选人」（`SUB_BY_SEARCH` 的每候选一趟搜索）—— 那一段可能耗掉好几秒，
+		#   等它出来时**敌方回合可能已经结束、控制权已经交给玩家**（`_run_enemy_turn` 尾部切边）。
+		#   原来照旧落位 ⇒ 替补**在玩家回合里**才冒出来、当回合不能出手、还白挨一轮
+		#   （正是用户看到的那一幕）。现在：不是敌方回合就**不落位**，名额留在 `_pending_enemy_sub`，
+		#   下个敌方回合开场照常落位（那才是"落位即能出手"）。
+		if GameState.match_over or state == State.ENDED or GameState.active_side != GameState.SIDE_ENEMY:
+			if _CONSOLE_SUB_LOG or _CONSOLE_AI_LOG:
+				print("[替补] 本回合已经结束（现在不是敌方回合）⇒ 这次落位推迟到下一个敌方回合开始；待补名额仍是 %d 个。" % _pending_enemy_sub)
+			break
 		if cell.x == -99 and cell.y == -99:
 			if from_roster:
 				enemy_roster.push_front(next_id)   # 出生区满了，留到下一轮再
@@ -8931,7 +8980,7 @@ func _dyn_pick_by_search(cands: Array, cells: Array, need_hid: String, job = nul
 	for k in mini(DYN_SEARCH_TOPK, order.size()):
 		var hid_s := String(order[k]["hid"])
 		var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+				snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 		var nu = ai._sub_probe_unit(hid_s, cell)
 		if nu == null:
 			continue
@@ -8969,7 +9018,7 @@ func _sub_kill_scan(cands: Array, cells: Array) -> Dictionary:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	return ai.sub_kill_scan(sim, cands, cells)
 
 ## 动态替补总入口：按 ①②③④ 挑一个，返回 { "id": hero_id, "cell": Vector2i }（cell 为 (-99,-99) ⇒ 用原落点规则）
@@ -9139,7 +9188,7 @@ func _sub_cell_by_rule_c(hero_id: String, fallback: Vector2i) -> Vector2i:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var pick: Vector2i = ai.pick_sub_cell(sim, hero_id, cells)
 	if pick.x == -99 and pick.y == -99:
 		return fallback
@@ -9207,7 +9256,7 @@ func _sub_finish_hero_pick(cells: Array, default_idx: int = -1) -> int:
 	ai.log_decisions = false
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	# 【2026-09-29 晚·用户「场上并没有能被收尾的英雄。鼠队长补上来也没有，其次波盾和鼠队长攻击一样，
 	#   为什么是上鼠队长」】**先问"到底有没有人能收掉"**：`pick_sub_hero()` 的档位里有"参与/离得近"
 	#   这类**不要求打死**的档 ⇒ 场上一个能收的都没有时它照样返回一个人 ⇒ 旧口径拿这个非空返回当
@@ -10432,7 +10481,7 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null, avoid_hid: String = ""
 	#   替补够不到 ⇒ 这一刀收不了尾（日志会照旧写"替补席没人能…"）。
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	# 目标在**模拟局面**里的那个单位：下标就是 `units` 里的下标（`build_state` 的 `cu.sim_index = i`
 	#   与 `units` 一一对应，与 `_remap_action_targets` 同一套口径）——比按格子/血量猜稳得多。
 	#   ⚠️ 仍需判 `alive`：快照会把已阵亡的单位一起带进 descs（要保住下标对应关系），
@@ -10491,10 +10540,16 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null, avoid_hid: String = ""
 	#     梅林(治疗+换位) / 风语者(光环) —— 都不是"无距离伤害"，别顺手加进来。
 	#   ⚠️【2026-10-01·对齐原版】伤害 = 猎颅者**登场那一刻的 `effective_atk()`**（原来写死 3）——
 	#     吃攻击 buff（含落点道具，`_spawn_unit()` 里已先 `_pickup_buff_at_cell`）会涨：3 → 5。
-	#     这里判据用它的**面板攻击力**（`DataRegistry.get_hero("hero_39").atk`，现役 = 3）：
-	#     pick 阶段它还没上场、拿不到"落点道具 / 光环"那一部分 ⇒ **刻意只算面板**（保守口径：
-	#     宁可漏认一次斩杀，也不认下"上去却打不空"的一手）。
-	var sh_atk := DataRegistry.get_hero("hero_39").atk
+	# 【2026-10-01 晚·用户「猎颅者登场的时候，吃了个攻击 buff，怎么技能还是打 3 血」】**AI 这边也要跟上**：
+	#   原来这里只算**面板攻击力**（并在日志里打"登场就打 3 伤"）⇒ 用户看日志就以为技能没吃 buff。
+	#   AI 能**提前知道**的加攻只有一样：**落点格上的攻击道具**（`buff_items[落点] == "atk"` ⇒
+	#   落位时 `_pickup_buff_at_cell` 会给它 `atk_use_buff += ATK_ITEM_BUFF`，而**登场技不是攻击**、
+	#   不会消耗这份 buff ⇒ 这一刀真按 +2 结算）。⇒ 按同一把尺子算：面板 ＋ 落点道具。
+	#   ⚠️ 其余加攻（同伴光环 / 涌电技师 / 回合开始的烈焰祭司）在 pick 阶段**还看不到**（它没上场）
+	#     ⇒ 那部分仍**刻意不算**（保守口径：宁可漏认一次斩杀，也不认下"上去却打不空"的一手）。
+	var sh_atk := int(DataRegistry.get_hero("hero_39").atk)
+	if not cells.is_empty() and String(buff_items.get(cells[0], "")) == "atk":
+		sh_atk += ATK_ITEM_BUFF
 	if best_hid == "" and bench.has("hero_39") and sh_atk >= int(st.hp) and not st.shield:
 		# 目标必须是"**全场 HP 最低的敌人**"（猎颅者的登场技只打那一个；并列时按 `units` 顺序取先出现的）
 		var lowest_ok := true
@@ -10510,8 +10565,10 @@ func _finish_kill_hero_pick(tgt: Unit, skip: Unit = null, avoid_hid: String = ""
 			best_cell = cells[0]          # 落哪个合法落点都行（登场技不看距离）
 			best_fire_cell = Vector2i(-99, -99)   # **没有开火格** ⇒ 落位那一刻自动结算
 			if _CONSOLE_AI_LOG and diag_first:
-				_fw_diag_add(tgt, "登场技：它血 %d 是全场最低，而**猎颅者登场就打 %d 伤、不看距离** ⇒ **上猎颅者落 %s**" % [
-					int(st.hp), sh_atk, DataRegistry.cell_txt(best_cell)])
+				_fw_diag_add(tgt, "登场技：它血 %d 是全场最低，而**猎颅者登场就打 %d 伤**（面板 %d%s）、不看距离 ⇒ **上猎颅者落 %s**" % [
+					int(st.hp), sh_atk, int(DataRegistry.get_hero("hero_39").atk),
+					("＋落点攻击道具 %d" % ATK_ITEM_BUFF) if sh_atk > int(DataRegistry.get_hero("hero_39").atk) else "",
+					DataRegistry.cell_txt(best_cell)])
 	# 【2026-10-01·用户实机「沉默术士只有 7 血，AI 没死人。随便替补两个就能斩杀，但没有」】**两刀合力**兜底：
 	#   ④ 原来的门槛是「**一个**替补补上来就能一刀收掉」（`_finish_pick_dmg` = 真实一击 ≥ 目标血）
 	#   ⇒ 目标血比"收尾特例里最高的那一击"还厚时，**一个候选都不认** ⇒ pick 返回空 ⇒ 一次都不撤
@@ -10884,7 +10941,7 @@ func _sim_pair(u: Unit, tgt: Unit) -> Dictionary:
 		return {}
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var ui := units.find(u)
 	var ti := units.find(tgt)
 	if ui < 0 or ti < 0 or ui >= sim.units.size() or ti >= sim.units.size():
@@ -11113,6 +11170,76 @@ func _state_dump_line() -> String:
 	parts.append("坐标=界面口径（左上角 (1, 1)）；脚本解析要 −1 换回 0 基")
 	return "[战局转储] " + "　‖　".join(parts)
 
+## 【2026-10-01 晚·用户「**你不能让转换回合的时机等替补的人上来，行动完之后才结束吗**？你给他定个
+##   时间上限，是不是可能算不出好结果呢」】⇒ **回合切换等替补**（这就是他给的方案）。
+##   病灶（用户实机那一幕）：雪拳打红帽、被反击反杀 ⇒ `_on_unit_died()` 起了一条**不 await 的**协程
+##   （`_defer_enemy_sub_after_gap()`）去落位，而那条协程里还要跑"选人"那趟搜索（几秒到几十秒）
+##   ⇒ 回合收尾/切边**根本不认识它**：回合照常在那一拍结束、控制权交给玩家，替补才慢吞吞冒出来
+##   ——「怎么到我的回合，AI 才替补？」而且当回合不能出手、还白挨一轮。
+##   修法（按用户口径）：**敌方回合收尾前（清状态/清碑/烧血/`end_current_side`/`_begin_side(玩家)` 之前）
+##   先把这一回合欠下的替补补上，并让它把那一手打完，然后才切边**。
+##   ⚠️ 与斩杀撤人（`_ai_finish_withdraw_apply()`）**同一套仪式**，缺一不可：
+##     · `_enemy_plan_running = true`：`_plan_enemy_late_sub()` 第一行就判它，false ⇒ 连"补那一手"都不算
+##       （替补落位却站着不出手）；
+##     · `_enemy_refs = units.duplicate()`：追加进来的那一步的 `idx` 是**相对 `_enemy_refs` 的下标**
+##       （`_replay_enemy_plan()` 跑完会把它清空 ⇒ 不补回来会指错人，见那里的说明）；
+##     · 最后 `run_from()`：`EnemyReplay.run()` 的循环早就结束了，追加的那一步没人演。
+##   ⚠️ 只处理**敌方自己回合内**阵亡的那批（`_pending_enemy_sub` 里"玩家回合死的"在回合开场就落位了）；
+##      本函数之后才结算的阵亡（回合末烧血 / 淡出晚到）照旧留给下一个敌方回合开场（那时落位即能出手）。
+func _settle_pending_subs_before_turn_end() -> void:
+	if _replay_mode:
+		return   # 录像回放不跑 AI：敌方那一段照录像里的计划重演
+	var my_session := _session_id
+	if _pending_enemy_sub <= 0 and not _sub_placing and _ai_plan.size() <= _replay_plan_pos:
+		return   # 没欠替补、没有落位在跑、也没有"追加进来还没演"的一手 ⇒ 逐位回到改动前（不多等一帧）
+	var was_running := _enemy_plan_running
+	var refs_was := _enemy_refs
+	_enemy_refs = units.duplicate()
+	_enemy_plan_running = true      # 见上面说明：不支起来，替补落位后不会补那一手
+	# ① 先等"在路上"的那一趟落位跑完（`_defer_enemy_sub_after_gap()` 那条协程随时可能正在搜索选人）。
+	#    这一段里 `_enemy_plan_running` 是开的 ⇒ 它落位时补的那一手同样会追加进 `_ai_plan`，下面一起演。
+	#    ⚠️ **暂停期间不算进下面的兜底时限**：那趟落位用的计时器是 `create_timer(..., false)`
+	#       （`process_always = false`）⇒ 整棵树暂停时它也不推进；要是这里照墙上时钟倒计时，
+	#       玩家按一下 ESC 停一会儿就会把这个等待耗光 ⇒ 替补被推回"下个敌方回合"（正是要修的现象）。
+	var waited_ms := 0
+	while _sub_placing:
+		if not is_inside_tree() or my_session != _session_id or GameState.match_over or state == State.ENDED:
+			break
+		if get_tree().paused:
+			await _enemy_replay.wait_unpaused()
+			continue
+		if waited_ms > SUB_SETTLE_WAIT_MS:
+			break
+		var t0 := Time.get_ticks_msec()
+		await get_tree().process_frame
+		waited_ms += Time.get_ticks_msec() - t0
+	if _sub_placing and _CONSOLE_SUB_LOG:
+		print("[替补] 在路上的那趟落位等超时（%d ms）⇒ 这次不等了，名额留到下个敌方回合开场落位。" % SUB_SETTLE_WAIT_MS)
+	# ② 还有名额就自己补（`_place_enemy_sub()` 里自带"现在还是不是敌方回合"那道门）。
+	#    上限 = 本回合可能的名额数（斩杀撤人 2 次 + 常规 1 个，再多纯属保险），绝不转圈。
+	var guard := 0
+	while guard < FINISH_WITHDRAW_MAX + 2:
+		guard += 1
+		if not is_inside_tree() or my_session != _session_id:
+			break
+		if GameState.match_over or state == State.ENDED or _pending_enemy_sub <= 0 or _sub_placing:
+			break
+		if enemy_roster.is_empty() and not _dynamic_sub_active():
+			break    # 没人可上（或动态池算不出人）：名额留着，下个敌方回合开场照常落位
+		var pending_before := _pending_enemy_sub
+		await _place_enemy_sub(true)
+		if not is_inside_tree() or my_session != _session_id:
+			break
+		if _pending_enemy_sub >= pending_before:
+			break    # 这一趟一个都没落成（出生区满 / 名额被清）⇒ 收工，别再转
+	# ③ 把这一趟追加进来的"替补那一手"演完 —— 这就是用户要的「**行动完之后才结束**」。
+	if _ai_plan.size() > _replay_plan_pos:
+		await _enemy_replay.run_from(_ai_plan, _enemy_refs, my_session, _replay_plan_pos)
+	# 收尾一律还原（含"中途安全退"那条路）：场景已在拆 / 已重开时置回去也无副作用，
+	#   但不置回去的话，本会话接下来的那段会带着"计划还开着 + refs 是旧副本"继续跑。
+	_enemy_plan_running = was_running
+	_enemy_refs = refs_was
+
 func _run_enemy_turn() -> void:
 	if _replay_mode:
 		return   # 【2026-09-27·录像】回放不跑 AI 搜索：敌方那一段照录像里的计划重演
@@ -11218,6 +11345,16 @@ func _run_enemy_turn() -> void:
 		if my_session != _session_id or not is_inside_tree():
 			return
 		if not _check_win():
+			# 【2026-10-01 晚·用户「不能让转换回合的时机等替补的人上来、行动完之后才结束吗？」】
+			#   回合收尾的**第一件事**：把这一回合阵亡欠下的替补补上（含"选人"那趟搜索 + 落位演出 +
+			#   它补的那一手）——**做完这些才清状态/清碑/烧血/切边**。放在这里而不是更后面：
+			#   顺序上"替补这一手"属于本回合的出手（与斩杀撤人同一时点），且要排在胜负判定之后
+			#   （判负成立就不必再补人了）。
+			await _settle_pending_subs_before_turn_end()
+			if my_session != _session_id or not is_inside_tree():
+				return
+			if _check_win():
+				return   # 替补那一手可能正好把胜负打出来（判负线到了）⇒ 就此收工，不再走回合末那套
 			await _trigger_turn_end_all(DataRegistry.Faction.ENEMY)
 			_clear_statuses(DataRegistry.Faction.ENEMY)
 			# 【2026-09-29·用户口径「**哪方的墓碑在哪方回合结束就消失**」】单机 AI 的回合**不经过
@@ -11246,7 +11383,7 @@ func _run_enemy_turn() -> void:
 # 写死 BattleAI 会让线程启动失败（"Cannot convert argument 1"）。RefCounted 对生产 AI 与候选都成立。
 func _enemy_ai_worker(ai: RefCounted, snap: Dictionary) -> void:
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
-			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}))
+			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
 	var result: Array = ai.search(sim, DataRegistry.Faction.ENEMY)
 	_ai_mutex.lock()
 	_ai_plan = result

@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://crebsjal1lmy5"]
+
+[ext_resource type="Script" path="res://RL/probe/终局项判负线自检.gd" id="1_script"]
+
+[node name="终局项判负线自检" type="Node"]
+script = ExtResource("1_script")

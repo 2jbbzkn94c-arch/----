@@ -179,6 +179,15 @@ class Sim:
 	# `_sync_ranged_adjacent()`（src/Battle.gd:3488）跑在阵亡技**之前**；模拟是同步结算，
 	# 若在死亡瞬间就跑 on_died，自爆会先炸死邻格敌人、导致被贴标记算错（hero_40 #22 实测）。
 	var pending_died: Array = []
+	# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，**自爆就输了**」】**累计阵亡（判负线的唯一口径）**：
+	#   真实胜负 = `player_dead / enemy_dead >= LOSS_DEATH_COUNT`（**累计**阵亡），与"场上还剩几个"无关。
+	#   而 ⑩终局项 `_terminal_value()` 过去按**存活数**给分 —— 3 人队两者恰好等价，可队伍是 4/5 人
+	#   （替补/配方档）时就分叉：用户那局 AI 已阵亡 2、场上还剩 3 ⇒ 红帽自爆（第 3 死）**直接判负**，
+	#   而老口径只看到"3 人→2 人 = −2.5 分"⇒ 它开开心心自爆送掉比赛。
+	#   `-1` = **未知**（老调用方 / RL harness 不带这份数据）⇒ 终局项退回"按存活数"的老口径（逐位不变）。
+	var my_dead := -1        # 我方（AI 这一侧）**累计**阵亡
+	var foe_dead := -1       # 对手**累计**阵亡
+	var death_line := 3      # 判负线（真实 `Battle.LOSS_DEATH_COUNT`，由快照带过来）
 	# 【RL 修正】替补名额（fn -> 待补数量；真实 src/Battle.gd:4338 `_pending_enemy_sub += 1` 同口径，召唤物不计）
 	var pending_sub: Dictionary = {}
 	# 【RL 修正】替补席英雄 id（快照 "rosters" 键；AI 侧才有，用于选人与登场效果）
@@ -1716,8 +1725,15 @@ func _init(g: HexGrid) -> void:
 # **可选**第 11 参 `buff_owner`：道具**归属**（cell -> 阵营），来自快照 `"buff_owner"`。
 # 缺省 {} = 所有道具都当**中立**（双方都能捡）= 与加本参之前逐位相同（老调用点不受影响）。
 # 见 `Sim.buff_owner` 与 `_sim_pickup_owned()` 的说明。
-func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}, buff_cells: Dictionary = {}, active_fn: int = -1, rosters: Dictionary = {}, auto_sub: Dictionary = {}, buff_owner: Dictionary = {}) -> Sim:
+func build_state(unit_descs: Array, occ: Dictionary, gold_cells: Dictionary = {}, graves: Dictionary = {}, obstacles: Dictionary = {}, bombs: Dictionary = {}, buff_cells: Dictionary = {}, active_fn: int = -1, rosters: Dictionary = {}, auto_sub: Dictionary = {}, buff_owner: Dictionary = {}, deads: Dictionary = {}) -> Sim:
 	var s := Sim.new()
+	# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，自爆就输了」】**累计阵亡随快照进来**
+	#   （`BattleSnapshot.collect()` 的 `"deads"` 键：`{my, foe, line}`；缺省 {} ⇒ 保持 −1 = 未知
+	#   ⇒ ⑩终局项退回"按存活数"的老口径 ⇒ 老调用方/RL harness 行为逐位不变）。
+	if not deads.is_empty():
+		s.my_dead = int(deads.get("my", -1))
+		s.foe_dead = int(deads.get("foe", -1))
+		s.death_line = maxi(int(deads.get("line", 3)), 1)
 	s.rosters = rosters.duplicate(true)
 	s.auto_sub = auto_sub.duplicate()
 	s.active_fn = DataRegistry.Faction.ENEMY if active_fn < 0 else (active_fn as DataRegistry.Faction)
@@ -6457,10 +6473,13 @@ func _sim_on_move(sim: Sim, u: SimUnit, moved_dist: int = 0) -> void:
 		# 实测 hero_35·移动（炸弹人在 (2,5)）：真实多出炸弹 (2,6)、模拟一颗都没有。
 		var bcells: Array = []
 		for n in grid.neighbors(u.cell):
-			# 【RL 修正】候选格口径对齐真实 `Battle.bomb_cell_ok`：界内、无单位、无障碍、无已有炸弹、
+			# 【RL 修正】候选格口径对齐真实 `Battle.bomb_cell_ok`：界内、无单位、无障碍、**无墓碑**、无已有炸弹、
 			# 无增益道具**与金矿**（真实的 `buff_items` 里金矿和普通道具是同一张表，所以金矿格也不能落雷；
 			# sim 把金矿拆到了 `gold_cells`，原来漏了这一条 → 模拟会把雷放到金矿上，真实不会）。
+			# 【2026-10-01·用户「怎么 AI 的炸弹人把炸弹放到了墓碑那格」】墓碑那条也补上（真实侧同一批改的，
+			#   `Battle.bomb_cell_ok()` 现在查 `graves`）—— 墓碑格谁也站不了 ⇒ 那格的雷是死雷。
 			if grid.in_bounds(n) and not sim.occ.has(n) and not sim.obstacles.has(n) \
+					and not sim.graves.has(n) \
 					and not sim.bombs.has(n) and not sim.buff_cells.has(n) and not sim.gold_cells.has(n):
 				bcells.append(n)
 		if bcells.size() > 0:
@@ -7036,6 +7055,14 @@ func _sim_kill(sim: Sim, t: SimUnit) -> void:
 ## 阵亡时英雄专属效果（模拟侧）。
 ## 真实派发点：src/Battle.gd `_on_unit_died` → `_hero(u).on_died()`。
 func _sim_on_died(sim: Sim, t: SimUnit) -> void:
+	# 【2026-10-01 晚】累计阵亡记账（真实 `_on_unit_died()`：`if not is_summon: enemy_dead/player_dead += 1`）
+	#   ⇒ 只有"阵亡数已知"（快照带了 `deads`）时才记，老调用方保持 −1 = 未知。
+	if sim.my_dead >= 0 or sim.foe_dead >= 0:
+		if not DataRegistry.summons.has(t.hero_id):
+			if t.fn == DataRegistry.Faction.ENEMY:
+				sim.my_dead = maxi(sim.my_dead, 0) + 1
+			else:
+				sim.foe_dead = maxi(sim.foe_dead, 0) + 1
 	# 【RL 修正】红帽(hero_40)：扑街时对**相邻的敌对阵营单位**造成 13 点伤害，
 	# 并波及相邻障碍各 -1 耐久；被[沉默]/[眩晕]期间阵亡则不触发。
 	# 【2026-10-01·用户「把红帽的技能效果改成只对敌人造成爆炸伤害」】原来是"相邻的**所有**单位
@@ -8507,20 +8534,31 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 #       ② 对方剩 1 个时，"能收割就收割"的价值暴涨（人类玩家的收尾意识）；
 #       ③ 数值按 10 倍递进 ⇒ 是**凸**的，而不是线性的"每人头等值"。
 func _terminal_value(sim: Sim) -> float:
+	const MINE_CURVE := [ -1000.0, -100.0, -10.0, 0.0 ]    # 下标 = 我方还剩几条命（或存活数，见下）
+	const FOE_CURVE := [ 1000.0, 100.0, 10.0, 0.0 ]         # 下标 = 对方还剩几条命（0 = 全灭我赢）
+	# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，**自爆就输了**」】**改成按"还剩几条命"**：
+	#   判负线是**累计阵亡** `death_line`（真实 `Battle.LOSS_DEATH_COUNT`）⇒ "还剩几条命" =
+	#   `death_line − 累计阵亡`，与"场上还剩几个"**不是一回事**（队伍 > 3 人时，场上还有 3 个也可能
+	#   已经死了 2 个 ⇒ 再死一个就判负）。老口径按存活数 ⇒ 用户那局"3 人→2 人"只值 −2.5 分，
+	#   于是 AI 用红帽自爆（第 3 死 = 判负）去换对面人头 ⇒ **自己把比赛送掉**。
+	#   ⚠️ **3 人队且无召唤物时，两者逐位相同**（只剩几条命 ≡ 存活数）⇒ 标准局行为不变；
+	#      `deads` 未知（−1，老调用方/RL harness）⇒ 也退回老口径 ⇒ 老读数不受影响。
 	var mine := 0
 	var foe := 0
-	for i in sim.units.size():
-		var u: SimUnit = sim.units[i]
-		if u == null or not u.alive:
-			continue
-		if u.fn == DataRegistry.Faction.ENEMY:
-			mine += 1
-		else:
-			foe += 1
+	if sim.my_dead >= 0 and sim.foe_dead >= 0:
+		mine = sim.death_line - sim.my_dead
+		foe = sim.death_line - sim.foe_dead
+	else:
+		for i in sim.units.size():
+			var u: SimUnit = sim.units[i]
+			if u == null or not u.alive:
+				continue
+			if u.fn == DataRegistry.Faction.ENEMY:
+				mine += 1
+			else:
+				foe += 1
 	mine = clampi(mine, 0, 3)
 	foe = clampi(foe, 0, 3)
-	const MINE_CURVE := [ -1000.0, -100.0, -10.0, 0.0 ]    # 下标 = 我方存活数
-	const FOE_CURVE := [ 1000.0, 100.0, 10.0, 0.0 ]         # 下标 = 对方存活数（0 = 全灭我赢）
 	return float(MINE_CURVE[mine]) + float(FOE_CURVE[foe])
 
 # 【2026-09-15 合并·用户决定】「威胁图」与「玩家反制前瞻」原本是**两项、两把尺子**在描述同一件事

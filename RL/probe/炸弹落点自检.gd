@@ -20,10 +20,16 @@ func _run() -> void:
 	# 盘面 B：血锁在炸弹人**正上方**（(2,3)）⇒ 它的邻格在最前那格之外
 	#   ⇒ 旧口径仍挑"最靠对手底线"的 (2,5)，新口径应改挑血锁邻格
 	await _case("B_血锁在上方", Vector2i(2, 3), Vector2i(3, 2))
+	# 盘面 C 【2026-10-01·用户「怎么 AI 的炸弹人把炸弹放到了墓碑那格」】**墓碑格不能放雷**：
+	#   炸弹人 (2,4) 的邻居里有 (2,3)（见 `_case` 里那三格的算法）—— 在那儿立一座墓碑，
+	#   候选格清单里就不该再有它（墓碑格谁也站不了 ⇒ 那颗雷是死雷）。
+	await _case("C_墓碑格", Vector2i(0, 1), Vector2i(4, 1), Vector2i(2, 3))
 	print("BOMB|END")
 	get_tree().quit(0)
 
-func _case(tag: String, chain_cell: Vector2i, foe_cell: Vector2i) -> void:
+func _case(tag: String, chain_cell: Vector2i, foe_cell: Vector2i, grave_cell: Vector2i = Vector2i(-99, -99)) -> void:
+	if grave_cell.x >= 0:
+		battle.graves[grave_cell] = { "fn": DataRegistry.Faction.ENEMY, "hero": "hero_11" }
 	var bomber = battle._spawn_unit("hero_35", DataRegistry.Faction.ENEMY, Vector2i(2, 4))
 	var chain = battle._spawn_unit("hero_41", DataRegistry.Faction.ENEMY, chain_cell)
 	var foe = battle._spawn_unit("hero_12", DataRegistry.Faction.PLAYER, foe_cell)
@@ -41,6 +47,11 @@ func _case(tag: String, chain_cell: Vector2i, foe_cell: Vector2i) -> void:
 		print("BOMB|%s|  格%s 分=%.1f|到我方近战距离=%d|是血锁邻格=%s" % [
 			tag, str(c), hero._bomb_cell_score(c, pa), battle.grid.distance(foe.cell, c),
 			str(battle.grid.distance(chain.cell, c) == 1)])
+	if grave_cell.x >= 0:
+		print("BOMB|%s|墓碑格 %s｜在候选里=%s｜bomb_cell_ok=%s ⇒ %s" % [
+			tag, str(grave_cell), str(cells.has(grave_cell)), str(battle.bomb_cell_ok(grave_cell)),
+			("PASS（墓碑格已排除）" if not cells.has(grave_cell) else "FAIL（墓碑格仍可放雷）")])
+		battle.graves.erase(grave_cell)
 	# 拆掉这一盘的三个单位，给下一盘腾地方
 	for u in [bomber, chain, foe]:
 		if u != null and is_instance_valid(u):

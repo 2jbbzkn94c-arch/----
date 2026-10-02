@@ -95,4 +95,9 @@ static func collect(battle, pool: Array = []) -> Dictionary:
 		# "某一招窗口内替补登场"的选人与登场效果（如波盾 on_enter 给己方全体盾），把那类块从"不可比"变成可比。
 		# 纯读取、不改游戏行为；与 atk_use_buff/move_use_buff/atkdown/thorn/echo_set 同批同类，只被 RL 的 sim/harness 消费。
 		"rosters": { DataRegistry.Faction.PLAYER: battle.player_roster.duplicate(), DataRegistry.Faction.ENEMY: battle.enemy_roster.duplicate() },
+		# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，**自爆就输了**」】**累计阵亡 + 判负线**：
+		#   ⑩终局项要按"**还剩几条命**"算（判负线是**累计阵亡** `LOSS_DEATH_COUNT`，与"场上还剩几个"
+		#   不是一回事 —— 队伍 > 3 人时，场上还有 3 个也可能已经死了 2 个）。纯新增键：
+		#   不读它的调用方（RL harness / 老工具）行为不变（模拟里那两个字段留 −1 = 未知 ⇒ 退回老口径）。
+		"deads": { "my": battle.enemy_dead, "foe": battle.player_dead, "line": battle.LOSS_DEATH_COUNT },
 	}

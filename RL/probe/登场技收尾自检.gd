@@ -20,9 +20,14 @@ func _run() -> void:
 	print("E|CFG|登场技收尾复刻（猎颅者登场 3 伤、无距离；目标缩在最深处）")
 	await _arm("A 原局·玩家已死1名（收掉也只到2名 ⇒ 期望不撤）", 1, false)
 	await _arm("B 对照·玩家已死2名（再收1个就赢 ⇒ 期望撤+上猎颅者）", 2, true)
+	# 臂 C 【2026-10-01 晚·用户「猎颅者登场的时候，吃了个攻击 buff，怎么技能还是打 3 血」】**落点道具要算进去**：
+	#   同一个盘面，把目标血改成 **4**（面板 3 收不掉），并在**第一个合法落点**上放一颗**攻击道具**
+	#   ⇒ 落位时 `_pickup_buff_at_cell()` 会给它 `atk_use_buff += ATK_ITEM_BUFF(2)`，而"登场技不是攻击"
+	#   不会消耗这份 buff ⇒ 真实伤害 **3 + 2 = 5 ≥ 4** ⇒ **期望撤 + 上猎颅者**（改前：只按面板 3 判 ⇒ 不撤）。
+	await _arm("C 落点有攻击道具（真伤 3+2=5 ≥ 4血 ⇒ 期望撤）", 2, true, 4, true)
 	print("E|END")
 
-func _arm(nm: String, pdead: int, expect: bool) -> void:
+func _arm(nm: String, pdead: int, expect: bool, tgt_hp: int = 1, with_item: bool = false) -> void:
 	await _fresh()
 	GameState.enemy_recipe = {}
 	battle.enemy_roster = BENCH.duplicate()
@@ -30,10 +35,14 @@ func _arm(nm: String, pdead: int, expect: bool) -> void:
 	battle.player_dead = pdead
 	battle.enemy_dead = 1          # 用户那局：我方已阵亡 1 名 ⇒ 本回合只能撤 1 次
 	battle._finish_withdraw_used = 0
-	# 目标：沉默术士 1 血，缩在玩家最深处（4,6）；**场上只有它** ⇒ 必然是"全场最低血"
+	# 目标：沉默术士（默认 1 血），缩在玩家最深处（4,6）；**场上只有它** ⇒ 必然是"全场最低血"
 	var tgt := _spawn("hero_34", DataRegistry.Faction.PLAYER, Vector2i(4, 6))
 	if tgt != null:
-		tgt.hp = 1
+		tgt.hp = tgt_hp
+	# 【臂 C】第一个合法落点上放一颗**攻击道具**（模拟器要能提前把它算进登场伤害）
+	var legal0: Array = battle._sub_legal_cells_for_ai()
+	if with_item and not legal0.is_empty():
+		battle.buff_items[legal0[0]] = "atk"
 	# 我方：两名已出手的单位（该被撤的那批），离目标很远
 	for spec in [["hero_11", Vector2i(1, 2)], ["hero_12", Vector2i(3, 1)]]:
 		var mu := _spawn(String(spec[0]), DataRegistry.Faction.ENEMY, spec[1])
@@ -45,9 +54,10 @@ func _arm(nm: String, pdead: int, expect: bool) -> void:
 	var near := 99
 	for c in legal:
 		near = mini(near, battle.grid.distance(c, Vector2i(4, 6)))
-	print("E|%s|我方已阵亡=%d ⇒ 可撤 %d 次 ｜ 合法落点=%s ｜ 最近落点到目标=%d 格 ｜ 席里最高面板攻=%d" % [
-		nm, battle.enemy_dead, battle._finish_gate_mult(), DataRegistry.cells_txt(legal), near,
-		_max_bench_atk()])
+	print("E|%s|我方已阵亡=%d ⇒ 可撤 %d 次 ｜ 目标血=%d%s ｜ 合法落点=%s ｜ 最近落点到目标=%d 格 ｜ 席里最高面板攻=%d" % [
+		nm, battle.enemy_dead, battle._finish_gate_mult(), tgt_hp,
+		("（落点首格有攻击道具 +2）" if with_item else ""),
+		DataRegistry.cells_txt(legal), near, _max_bench_atk()])
 	battle._ai_finish_withdraw_pick()
 	var decided := battle._finish_withdraw_target != null
 	var who := String(battle._finish_withdraw_hero)
