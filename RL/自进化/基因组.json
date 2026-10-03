@@ -1,0 +1,11 @@
+﻿{
+ "overlay": {
+  "FORM_ESCAPE_ESCAPABLE": 1,
+  "FORM_ROLE_GATE": 1,
+  "FORM_ESCAPE_RANGED_ONLY": 1,
+  "_起点说明": "档位5 的起点 = 噩梦1(esc 门) + 用户 2026-10-02 拍板的两项行为口径（队形按身份分档·含后勤 / ㉑ 只考虑远程）。之后每一轮由 自进化.ps1 自己出点子、配对批带 CI 判定后增删。"
+ },
+ "last_round": 0,
+ "last_run": "",
+ "accepted": "起点（用户口径）"
+}

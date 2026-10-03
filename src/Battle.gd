@@ -375,6 +375,14 @@ const FINISH_HEROES: Array[String] = [
 	"hero_41", "hero_27", "hero_46",
 ]
 
+## 【2026-10-02·用户口径「黄金矿工不要替补出」】**永不作为替补上场**的英雄（只挡"替补选人"这一条路）。
+##   黄金矿工 `hero_42` 的收益全在"己方回合开始在空地放金块 + 自己去捡"（攻 +1 / 上限 +3 / 回 3 血）
+##   ⇒ 中途替补上场时那些机会早就过去了，上来就是个白板（用户实机：动态池排名里它还真进了圈内：
+##   「…长剑 20.6、黄金矿工 20.6」）。两条替补路径都读本表：动态池 `_dynamic_sub_candidates()`
+##   直接跳过；预设替补席在落位前由 `_strip_never_subs()` 摘掉。
+##   ⚠️ **不挡**：开局首发/部署、玩家自己组队与手点替补（那是玩家的自由）。要放开就把 id 从本表删掉。
+const SUB_NEVER: Array[String] = ["hero_42"]
+
 # 把一份候选名单收窄成"收尾特例"（见 `FINISH_HEROES` 的说明）；没变就原样返回。
 func _finish_hero_pool(bench: Array) -> Array:
 	var out: Array = []
@@ -397,6 +405,27 @@ func _finish_hero_pool(bench: Array) -> Array:
 ##      模拟里会带着整队攻击力之和，两把尺不一致 ⇒ 这里按时点直接把它排除/放行。
 func _echo_active_here() -> bool:
 	return _start_placing_subs
+
+## 【2026-10-02·T138】"**这一手替补如果上场，共鸣者落地后会有多少攻击力**" = 活着的同阵营单位
+##   （除共鸣者自己）`effective_atk()` 之和 —— 与 `heroes/hero_47_共鸣者.gd::on_side_turn_start()`
+##   的取和口径**逐字同款**（先整队取样再赋值 ⇒ 不会自我污染；这里只有一个候选，取和即可）。
+##   ⚠️ **只在 `_echo_active_here()`（回合开始的先补位）时才喂给 AI**：中途落位 echo 不结算
+##   ⇒ 那时喂 -1（保持 T70 定的"中途上场 0 攻"口径，逐位不变）。
+func _echo_sum_here() -> int:
+	var total := 0
+	for v in units:
+		if v == null or not is_instance_valid(v) or not v.alive:
+			continue
+		if v.faction != DataRegistry.Faction.ENEMY or v.hero_id == "hero_47":
+			continue
+		total += int(v.effective_atk())
+	return total
+
+## 把"这一手会不会结算共鸣"喂给这个 AI 实例（见 `_echo_sum_here()`）。
+func _wire_echo_for(ai) -> void:
+	if ai == null:
+		return
+	ai.echo_sum_here = (_echo_sum_here() if _echo_active_here() else -1)
 # 【2026-09-28·斩杀撤人】"这一次落位必须用指定的人 / 指定的格"（只有斩杀撤人会设）：
 #   `_place_enemy_sub()` 一开头就看它，用完即清 ⇒ 正常替补流程逐位不变。
 var _forced_sub_cell := Vector2i(-99, -99)
@@ -650,9 +679,28 @@ const _CONSOLE_AI_LOG := true
 # 【2026-09-20 用户拍板·改为四档】3 = 噩梦 = 注入 `噩梦.json`（**通用权重 + hero_XX 英雄特化段在同一份文件里**）。
 #   原来还多一档 4 = 噩梦+（第二份表 `噩梦+.json` 只写 hero_XX 段）；用户决定"没必要再分一层"⇒
 #   英雄段整体搬进 `噩梦.json`、第 5 档删除（手写 4 会被 `>= NIGHTMARE_DIFFICULTY` 当噩梦处理）。
-const NIGHTMARE_DIFFICULTY := 3                          # 与 GameState.AI_DIFFICULTY_MAX 对应
+const NIGHTMARE_DIFFICULTY := 3                          # ≥3 走候选 AI；3 = 噩梦（冻结）· 4 = 噩梦+（实验档）
+#   ⚠️ 2026-10-02：原来这里写"与 `GameState.AI_DIFFICULTY_MAX` 对应" —— 现在 MAX = 4、本常量仍是 3
+#   （它只是"低档 / 候选 AI"的分界），两者不再相等，别照旧注释推。
 const AI_CANDIDATE_PATH := "res://RL/ai/AI_Battle.gd"    # 候选（带保真修正 + 可注入权重）
 const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦档：训练权重 + 英雄段
+# 【2026-10-02 新增·用户拍板】第 5 档「噩梦+」= 与噩梦**同一个候选 AI、同一套算力**，
+#   只把权重文件换成这一份（= `噩梦.json` 的逐键副本 + 实验键）。
+#   用户口径：「创建个噩梦+的难度，我现在改的东西都记录到噩梦+，**噩梦本身不要动**」
+#   ⇒ 噩梦(3) 是冻结对照，新机制先只在噩梦+(4) 打开。回退 = 删掉那个 json（本档会自动降级为噩梦权重）。
+const AI_NIGHTMARE1_WEIGHTS_PATH := "res://RL/weights/噩梦1.json"
+# 【2026-10-02 晚·用户口径「我想让你自己开个难度，那就是证明你的水平的挡位」】档位 5「自进化」的权重文件。
+#   ⚠️ 它**由 AI 自己逐轮进化出来**（出点子 → 配对批带 CI 判定 → 留/退），不是用户手调的；
+#   删掉这个文件 ⇒ 难度 5 自动退回 噩梦1.json（见 `_nightmare_weights_path()` 的降级链）。
+#   【2026-10-03】路径从 `RL/weights/自进化.json` 搬进**我自己的文件夹**（`RL/自进化/`，用户口径
+#   「你的所有东西都不要在原来的文件里，你另外起一个文件夹」）⇒ 现在**删掉整个 `RL/自进化/` 文件夹**
+#   就等于把难度 5 的一切（权重 + AI 脚本 + 我的工具/报告）完全回退，其余档一字节不变。
+const AI_EVOLVE_WEIGHTS_PATH := "res://RL/自进化/权重.json"
+# 【2026-10-03】档位 5 专用的 AI 脚本（**AI 自己的机制实现**，住在我自己的文件夹里）：
+#   `RL/自进化/AI.gd` 用 `extends "res://RL/ai/AI_Battle.gd"` 继承同一个 fork（**不是副本、不会漂移**），
+#   我的机制（如"对手阵容条件化的权重档"）都在那里；`src/` 里只有本常量与那一支加载分支。
+#   文件不存在 ⇒ 难度 5 自动退回用 `AI_CANDIDATE_PATH`（= 与难度 3/4 完全同一个 AI）。
+const AI_EVOLVE_SCRIPT_PATH := "res://RL/自进化/AI.gd"
 # 【2026-09-20 新增·默认零变化】低档权重文件通道。
 # 【2026-09-25 用户拍板·新口径】「把前三个难度按照噩梦的基础上修改」+「困难和噩梦的区别就是专属键和概率弱智」
 #   ⇒ 三档的权重文件**由 `RL/train/派生低档权重.ps1` 从 `噩梦.json` 派生**（噩梦.json 是唯一真源）：
@@ -668,6 +716,11 @@ const AI_NIGHTMARE_WEIGHTS_PATH := "res://RL/weights/噩梦.json"      # 噩梦�
 #     困难(2) = `困难.json` `WEAK_P=0.20`（⚠️ 从这里起困难**也读文件**了，旧口径"困难永不走这条路（锚点）"已作废）
 #   四档与噩梦的差别汇总：简单/普通/困难 = 同一套评分键 + 无英雄段 + **同样的算力**（200 / 10s / 现役搜索），
 #     三档彼此只差弱化概率（1.00 / 0.50 / 0.20）；噩梦 = 评分键 + **7 段英雄专属价** + 两阶段 / 400 / **40s** + 不弱化。
+#   【2026-10-02 新增第 5 档「噩梦+」(diff = 4)】与噩梦**同一个候选 AI、同一套算力、同一份小池**，
+#     **只把权重文件换成 `RL/weights/噩梦1.json`**（= `噩梦.json` 的逐键副本 + 实验键）：
+#       用户口径「新改动都记录到噩梦+，**噩梦本身不要动**」⇒ 噩梦(3) 冻结当对照、噩梦+(4) 当试验田。
+#     ⇒ 拿它跑对拍时，两边的差**只来自权重文件**（AI 脚本 / 算力 / 组队池全同源）。
+#     ⚠️ 噩梦1.json 不存在时自动降级成噩梦权重（`_load_weights_json` 会 push_warning），不会崩。
 #   ⚠️ **文件不存在 ⇒ 完全不注入 ⇒ 退回引擎默认（= 旧困难口径）**；删掉这三份 json 就是回退。
 #   ⚠️ 改权重文件**重开一局**即生效（`_load_weights_json` 每局建 AI 时读一次）。
 #   旧口径的实测（**低档 = 裸默认 + 概率弱化**，仅作历史参照，不可与新读数混比）：`难度体检 -Mode weakp2`
@@ -681,7 +734,7 @@ const AI_LOW_TIER_WEIGHTS_PATH := {
 	2: "res://RL/weights/困难.json",
 }
 # 取证日志（默认零输出，保留）：确认"噩梦档这一局到底用了哪个 AI、权重读进来没有、BEAM 是多少"。
-#   怎么开：启动前设环境变量 ZB_NIGHTMARE_DEBUG=1（任意非空值），再进难度=3 的对局。
+#   怎么开：启动前设环境变量 ZB_NIGHTMARE_DEBUG=1（任意非空值），再进难度=3 或 4 的对局。
 #           例：set ZB_NIGHTMARE_DEBUG=1 && godot.exe --path "<项目>" --log-file <绝对路径日志>
 #   会打什么（敌方每回合建 AI 时一行；难度 0/1/2 不打）：
 #     [噩梦档] 难度=3 | AI=res://RL/ai/AI_Battle.gd | 权重文件=res://RL/weights/噩梦.json | 注入键数=17 | BEAM=200
@@ -1073,6 +1126,41 @@ func surrender_online() -> void:
 		NetBus.send_all(JSON.stringify({ "type": "surrender" }))
 	_apply_surrender(_opp_side())
 
+## 【2026-10-03·用户要求「普通模式和竞技场模式点击认输不录像」】认输那一局也要能在**录像列表**里回看：
+##   `_rec_finish()` 遇到"一段都没录"会直接丢弃（部署期 / 第 1 回合开打前就认输，就是这种局面）
+##   ⇒ 这里先补录**当前局面**这一帧（`_rec_frame()` 会取快照 + 开一段）；已经录过段就什么都不做。
+##   ⚠️ 必须在 `_apply_surrender()` / 天梯"认输"**之前**调（那边收尾时才会走 `_rec_finish()` 落盘）。
+##   ⚠️ 只补"有局面可看"的这一帧：真·空局（选卡组/竞技场选人阶段就认输）依然不落盘 —— 那种录像
+##   在列表里点开也是白板，反而占额度（`ReplayStore.MAX_KEEP`）。
+func _rec_capture_if_empty() -> void:
+	if not _rec_on or _rec == null or _replay_mode:
+		return
+	if _rec.has_frames():
+		return
+	# 【2026-10-03·用户「怎么竞技场录像又看不到2选1流程了」】回放的**开场那一段**（竞技场 2 选 1 →
+	#   「战斗开始」→ 部署逐手）是靠 `meta.deploy_snap` 撑起来的：`_replay_begin()` 见它就往 `frames`
+	#   最前面**插一条 `side = -1` 的"舞台帧"**（那一段的闸门就是 `frames[0].side < 0`）。而
+	#   `deploy_snap` 只在**部署跑完**那一刻才写（`_rec_note_deploy()`）⇒ 选牌期 / 部署期就认输的局
+	#   **没有它** ⇒ 回放直接落到"当前局面"，`meta.draft` 里明明记着选牌流水却一个字都不演。
+	#   ⇒ 这里补一份：拿"当前局面"当那条开场帧的画面（与部署完成那条路**同一个调用形状**）。
+	#   ⚠️ 只有在真·空局（连一条段都没有）时才走到这儿 ⇒ 正常打完的局一个字都不受影响。
+	if (_rec.meta.get("deploy_snap", {}) as Dictionary).is_empty():
+		_rec.meta["deploy_snap"] = _snap_take(GameState.SIDE_PLAYER)
+	# 开场阶段（选牌 / 部署）还没有"行动方"（`GameState.active_side` 要 `_start_match()` 才写）⇒ 用本局先手
+	var pre_match: bool = state == State.DEPLOY or state == State.PLACE_DEPLOY \
+			or state == State.ARENA_DRAFT or state == State.DECK_PICK
+	_rec_frame(_first_side if pre_match else GameState.active_side)
+
+## 【2026-10-03·用户要求「普通模式和竞技场模式也需要在菜单键增加认输按钮」】单机认输（普通模式 /
+##   竞技场模式 / 自由部署沙箱）：和联机那条**同一条结算路**（`_apply_surrender()` ⇒ `GameState.end_match()`
+##   + `_emit_match_result()`），只是**不广播、也不要求 `is_online`**；winner 传**对方阵营**（认输 = 判自己输）。
+##   ⚠️ 别在 HUD 里另写一套结算：胜负只有这一套（另写会漏记账 / 结算面板 / 天梯钩子）。
+func surrender_local() -> void:
+	if state == State.ENDED or GameState.match_over:
+		return
+	_rec_capture_if_empty()   # 【2026-10-03】认输前先把"当前局面"补成一段 ⇒ 录像才落得下来
+	_apply_surrender(_opp_side())
+
 # 认输结算（两端共用）：winner = 全局赢家阵营；对端收到 `surrender` 包时传 `_my_side()`
 func _apply_surrender(winner: int) -> void:
 	GameState.end_match(winner)
@@ -1280,10 +1368,12 @@ func _pick_weight(sc: float) -> float:
 #   L2 队伍池：`res://RL/weights/队伍池.json` 里"离线车轮战排出来的队"，按难度取档（弱/中/强）
 #   L3 在线挑队：对候选集算**在线分**（整队 solo + 队内协同 + L1 的克制），取前 `PICK_POOL_TOPK` 支再**随机抽一支**
 # 任何一环缺失（池子文件没有 / 该档为空 / `TARGET_W=0` 且无池子）⇒ **逐位退回现在的行为**（安全降级）。
-const PICK_TARGET_W := { 0: 0.0, 1: 0.5, 2: 1.0, 3: 1.0 }   # 按难度：简单不针对 · 普通半针对 · 困难/噩梦全针对（改成 0 即恢复原样）
+const PICK_TARGET_W := { 0: 0.0, 1: 0.5, 2: 1.0, 3: 1.0, 4: 1.0, 5: 1.0 }   # 按难度：简单不针对 · 普通半针对 · 困难/噩梦/噩梦+全针对（`5` = 档位「自进化」：2026-10-03 已从界面摘掉，但这一行**故意留着** —— 它与 `_nightmare_weights_path(5)` 一样属于"引擎仍支持、界面不提供"；改成 0 即恢复原样）
+#   ⚠️ 2026-10-02：这是**按难度查表**的键 —— 新增档必须同批补行，否则 `.get(diff, 0.0)` 静默回退成
+#   "简单档：完全不针对"，而且不会有任何报错（本轮就是靠这一条发现第 5 档要补的）。
 # 池子档位键用 **ASCII**（`weak`/`mid`/`strong`）：队池 JSON 由 `RL\train\队伍车轮战.ps1` 生成，
 #   全 ASCII 的键能彻底避开"PowerShell 写中文 → 编码事故"这一类坑（本项目已踩过 7 次引号/编码问题）。
-const PICK_POOL_TIER := { 0: "weak", 1: "mid", 2: "strong", 3: "strong" }
+const PICK_POOL_TIER := { 0: "weak", 1: "mid", 2: "strong", 3: "strong", 4: "strong" }
 const PICK_POOL_PATH := "res://RL/weights/队伍池.json"
 # 【临时·2026-09-23 用户要求】「普通模式（单机→普通模式）→ 难度=噩梦」专用小池：只放
 #   «近战/远程/嘲讽»(R04) 与 «近战/近战/嘲讽»(R05) 两条配方（放在 strong 档，噩梦读的就是 strong）。
@@ -1320,9 +1410,11 @@ func _load_pick_pool() -> void:
 	if _pick_pool_tried:
 		return
 	_pick_pool_tried = true
-	# 噩梦档（难度 3·非竞技场）：存在专用小池就用它（临时限制，见 PICK_POOL_PATH_NIGHTMARE 的注释）
+	# 噩梦档 / 噩梦+档（难度 >= 3·非竞技场）：存在专用小池就用它（临时限制，见 PICK_POOL_PATH_NIGHTMARE 的注释）
+	#   【2026-10-02】判据从 `== 3` 放宽成 `>= NIGHTMARE_DIFFICULTY` ⇒ 噩梦+(4) 读同一份小池
+	#   （它是噩梦的对照副本，开局组队必须同源，否则两边差的就不只是"新机制"了）。
 	var pool_path := PICK_POOL_PATH
-	if GameState.ai_difficulty == 3 and not GameState.arena_mode and FileAccess.file_exists(PICK_POOL_PATH_NIGHTMARE):
+	if GameState.ai_difficulty >= NIGHTMARE_DIFFICULTY and not GameState.arena_mode and FileAccess.file_exists(PICK_POOL_PATH_NIGHTMARE):
 		pool_path = PICK_POOL_PATH_NIGHTMARE
 	if not FileAccess.file_exists(pool_path):
 		return
@@ -2907,12 +2999,21 @@ func _combos_of(pool: Array, r: int) -> Array:
 			out.append(combo)
 	return out
 
-# “硬身板/控制型”判定：坦克 或 高血量(≥24) 或 功能（支援/光环/控制类）
+# "硬身板/控制型"判定：**坦克 / [嘲讽] / 高血量(≥24)**。
+# 【2026-10-02·用户「**有肉盾，为什么最后会上了三个脆皮**」】**"后勤"不再算硬身板**：
+#   原来这里还有一条 `skills.has(LOGISTICS)`（原注释写的是"功能（支援/光环/控制类）"），可全表三个后勤
+#   —— 烛火(17 血) · 末日(18 血) · 涌电技师 —— **全是低血支援**，它们顶着"硬身板"的名额会让
+#   下面 ②/③ 那道「防全脆皮」的门（`deployed.size() == 2 and hard_cnt == 0` 才要求第三手硬身板）
+#   **永远不触发**。用户那一局的账：{烛火(后勤·17 血), 红帽(13 血)} 两个低血 ⇒ `hard_cnt` 被烛火算成 1
+#   ⇒ 第三手随便上 ⇒ 上了沉默术士 ⇒ **三个脆皮**，而席里还坐着 装甲堡垒（36 血坦克）。
+#   ⚠️ 这一改只影响"首发三槽"的取舍（坦克/嘲讽/≥24 血仍照旧算硬身板），不动任何伤害/评分公式。
 func _deploy_is_hard(id: String) -> bool:
 	var def := DataRegistry.get_hero(id)
 	if def == null:
 		return false
-	if def.skills.has(DataRegistry.Skill.TAUNT) or def.skills.has(DataRegistry.Skill.LOGISTICS):
+	if DataRegistry.hero_role_name(id) == "坦克":
+		return true
+	if def.skills.has(DataRegistry.Skill.TAUNT):
 		return true
 	if def.max_hp >= 24:
 		return true
@@ -3894,9 +3995,20 @@ func _side_begin_stage(side: int) -> bool:
 	# 自由部署双控时敌方也归本端玩家手动点选，故不跑 AI 补位。
 	if not GameState.is_online and side != _my_side() and not _is_manual_sub_faction(DataRegistry.Faction.ENEMY) \
 			and _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
-		_start_placing_subs = true
-		await _place_enemy_sub()
-		_start_placing_subs = false
+		if _replay_mode or GameState.replay_id != "":
+			# 【2026-10-02·用户报「录像里替补出来个红帽 / 长剑 / 波盾（实际玩的是黄金矿工）」】回放里
+			#   **绝不重挑人**：`_dynamic_sub_pick()` 带随机波段 ⇒ 同一份录像每次回放冒出来的人都不同。
+			#   ⚠️ 判据含 `GameState.replay_id`：回放建场是"先建 HUD、后置 `_replay_mode`"，
+			#   中间那段空窗期只看 `_replay_mode` 会漏（`_deploy_banner_if_my_turn()` 有同款说明）。
+			#   `_dynamic_sub_pick()` 带随机波段 ⇒ 同一份录像每次回放冒出来的人都不同。
+			#   · 新录像：本段自带 `sub` 步骤 ⇒ 什么都不用做（`_apply_replay_step()` 会照原样落位）；
+			#   · 老录像（改前录的、没有那一步）：从**下一段快照**里读当时真落的谁（见 `_replay_place_peeked_subs()`）。
+			if not _replay_frame_has_enemy_sub():
+				await _replay_place_peeked_subs()
+		else:
+			_start_placing_subs = true
+			await _place_enemy_sub()
+			_start_placing_subs = false
 	return false
 
 # 回合开始技执行段（含演出、入场上/下文的计时/横幅）。
@@ -3981,7 +4093,12 @@ func _run_side_skills(side: int) -> void:
 	#   （`frames[i].stage_fp`）：回放侧的 `_obs_stage_hook` 在 "after" 那一刻读一次，两边就能对撞。
 	#   老录像没有这个字段 ⇒ 对照探针自动跳过（兼容不变）。
 	_rec_note_stage_fp()
-	if _replay_mode:
+	# 【2026-10-02·用户报「看录像，控制台也在跳 AI 思考过程」】判据改成"**这一局是回放**"：
+	#   回放的建场顺序是"先建 HUD、后置 `_replay_mode`"（同款说明见 `_deploy_banner_if_my_turn()`），
+	#   空窗期里只判 `_replay_mode` 会漏 —— 而这一段末尾就是 `_run_enemy_turn.call_deferred()`
+	#   ⇒ 真 AI 回合会在空窗里被叫起来：搜索打决策日志、挑替补（`[AI替补上人]`）、
+	#   跑斩杀撤人（`[斩杀撤人]`）……用户看到的"看录像时控制台还在跳 AI 思考"就是它。
+	if _replay_mode or GameState.replay_id != "":
 		_in_begin_phase = false
 		state = State.ANIMATING
 		return
@@ -5210,7 +5327,7 @@ func _impact_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	if u == null or not is_instance_valid(u) or not u.alive:
 		return
 	if not obstacles.has(cell):
-		_finish_obstacle_hit(for_enemy)
+		_finish_obstacle_hit(u, for_enemy)
 		return
 	_obstacle_hit_fx(cell)
 	# 【2026-09-28】敲障碍的攻击音/喊话**不在这里播**了 —— 远程在发射时播
@@ -5220,7 +5337,7 @@ func _impact_obstacle(u: Unit, cell: Vector2i, for_enemy: bool = false) -> void:
 	var dmg := _hero(u).obstacle_damage()
 	_damage_obstacle(cell, dmg)
 	log_message.emit("%s 攻击障碍物。" % u.display_name)
-	_finish_obstacle_hit(for_enemy)
+	_finish_obstacle_hit(u, for_enemy)
 
 
 # 障碍攻击"空动作"的收尾（2026-09-23 新增）：目标是非法/打不到时真实引擎整招不执行，
@@ -5237,7 +5354,20 @@ func _obstacle_noop(for_enemy: bool) -> void:
 # （生产 `EnemyReplay._wait_action_done` 3s / 抽查器 `ACT_WALL_MS` 3s / 跑批 400ms~1s）
 # 每次都只能吃满超时兜底：游戏里每次敌方打障碍白停 3 秒，抽查器还会在兜底窗口里抓拍出
 # 假的「障碍耐久 预测1/实际2」DIFF。敲障碍不会结束对局，所以这里不需要 `_check_win()`。
-func _finish_obstacle_hit(for_enemy: bool) -> void:
+func _finish_obstacle_hit(u: Unit, for_enemy: bool) -> void:
+	# 【2026-10-02·用户「攻击障碍物也会让攻击buff消失」→「**我是说需要消失**」】
+	#   口径统一：**敲障碍也算一次"攻击结算"** ⇒ 与 `_finish_attack()` 一样消耗
+	#   "一次性攻击道具"（`Unit.atk_use_buff`，拾取 +2、只对**下一次攻击**生效）。
+	#   原来这一路不清 ⇒ 敲完障碍黄字还在、下一次真打人时 +2 又照常生效
+	#   （等于敲这一下白嫖了一次加成）；而打单位/反击那两条早就清了（见 `_finish_attack` /
+	#   `_play_counter` / `_launch_counter_projectile` 三处）⇒ 三条路现在同口径。
+	#   ⚠️ 位置：**伤害已经结算完**才清（`_impact_obstacle` 里先 `_damage_obstacle` 再调这里）
+	#      —— 这一下敲的耐久**照常吃到 +2**（伐木工那 `有效攻击力 + 99` 也一样），
+	#      与打单位"先按加成算伤害、结算完再清零"同一顺序。
+	#   ⚠️ 非法目标那条路（`_obstacle_noop`：血锁不直线 / 视线被挡）**不消耗** —— 那招根本没执行、也不扣行动。
+	if u != null and is_instance_valid(u) and u.atk_use_buff > 0:
+		u.atk_use_buff = 0
+		u.refresh_stats()
 	if for_enemy:
 		# 单机：通知敌方 AI 回放/跑批继续；联机对端真人行动后回到等待状态（同 _finish_attack）
 		if GameState.is_online:
@@ -7656,6 +7786,7 @@ func _apply_base_hero(u: Unit, hid: String) -> void:
 	u.echo_set = -1   # 回到基础英雄：清空共鸣者"攻击力变为队友之和"
 	u.display_name = bdef.display_name
 	u.update_atk_icon()   # 攻击图标跟随（近战剑/远程弩/后勤齿轮）
+	u.update_hp_icon()    # 【2026-10-03】血量图标跟随（带 <嘲讽> 的换成"嘲讽血量背景"，见 `Unit._hp_icon_path()`）
 	u._update_name_label()   # 名字跟随（此前只在 _transform 里刷，直接还原时名字会残留旧英雄）
 	u._update_tags_label()   # 词条标签跟随
 	u.behavior = HeroRegistry.create(hid)
@@ -7756,6 +7887,7 @@ func _transform(u: Unit, picked_override: String = "") -> void:
 	log_message.emit("%s 变身 %s。" % [u.display_name, def.display_name])
 	u.display_name = def.display_name   # 完整显示变身后的英雄名（曾误留孤立 "(" 致名字残缺）
 	u.update_atk_icon()      # 攻击图标跟随（近战剑/远程弩/后勤齿轮——变远程或后勤时必须换）
+	u.update_hp_icon()       # 【2026-10-03】血量图标跟随（变/还原成带 <嘲讽> 的必须换）
 	u._update_name_label()   # 卡面名字跟随变化
 	u._update_tags_label()   # 技能词条标签跟随变
 	u.refresh_stats()        # 攻击等数值也刷新
@@ -7969,11 +8101,25 @@ func _replan_enemy_action(u: Unit) -> Dictionary:
 ##   ⚠️ 找不到任何能开火的格子 ⇒ 返回 `{}`，调用方退回搜索（那种局面搜索能挑个像样的落点）。
 ##   入参 `pool` 与 `_plan_enemy_late_sub()` 同一口径（`pool[0]` 是替补自己，其余是玩家方），
 ##   返回的动作里 `atk` 是**玩家方在 pool 里的下标**（调用方再经 `_remap_action_targets()` 换算）。
+## 【2026-10-03·B 案·用户「替补落点按规则走不到斩杀落点却照样斩杀」】替补"**从它现在这一格，按真实路网走得到目标格吗**"。
+##   墙 = 障碍 / 墓碑 / **其他单位**（自己不算墙）；步数上限 = 它这一回合的 `effective_move()`。
+##   ⚠️ 【2026-10-03 修正】**必须用游戏自己的那把尺子 `_move_reachable()`** —— 它按单位的移动规则分派
+##   （大骑士 `uses_charge_movement()` ⇒ **只走直线冲锋、任意距离**；普通单位走移动力 + 路网）。
+##   我第一版用 `grid.find_path()` + `effective_move()`：对大骑士**太松**（它 `move_range` 是 ∞，
+##   于是"拐着弯能到"也被当成能到 ⇒ 用户实机：落点 (2,1) 根本不在能冲 (4,4) 的直线上，却照样斩了）。
+func _sub_can_walk_to(nu: Unit, goal: Vector2i) -> bool:
+	if nu == null or not is_instance_valid(nu):
+		return false
+	if goal == nu.cell:
+		return true
+	return _move_reachable(nu).has(goal)
+
 func _sub_best_strike_here(nu: Unit, pool: Array) -> Dictionary:
 	var ai = _make_battle_ai()
 	if ai == null:
 		return {}
 	ai.difficulty = GameState.ai_difficulty
+	_wire_echo_for(ai)   # 【T138】
 	var snap := BattleSnapshot.collect(self, pool)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
@@ -7984,12 +8130,20 @@ func _sub_best_strike_here(nu: Unit, pool: Array) -> Dictionary:
 	if su == null or not su.alive:
 		return {}
 	su.cell = nu.cell
+	# 【2026-10-02·T138】回合开始的先补位 ⇒ 这一手真会结算共鸣 ⇒ 估算按"落地后的攻击力"算
+	if _echo_active_here() and String(su.hero_id) == "hero_47":
+		su.echo_set = _echo_sum_here()
+		su.eatk = su.echo_set
 	# 候选开火格：原地 + 走得到的空格（`moved_this_turn` 时只能原地 —— 与真实规则同款）
 	var cands: Array = [nu.cell]
 	if not nu.moved_this_turn:
 		for c in ai._move_cells(sim, su).keys():
 			var cc: Vector2i = c
 			if cc != nu.cell:
+				# 【2026-10-03·B 案】模拟侧那把尺子只当**候选生成器**：能不能真走到、以**真实路网**为准
+				#   （用户实机：模拟说走得到、真实路上被单位/墓碑/障碍挡住 ⇒ 却照样打了那一刀）。
+				if not _sub_can_walk_to(nu, cc):
+					continue
 				cands.append(cc)
 	var best: Dictionary = {}
 	var best_key := -1.0
@@ -8015,7 +8169,14 @@ func _sub_best_strike_here(nu: Unit, pool: Array) -> Dictionary:
 				continue                          # 盾整次免伤 ⇒ 这一刀收不掉
 			if not ai._threat_fire_ok_at(sim, su2, fire, t.cell, t):
 				continue                          # 从这一格打不到它（射程/视线/身体/嘲讽门）
-			var hit := float(ai._adj_foe_hit_on(sim, t, su2))
+			# 【2026-10-02·修·用户实机「日志写『原地打 嬉皮死神（约 5 伤）』，实战只打出 1 伤」】
+			#   **这一刀必须用"站在这一格打出去多少"那把尺子**（`_sim_hit_est()` = `eatk × 倍率 × 受击侧`；
+			#   `eatk` 已由上面的 `_sim_refresh_pins()` 按这一格重算 ⇒ **远程被贴身就是 1**）。
+			#   ⚠️ 原来用的是 `_adj_foe_hit_on()`（= `_threat_hit_value(d = 1)`）—— 那是"**下回合**这个贴身的
+			#   敌人会怎么打我"的尺子，里面有一条「**退得开 ⇒ 按满额算**」的判据（下回合它当然可以先退开）；
+			#   而**替补这一枪就在原地打**、退不开 ⇒ 判据给 5、实战给 1（用户那局：影丸 原地打只 1 伤，
+			#   且因为两格都被算成 5 分、同分优先原地，它连"退开一格再打"都不去 ⇒ 承诺的斩杀没发生）。
+			var hit := float(ai._sim_hit_est(sim, su2, t))
 			if hit <= 0.0:
 				continue
 			var lethal := hit >= float(int(t.hp))
@@ -8144,8 +8305,17 @@ func _plan_enemy_late_sub(nu: Unit) -> void:
 		elif pool.find(forced_target) <= 0:
 			why = "目标不在本次快照池里（下标 0 是替补自己）"
 		elif forced_fire != nu.cell:
-			why = "落点 %s 按真实路网走不到开火格 %s（替补现在 %d 格移动力；路上被单位/墓碑/障碍挡住）" % [
-				DataRegistry.cell_txt(nu.cell), DataRegistry.cell_txt(forced_fire), nu.effective_move()]
+			# 【2026-10-03·修】原文案是**推测**（只凭"落点 ≠ 开火格"就写成"按真实路网走不到…被挡住"），
+			#   而这里**从来没跑过寻路** ⇒ 用户实机被它误导（以为存在路网校验，其实没有）。
+			#   现在**真跑一次**（`_sub_can_walk_to()` = 游戏自己的 `_move_reachable()`，含大骑士直线冲锋），
+			#   把两种情形分开报：**走不到** vs **能走到但没落过去**。
+			if _sub_can_walk_to(nu, forced_fire):
+				why = ("落点 %s ≠ 开火格 %s —— 这一刀要求它**落在开火格**上；"
+						+ "它其实走得到，但没落过去（原定落点多半被占、退回了出生区）⇒ 放弃这一刀") % [
+					DataRegistry.cell_txt(nu.cell), DataRegistry.cell_txt(forced_fire)]
+			else:
+				why = "落点 %s 按它自己的移动规则走不到开火格 %s（替补 %d 移动力；路上被单位/墓碑/障碍挡住，或本单位的移动方式不允许）" % [
+					DataRegistry.cell_txt(nu.cell), DataRegistry.cell_txt(forced_fire), nu.effective_move()]
 		else:
 			why = "复核没过（这一刀不够重 / 被[嘲讽]门挡住 / 目标带盾）"
 		print("[替补·诊断] %s 没走「照那一刀执行」⇒ %s" % [nu.display_name, why])
@@ -8330,6 +8500,7 @@ func _sub_idx_by_search(cells: Array, need_i: int, job = null) -> int:
 	#   旋钮 `sub_by_search_ms` 留着（探针按预算 A/B / 以后要收窄就改它），默认值就是 0。
 	ai.time_budget_ms = maxi(int(sub_by_search_ms), 0)
 	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
+	_wire_echo_for(ai)   # 【T138】回合开始的先补位 ⇒ 共鸣会结算
 	# 【2026-10-01】把这次要跑的 AI 实例登记进工作包 ⇒ 重开 / 退出场景时能**先叫停**再 join
 	#   （否则这条线程关着时间闸，join 会把主线程冻满整趟搜索 —— 用户看到的"卡住"）。
 	if job != null:
@@ -8421,7 +8592,102 @@ func _hname(hid: String) -> String:
 ##   两者都在 `await` 点上让出主线程 ⇒ 可能**同一个待补名额被落两个人**（也违反用户口径"一个 1 个上"）。
 ##   这里用 `_sub_placing` 把它串行化：在跑就当场退（名额留在 `_pending_enemy_sub`，谁想补谁稍后再来）。
 ##   ⚠️ 外壳**只打包这一件事**：真正的落位逻辑逐字不动，见 `_place_enemy_sub_body()`。
+## 【2026-10-02·用户报「录像里替补出来个红帽 / 长剑（实际玩的是黄金矿工）」】**老录像的补位兜底**。
+##   改前录的录像里**没有 AI 的 `sub` 步骤**（那时 AI 落位直接 `_spawn_unit()`、一步都不记）⇒ 回放
+##   只能重挑一次人，而 `_dynamic_sub_pick()` 在"最高分 − 波段"里**均匀随机** ⇒ 每次回放冒出来的
+##   都不同（用户先看到小红帽、第二次看到长剑）。
+##   这里**不重挑**，而是从**下一段快照**里读当时真正落的那个人 —— 快照是事实：
+##     · 只认**非召唤物**（骷髅兵那类是技能召出来的，不占替补名额）；
+##     · 只认"现在场上还没有的"（用 `阵营|英雄id` 比对），最多补 `_pending_enemy_sub` 个；
+##     · 落点优先取本段计划里它**第一次出场**时的格子（＝ 落位之后还没动过的位置，见
+##       `_replay_plan_first_cell()`），取不到就退回 `_free_sub_cell_for()`；
+##     · 找不到（终局段 / 没有下一段）就**不落人** —— 下一段快照照样会把真盘面摆回来。
+##   ⚠️ 只在回放里调（`_side_begin_stage()` 的敌方分支）；实战那条走 `_place_enemy_sub()`。
+func _replay_place_peeked_subs() -> void:
+	if _rec == null:
+		return
+	var frames: Array = _rec.frames
+	if _replay_frame < 0 or _replay_frame + 1 >= frames.size():
+		return
+	var next_units: Array = ((frames[_replay_frame + 1] as Dictionary).get("snap", {}) as Dictionary).get("units", [])
+	if next_units.is_empty():
+		return
+	var have := {}
+	for u in units:
+		if u != null and is_instance_valid(u) and u.alive:
+			have["%d|%s" % [u.faction, u.hero_id]] = true
+	var want := _pending_enemy_sub
+	for su in next_units:
+		if want <= 0:
+			break
+		var v: Dictionary = (su as Dictionary).get("vars", {})
+		if int(v.get("faction", -1)) != DataRegistry.Faction.ENEMY or not bool(v.get("alive", true)):
+			continue
+		var hid := String(v.get("hero_id", ""))
+		if hid == "" or DataRegistry.summons.has(hid):
+			continue
+		var key := "%d|%s" % [DataRegistry.Faction.ENEMY, hid]
+		if have.has(key):
+			continue
+		have[key] = true
+		want -= 1
+		var cell := _replay_plan_first_cell(hid)
+		if cell.x == -99:
+			cell = _free_sub_cell_for(DataRegistry.Faction.ENEMY)
+		if cell.x == -99:
+			continue
+		if occupancy.has(cell):
+			var alt := _free_sub_cell_for(DataRegistry.Faction.ENEMY)
+			if alt.x == -99:
+				continue
+			cell = alt
+		_place_sub(DataRegistry.Faction.ENEMY, hid, cell)
+		if _CONSOLE_SUB_LOG:
+			print("[回放] 老录像没有 AI 的 sub 步 ⇒ 照下一段快照补位：%s @%s" % [
+				_hname(hid), DataRegistry.cell_txt(cell)])
+
+## 本段录像里**有没有** AI 的 `sub` 步骤（有 ⇒ 新录像，等 `_apply_replay_step()` 自己落位，不兜底）。
+func _replay_frame_has_enemy_sub() -> bool:
+	if _rec == null or _replay_frame < 0 or _replay_frame >= _rec.frames.size():
+		return false
+	for st in ((_rec.frames[_replay_frame] as Dictionary).get("steps", []) as Array):
+		var d: Dictionary = st
+		if String(d.get("type", "")) == "sub" and int(d.get("fn", 0)) == DataRegistry.Faction.ENEMY:
+			return true
+	return false
+
+## 本段计划里某个英雄**第一次出场**时站的那一格（＝ 它落位之后、还没动过的位置）。
+## 老录像的补位落点用它；计划里压根没有它（那一手一直没出手）⇒ 返回 `(-99,-99)`。
+func _replay_plan_first_cell(hid: String) -> Vector2i:
+	if _rec == null or _replay_frame < 0 or _replay_frame >= _rec.frames.size():
+		return Vector2i(-99, -99)
+	for st in ((_rec.frames[_replay_frame] as Dictionary).get("steps", []) as Array):
+		var d: Dictionary = st
+		if String(d.get("type", "")) != "plan":
+			continue
+		for e in (d.get("plan", []) as Array):
+			var who: Dictionary = (e as Dictionary).get("who", {})
+			if String(who.get("hid", "")) != hid:
+				continue
+			var v := _v2(who.get("cell", null))
+			if v.x != -99:
+				return v
+	return Vector2i(-99, -99)
+
 func _place_enemy_sub(mid_turn: bool = false) -> void:
+	# 【2026-10-02·用户报「录像里替补出来个红帽，下一回合变成黄金矿工（实际玩的是黄金矿工）」】
+	#   **回放里不重跑 AI 的补位选人**：AI 替补现在与玩家侧同一口径 —— 由录像里的 `sub` 步骤演出来
+	#   （录制点在 `_place_enemy_sub_body()` 里那句 `_rec_step`）。原来这里照跑，于是回放每次走到
+	#   "该补位了"都会**重挑一次英雄**（`_dynamic_sub_pick()` 在"最高分 − 波段"里均匀随机）⇒
+	#   冒出来的人常常不是当时那个（用户看到"先冒个红帽"），等下一段快照还原真盘面才变回黄金矿工。
+	#   ⚠️ 与上面那条"本端手动方在回放里不补位"（`_side_begin_stage()`）同一口径。
+	#   老录像（没有 AI `sub` 步骤）的代价：那一趟不再凭空冒人，等到下一段快照里它才出现。
+	#   ⚠️ 判据是"**这一局是回放**"，不是只看 `_replay_mode`：回放的建场顺序是**先建 HUD、后置
+	#   `_replay_mode`**（见 `_deploy_banner_if_my_turn()` 那条同款说明）⇒ 中间那段空窗期里
+	#   `_replay_mode` 还是 false，只看它就会**在空窗里再挑一次人**（用户重启后看到"这次变成波盾了"
+	#   就是这么来的：`GameState.replay_id` 已指向那份录像，而 `_replay_mode` 还没置上）。
+	if _replay_mode or GameState.replay_id != "":
+		return
 	if _sub_placing:
 		if _CONSOLE_SUB_LOG:
 			print("[替补] 已经有一趟落位在跑 ⇒ 这次跳过（待补名额仍是 %d 个）。" % _pending_enemy_sub)
@@ -8439,6 +8705,9 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 	# 【2026-09-22 配方档】动态替补：本局敌方走配方 **且 该配方没写预设替补** ⇒ 候选不是替补席，
 	#   而是"需要补位时"从全英雄池按局面挑（见 `_dynamic_sub_pick()`）。
 	while _pending_enemy_sub > 0 and (enemy_roster.size() > 0 or _dynamic_sub_active()):
+		# 【2026-10-02·用户「黄金矿工不要替补出」】把 `SUB_NEVER` 里的人从**预设替补席**里摘掉
+		#   （摘掉之后下游所有"选人 / 按索引 pop"都自然一致；摘空 ⇒ 什么都不做，照旧上人，绝不把 AI 卡死）。
+		_strip_never_subs()
 		# 【2026-09-29 晚·用户要求】每次上人前把**当时的**替补名单打一行（逐个上人时会看到名单在变短）。
 		_log_ai_bench("上人前")
 		var next_id: String = ""
@@ -8448,10 +8717,16 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 		#   用完即清 ⇒ 正常替补流程逐位不变；指定的人不在替补席／指定的格被占了 ⇒ 退回原流程。
 		var forced_hero := _forced_sub_hero
 		_forced_sub_hero = ""
+		# 【2026-10-02·用户报「这个 (4,2) 是 AI 的碑，他为什么说不是合法落点」】**判据改成与"合法落点"同一把尺**：
+		#   这里原来写的是 `not occupancy.has(...) and not graves.has(...)` —— 等于**要求那一格"不是墓碑"**，
+		#   可"本方墓碑格"本来就是合法落点（阵亡原地顶碑补位，手册落位 `_try_place_sub()` 与 UI 高亮
+		#   都把本方碑格画成可落位点、`_sub_legal_cells_for_ai()` 也把它列进去）⇒ 两条要求**互相打架**：
+		#   只要是"指定的格 = 我方碑格"，就永远进不来，还会打出一句**错的**日志（"不在合法落点里"）。
+		#   现在直接问 `_sub_legal_cells_for_ai().has(...)`（本方墓碑格 + 出生区空格、且没被占）—— 判据一处。
 		if forced_hero != "" and from_roster:
 			var fi := enemy_roster.find(forced_hero)
 			if fi >= 0 and _forced_sub_cell.x != -99 \
-					and not occupancy.has(_forced_sub_cell) and not graves.has(_forced_sub_cell):
+					and _sub_legal_cells_for_ai().has(_forced_sub_cell):
 				forced_cell = _forced_sub_cell
 				next_id = enemy_roster.pop_at(fi)
 		elif forced_hero != "" and _dynamic_sub_active() and _dynamic_sub_candidates().has(forced_hero):
@@ -8459,7 +8734,7 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 			#   （`enemy_roster` 空）⇒ 老写法只处理 `from_roster` 那条 ⇒ 斩杀撤人指定的人在动态池里
 			#   却没人认，落位又退回"按局面挑"，那一刀就砍空了。现在动态池也认这个指定人名。
 			if _forced_sub_cell.x != -99 \
-					and not occupancy.has(_forced_sub_cell) and not graves.has(_forced_sub_cell):
+					and _sub_legal_cells_for_ai().has(_forced_sub_cell):
 				forced_cell = _forced_sub_cell
 				next_id = forced_hero
 		_forced_sub_cell = Vector2i(-99, -99)
@@ -8477,17 +8752,29 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 			#   AI 侧按"**有没有能被这一刀收掉的残血目标**"挑（挑不出来会回退到需求制，见 `_sub_finish_hero_pick`）。
 			#   ⚠️ 【2026-09-29 晚】它**会覆盖**上面那句需求制的结论，所以：① 覆盖动作本身要打日志（原来静默）；
 			#   ② 末尾必须有一条"**实际上场**"的总结行 —— 用户就是被"→ 上 塔盾"那句骗的（实际上了超新星）。
+			#   ⚠️ 【2026-10-03·用户「那两行顺序有点问题以及有点重复」】那条总结行原来打在**这里**（搜索选人之前）
+			#      ⇒ 它随后可能又被 `_sub_idx_by_search_threaded()` 改掉（日志说的和实际上的不是一个）⇒ **整段下移**到
+			#      所有覆盖（收尾优先 ＋ 搜索选人 ＋ 索引夹取）**全部结束之后**，成为真正的最后一句。
 			if _sub_finish_w() > 0.0:
 				var fc := _sub_finish_hero_pick(_sub_legal_cells_for_ai(), idx_pick)
 				if fc >= 0:
 					idx_pick = fc
-			if _CONSOLE_AI_LOG and enemy_roster.size() > 0:
-				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
-					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
 			# 【2026-09-29 晚·SUB_BY_SEARCH】开着时：让搜索自己回答「该上谁」（见 `_sub_idx_by_search()`）
 			var sb := await _sub_idx_by_search_threaded(_sub_legal_cells_for_ai(), need_pick)   # 线程版：不冻界面
-			if sb >= 0:
+			if sb >= 0 and sb < enemy_roster.size():
 				idx_pick = sb
+			# 【2026-10-02·查"替补的英雄没有行动"时抓到的第二处】这一趟会 `await`（选人搜索走后台线程，
+			#   几秒起步）⇒ 期间 `enemy_roster` 可能被**别处**改小（并发的那一趟落位 / 重开 / 名单被摘）
+			#   ⇒ 原来直接 `pop_at(idx_pick)` 会返回 **null**，撞 `Trying to assign value of type 'Nil'
+			#   to a variable of type 'String'`（探针实测抓到的栈：`_place_enemy_sub_body:` 那一行）
+			#   ⇒ 整个落位当场中断：替补**既不落位、也不补那一手**。这里夹一下索引；
+			#   名单已空就收工（名额留给下一次调用，绝不越界）。
+			if enemy_roster.is_empty():
+				break
+			idx_pick = clampi(idx_pick, 0, enemy_roster.size() - 1)
+			if _CONSOLE_AI_LOG:
+				print("[AI替补上人] → **实际上场 = %s**（名单第 %d 位）" % [
+					_hero_name(String(enemy_roster[idx_pick])), idx_pick])
 			next_id = enemy_roster.pop_at(idx_pick)
 		else:
 			# 【2026-10-01】`_dynamic_sub_pick()` 现在内部可能要 await（搜索选人走线程版）⇒ 调用处加 await
@@ -8508,8 +8795,12 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 			#   （配合 pick 侧那条"被撤下那一格也算合法落点"的放宽，替补会**空降到你那半边**）。
 			#   现在**再判一次合法性**：必须落在**本方墓碑格 / 出生区空格**（`_sub_legal_cells_for_ai()` 同一份口径）。
 			#   ⇒ 即使上游给了个越界格子，这里也不会照办，会退回"出生区第一个空格/墓碑格"。
-			if not occupancy.has(forced_cell) and not graves.has(forced_cell) \
-					and _sub_legal_cells_for_ai().has(forced_cell):
+			# 【2026-10-02·用户报「这个 (4,2) 是 AI 的碑，他为什么说不是合法落点」】原来这里还挂着一条
+			#   `not graves.has(forced_cell)` —— 它与上面那句"必须在本方墓碑格里"**互相打架**：本方碑格永远进不来，
+			#   而且会打出一句**错的**日志（那一格其实就在合法落点里）。动态替补（`_dynamic_sub_pick()` 给的
+			#   `plan["cell"]`）与斩杀撤人都是从这个合法清单里挑的格 ⇒ 它挑中的碑格本来就该被认。**这一条删掉**，
+			#   合法性只由 `_sub_legal_cells_for_ai()` 一处说了算（它自己已经排掉了"被占"与"对方墓碑"）。
+			if _sub_legal_cells_for_ai().has(forced_cell):
 				cell = forced_cell
 			elif _CONSOLE_AI_LOG:
 				print("[替补落点] ⚠️ 指定的 %s 不在合法落点里（本方墓碑格/出生区空格）⇒ 不采用，改走默认规则" % DataRegistry.cell_txt(forced_cell))
@@ -8549,6 +8840,12 @@ func _place_enemy_sub_body(mid_turn: bool = false) -> void:
 		if graves.has(cell):
 			graves.erase(cell)
 			_refresh_board()
+		# 【2026-10-02·用户报「录像里替补出来个红帽，下一回合变成黄金矿工（实际玩的是黄金矿工）」】
+		#   **AI 的替补落位也要记一步**（与玩家侧 `_place_sub()` 里那条 `_rec_step` 同一形状）：
+		#   原来这里直接 `_spawn_unit()`，录像里**没有这一趟的任何痕迹** ⇒ 回放只能重跑一遍选人，
+		#   而选人是带随机波段的 ⇒ 落的英雄常常与当时不同。现在把"这一趟实际落的谁 + 落在哪"记下来，
+		#   回放走 `_apply_replay_step()` 的 `"sub"` 分支（`_place_sub()`）照原样落位。
+		_rec_step({ "type": "sub", "fn": DataRegistry.Faction.ENEMY, "hero": next_id, "cell": [cell.x, cell.y] })
 		var eu := _spawn_unit(next_id, DataRegistry.Faction.ENEMY, cell)
 		# 【2026-09-26 修·用户报「炸弹人踩在炸弹上死亡，替补应吃到那颗炸弹」】替补落位也判一次炸弹（原来只判移动落停）
 		if bombs.has(eu.cell):
@@ -8635,7 +8932,9 @@ func _best_enemy_sub_idx() -> int:
 		# ⚠️ 【2026-09-29 晚·用户「为什么说的上塔盾，结果上了个超新星」】这句是**需求制的建议**，不是最终结果：
 		#   调用方随后可能让"收尾优先"（`SUB_FINISH_W > 0`）覆盖它 ⇒ 那句写死"→ 上 X"会骗人。
 		#   现在改成"建议"，并且调用方在覆盖之后一定会再打一条"→ **实际上场 = X**"。
-		print("[AI替补上人] 需求制建议：上 %s（预设名单里最高分；最终以本条下面的「实际上场」为准）" % _hero_name(String(enemy_roster[best_i])))
+		#   【2026-10-03】那条总结行现在打在**收尾优先 ＋ 搜索选人全部结束之后**（见调用处）⇒ 这里不再挂
+		#   "以「实际上场」为准"那半句提示（用户口径：「有点重复」）。
+		print("[AI替补上人] 需求制建议：上 %s（预设名单里最高分）" % _hero_name(String(enemy_roster[best_i])))
 	return best_i
 
 ## 替补选人的「需求上下文」（**真实侧**）：只统计**存活单位**，然后问 `DataRegistry.sub_need()`。
@@ -8783,8 +9082,34 @@ func _dynamic_sub_candidates() -> Array:
 		var def := DataRegistry.get_hero(h)
 		if def == null or def.is_summon:
 			continue
+		if SUB_NEVER.has(h):
+			continue   # 【2026-10-02·用户「黄金矿工不要替补出」】见 `SUB_NEVER`
 		out.append(h)
 	return out
+
+## 【2026-10-02·用户「黄金矿工不要替补出」】把 `SUB_NEVER` 里的人从**预设替补席** `enemy_roster` 摘掉。
+##   只在 AI 落位那条路上调（`_place_enemy_sub_body()` 每次上人前一次）；摘掉之后
+##   `_best_enemy_sub_idx()` / `_sub_idx_by_search()` / `_sub_finish_hero_pick()` 与最后的
+##   `enemy_roster[idx]` / `pop_at(idx)` 全都自然一致（不然按索引取人会错位）。
+##   ⚠️ 全被摘空 ⇒ **什么都不做**（照旧按原名单上人）：宁可按老规矩上个矿工，也不能让 AI"没人可上"。
+func _strip_never_subs() -> void:
+	if enemy_roster.is_empty():
+		return
+	var kept: Array = []
+	var removed: Array = []
+	for hid in enemy_roster:
+		if SUB_NEVER.has(String(hid)):
+			removed.append(String(hid))
+			continue
+		kept.append(hid)
+	if removed.is_empty() or kept.is_empty():
+		return
+	enemy_roster = kept
+	if _CONSOLE_AI_LOG:
+		var names: Array = []
+		for hid2 in removed:
+			names.append(_hero_name(hid2))
+		print("[AI替补上人] 名单里的 %s 按「不要替补出」摘掉（`SUB_NEVER`；该英雄的收益全在回合开始的放矿/捡矿上）。" % "、".join(names))
 
 ## 【2026-09-29 删除·本会话】原 `_sub_best_kill(hid, cells)`（动态替补判据①）：
 ##   它只认"**替补自己**的面板攻击力 ≥ 目标当前血"，够得到还按 `grid.distance()`（**直尺**、不看障碍）判 ⇒
@@ -8951,6 +9276,7 @@ func _dyn_pick_by_search(cands: Array, cells: Array, need_hid: String, job = nul
 	ai.log_decisions = false
 	ai.time_budget_ms = DYN_SEARCH_MS
 	ai.set_weights({ "BEAM": 200, "TWO_PHASE_LAYOUTS": 16, "TWO_PHASE_INNER": 8 })
+	_wire_echo_for(ai)   # 【T138】动态池这条路同样：回合开始的先补位 ⇒ 共鸣会结算
 	# 【2026-10-01】登记进工作包 ⇒ 重开 / 退出场景时能**先叫停**再 join（见 `_reap_pick_job()`）。
 	if job != null:
 		job.ai = ai
@@ -9019,6 +9345,7 @@ func _sub_kill_scan(cands: Array, cells: Array) -> Dictionary:
 	var snap := BattleSnapshot.collect(self)
 	var sim = ai.build_state(snap["descs"], snap["occ"], snap["gold"], snap["grave"],
 			snap["obstacle"], snap["bomb"], snap["buff"], -1, snap.get("rosters", {}), {}, snap.get("buff_owner", {}), snap.get("deads", {}))
+	_wire_echo_for(ai)   # 【T138】这一手会不会结算共鸣（回合开始的先补位才会）
 	return ai.sub_kill_scan(sim, cands, cells)
 
 ## 动态替补总入口：按 ①②③④ 挑一个，返回 { "id": hero_id, "cell": Vector2i }（cell 为 (-99,-99) ⇒ 用原落点规则）
@@ -9080,7 +9407,7 @@ func _dynamic_sub_pick() -> Dictionary:
 func _try_begin_next_sub(fn: int = -1) -> void:
 	if GameState.match_over:
 		return   # 对局已结束：不再弹替补界
-	if _replay_mode:
+	if _replay_mode or GameState.replay_id != "":
 		# 【2026-09-28 修·用户报「主动撤下的英雄还是在场上 / 撤下的人没消失」】回放里的替补
 		#   **只由录像里的 `sub` 步骤演**（见 `_apply_replay_step`）。原来这里会调
 		#   `_replay_auto_sub()` 自己再落一个 ⇒ 和那条 `sub` 步骤一起落下**两个同名额的替补**
@@ -9089,6 +9416,11 @@ func _try_begin_next_sub(fn: int = -1) -> void:
 		return
 	var f := fn if fn >= 0 else _my_faction()
 	if _pending_subs_of(f) <= 0 or _roster_of(f).size() <= 0:
+		# 【2026-10-02·修】同 `_place_sub()` 那一处：这条链若处在"回合开始先补位"的顺延状态，
+		#   直接 return 会让顺延的**回合开始技**永远没人补跑（用户实机：变身没重来、死灵法师没召唤）。
+		#   ⇒ 只有顺延状态才补一次恢复（其余调用点行为一字不变）。
+		if _defer_side_skills:
+			_resume_after_sub()
 		return
 	if state == State.SUBSTITUTING or state == State.PLACE_SUB:
 		return   # 替补面板已在进行：本次落位后会自动开启下一个替补名额
@@ -9419,6 +9751,13 @@ func _place_sub(fn: int, hero_id: String, cell: Variant, clear_side: int = -1) -
 	if occupancy.has(cell):
 		var alt := _free_sub_cell_for(fn)
 		if alt.x == -99:
+			# 【2026-10-02·修·用户报「实机也没有：那一回合的回合开始技整段没跑」】
+			#   若这一手正处在"**回合开始先补位**"那条链上（`_defer_side_skills` 开着），这里直接
+			#   `return` 就等于把整条链断在这儿 —— 顺延的**回合开始技**（古灵精怪重新变身 / 死灵法师
+			#   召唤 / 圣诞老人放道具…）**再也没人补跑**，而旧形态已经在 `_side_begin_stage()` 里被还原成
+			#   "古灵精怪"了 ⇒ 玩家看到的就是「百变这回合没变、死灵法师也没召唤」。
+			if _defer_side_skills:
+				_resume_after_sub()
 			return   # 没地方落：放弃这次（名额由调用方处理，别硬塞）
 		cell = alt
 	var roster := _roster_of(fn)
@@ -9890,12 +10229,22 @@ func _make_battle_ai() -> Variant:
 				if _NIGHTMARE_DEBUG and OS.get_environment("ZB_NIGHTMARE_DEBUG") != "":
 					print("[低档权重] 难度=%d | 文件=%s | 注入键数=%d" % [diff, low_path, wl.size()])
 		return ai_low
-	# 3+ = 噩梦（训练权重 + hero_XX 英雄段，同一份 `噩梦.json`）。
+# 3+ = 噩梦（训练权重 + hero_XX 英雄段，同一份 `噩梦.json`）。
 	# 【2026-09-20 用户拍板】第 5 档「噩梦+」已删除：`噩梦.json` 里现在既有通用键也有 hero_XX 段，
 	#   `set_weights` 会把 `hero_XX` 字典自动转发给 `set_hero_weights` ⇒ 一次注入就够，不再叠第二份表。
-	var w := _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
-	var used_files := AI_NIGHTMARE_WEIGHTS_PATH
-	var script = load(AI_CANDIDATE_PATH)
+	# 【2026-10-02】再分出一档「噩梦+」(diff = 4)：**同一套 AI / 同一套算力，只换权重文件**
+	#   ⇒ 噩梦(3) 冻结当对照、新改动记到噩梦+(4)。见 `_nightmare_weights_path()`。
+	var wpath := _nightmare_weights_path(diff)
+	var w := _load_weights_json(wpath, _nightmare_weights_tag(diff))
+	var used_files := wpath
+	# 【2026-10-03·档位 5「自进化」】难度 ≥5 且**我自己的 AI**（`RL/自进化/AI.gd`）在 ⇒ 用它。
+	# ⚠️ 那是我（AI）的机制实现所在的文件（`extends` 本档同一份 fork，只是加了子类）+ 通用接线，
+	#   不往 `src/BattleAI.gd` 里塞任何我的机制；这一支**只影响难度 5**。
+	var script = null
+	if diff >= 5 and ResourceLoader.exists(AI_EVOLVE_SCRIPT_PATH):
+		script = load(AI_EVOLVE_SCRIPT_PATH)
+	if script == null:
+		script = load(AI_CANDIDATE_PATH)
 	if script == null:
 		push_warning("噩梦档：%s 加载失败，本局降级为生产困难档 AI。" % AI_CANDIDATE_PATH)
 		return BattleAI.new(grid)
@@ -9907,11 +10256,51 @@ func _make_battle_ai() -> Variant:
 	if not w.is_empty():
 		cand.set_weights(w)      # 候选自带 set_weights：未知键忽略，类型非数字跳过
 		w_keys = w.size()
+	# 【2026-10-03·通用接线（不含任何机制逻辑）】候选若能"看对手阵容"就让它看一眼
+	#   （实现在它自己的文件里，见 `RL/自进化/AI.gd::adapt_to_opponent()`）⇒ 本行对没有该方法的 AI 是空操作。
+	#   ⚠️ 传的是**对手那一侧**的单位（本档候选恒为敌方 ⇒ 数玩家阵营）；由本行负责筛，
+	#      `AI.gd` 那边不再自己按 faction 筛 —— 否则走查台里 A 方当玩家方的半局会把"自己"当对手。
+	if cand.has_method("adapt_to_opponent"):
+		var foes: Array = []
+		for u in units:
+			if u != null and is_instance_valid(u) and int(u.get("faction")) == int(DataRegistry.Faction.PLAYER):
+				foes.append(u)
+		cand.adapt_to_opponent(foes)
 	if _NIGHTMARE_DEBUG and OS.get_environment("ZB_NIGHTMARE_DEBUG") != "":
 		print("[噩梦档] 难度=%d | AI=%s | 权重文件=%s | 注入键数=%d | BEAM=%s" % [
 			diff, AI_CANDIDATE_PATH, used_files, w_keys,
 			str(cand.w_beam)])
 	return cand
+
+# 【2026-10-02】难度 → 权重文件。3 = 噩梦（冻结对照）· 4 = 噩梦+（实验档）· **5 = 自进化（AI 自己的档）**。
+# 为什么单独一个函数：`_make_battle_ai()` 与 `_load_nightmare_weights()` 两处都要按档取文件，
+#   写死两遍容易漏（本轮就是这么发现 `PICK_TARGET_W` 漏了第 5 档的）。
+# ⚠️ 【2026-10-02 修·用户口径「不好用要可以轻松删除，不影响原本难度」】噩梦1.json **不存在 ⇒ 退回噩梦.json**
+#   （而不是退回引擎默认）。原来只写 `AI_NIGHTMARE1_WEIGHTS_PATH if diff >= 4` ⇒ 文件缺失时
+#   `_load_weights_json` 返回 `{}` ⇒ **一份权重都不注入** ⇒ 难度 4 会掉到"引擎默认（= 旧困难口径）"，
+#   与"删掉即无害"正好相反（用户会看到难度 4 突然变弱一大截，还以为噩梦+ 被删坏了）。
+#   ⇒ 判据 = 「档位 ≥4 **且** 文件真的存在」；两者都满足才用实验档，否则一律回噩梦。
+#   这样"删除噩梦1.json"= 难度 4 与难度 3 **逐位相同**，彻底无害。
+# 【2026-10-02 晚·用户口径「我想让你自己开个难度，那就是证明你的水平的挡位」】新增**档位 5「自进化」**：
+#   同一套算力、同一份小池，**权重文件 = `RL/自进化/权重.json`**（= 由 AI 自己"出点子 → 配对批带 CI 判定
+#   → 留下/回退"逐轮进化出来的那一份）。⚠️ 【2026-10-03】它跟 3/4 **不再共用同一个 AI 脚本**：
+#   难度 5 的 AI 是 `RL/自进化/AI.gd`（fork 的子类，我的机制都长在那里；见 `AI_EVOLVE_SCRIPT_PATH` 与
+#   `_make_battle_ai()` 的加载分支），3/4 仍是 `RL/ai/AI_Battle.gd`。
+#   ⚠️ **降级链**：权重.json 不在 ⇒ 退回 **噩梦1.json**（若在）⇒ 再退回 **噩梦.json**
+#   ⇒ 删掉它 = 难度 5 与难度 4 逐位相同；三个都删 = 与难度 3 逐位相同。**任何一层删掉都不会崩、不会变弱。**
+func _nightmare_weights_path(diff: int) -> String:
+	if diff >= 5 and FileAccess.file_exists(AI_EVOLVE_WEIGHTS_PATH):
+		return AI_EVOLVE_WEIGHTS_PATH
+	if diff >= 4 and FileAccess.file_exists(AI_NIGHTMARE1_WEIGHTS_PATH):
+		return AI_NIGHTMARE1_WEIGHTS_PATH
+	return AI_NIGHTMARE_WEIGHTS_PATH
+
+# 日志用的档名（与 `HUD.AI_DIFF_NAMES` 同一套口径）——⚠️ 必须与上面那份"实际用了哪个文件"一致，
+#   否则删掉某个 json 后日志会写着那个档名、实际跑的是下一层的权重。
+func _nightmare_weights_tag(diff: int) -> String:
+	if diff >= 5 and FileAccess.file_exists(AI_EVOLVE_WEIGHTS_PATH):
+		return "自进化"
+	return "噩梦+" if (diff >= 4 and FileAccess.file_exists(AI_NIGHTMARE1_WEIGHTS_PATH)) else "噩梦"   # 【2026-10-03·用户口径】界面档名「噩梦1」→「噩梦+」（文件名仍叫 噩梦1.json，不动）
 
 # 读一份权重表：不存在/解析失败/不是字典 → 返回空字典（该层退回下一层的值，安全降级）
 func _load_weights_json(path: String, tag: String) -> Dictionary:
@@ -9930,9 +10319,12 @@ func _load_weights_json(path: String, tag: String) -> Dictionary:
 		return {}
 	return parsed
 
-# 兼容壳：旧名字（只读噩梦.json）。保留给可能的外部调用点。
+# 兼容壳：旧名字。保留给可能的外部调用点。
+# 【2026-10-02】改成**按当前难度取文件**（原来写死 `噩梦.json`）—— 现在有 3/4 两档，
+#   写死会让噩梦+ 的调用点静默拿到噩梦权重。没有外部调用点（全仓只此一处定义）。
 func _load_nightmare_weights() -> Dictionary:
-	return _load_weights_json(AI_NIGHTMARE_WEIGHTS_PATH, "噩梦")
+	var d: int = GameState.ai_difficulty
+	return _load_weights_json(_nightmare_weights_path(d), _nightmare_weights_tag(d))
 
 # ---------------- 【2026-09-28·用户口径】中毒 1 血的 AI 单位：打完这一手就撤 ----------------
 # 用户原话（三条判据，逐条落到这里）：
@@ -10018,8 +10410,21 @@ func _ai_poison_withdraw_apply() -> void:
 	# 撤下把名额记进 `_pending_enemy_sub`，但**不会**自动落位（`_on_unit_died` 只 await 了
 	#   `_defer_enemy_sub_after_gap()`）⇒ 这里自己落，并等它把入场演出播完（`_place_enemy_sub`
 	#   内部逐个 await）——落定之后 `_plan_enemy_late_sub()` 补的那一手就在计划尾部等着被执行。
+	# 【2026-10-02·用户「这次会主动撤下下回合开始必被毒死的英雄了，但是**替补的英雄没有行动**」】
+	#   **必须与斩杀撤人（`_ai_finish_withdraw_apply()`）做同一套仪式，缺一不可**：
+	#     · `_enemy_plan_running = true`：`_plan_enemy_late_sub()` 的**第一行**就判它，false ⇒ 连"补那一手"
+	#       都不算（替补落位却干站着）。上面那段旧注释以为"本函数在 `_replay_enemy_plan()` 之内被调"，
+	#       可**实际调用点早挪到回放返回之后**了（那时标志已关、`_enemy_refs` 已清空）⇒ 注释对、代码不对。
+	#     · `_enemy_refs = units.duplicate()`：追加步的 `idx` 是相对 `_enemy_refs` 的下标（回放按标签解析，
+	#       但落点/身份对齐仍要这份 refs），与 `_replay_enemy_plan()` 收尾前的口径一致。
+	#     · 最后 `run_from()`：`EnemyReplay.run()` 的循环早就结束了，追加的那一步没人演。
+	_enemy_refs = units.duplicate()
+	var was_running := _enemy_plan_running
+	_enemy_plan_running = true
 	GameState.active_side = GameState.SIDE_ENEMY
 	await _place_enemy_sub(true)
+	_enemy_plan_running = was_running
+	await _enemy_replay.run_from(_ai_plan, _enemy_refs, _session_id, _replay_plan_pos)
 
 # ---------------- 【2026-09-28·用户口径】斩杀撤人：出手全打完了还收不掉 ⇒ 撤一个换替补一刀收尾 ----------------
 # 用户定稿的发起条件（四条**同时**成立才撤）：
@@ -11093,14 +11498,14 @@ func _ai_finish_withdraw_apply() -> void:
 	# 【2026-10-01·用户「主动撤人成功了，替补上来的人为什么不攻击啊」】落点改用**开火格**：
 	#   pick 认下的那一刀就是从这一格打出去的（站定即能开火 / 从落点走一步到这一格再开火，两条都验过）
 	#   ⇒ 让替补**直接落这一格**，它就能"原地开火"把那一刀打出去，不必再指望第二次搜索去走那一步。
-	#   ⚠️ 三个前提都成立才换：开火格已在盘上（不是 -99）、没被占、不是墓碑，**并且落在合法落点里**
-	#      （本方墓碑格 / 出生区空格 —— 2026-10-01 用户「完全收回」：否则这条调整会变成
-	#        "为了站上开火格而空降到你那半边"，正是他抓到的那个现象）。
+	#   ⚠️ 三个前提都成立才换：开火格已在盘上（不是 -99）、**落在合法落点里**（本方墓碑格 / 出生区空格），
+	#      见 `_sub_legal_cells_for_ai()`（它自己已经排掉"被占"和"对方墓碑"）。
+	#      （2026-10-01 用户「完全收回」：否则这条调整会变成"为了站上开火格而空降到你那半边"，正是他抓到的现象。）
+	#      【2026-10-02】原来这里还多一条 `not graves.has(_finish_fire_cell)` ⇒ 与"本方墓碑格是合法落点"
+	#        自相矛盾（开火格正好是我方碑格时永远换不过去）⇒ 删掉，合法性只认合法清单那一处。
 	#   不成立就照旧用原落点（那时替补还是可能走过去打 —— 只是不再保证）。
 	var land_cell := cell
-	if _finish_fire_cell.x != -99 and not occupancy.has(_finish_fire_cell) \
-			and not graves.has(_finish_fire_cell) \
-			and _sub_legal_cells_for_ai().has(_finish_fire_cell):
+	if _finish_fire_cell.x != -99 and _sub_legal_cells_for_ai().has(_finish_fire_cell):
 		land_cell = _finish_fire_cell
 	_forced_sub_cell = land_cell
 	_forced_sub_hero = hero_id
@@ -11241,7 +11646,11 @@ func _settle_pending_subs_before_turn_end() -> void:
 	_enemy_refs = refs_was
 
 func _run_enemy_turn() -> void:
-	if _replay_mode:
+	# 【2026-10-02·用户报「看录像，控制台也在跳 AI 思考过程」】判据含 `GameState.replay_id`：
+	#   `_run_side_skills()` 末尾那句 `_run_enemy_turn.call_deferred()` 在回放建场的**空窗期**
+	#   （HUD 已建好、`_replay_mode` 还没置上）会照发 ⇒ 这一趟被延迟叫起来时可能已经是回放了；
+	#   这一道门保证它无论如何都不在回放里跑（搜索/挑替补/斩杀撤人那几百行日志的源头）。
+	if _replay_mode or GameState.replay_id != "":
 		return   # 【2026-09-27·录像】回放不跑 AI 搜索：敌方那一段照录像里的计划重演
 	var my_session := _session_id   # 记录本次回放所属会话，重开后会
 	# 【别写成 get_tree() == null】节点在"重开/切场景/退出"时会被**先移出场景树、再释放**：
@@ -11781,10 +12190,23 @@ func replay_seek_frame(i: int, pause: bool = true) -> void:
 func replay_seek_step(delta: int) -> void:
 	if not _replay_mode or _replay_frame_count() <= 0:
 		return
-	var base: int = _replay_seek_goal
-	if base < 0:
-		base = _replay_frame
-	replay_seek_frame(base + delta)
+	# 【2026-10-02·用户报「点到最后一个回合再点下回合，回合会错乱、英雄乱飞」】基准分两种情形：
+	#   · **有请求在跑/在排队** ⇒ 用"已经排着的落点"（连点要累加，见上面 2026-09-29 那段）；
+	#   · **空着**（已落地、或观众自己播到别处）⇒ 用**当前段**。
+	#   原来无脑用 `_replay_seek_goal`：它只在点击时更新 ⇒ 落地后观众又播了几段、或在末段停下时，
+	#   它就过期了 ⇒ 点「上回合」会算出"从旧落点往回一格"，而当前段比它靠后 ⇒ 走倒回那条路。
+	var pend := _replay_seeking or _replay_seek_to >= 0
+	var base: int = _replay_frame
+	if pend:
+		base = _replay_seek_goal if _replay_seek_goal >= 0 else _replay_frame
+	var tgt := clampi(base + delta, 0, _replay_frame_count() - 1)
+	# 已经到头（末段再点「下回合」／首段再点「上回合」）⇒ **什么都不做**：
+	#   老写法照样发一次"跳到同一段"的请求，而落段会把这一段的**回合开始那套**再演一遍
+	#   （傀儡师推人 / 死灵召唤 / 毒伤飘字…＝用户看到的"英雄乱飞"），还会把同一回合的横幅再报一次
+	#   （"回合错乱"）；观众接着按「继续」还会把这一段已经演过的招**再打一遍**。
+	if tgt == base and not pend:
+		return
+	replay_seek_frame(tgt)
 
 func replay_frame_count() -> int:
 	return _replay_frame_count()
@@ -11852,18 +12274,29 @@ func _replay_loop() -> void:
 			_replay_seek_to = -1
 			_replay_seeking = true
 			_replay_hold_seq += 1   # 换代：还可能挂着的那次"停一拍"当场作废
-			var from_frame := _replay_frame
+			# 【2026-10-02·用户报「上下回合点快了会**回合/画面错乱**」】这一趟的"代"**在开跳之前**就取好：
+			#   跳的过程中观众又点了（连点很常见）⇒ 下面两道门会让这一趟**整趟作废**
+			#   （不报横幅、不补演回合开始技、也不写播放状态），主循环立刻按**最新**那个目标重跳。
+			#   不加这道门的老行为：连点 N 下 = 排 N 趟完整重演（每趟都要逐段逐招"快进演"过去，而目标
+			#   早就被后来的点击顶掉了）⇒ 观众看到横幅乱闪、单位乱动、段号与盘面对不上，而且半天停不下来。
+			var req_at_start := _replay_seek_req
 			# 【2026-09-29 修·探针 C 趟】重演期间**先把"暂停"从判断里摘掉**：快进重演是"跳到那一段"的
 			#   手段，不是"播放" —— 观众在**暂停中点「下回合」**时，重演内部那些跟随暂停的拍子
 			#   （`_gap_replay()` 一类）会一直等下去 ⇒ 点了没反应（实测：20 秒后还停在原段）。
 			#   ⚠️ 只改标志位、**不刷控制条**：按钮上的字在重演期间保持「继续」，末尾由 `my_pause` 统一定。
 			_replay_paused = false
-			if t > _replay_frame:
-				await _replay_fast_forward(t)   # 往后：就地快进
-			else:
-				await _replay_rewind(t)         # 往前：回到第 0 段重建后再快进
-			var went_back := t <= from_frame    # 倒回（含"原地重来"）
+			# 【2026-10-02·用户报「快速点之后再点一次上回合，会回到第一回合」】跳段改成**直接落到目标段**：
+			#   还原目标段快照 + 让该段"快照之后那一套"能重跑（落地的 `_replay_side_begin()`）。
+			#   老行为是"往前就地快进 / 往后从第 0 段重建再快进"——两样都要**逐段逐招重演**过去：
+			#   往后那一趟观众看到的就是"一下回到第一回合、再从开头演到目标段"（录像越长走得越久，
+			#   连点几下时中间几趟还会互相打架）。换段本来就以**快照为准**（`_replay_end_frame()` 每段
+			#   开头也是 `_restore_snapshot()`，见那里的注释）⇒ 直接还原与"走过去"等价、但观众看不到乱动。
+			_replay_seek_land(t)
 			_replay_seeking = false
+			# 【2026-10-02·连点】跳的过程中又来了新请求（或在排队）⇒ 这一趟整趟作废：
+			#   连点 N 下只落地**一次**（落在最后一次点的那个目标上）。
+			if _replay_seek_req != req_at_start or _replay_seek_to >= 0:
+				continue
 			# 【2026-09-28】跳到**部署段**（第 0 段）走与"进回放"同一条路：先清人（别停在"全员已站好"
 			#   的静态画面上），报完横幅再逐手重演（见 `_replay_deploy_clear()`）。
 			var at_deploy := _replay_frame == 0 and int((_frames()[0] as Dictionary).get("side", 0)) < 0
@@ -11883,12 +12316,13 @@ func _replay_loop() -> void:
 			# 【2026-09-28 用户要求】「点击开局后，在开局处暂停，需要点击继续或者点击录像才开始」：
 			#   落到**部署段**时先真停住（清完场、空盘），观众点了「继续」（或点一下画面）才演横幅+逐手。
 			# 【2026-09-28 用户报「点开局后没点继续，死灵法师就开始召唤了」】倒回补跑的那一套
-			#   （`_replay_side_begin()`，见下面 `elif went_back`）原来排在"落地即停"**之前**执行
+			#   （`_replay_side_begin()`）原来排在"落地即停"**之前**执行
 			#   ⇒ 一落地就把召唤/推人/放道具全演完了，观众还没点「继续」。现在两者**同一口径**：
 			#   先停住等放行，放行之后才报横幅、才演那一套（"开始之后才出现提示"也一并满足）。
-			#   ⚠️ 只对"落地即停"的跳段生效（`my_pause`）；普通回合的「上/下回合」照旧"落地即停"。
+			#   ⚠️ 【2026-10-02·改成"直接落段"之后】这道闸门对**上/下回合都生效**（老的"下回合"是走路过去的、
+			#   落地后才停；现在两条路都是"瞬间落到目标段"，那就统一在落点先停住、等观众按「继续」再演）。
 			#   【2026-09-29 用户要求·导出整场】整场导出期间**连这道闸门也不走**（不等观众按「继续」）。
-			if (at_deploy or went_back) and my_pause and not _replay_export_full:
+			if my_pause and not _replay_export_full:
 				# 等待期间屏幕上**不该有任何回合提示**（含上一条还在淡出的回合横幅）+ 顶栏别停在旧回合号
 				if _hud != null and is_instance_valid(_hud):
 					_hud.clear_transient_ui()
@@ -11924,13 +12358,12 @@ func _replay_loop() -> void:
 				continue
 			if at_deploy:
 				await _replay_deploy_frame()
-			elif went_back:
+			else:
 				# 【2026-09-28 修·用户报「有死灵法师的录像，召唤完后点开局，那死灵法师那回合就不会召唤」】
-				#   倒回落到第 t 段时，**那一段的"回合开始那套"从来没跑过**：`_replay_rewind()` 是把段号
-				#   直接设回去的，而这里原来只对"部署段"做了补演 ⇒ 那一段该有的回合开始技全部缺失
-				#   （死灵法师的骷髅、风语者的光环、圣诞老人的道具、傀儡师的推人…）。
-				#   实测：第 1 趟第 0 段 `after 骷髅=4`；点开局后第 2 趟**第 0 段的阶段钩子一次都没出现**。
-				#   ⚠️ 只补"倒回"这一路：往前的快进重演在换段时已经跑过目标段的那一套（再跑一次会翻倍）。
+				#   落到第 t 段时，**那一段的"回合开始那套"必须补跑**（死灵法师的骷髅、风语者的光环、
+				#   圣诞老人的道具、傀儡师的推人…）—— 快照是"回合开始之前"取的，这套在它之后。
+				# 【2026-10-02·改成直接落段之后】往前、往后**都要**跑：老的"往前"是靠 `_replay_fast_forward()`
+				#   逐段重演顺带跑掉的，现在跳段不再重演 ⇒ 两条路都得在这里补一次。
 				#   ⚠️ 它在**等放行之后**才跑（见上面的闸门）—— 否则一落地就召唤，观众还没点「继续」。
 				await _replay_side_begin(_replay_frame)
 			if my_req != _replay_seek_req:
@@ -11948,6 +12381,9 @@ func _replay_loop() -> void:
 			await get_tree().process_frame
 			continue
 		if _replay_frame < 0 or _replay_frame >= _replay_frame_count():
+			# 【2026-10-02】同上：这一趟要收工了，但观众可能刚点了跳段 ⇒ 先回去处理那个请求。
+			if _replay_seek_to >= 0:
+				continue
 			break   # 越界（末段也演完了）：停下等玩家点"返回/重看"（不自动退出）
 		var steps: Array = (_frames()[_replay_frame] as Dictionary).get("steps", [])
 		# 【2026-09-29 用户报「录像最后，一方已经死 3 个人了，另一方的动画还在动，动完了才结束」】
@@ -11973,6 +12409,14 @@ func _replay_loop() -> void:
 					replay_record_stop()
 				# 【2026-09-28 用户要求】「结束后要回到录像列表界面」：结果横幅读完 → 自动回录像列表。
 				await _replay_auto_back()
+				# 【2026-10-02·用户报「快速点之后再点一次上回合，会回到第一回合」探针抓到的第二个坑】
+				#   收工前**再看一眼有没有新请求**：末段演完这一趟要 break，而观众可能刚好在末段点了
+				#   「上/下回合/开局」—— 请求躺在 `_replay_seek_to` 里，break 掉就永远没人处理
+				#   （探针实测：`loop=false` 而 `seek_to=11` 一直挂着，画面停在末段 = 点了没反应）。
+				#   `replay_seek_frame()` 那句"叫起主循环"也救不了：它看的是 `_replay_loop_running`，
+				#   而这一刻那面旗**还没落**（这一趟还停在 await 里）⇒ 它以为循环还在、就没重开。
+				if _replay_seek_to >= 0:
+					continue
 				break   # 兜底：`_replay_auto_back()` 若因异常没能切场景，也照旧停在终局画面
 			# 【2026-09-28 用户要求】观察时间**挪到"回合开始"那一边**了（见 `_replay_end_frame()`）：
 			#   一方演完就**立刻**换段，不再在这里停 —— 原来停在这儿，观众看到的是"上一段已经打完的
@@ -12077,7 +12521,7 @@ func _replay_side_begin(idx: int) -> void:
 	#   病灶（探针实测的两次调用点）：① 进场时残留的清账流程已经跑过一遍（`_ready()` 那套对局 prologue
 	#   的协程）；② `_replay_begin()` 又显式补跑一遍（`Battle.gd:7928`）⇒ 死灵法师一次召唤 2 个，
 	#   盘上出现 4 个（探针读数 `before 骷髅=2 → after 骷髅=4`）。
-	#   倒回（「开局/上回合」）要能重跑 ⇒ `_replay_rewind()` 里把这个号清成 -1（见那里）。
+	#   倒回（「开局/上回合」）要能重跑 ⇒ `_replay_seek_land()` 里把这个号清成 -1（见那里）。
 	if _replay_stage_done == idx:
 		return
 	_replay_stage_done = idx
@@ -12421,27 +12865,23 @@ func _replay_enter_frame(force: bool = false) -> void:
 ## 快进重演到第 target 段（往后：就地演完当前段剩余步骤，逐段推进）。
 ## 为什么要重演而不是"直接摆快照"：快照只在"半回合开始"落一份（见文件头），要精确到段只能重演；
 ## 把 `Engine.time_scale` 拉高后演出照常播、墙钟极短（跑批用的也是同一招）。
-func _replay_fast_forward(target: int) -> void:
-	var keep := Engine.time_scale
-	Engine.time_scale = maxf(keep, 60.0)
-	while _replay_frame < target and _replay_mode and is_inside_tree():
-		var steps: Array = (_frames()[_replay_frame] as Dictionary).get("steps", [])
-		if _replay_step >= steps.size():
-			await _replay_end_frame()
-			continue
-		var st: Dictionary = steps[_replay_step]
-		_replay_step += 1
-		await _apply_replay_step(st)
-		await _replay_wait_action(_replay_wait_cap_ms)
-	Engine.time_scale = keep
-
-## 倒回第 target 段（往前：只能从第 0 段重建再快进过去）
-func _replay_rewind(target: int) -> void:
-	_replay_stage_done = -1   # 倒回：目标段的"回合开始那套"要能重跑（防重复闸门见 `_replay_side_begin()`）
-	_restore_snapshot((_frames()[0] as Dictionary).get("snap", {}))
-	_replay_frame = 0
+func _replay_seek_land(target: int) -> void:
+	# 【2026-10-02·用户报「快速点之后再点一次上回合，会回到第一回合」】跳段落地 = **直接还原目标段快照**。
+	#   原来是"往前就地快进（逐段逐招演过去）／往后从第 0 段重建再快进过去"⇒ 往后那一趟观众看到的就是
+	#   "一下回到第一回合、再从开头演到目标段"（`_replay_rewind()` 把段号设回 0、再一路重演），
+	#   录像越长走得越久；连点几下时中间几趟还会互相打架（横幅乱闪、段号与盘面对不上）。
+	#   为什么要按快照落地：回放的每个段首本来就是"快照即权威"（`_replay_end_frame()` 换段时同样
+	#   `_restore_snapshot()`，旁边那段注释写明"下一段快照再把任何残留差异盖正"）⇒ 直接还原与
+	#   "走过去"**等价**，但观众看不到中间那些段的乱动。
+	#   ⚠️ 该段"快照之后那一套"（清账 / 变身还原 / 毒伤 tick / 补位 / 各英雄回合开始技）由落地的
+	#   `_replay_side_begin()` 补跑 —— **往前、往后都要跑**（老的往前那条路是靠"重演"顺带跑掉的）。
+	var last := _replay_frame_count() - 1
+	_replay_frame = clampi(target, 0, maxi(last, 0))
 	_replay_step = 0
-	await _replay_fast_forward(target)
+	_replay_stage_done = -1        # 目标段的"回合开始那套"要能重跑（见 `_replay_side_begin()`）
+	_replay_banner_frame = -1      # 换段：上一次的横幅记录作废（落地那次 `force` 报道本来也兜得住）
+	_replay_skills_defer = -1      # 上一段没跑完的"顺延回合开始技"作废（目标段自己会重跑）
+	_restore_snapshot((_frames()[_replay_frame] as Dictionary).get("snap", {}))
 
 func _apply_replay_step(st: Dictionary) -> void:
 	if _obs_target > 0:

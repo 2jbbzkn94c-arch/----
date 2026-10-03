@@ -1,4 +1,4 @@
-# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
+﻿# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
 # PURE ASCII ONLY. PS 5.1 reads .ps1 as ANSI: any non-ASCII byte here becomes mojibake.
 # Chinese text lives only in .md reports written with the write tool.
 #
@@ -334,7 +334,7 @@ function Get-PinnedScoreKeys {
     #   所以它既不在本清单里、也不是写死的。
     #   代价：那批历史 run（p1_*、k_pv_*、shj_* 等）里的这些键从此**静默失效**——
     #   它们本来就是历史留档，复跑会得到与旧记录不同的结果（重新测才准）。
-    return @('OBSTACLE_DETOUR_WEIGHT', 'BEAM')
+    return @('BEAM')
 }
 
 function New-CandidateWeights {
@@ -606,7 +606,45 @@ function Get-SeedInfo([object]$Spec, [int]$Seed) {
     $pools = Get-LineupPoolSet -Spec $Spec
     $genPool = $(if ($isHold) { $pools.holdout } else { $pools.train })
     $anchorDeck = ''; $anchorName = ''; $shared = @(); $fillHero = ''
-    if ($version -eq 'v2') {
+    if ($version -eq 'v4') {
+        # 【2026-10-03·用户口径「我还以为两边是随机相同队伍呢」】v4：**每种子随机一套阵容、两侧完全相同**（镜像）。
+        #   用途 = 量"谁更强"**最干净**的一种设计：把"阵容运气"整块消掉（同队同英雄，只差 AI 档位/权重）。
+        #   ⚠️ 与 `-FixedDecks` 的区别：那个是**写死一套**（spec.decks，全场不变）；本模式是**每种子换一套**
+        #     ⇒ 既消掉阵容运气，又能覆盖 49 英雄池。
+        #   ⚠️ 走查台不禁止两侧同阵容（`Assert-DeckSide` 只查"每侧 3 人、侧内不重复"）⇒ 直接可用。
+        #   ⚠️ 只对显式写 `lineups.version = "v4"` 的 spec 生效。
+        $anchorDeck = ($gen -join ',')
+        $anchorName = ('v4-mirror:' + ($gen -join '+'))
+    } elseif ($version -eq 'v3') {
+        # 【2026-10-03·用户口径「两边队伍不相同的随机」】v3：**两侧都是完整的生成阵容、互不撞英雄**。
+        #   v2 的病灶：为保证"两侧不撞"，另一侧被迫用 3 个 **2 人锚点池** + 1 个填充
+        #   ⇒ 一半的对局里有一队的阵容**又窄又重复**（锚点池只有 hero_11/hero_04 · hero_49/hero_07 · hero_28/hero_34）。
+        #   v3 做法：第二侧 = **同一种子池里的另一个种子**的阵容（按 (r+j) 轮转着找，试到与第一侧不重叠为止）。
+        #   ⚠️ 为什么不是"同种子换 stride"：`Get-Lineup` 的第一个成员是 `(j*stride + r) mod 49`，
+        #     **j=0 时它与 stride 无关** ⇒ 换 stride 永远撞同一个英雄（冒烟实测：seed 10008 直接抛
+        #     `no disjoint second lineup`）。换种子才会同时改 r 与 j。
+        #   ⚠️ 有界且确定性：最多试 `种子池大小 − 1` 次；不撞由**构造**保证（试到才用）。
+        #   ⚠️ 第二侧取自**同一份种子池**（train 取 train、holdout 取 holdout）⇒ 阵容宇宙不越界，
+        #     训练/留出集的阵容切分性质照旧。只对显式写 `lineups.version = "v3"` 的 spec 生效。
+        $seedList = @($(if ($isHold) { $Spec.seeds.holdout } else { $Spec.seeds.train }) | ForEach-Object { [int]$_ })
+        $nSeed = $seedList.Count
+        if ($nSeed -lt 2) { throw 'v3: seed set must have >= 2 seeds' }
+        $startIdx = ((($r + $j) % $nSeed) + $nSeed) % $nSeed
+        $genB = @()
+        # 跳步扫描（步长 7，与种子池大小互质 ⇒ 能走遍全池）：避免"相邻种子抽到同一对阵容"。
+        for ($t = 1; $t -lt $nSeed; $t++) {
+            $s2 = $seedList[($startIdx + $t * 7) % $nSeed]
+            $r2 = [int][Math]::Floor([double]$s2 / [double]$slots)
+            $j2 = ((($s2 % $slots) + $slots) % $slots)
+            $sB = $(if ($isHold) { $hs[(($r2 + $j2) % $hs.Count)] } else { $ts[(($r2 + $j2) % $ts.Count)] })
+            $cand = Get-Lineup -Seed $s2 -Stride $sB -Slots $slots -PoolSize $poolSize
+            $interB = @($cand | Where-Object { $gen -contains $_ })
+            if ($interB.Count -eq 0) { $genB = $cand; break }
+        }
+        if ($genB.Count -ne 3) { throw ('v3: no disjoint second lineup found for seed ' + $Seed) }
+        $anchorDeck = ($genB -join ',')
+        $anchorName = ('v3-gen:' + ($genB -join '+'))
+    } elseif ($version -eq 'v2') {
         # A pool holds only 2 heroes, so the anchor side is completed with 1 deterministic filler:
         # 2 anchors + filler = the 3 heroes a 3v3 side needs (before this the 2-hero pool was handed to
         # the harness as a whole deck and _setup walked off the end -> "Out of bounds get index '2'").
@@ -675,13 +713,15 @@ function Test-LineupPools([object]$Spec) {
     }
     $overlap = @($trainCombos.Keys | Where-Object { $holdCombos.ContainsKey($_) })
     if ($overlap.Count -gt 0) { throw ('LINEUP SPLIT VIOLATION: train/holdout share lineups: ' + ($overlap -join ' , ')) }
-    # Hard check: no seed may put the same hero on both sides (v2 guarantee).
+    # Hard check: no seed may put the same hero on both sides (v2/v3 guarantee).
+    # ⚠️ 【2026-10-03】`version = "v4"` **按设计就是镜像**（每种子随机一套、两侧完全相同）⇒ 本门对它豁免；
+    #    v1/v2/v3 一字不变（仍然硬失败）。理由：v4 是用来量"谁更强"的——把阵容运气整块消掉。
     $sharedSeeds = @()
     foreach ($sd in (@($Spec.seeds.train) + @($Spec.seeds.holdout))) {
         $i = Get-SeedInfo -Spec $Spec -Seed ([int]$sd)
         if ($i.shared_heroes) { $sharedSeeds += ($i.seed.ToString() + ':' + $i.shared_heroes) }
     }
-    if ($sharedSeeds.Count -gt 0) {
+    if ($sharedSeeds.Count -gt 0 -and (Get-LineupVersion $Spec) -ne 'v4') {
         throw ('ANCHOR/GENERATED OVERLAP: ' + $sharedSeeds.Count + ' seed(s) share a hero between the two sides, e.g. ' + (($sharedSeeds | Select-Object -First 5) -join ' ; '))
     }
     $thin = @()
@@ -1249,6 +1289,12 @@ function Get-RuleScoreKeys {
              # AI 的行为大半由"并列时怎么破"决定，而现有裁决只有规则 A（+0.20 n.s.）。
              # TIEBREAK_MODE = 1/2（结局量字典序；2 = 再带威胁差）· TIEBREAK_EPS = 多小算并列。
              'TIEBREAK_MODE', 'TIEBREAK_EPS',
+             # 【2026-10-02·噩梦1】"对手回合一瞥"（`REPLY_PEEK`）：两阶段搜索收尾处，把前 K 个**完态**
+             #   各让对手贪心打一回合，再用完整 `_evaluate()` 重排。默认 0 = 关（生产逐位不变）。
+             #   ⚠️ 与上面 2026-09-19 那个**已判死**的 `REPLY_TOPK` **同名不同机制**（对手模型换成
+             #   阵营中立净值、重排换成完整 `_evaluate`、挂点换到两阶段收尾）；区别写在
+             #   `src/BattleAI.gd` 的 `const REPLY_PEEK` 处。
+             'REPLY_PEEK',
              # 【2026-09-22 晚·已删】原来这里还有 `'ROLLOUT_TOPK', 'ROLLOUT_MODE'`（"下一回合真推演"
              #   终选层）：剂量批 16/32 都与关打平（−1.72 / −1.74，CI 跨 0）、实机又验出它把
              #   「对面会来打我们」判成 0（过度乐观）⇒ 用户拍板**整段删除**（引擎那一段已删干净）
@@ -1372,6 +1418,77 @@ function Get-RuleScoreKeys {
              #   + "相邻敌多于相邻友"的差额（治贴墙/死胡同/被包夹）。两项都是纯局面量、纯罚分。
              #   默认 0 = 关 ⇒ 生产三档逐位不变；噩梦档初值写在 `RL/weights/噩梦.json`。规则键 26 → 28。
              'FORM_COHESION_W', 'FORM_ESCAPE_W',
+             # 【2026-10-02·用户拍板方案 1】**㉑ 被夹份的"退得掉"门** `FORM_ESCAPE_ESCAPABLE`
+             #   （0 = 关 ⇒ 逐位不变 / 1 = 下回合能走到一格"不贴任何敌人"的落点就不收被夹份）。
+             #   病灶（探针 `RL/probe/对方总输出自检.gd`）：旧口径下近战输出每次进攻都要交贴脸税
+             #   （射程 1 ⇒ 必须贴身；一对一实测 −6.00 分，而同一笔 1 点伤害在 ⑥⑦㉖ 上不到 0.2 分）。
+             #   只由 `RL/weights/噩梦1.json`（难度 4）打开；噩梦(3) 冻结不动。规则键 62 → 63。
+             'FORM_ESCAPE_ESCAPABLE',
+             # 【2026-10-02·用户口径】队形族（⑳抱团 / ㉓离队距离）的「**按身份分档**」：
+             #   用户原话「抱团不一定是最好的操作…伐木工本身是不怕被分割的英雄，他不是脆皮、没有生命危险、
+             #   不是核心 ⇒ 不需要强制抱团」。1 = 只有"会为落单真付代价"的单位（复用 ㉖ 的门
+             #   `_exposure_covered()`）拿全价，其余乘 `FORM_ROLE_TANK_MULT`（默认 0.25）。
+             #   引擎默认 0 ⇒ 四档与噩梦(3) 逐位不变；只由 `RL/weights/噩梦1.json` 打开。规则键 63 → 64。
+             'FORM_ROLE_GATE', 'FORM_ROLE_TANK_MULT',
+             # 【2026-10-03·用户实机反馈】坦克的「**护卫**」尺子 `FORM_GUARD_GATE`：
+             #   用户「坦克把抱团改了之后，他都不去贴身保护输出和远程了」⇒ 分档把坦克的护卫动机一起削了。
+             #   1 = 非须保护单位的 ⑳/㉓ 只按「离最近的**须保护**队友多远」算、且恢复全价；
+             #   场上没有须保护队友时该单位的 ⑳/㉓ 整笔跳过。引擎默认 0 ⇒ 四档逐位不变。规则键 67 → 68。
+             'FORM_GUARD_GATE',
+             # 【2026-10-03·用户口径（可选项）】坦克的「**挡刀位置**」奖励 `FORM_SCREEN_W`（新评分项 ㉜）：
+             #   用户「坦克站在"**脆皮与最近敌人之间**"时给正分（真正的挡路线/挡刀，塔盾 hero_11 的
+             #   "替相邻队友扛 1 点"就吃这个）」⇒ **不是距离罚、是位置奖励**。
+             #   `FORM_GUARD_GATE` 只管到"待在脆皮 2 步内" ⇒ 站在脆皮**身后**与站在**敌人那一侧**同分。
+             #   本键 = 每命中一对「须保护队友 P × 坦克 T（贴身 + 比 P 更靠近 P 的最近敌人）」+1 分。
+             #   ⚠️ 敌人够不着 P（路网步数 > `SCREEN_RANGE` = 4）就不计数；⚠️ **不挂末态门**（同 ㉘：
+             #   阶段 1 排阵型时 `end_of_turn = false`，带门的话那一项在"决定谁站哪"时恒 0）。
+             #   引擎默认 0 ⇒ 四档与噩梦(3) 逐位不变；只由 `RL/weights/噩梦1.json` 打开。规则键 +1。
+             'FORM_SCREEN_W',
+             # 【2026-10-03·用户口径】「AI 会不会去找对方 3 人队伍里的核心？在能打核心的时候就去打核心？」
+             #   →「要」。**目标价值权重** `FOCUS_VALUE_POW`：同样一刀，砍在"对面核心"身上比砍在杂鱼身上值钱。
+             #   倍率 = (目标核心度 ÷ 对面存活单位核心度均值)^p，夹在 [0.2, 5.0]；**只放大"打出去"的那一侧**，
+             #   我方挨打照旧（⇒ 不会为了核心无脑换亏本刀）。p = 0 关（**逐位不变**）· 1 = 线性 · 2 = 强偏好。
+             #   核心度复用 ⑦ 的 `_core_raw()` = 身价^(1−w) × 输出潜力^w，w = `RISK_CORE_OUTPUT_W`
+             #   （噩梦/噩梦1 都写 **0.5** ⇒ 核心 = `√(身价 × 输出潜力)`，队内区分度 2~7×；
+             #     纯身价只有 1.01~1.23×、推不动选择）。
+             #   ⚠️ **两把夹子**：比值先夹进 [0.2, 5.0]，**乘完幂之后再夹一次** —— 否则 p=2 的上限是 5² = 25×。
+             #   作用在**三处**：③血量账对面侧 + ④集火（`_eval_breakdown` / `_evaluate`），
+             #   以及阶段1 走位漏斗 `_tp_hit_gain()`（否则"能打核心的站位"在漏斗里就先被筛掉了）。
+             #   探针实测（`RL/probe/打核心自检.gd`，固定盘 · 两目标同血 · 只差核心度）：
+             #     p=0 ⇒ 搜索选**打杂鱼**（打核心 −82.879 / ③−2.67 ④+1.20 vs 打杂鱼 −81.300 / ③−1.33 ④+1.20）
+             #     p=2 ⇒ 搜索选**打核心**（打核心 −80.911 / ③−1.15 ④+1.65 vs 打杂鱼 −82.954 / ③−2.60 ④+0.82）
+             #   ⇒ 门关打杂鱼、门开打核心，行为确实翻转。
+             #   引擎默认 0 ⇒ 四档与噩梦(3) 逐位不变；只由 `RL/weights/噩梦1.json` 打开。
+             #   连续参数（要扫 0/1/2）⇒ 走"显式点名"通道、不进自动搜索。规则键 +1（重数见文档计数行）。
+             'FOCUS_VALUE_POW',
+             # 【2026-10-03·用户实机报「我有长剑的时候，AI 还是站成一排被我一串三」】㉛ 的**阶段 1 门**
+             #   `AOE_LAYOUT_GATE`：㉛（`AOE_RIDER_TOTAL_W`）挂在"只在末态结算"上，而 `SEARCH_MODE=2` 的
+             #   **阶段 1 排阵型**用的是 `_layout_score()` → `_evaluate(sim, complete=false)`
+             #   ⇒ **㉛ 在"决定谁站哪"那一步恒等于 0** ⇒ "散开"的阵型进不了前 16 名漏斗
+             #   （同一个坑 ㉘ 踩过，最后靠去掉门修好）。
+             #   1 = 在 `_layout_score()` 的**代理分**里也算这一笔（照抄 `TANK_FRONT_W` 的先例）；
+             #   `_evaluate()` / `_eval_breakdown()` 一个字不动 ⇒ 引擎默认 0 时四档逐位不变。
+             #   只由 `RL/weights/噩梦1.json` 打开。规则键 +1。
+             'AOE_LAYOUT_W',
+             # 【2026-10-03·用户口径·方案 1】⑥ 补的「**AoE 团队总量**」`OPEN_AOE_TOTAL_W`：
+             #   用户「规则B在判断开局要不要往前冲的时候，把 AOE 伤害也考虑进去。不要出现收到最高伤害的
+             #   单位没有超过阈值，但是后面被 AOE 波及的加起来受到巨额伤害，这波前压就是亏的」。
+             #   ⑥ 是**逐单位**判 max(挨打合计−阈值,0) ⇒ 没有单个超阈值就罚 0；而它在 `_layout_score()`
+             #   那一层**权重还被清零**（"个人暴露三项"）⇒ 「前压会不会亏」原本一分账都没有。
+             #   本键 = `W × Σ_{我方全队} [ AoE 形状 rider 之和 ]`（团队总量、不是 max；只算 AoE 那三族，
+             #   不重复算普通单击），加在 `_layout_score()` 上。引擎默认 0 ⇒ 四档逐位不变。规则键 +1。
+             'OPEN_AOE_TOTAL_W',
+             # 【2026-10-03·用户口径】排阵型时的「落单会被死神打双倍」账 `OPEN_ISOLATE_W`：
+             #   用户「我说的是玩家有死神，AI 现在会处理吗？会无意思的落单吗」。死神的 ×2 **已经在**
+             #   威胁尺子里（`_sim_mult_at()`）；缺口是 **⑥ 在 `_layout_score()` 被临时清零**、⑦ 是 max 型、
+             #   ㉖ 只看脆皮 ⇒ 「落单的价钱」在**排阵型那一步**看不见。本键 = `W × Σ_{我方}[因落单多吃的死神伤害]`，
+             #   加在 `_layout_score()`。引擎默认 0 ⇒ 四档逐位不变。规则键 +1。
+             'OPEN_ISOLATE_W',
+             # 【2026-10-02·用户口径】「**㉑ 只考虑远程**」：㉑（退路/被夹）本来是为远程写的
+             #   （2026-09-21 用户报「远程…走进死胡同、贴墙被包夹」），但实现里对每个单位同价
+             #   ⇒ 近战（射程 1、必须贴身）每次进攻都交一笔贴脸税。1 = 近战整个跳过 ㉑（两半都不算）。
+             #   引擎默认 0 ⇒ 四档与噩梦(3) 逐位不变；只由 `RL/weights/噩梦1.json` 打开。规则键 66 → 67。
+             'FORM_ESCAPE_RANGED_ONLY',
              # 【2026-09-21 用户提问后追加】**"治疗"计价**（用户问「捡血量buff加分，回血也加分，是不是重复了」→
              #   答：不重复；但顺着问出一个真缺口：**技能治疗在评分里一分都不加** ⇒ AI 天生不看重医疗单位）。
              #   `HEAL_CREDIT_W` = 按**实际回血量**计价（1 血 = W 分，含溢出）：我方回血 +、对面回血 −；
@@ -1545,7 +1662,15 @@ function Get-RuleScoreKeys {
              #   规则键 37 → 38。
              'MOVE_ACCEPT_ENGAGED',
              'BUFF_DENY_W',
-             'TAUNT_SOAK_W')
+             'TAUNT_SOAK_W',
+             # 【2026-10-02·用户口径】「**最后一人保命**」LAST_MAN_W：末态里"下回合会被打死"的我方单位
+             #   （判据 = 挨打合计 ≥ 当前血，与 ⑥⑦ 同一把尺子）按"**这一条命值多少终局分**"罚
+             #   （从 ⑩终局项的同一条曲线取：剩 3 条 10 分 / 剩 2 条 90 / **剩 1 条（再死就判负）900**）。
+             #   用户原话「除非能斩杀对方，否则那个必死的英雄躲起来用走位苟一下，争取多几回合时间」。
+             #   配套：_actions_for() 的撤退过滤对"当前格就必死"的单位开一条口子（否则没有"躲"这个候选）。
+             #   0 = 关（**逐位不变**）⇒ 只由 RL/weights/噩梦1.json（难度 4）打开；噩梦(3) 冻结不动。
+             #   规则键 +1（重数见文档计数行）。
+             'LAST_MAN_W')
 }
 
 function Get-WeightsMeta([string]$Path, [int]$Beam, [int]$BeamOpp = 0, [string]$Opp = 'base', [string]$WBSha = '') {

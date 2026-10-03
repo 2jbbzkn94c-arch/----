@@ -117,6 +117,15 @@ const GRAVE_TEX := preload("res://assets/美术资源/墓碑.png")
 #   改成贴图：用户提供的 `assets/图标/炸弹.png`（281×384 竖版，带引线）。放在 `图标/` 而不是 `美术资源/`
 #   是**用户自己放的位置**，照用即可（同目录还有喊话/名片等 UI 图）。
 const BOMB_TEX := preload("res://assets/图标/炸弹.png")
+# 【2026-10-02·用户要求「图标文件夹有个耐久度背景，把金矿、障碍物耐久的数字加上这个背景，
+#   放在六边形的右下角，现在的数字大小需要缩小，和血量标志一样」】
+#   使用者 = **障碍物耐久**（`_draw()` 里 `obstacles[cell]`）与**金矿剩余回合数**（`gold_left[cell]`）——
+#   两者共用同一个数字画法 `_draw_cell_digit()`（数字锚点都在格子右下角，见 `_digit_anchor()`）。
+const DUR_BG_TEX := preload("res://assets/图标/耐久度背景.png")
+# 背景框边长 = 字号 × 这个系数（背景按原比例放进方框、居中画在数字底下；想更大/更小只改这一个数）
+# 【2026-10-03·用户先「障碍物耐久度的盾牌放大点」、随后「金矿也要的耐久度背景也变大」】⇒ 两处统一放大：
+#   1.55 → **1.55 × 1.20 = 1.86**（障碍与金矿**共用同一个值**，不再分档）。
+const DIGIT_BG_BOX := 1.86
 # 炸弹贴图尺寸：高 = 格高 × 这个系数（与酒桶 `OBSTACLE_H` 0.60 / 墓碑 `GRAVE_H` 0.66 同一套口径 ——
 #   正好落在六边形格子里、不压相邻格；宽按原图比例自动算，不会拉伸变形）。想更大/更小只改这一个数。
 # 【2026-09-29·用户要求「炸弹缩小点」】0.62 → **0.50**（去掉白底后图案顶满整框，同一个系数下看着偏大）。
@@ -280,7 +289,7 @@ func _draw() -> void:
 		var bh := cell_h * OBSTACLE_H
 		var bw := bh * float(OBSTACLE_TEX.get_width()) / float(OBSTACLE_TEX.get_height())
 		draw_texture_rect(OBSTACLE_TEX, Rect2(center - Vector2(bw, bh) * 0.5, Vector2(bw, bh)), false)
-		# 剩余耐久：数字画在格子右下角（黑色、大字号，见 _draw_cell_digit）
+		# 剩余耐久：数字画在格子右下角（带耐久背景，见 `_draw_cell_digit`）
 		_draw_cell_digit(center, str(int(obstacles[cell])))
 	# 增益道具/金矿（有美术素材的直接贴图；移动道具仍用程序画的蓝点）
 	for cell in buff_items.keys():
@@ -320,7 +329,7 @@ func _draw() -> void:
 			var dp := _digit_anchor(center)   # 与"金矿剩余回合数/障碍耐久"同一套右下角锚点
 			draw_circle(dp, grid.hex_size * 0.17, Color(0, 0, 0, 0.85))   # 黑底：保证在任何贴图上都看得清
 			draw_circle(dp, grid.hex_size * 0.12, dot)
-		# 金矿：右下角显示剩余回合数（3→2→1，到0消失），与障碍耐久同一套画法
+		# 金矿：右下角显示剩余回合数（3→2→1，到0消失），与障碍耐久同一套画法（背景用默认大小）
 		if st == "gold" and gold_left.has(cell):
 			_draw_cell_digit(center, str(int(gold_left[cell])))
 	# 墓碑（R.I.P. 石碣素材，2026-09-25 用户提供）：替补可选择在其上方/周围落位，落位后消失
@@ -478,24 +487,37 @@ func set_spawn_zones(on: bool) -> void:
 	show_spawn_zones = on
 	queue_redraw()
 
-# 数字锚点（基线位置）：放格子右下角。字号 = 格半径 × 0.75，字形从基线往上长约占 0.72em，
-# 所以锚点取 (0.46r, 0.40r)：字形的四角算下来仍在六边形内（右下角那点余量最小，0.92 ≤ 1）。
+# 数字锚点（基线位置）：放格子右下角。
+# 取 (0.30r, 0.66r)：字号 0.392r、背景框 1.55×字号 ≈ 0.60r（障碍那处 1.86× ≈ 0.73r）⇒
+# 障碍框下缘 ≈ 0.66r − 0.14r + 0.365r = 0.885r，贴着六边形底边 0.866r 但基本不出去
+# （2026-10-03 为"把障碍盾牌放大点"把 y 从 0.68r 提到 0.66r，腾出这点余量）。
 func _digit_anchor(center: Vector2) -> Vector2:
-	return center + Vector2(grid.hex_size * 0.3, grid.hex_size * 0.7)
+	return center + Vector2(grid.hex_size * 0.30, grid.hex_size * 0.66)
 
-# 数字字号：跟随格子大小缩放（= 格半径 × 0.75），下限 14px
+# 数字字号：**与棋子上的"血量标志"同一把尺子** ——
+#   `Unit` 里血量/攻击数字是 `17.0 * (hex_radius / 39.0)`，而棋子 `hex_radius = grid.hex_size * 0.9`
+#   （`Battle._spawn_unit()` 传 `hex_size * 0.9`）⇒ 这里 = `grid.hex_size * 17.0 * 0.9 / 39.0`。
+#   历史：原来写 `grid.hex_size * 0.75`（≈ 血量标志的两倍），2026-10-02 用户要求缩小到一致。
+const DIGIT_FONT_RATIO := 17.0 * 0.9 / 39.0
+
 func _digit_font_px() -> int:
-	return maxi(int(round(grid.hex_size * 0.75)), 14)
+	return maxi(int(round(grid.hex_size * DIGIT_FONT_RATIO)), 10)
 
 # 数字描边：黑色描边粗细 = 字号 × 这个系数（想更粗/更细改它；设 0 = 不描边）
 const DIGIT_OUTLINE := 0.10
 
-# 统一画法：白色字 + 黑描边、居中于锚点（障碍耐久 / 金矿剩余回合数共用）
+# 统一画法：**耐久度背景 + 白色字 + 黑描边**、居中于锚点（障碍耐久 / 金矿剩余回合数共用）——
+# 【2026-10-02·用户要求】数字底下铺那张 `assets/图标/耐久度背景.png`（`DUR_BG_TEX`），
+#   框按字号缩放（`DIGIT_BG_BOX`，2026-10-03 两处统一放大到 1.86），整组仍在格子右下角（见 `_digit_anchor()`）。
 func _draw_cell_digit(center: Vector2, txt: String) -> void:
 	var f := ThemeDB.fallback_font
 	var fs := _digit_font_px()
 	var tw := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var p := _digit_anchor(center) - Vector2(tw * 0.5, 0.0)
+	# 背景：以**字形中心**为锚（基线往上约 0.36em ≈ 一行大写字形的中心），按字号取框、原比例放入
+	if DUR_BG_TEX != null:
+		var bg_c := Vector2(p.x + tw * 0.5, p.y - float(fs) * 0.36)
+		_draw_cell_icon(DUR_BG_TEX, bg_c, float(fs) * DIGIT_BG_BOX)
 	var ow := int(round(float(fs) * DIGIT_OUTLINE))
 	if ow > 0:
 		# 先画一圈黑描边再盖白字（Godot 自带 draw_string_outline，不用手动多方向偏移）

@@ -310,6 +310,10 @@ func _build() -> void:
 	_diff_opt.add_item("普通")
 	_diff_opt.add_item("困难")
 	_diff_opt.add_item("噩梦")    # 第 4 档：RL 候选 AI + 训练权重（**英雄特化段也在同一份权重文件里**，见 src/Battle.gd）
+	_diff_opt.add_item("噩梦+")   # 第 5 档【2026-10-02 新增 · 2026-10-03 改名「噩梦1」→「噩梦+」】：与噩梦同 AI/同算力，权重换成 噩梦1.json（实验档，噩梦当对照）
+	# 【2026-10-03·用户口径「你的自进化不要在界面显示出来」】原第 6 档「自进化」**已从菜单摘掉**：
+	#   引擎侧照旧（`Battle.AI_EVOLVE_WEIGHTS_PATH` / `AI_EVOLVE_SCRIPT_PATH`、`_nightmare_weights_path(5)` 都在，
+	#   探针/跑批可以直接设 `GameState.ai_difficulty = 5`），只是玩家在界面上看不到、也选不到这一档。
 	_diff_opt.select(GameState.ai_difficulty)
 	_diff_opt.custom_minimum_size = Vector2(0, 36)
 	_diff_opt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1621,10 +1625,13 @@ func _ask_arena_difficulty() -> void:
 		b.add_theme_font_size_override("font_size", 22)
 		b.pressed.connect(_start_arena.bind(val))
 		box.add_child(b)
-	add.call("简单", 0)
-	add.call("普通", 1)
-	add.call("困难", 2)
-	add.call("噩梦", 3)    # 第 4 档（最后一档）：RL 候选 AI + 训练权重（英雄特化段同文件，同上）
+	# 【2026-10-02·用户「竞技场难度也开噩梦+」】档位**逐个按 `HUD.AI_DIFF_NAMES` 加**（下标 = `GameState.ai_difficulty`）：
+	#   原来这里手抄了四条「简单/普通/困难/噩梦」⇒ 2026-10-02 新增第 5 档「噩梦+」时**唯独漏了这一份**
+	#   （选人页下拉与本文件的 `_diff_opt`、自由部署的 `QuickTest` 都跟着档名表走，只有竞技场这个弹层是手抄的）。
+	#   ⇒ 以后再加档位，这里自动跟上，不会再漏一份。
+	var diff_names: Array = HUD.AI_DIFF_NAMES
+	for di in diff_names.size():
+		add.call(String(diff_names[di]), di)   # 注释见 `HUD.AI_DIFF_NAMES`（噩梦 = RL 候选 AI + 训练权重；噩梦+ = 同 AI/同算力、权重换 噩梦1.json）
 	var cancel := Button.new()
 	cancel.text = "返回"
 	cancel.custom_minimum_size = Vector2(0, 48)

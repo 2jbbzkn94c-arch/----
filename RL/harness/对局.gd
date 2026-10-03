@@ -22,6 +22,8 @@ extends Node
 
 const FORK := preload("res://RL/ai/AI_Battle.gd")
 const BASE := preload("res://RL/ai/AI_Battle_原版.gd")
+const FORK_PATH := "res://RL/ai/AI_Battle.gd"
+const BASE_PATH := "res://RL/ai/AI_Battle_原版.gd"
 
 const P_CELLS: Array[Vector2i] = [Vector2i(1, 4), Vector2i(3, 4), Vector2i(1, 5)]
 const E_CELLS: Array[Vector2i] = [Vector2i(1, 2), Vector2i(3, 2), Vector2i(1, 1)]
@@ -38,6 +40,9 @@ var _beamA := 800               # 候选算力（默认 800 = 生产困难档同
 var _beamB := 800
 var _opp := "cand"              # cand / base
 var _first_mode := "p"          # p / e / both
+# 【2026-10-03·通用接线】本局身份（`_play()` 里赋值、`_ai_side()` 建 AI 时用）
+var _cur_seed := 0
+var _cur_first := 0
 
 var _sum := { "games": 0, "w": 0, "l": 0, "d": 0, "ptsA": 0.0, "ptsB": 0.0, "ms_max": 0 }
 var _game_ms_max := 0           # 本局单次思考最久的毫秒（每局清零；纯取证，见 `_ai_side`）
@@ -96,9 +101,14 @@ func _run() -> void:
 			asides = [DataRegistry.Faction.PLAYER]
 		elif String(ua[10]) == "e":
 			asides = [DataRegistry.Faction.ENEMY]
-	print("R|cfg|seeds=%d|seed0=%d|edeck=%s|pdeck=%s|beamA=%d|beamB=%d|opp=%s|first=%s|nA=%d|nB=%d|fork_sha=%s|base_sha=%s" % [
+	# 【2026-10-03·通用接线】证据行尾部追加两侧**实际生效的 AI 脚本 sha**（默认仍是 fork/base）：
+	#   引擎锁（run_manifest.json）只覆盖 `RL/ai/AI_Battle.gd` / 原版 / 本文件 / 技能对拍，
+	#   而"权重文件自带 `_ai_script`"能换掉某一侧的脚本 ⇒ 每局的 .out 必须自带这个身份，否则事后无法归因。
+	print("R|cfg|seeds=%d|seed0=%d|edeck=%s|pdeck=%s|beamA=%d|beamB=%d|opp=%s|first=%s|nA=%d|nB=%d|fork_sha=%s|base_sha=%s|aiA=%s|aiB=%s|aiA_sha=%s|aiB_sha=%s" % [
 		pairs, seed0, str(_e_deck), str(_p_deck), _beamA, _beamB, _opp, _first_mode, _wA.size(), _wB.size(),
-		_sha("res://RL/ai/AI_Battle.gd"), _sha("res://RL/ai/AI_Battle_原版.gd")])
+		_sha(FORK_PATH), _sha(BASE_PATH),
+		_ai_script_path(_wA, FORK_PATH), _ai_script_path(_wB, FORK_PATH if _opp == "cand" else BASE_PATH),
+		_sha(_ai_script_path(_wA, FORK_PATH)), _sha(_ai_script_path(_wB, FORK_PATH if _opp == "cand" else BASE_PATH))])
 	var t_all := Time.get_ticks_msec()
 	for i in pairs:
 		var sd := seed0 + i
@@ -117,6 +127,10 @@ func _run() -> void:
 
 ## a_side = 候选（A）这一方扮演的阵营；first_side = 谁先手
 func _play(seed_v: int, a_side: int, first_side: int) -> Dictionary:
+	# 【2026-10-03·通用接线】本局身份存成成员：`_ai_side()` 建 AI 时要用它给"支持自报家门的 AI"打标记
+	#   （我的档位用它把采集的样本与这局胜负对上）。对不支持的 AI 无影响。
+	_cur_seed = seed_v
+	_cur_first = first_side
 	var t_game := Time.get_ticks_msec()   # 本局墙钟起点（打印在 R|m| 的 ms= 上）
 	_game_ms_max = 0                      # 本局"单次思考最久"（_ai_side 里累计，打印在 msmax= 上）
 	await _setup(seed_v, first_side)
@@ -239,10 +253,11 @@ func _ai_side(side: int, a_side: int) -> void:
 	var refs: Array = _b.units.duplicate()
 	var is_a: bool = fn == a_side
 	var ai                              # BattleAI(RefCounted，非 Node)：fork 或原版副本
+	var w: Dictionary = _wA if is_a else _wB
 	if is_a or _opp == "cand":
 		# 候选（A）恒用 fork；opp=cand 时对手也用 fork（可注入不同权重，训练自对弈）
-		ai = FORK.new(_b.grid)
-		ai.set_weights(_wA if is_a else _wB)
+		ai = _script_for(w, FORK).new(_b.grid)
+		ai.set_weights(w)
 		ai.w_beam = _beamA if is_a else _beamB
 		# ★ 2026-09-14 修：**必须**给候选设 difficulty。fork 的 _beam()/_jitter() 都是
 		#   `if difficulty >= 2: return w_beam / w_jitter`，difficulty 默认是 1 → 候选会恒用
@@ -253,10 +268,25 @@ func _ai_side(side: int, a_side: int) -> void:
 		ai.difficulty = 2                      # 与生产噩梦档同口径：beam 用 w_beam、抖动用 w_jitter（默认 0 = 可复现）
 	else:
 		# 生产困难档对手：用与 src/BattleAI.gd 逐字节同源的副本
-		ai = BASE.new(_b.grid)
+		ai = _script_for(w, BASE).new(_b.grid)
 		ai.difficulty = 2                      # 困难档口径（生产困难档对手）
 	ai.log_decisions = false
 	ai.time_budget_ms = 0                  # 不限时：自然搜完 → 可复现（实测远低于生产 10s 上限）
+	# 【2026-10-03·通用接线（不含任何机制逻辑）】若这个 AI 支持"自报家门"就告诉它本局身份
+	#   ⚠️ 本函数（`_ai_side`）只有 `side` / `a_side`；seed 与先后手存在成员 `_cur_seed` / `_cur_first`（见 `_play()`）。
+	#   对不支持的 AI 是空操作。
+	if ai.has_method("set_game_tag"):
+		ai.set_game_tag(_cur_seed, _cur_first, a_side, fn)
+	# 【2026-10-03·通用接线（不含任何机制逻辑）】能"看对手阵容"的 AI 就看一眼
+	#   （实现在它自己的文件里，与 `src/Battle.gd::_make_battle_ai()` 的同名调用对称）⇒ 对没有该方法的 AI 是空操作。
+	#   ⚠️ 传的是**对手那一侧**的单位：判据必须是"阵营 ≠ 本回合我方的阵营"（`fn`），不能写死 PLAYER ——
+	#     生产上候选恒为敌方（敌=AI、玩=人），但本走查台的 A 方两边都当（`asides e,p`），写死就会把"自己"当对手。
+	if ai.has_method("adapt_to_opponent"):
+		var foes: Array = []
+		for u in _b.units:
+			if u != null and is_instance_valid(u) and int(u.get("faction")) != fn:
+				foes.append(u)
+		ai.adapt_to_opponent(foes)
 	var descs: Array = snap["descs"]
 	if fn != DataRegistry.Faction.ENEMY:
 		descs = _relabel(descs)            # 替玩家方规划：对调 fn 标签
@@ -396,6 +426,22 @@ func _load_w(path: String) -> Dictionary:
 	f.close()
 	var d = JSON.parse_string(txt)
 	return d if typeof(d) == TYPE_DICTIONARY else {}
+
+## 【2026-10-03·通用接线】这一侧实际用哪个 AI 脚本：权重文件里的**可选**键 `_ai_script`（值 = `res://…` 路径）。
+##   没有这个键、或那个路径不在（删掉我的文件）⇒ 逐位回到原行为（A 方 = fork、B 方 = 原版副本）。
+##   为什么需要：档位 5「自进化」的 AI 是 fork 的**子类**（`RL/自进化/AI.gd`，靠多态覆盖评分/搜索/采数据），
+##   若批里恒用 `preload(FORK)`，那"难度5 打 难度3"量到的其实是 fork + 那份权重 —— 与生产不是同一个 AI。
+func _ai_script_path(w: Dictionary, dflt_path: String) -> String:
+	var sp := String(w.get("_ai_script", ""))
+	if sp != "" and ResourceLoader.exists(sp):
+		return sp
+	return dflt_path
+
+func _script_for(w: Dictionary, dflt):
+	var sp := _ai_script_path(w, "")
+	if sp == "":
+		return dflt
+	return load(sp)
 
 func _sha(path: String) -> String:
 	if not FileAccess.file_exists(path):

@@ -116,6 +116,58 @@ func _pass_to_enemy() -> void:
 	_refresh()
 	_enemy_pick.call_deferred()
 
+# ---- 【2026-10-03·用户口径】**部署顺序偏好**：怕被针对的英雄，等对方先亮 ----
+# 用户原话：「某些英雄存在鲜明的克制与非克制关系，**尽量不要前两个就上**……需要注意的是，
+#   **我这条规则不能改变 AI 本来的部署策略，只是在部署顺序上需要考虑一下**」。
+#   ① **毒蛇 hero_03**：靠毒吃饭；被**战锤 hero_25**（麻痹 ⇒ 有效攻击 0）克制 ⇒ 连毒都挂不上
+#   ② **红帽 hero_40**：被**沉默术士 hero_34**克制（被沉默 ⇒ 不能自爆、整只废）
+#   ③ **`<后勤>`**：被动挨打、还手极弱 ⇒ 怕**荆棘树人 hero_49**（[荆棘]=不能移动）/ **沉默术士**
+#   ⚠️ **负墟 暂未登记** —— 还差它的 hero_id（用户口径第 2 条，见训练日志待办）。
+# **做法**：**只压前 `EARLY_SLOTS` 格**、且**只在克制者还没亮出来时**压；用**乘法**（×0.2）而不是
+#   减固定分 ⇒ 与 `_enemy_candidate_value()` 的量纲无关，也不会把候选人彻底排除（"尽量"不是"禁止"）。
+#   ⚠️ **选人集合 / 落点 / 任何评分一律不动**：只改"同一次挑选里谁优先"。
+#   ⚠️ 克制者**已经亮了** ⇒ 不压（那本来就该由净克制项把它压下去；本规则只管"什么时候上"）。
+const EARLY_SLOTS := 2              # 前几格算"早"（用户：尽量不要前两个就上）
+const EARLY_DEFER_MULT := 0.2       # 早格上这些英雄时分数打几折（乘法、量纲无关）
+
+## 【2026-10-03·用户口径】这一格该不该"压后"：候选英雄怕的那个克制者**还没出现在玩家已首发表里** ⇒ true。
+func _defer_early(cand: String) -> bool:
+	if enemy_deployed.size() >= EARLY_SLOTS:
+		return false                       # 已经过了"前两格" ⇒ 不压
+	var revealed := {}
+	for h in player_deployed:
+		revealed[h] = true
+	# 【2026-10-03·用户「我角色列表里不是有他克制的人吗」】**三条改成读数据**（不再手写清单）：
+	#   `DataRegistry` 已有克制图（`HeroDef.beats` = 克制列 · `HeroDef.counters` = 被克制列）。
+	#   判据 = **候选自己的「被克制列」里，一个都还没出现在玩家已首发表里 ⇒ 等对方先亮**；
+	#          若其中**已经有**人亮了 ⇒ 不压（该不该选由 `_enemy_candidate_value()` 的净克制项决定）。
+	#   实测数据：**毒蛇淑女「被克制列 = 战锤」** · **红帽「被克制列 = 涌电技师、影丸、火枪手、沉默术士、坠炮手」**
+	#   （⚠️ 我第一版只写了"沉默术士"，**漏了另外 4 个** —— 这正是"别手写清单"的证据）。
+	var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
+	if cd != null and cd.counters.size() > 0:
+		for x in cd.counters:
+			if revealed.has(String(x)):
+				return false                       # 它的克制者已经亮了 ⇒ 不压
+		return true                                # 有克制者、但一个都没亮 ⇒ 等对方先亮
+	# ④ `<后勤>`：被动挨打、还手极弱 ⇒ 怕**荆棘树人**（[荆棘]=不能移动）/ **沉默术士**
+	#   ⚠️ 这一条**数据里没有**（医护兵/烛火的克制列与被克制列都是空的）⇒ 按用户口径手工登记。
+	if cd != null and cd.skills.has(DataRegistry.Skill.LOGISTICS):
+		return not (revealed.has("hero_49") or revealed.has("hero_34"))
+	return false
+	# 【2026-10-03·用户「我角色列表里不是有他克制的人吗」】**改正：读数据、不手写清单**。
+	#   负墟 hero_44 的「克制」列原文 = **毒蛇淑女 / 战锤 / 雪拳 / 白游侠 / 沉默术士 / 猎颅者 / 巨剑 / 宿魂**
+	#   （它的技能：所有负面效果对其无效，**每受到一次负面效果攻击，攻击力 +1**）。
+	#   ⇒ `HeroDef.beats` 就是那一列（`DataRegistry` 已有克制图：`beats` 克制列 / `counters` 被克制列）。
+	#   判据：玩家**已经亮出其中任何一个** ⇒ 负墟有得吃、不必压后；**一个都没亮** ⇒ 压后。
+	if cand == "hero_44":
+		var fd: DataRegistry.HeroDef = DataRegistry.get_hero("hero_44")
+		if fd != null:
+			for b in fd.beats:
+				if revealed.has(String(b)):
+					return false
+		return true
+
+
 func _enemy_pick() -> void:
 	if finished:
 		return
@@ -139,6 +191,10 @@ func _enemy_pick() -> void:
 			var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
 			var is_bench: bool = cd != null and cd.skills.has(DataRegistry.Skill.BENCH)
 			var sc: float = _enemy_candidate_value(cand) if not is_bench else -1e8
+			# 【2026-10-03·用户口径】**部署顺序偏好**：怕被针对的英雄（毒蛇/红帽/后勤）在前两格压后
+			#   （只改"什么时候上"，不改选谁 —— 详见 `_defer_early()` 上方那段）。
+			if not is_bench and _defer_early(cand):
+				sc *= EARLY_DEFER_MULT
 			if sc > best_sc:
 				best_sc = sc
 				best_i = i

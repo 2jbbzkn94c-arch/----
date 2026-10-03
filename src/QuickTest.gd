@@ -26,7 +26,7 @@ var _squad_clear_btn: Button = null        # 标题行右端「清空」按钮�
 var _squad_host: Control = null            # "已选队伍"小卡宿主（每次刷新整块重建）
 var _enemy_ai := false                     # 敌方是否交给 AI（不勾选=双控，双方都归玩家）
 var _diff_opt: OptionButton = null          # AI 难度下拉（敌方为 AI 时生效）
-const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]   # 与 Menu 的四档一致（2026-09-20 删除第 5 档「噩梦+」）
+const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦", "噩梦+"]   # 与 Menu 一致；【2026-10-03】第 5 档「噩梦1」改名「噩梦+」；⚠️ 2026-10-03 用户口径「你的自进化不要在界面显示出来」⇒ 档位 5「自进化」不再列入（引擎仍支持 `ai_difficulty = 5`，只是界面不提供）
 
 # 测试场里各队可上场的格子（底部行我方 / 第一满行敌方），只放首发 3 个
 const PLAYER_CELLS := [Vector2i(0, 6), Vector2i(2, 6), Vector2i(4, 6)]

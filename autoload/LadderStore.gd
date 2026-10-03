@@ -28,7 +28,9 @@ const TMP_PATH := "user://ladder.cfg.tmp"
 const MODE_NORMAL := "normal"      # 天梯普通模式（= 普通模式机制）
 const MODE_ARENA := "arena"        # 天梯竞技场模式（= 竞技场模式机制）
 const MODES := ["normal", "arena"]
-const LOCKED_DIFFICULTY := 3       # 锁死噩梦（= GameState.AI_DIFFICULTY_MAX = Battle.NIGHTMARE_DIFFICULTY）
+const LOCKED_DIFFICULTY := 4       # 【2026-10-03·用户口径「天梯模式难度改成噩梦+」】3（噩梦）→ **4（噩梦+）**。
+#   ⚠️ 4 读 `RL/weights/噩梦1.json`（实验档）；若那个文件不在，`Battle._nightmare_weights_path()` 会自动降级回
+#   `噩梦.json` ⇒ 天梯**不会崩**，只是当场退化成噩梦档（判据里带 `FileAccess.file_exists`）。
 
 var _runs: Dictionary = {}    # mode -> {"mode":…, "difficulty":3, "match_no":局数, "player_deck":[…],
                               #          "in_match":本局是否已开打（部署一开就 true）, "enemy_deck":[…]}

@@ -94,7 +94,15 @@ static func collect(battle, pool: Array = []) -> Dictionary:
 		# 4413(_best_enemy_sub_idx)、4561(_free_sub_cell_for 优先本方墓碑格)）。RL 的 sim 需要它才能预测
 		# "某一招窗口内替补登场"的选人与登场效果（如波盾 on_enter 给己方全体盾），把那类块从"不可比"变成可比。
 		# 纯读取、不改游戏行为；与 atk_use_buff/move_use_buff/atkdown/thorn/echo_set 同批同类，只被 RL 的 sim/harness 消费。
-		"rosters": { DataRegistry.Faction.PLAYER: battle.player_roster.duplicate(), DataRegistry.Faction.ENEMY: battle.enemy_roster.duplicate() },
+		# 【2026-10-03·用户口径「AI 不能偷看玩家的所有英雄！但可以记录根据首发阵型」】**对面给空**。
+		#   原来两侧都给 ⇒ AI 每回合都能看到**玩家尚未上场的整个替补席**；唯一读它的对面侧是
+		#   `REDCAP_SUB_RISK_W`（红帽·替补风险：拿玩家的替补名单对墓碑格逐张问"这张从这儿上场能弄死她吗"）
+		#   ⇒ 实机里等于提前知道"对面还有个猎颅者能踩墓碑登场" = **偷看牌组**。
+		#   来历说得通：注释写着「RL 修正·用户已批准」，那是给**跑批**用的，而跑批 `对局.gd` 从不发生替补
+		#   ⇒ `rosters` 恒空、当年看不出问题；**实机里它有值**。
+		#   ⇒ 现在只给 AI 自己那一侧（ENEMY）的 rosters、PLAYER **恒空** ⇒ 那条在实机里恒 0（等于关掉）。
+		#   ⚠️ RL 跑批不受影响（本来就恒空）。⚠️ 将来若要恢复"看得到"，只能改成"**只看已经登场过的敌人**"。
+		"rosters": { DataRegistry.Faction.PLAYER: [], DataRegistry.Faction.ENEMY: battle.enemy_roster.duplicate() },
 		# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，**自爆就输了**」】**累计阵亡 + 判负线**：
 		#   ⑩终局项要按"**还剩几条命**"算（判负线是**累计阵亡** `LOSS_DEATH_COUNT`，与"场上还剩几个"
 		#   不是一回事 —— 队伍 > 3 人时，场上还有 3 个也可能已经死了 2 个）。纯新增键：

@@ -91,6 +91,7 @@ const ACTION_Z := 14
 
 var _hex: Polygon2D
 var _art_hex: Polygon2D          # 【2026-09-27】人物本体那一层（贴在纯色六边形之上；没出图的英雄为 null 效果）
+var _art_shadows: Array = []       # 【2026-10-03】人物落影（多层淡影 = 假模糊，见 `ART_SHADOW_*`）
 var _shadow: Polygon2D = null    # 【2026-09-30】棋子投影（相对 −1：垫在底色之下，**只画轮廓外的月牙带**；`SHADOW_DROP = 0` 时不建）
 var _dome: Polygon2D = null      # 【2026-09-30】穹顶渐变（上亮下暗、无轮廓；见 `DOME_*` 常量）
 var _art: Texture2D = null       # 英雄卡面图（`DataRegistry.hero_card_art`）；null = 还没出图 ⇒ 保持原来的纯色棋子
@@ -106,6 +107,9 @@ var _passive_tween: Tween
 var _sel_border: Line2D = null   # 金色选中描边（选中时叠加在单位六边形上）
 var _atk_icon_center := Vector2.ZERO   # 攻击图标中心（_init 按棋盘缩算好，变身换图时复用）
 var _atk_icon_box := 0.0               # 攻击图标框大小（同上）
+# 血量图标中心/框大小（同上；【2026-10-03】嘲讽英雄换成"嘲讽血量背景"时 `update_hp_icon()` 要用）
+var _hp_icon_center := Vector2.ZERO
+var _hp_icon_box := 0.0
 var _acting_border: Line2D = null     # 敌方AI"正在行动"描边（红橙脉冲，区别于金色选中边）
 var _acting_tween: Tween
 var _action_dot: Label   # 本回合仍有行动的顶部标识（旧，保留兼容）
@@ -161,6 +165,28 @@ func _build_visual() -> void:
 		_shadow.color = Color(0.02, 0.01, 0.01, SHADOW_ALPHA)
 		_shadow.z_index = -1
 		add_child(_shadow)
+
+	# 【2026-10-03·用户口径「先把影子弄出来，再把英雄本体的图层压在影子上」】人物落影：
+	#   **先 add_child**（落在人物层之下），人物层 `_art_hex` 随后 add_child ⇒ 人物把**它自己那份剪影**
+	#   挡住，露出来的只有"人物轮廓右下那一窄条"（偏移由 `ART_SHADOW_DX/DY` 定，越小越贴人）。
+	#   ⚠️ 两者同为 `z_index = 0`，靠**子节点顺序**决定前后 ⇒ 顺序千万别调（见 `_sync_art_shadow()` 与下面
+	#   那个"套 MARKER_Z"的循环豁免名单）。变身换卡面时靠 `_sync_art_shadow()` 同步贴图/uv/显隐。
+	if ART_SHADOW_LAYERS > 0 and ART_SHADOW_A > 0.0:
+		_art_shadows.clear()
+		for i in ART_SHADOW_LAYERS:
+			var sh := Polygon2D.new()
+			sh.polygon = _hex_points(hex_radius)
+			sh.color = Color(ART_SHADOW_COLOR.r, ART_SHADOW_COLOR.g, ART_SHADOW_COLOR.b,
+					ART_SHADOW_A * pow(ART_SHADOW_DECAY, float(i)))
+			sh.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+			sh.antialiased = true
+			var k: float = 1.0 + 0.6 * float(i)
+			sh.position = Vector2(ART_SHADOW_DX, ART_SHADOW_DY) * k * hex_radius
+			# ⚠️ 显式写 0（= 与人物层同层，靠**子节点顺序**排在人物之下）：`_build_visual()` 末尾那个
+			#   "给所有子节点套 MARKER_Z"的循环已经豁免了落影，这里再钉一道，免得以后顺序被人挪动。
+			sh.z_index = 0
+			add_child(sh)
+			_art_shadows.append(sh)
 
 	# 【2026-09-27·用户要求】棋子上也放"人物本体"：在纯色六边形**之上**再贴一层同多边形的贴图
 	#   （`Polygon2D` 自带"按多边形裁剪" ⇒ 放大到顶满也不溢出卡边）。
@@ -224,6 +250,10 @@ func _build_visual() -> void:
 	if atk_icon != null:
 		atk_icon.name = "AtkIcon"
 		add_child(atk_icon)
+	# 血量图标：【2026-10-03·用户要求】带 <嘲讽> 的英雄换成"嘲讽血量背景"，其余照旧爱心（见 `_hp_icon_path()`）。
+	# 位置/尺寸同样记到成员上：变身改了技能位后 `update_hp_icon()` 才能就地换图不跑位。
+	_hp_icon_center = hp_c
+	_hp_icon_box = hp_icon_w
 	_atk_label = Label.new()
 	_atk_label.add_theme_font_size_override("font_size", int(17.0 * fs))
 	_atk_label.add_theme_font_override("font", DataRegistry.stat_bold_font())   # 数字加粗
@@ -237,7 +267,7 @@ func _build_visual() -> void:
 	add_child(_atk_label)
 	_update_atk_label()
 
-	var hp_icon := _make_stat_icon(DataRegistry.ICON_HEART, hp_c, hp_icon_w)
+	var hp_icon := _make_stat_icon(_hp_icon_path(), hp_c, hp_icon_w)
 	if hp_icon != null:
 		hp_icon.name = "HpHeart"
 		add_child(hp_icon)
@@ -283,9 +313,12 @@ func _build_visual() -> void:
 	#   血量图标+数字 / 状态字都摆在**这一层**——压在背景（`_hex`/`_art_hex`）和框（`FRAME_Z`）之上、
 	#   附体魂线之下。这里最后一次性设，免得以后往这段里加标记时忘了设 z
 	#   （变身时补建的攻击图标在 `update_atk_icon()` 里自己设）。
+	#   ⚠️【2026-10-03·踩过的坑】豁免名单必须**连人物落影一起写上**：落影是"人物层下面的背景层"，
+	#   不豁免就会被套成 `MARKER_Z = 2` ⇒ 暗剪影**画在人物之上**（用户报的「英雄卡面的英雄变得好暗」
+	#   真凶就是这条：当时落影只有 0.40 浓度、偏移 4.8px，但压在人物上就是整片发暗）。
 	for c: CanvasItem in get_children():
-		if c == _hex or c == _art_hex or c == _shadow or c == _dome:
-			continue   # 背景(0) / 投影(−1) / 穹顶(`FRAME_Z`) 的层级各自已经定好，不套 MARKER_Z
+		if c == _hex or c == _art_hex or c == _shadow or c == _dome or _art_shadows.has(c):
+			continue   # 背景(0) / 投影(−1) / 穹顶(`FRAME_Z`) / **人物落影(0)** 的层级各自已经定好，不套 MARKER_Z
 		c.z_index = MARKER_Z
 
 
@@ -425,6 +458,27 @@ func update_atk_icon() -> void:
 		if _atk_label != null:
 			move_child(made, _atk_label.get_index())   # 与 _init 的加入次序一致：图标在数字下面
 
+# 血量图标按"有没有 <嘲讽>"选：带嘲讽的英雄用 `assets/图标/嘲讽血量背景.png`，其余照旧用爱心。
+# 抽成函数供 `_build_visual()` 与 `update_hp_icon()` 共用（变身成/变回嘲讽英雄时会换）。
+func _hp_icon_path() -> String:
+	if skills.has(DataRegistry.Skill.TAUNT):
+		return DataRegistry.ICON_HP_TAUNT
+	return DataRegistry.ICON_HEART
+
+# 刷新血量图标（古灵精怪变身/还原后必须调用 —— 与 `update_atk_icon()` 同一套做法）：
+# 已建则就地换贴图；原先缺资源没建起来时补建一个，并保持画在血量数字下面。
+func update_hp_icon() -> void:
+	var spr := get_node_or_null("HpHeart") as Sprite2D
+	var made := _make_stat_icon(_hp_icon_path(), _hp_icon_center, _hp_icon_box, spr)
+	if made == null:
+		return   # 目标贴图缺失：保持现状，不做半截替换
+	if spr == null:
+		made.name = "HpHeart"
+		made.z_index = MARKER_Z
+		add_child(made)
+		if _hp_label != null:
+			move_child(made, _hp_label.get_index())   # 与 _init 的加入次序一致：图标在数字下面
+
 func _skill_tags() -> String:
 	var out := ""
 	for s in skills:
@@ -544,8 +598,32 @@ const DOME_BOTTOM_A := 0.0              ## 渐变底端（黑）的浓度（0 = 
 const DOME_COLOR := Color(1.0, 0.99, 0.96)   ## 顶端的高光色（微微偏暖；底端固定用纯黑）
 const DOME_SIDE_A := 0.08               ## 【第十二版】左右两侧往里的暗部浓度（0 = 只按上下打光，回到上一版）
 const DOME_SIDE_INNER := 0.55           ## 从多靠边开始起暗：|x| ≤ 这个值不压暗（0 = 中线 / 1 = 最左·最右）
-const SHADOW_DROP := 1.1                ## 投影往下偏多少（像素 × fs；0 = 不画投影）
-const SHADOW_ALPHA := 0.40              ## 投影浓度
+const SHADOW_DROP := 1.8                ## 投影往下偏多少（像素 × fs；0 = 不画投影）
+const SHADOW_ALPHA := 0.52              ## 投影浓度
+# 【2026-10-03·用户「棋子里面英雄本体不能变黑」】⚠️ 投影是**唯一**"有影子又不压卡面"的做法：
+#   它画在**棋子轮廓外面**那一圈月牙带（`_shadow_crescent()`，`_hex` 之下、z=-1），棋子底下一像素不画
+#   ⇒ 人物 / 阵营底色 / 卡面的明暗**一点不受影响**（用户 2026-09-30 报过一次"六边形里面还有一个
+#   六边形形状的阴影"，就是因为当年把整块下移的六边形也画进去了 ⇒ 只留外面这圈月牙）。
+#   数值演进：2026-09-30 立项时是 1.1 / 0.40；2026-10-03 用户「影子要，但别把英雄变黑」⇒ 加大到 **1.8 / 0.52**
+#   （影子更明显 ⇒ 棋子更像"立"在棋盘上，而卡面依旧干净）。想更重就继续加这两个数（0 则整块不建）。
+# 【2026-10-03·用户路径：「棋子里英雄卡面可以更立体点吗」→「英雄变得好暗」→「影子可以要」→
+#   「影子要，但你不要把英雄本体变黑啊」→「**你不能把影子弄出来，然后把英雄本体的图层压在影子上吗**」】
+#   ⇒ 就是用户说的这个结构：**先把落影画出来，人物层再压上去**（子节点顺序：落影在前、`_art_hex` 在后；
+#   两者同为 `z_index = 0` ⇒ 靠顺序决定 ⇒ 人物**挡住**它自己那份剪影）。于是露出来的只有
+#   "人物轮廓右下那一窄条" —— **人物本体（不透明像素）一个都不被压暗**。
+#   ⚠️ 前两版被否的原因，就是"偏移太大"：3 层叠到 8.7~10.8px（0.11×r）时，影子从人物背后**大片铺开**
+#   到棋子里的透明区 ⇒ 用户读成"英雄本体变黑"。现在收紧成**单层、≈2.4/2.8px**（0.03/0.035 × r），
+#   浓度 0.30 ⇒ 只在人物右下露出一道窄边（像"人物从底色上微微凸起"），不铺成暗块。
+#   旋钮：`LAYERS`（层数，1 = 单层；0 = 整层不建）/ `DX·DY`（偏移，越小越贴人）/ `A`（浓度）/ `DECAY`（多层时逐层衰减）。
+#   ⚠️ 两个坑立此存照：① `_build_visual()` 末尾"给所有子节点套 MARKER_Z"的循环必须豁免落影，
+#   否则剪影会被套成 z=2 **画到人物之上**（那就是第一版"英雄变黑"的真凶）；
+#   ② 卡面是抠好的（全透明 43~56%，实测）⇒ 影子会从人物四周的透明处透出来，所以"偏移"必须小。
+const ART_SHADOW_LAYERS := 1
+const ART_SHADOW_DX := 0.03             ## 最近那层的右向偏移（× hex_radius；0.03 ≈ 2.4px @ r=79.4）
+const ART_SHADOW_DY := 0.035            ## 最近那层的下向偏移（× hex_radius）
+const ART_SHADOW_A := 0.30              ## 最近那层的浓度（多层叠加 ≈ A×(1+DECAY+DECAY²)）
+const ART_SHADOW_DECAY := 0.72          ## 每往外一层浓度乘这个系数（偏移按 1+0.6i 增长）
+const ART_SHADOW_COLOR := Color(0.05, 0.03, 0.06)   ## 落影颜色（近黑、微微偏紫，避免纯黑发死）
 
 ## 阵营底色：**不透明**（`FACTION_FILL_MIX` 是"阵营色 vs 地面平均色"的配比，不是 alpha）。
 ## ⚠️ 别改回半透明：底下的棋盘（黑格线 / 地面）会从人像的透明区透上来，看着像"格线画在英雄身上"。
@@ -728,10 +806,12 @@ func _apply_hex_art() -> void:
 		_art_hex.texture = null
 		_art_hex.uv = PackedVector2Array()
 		_art_hex.visible = false
+		_sync_art_shadow()
 		return
 	_art_hex.visible = true
 	var ts := _art.get_size()
 	if ts.x <= 0.0 or ts.y <= 0.0:
+		_sync_art_shadow()
 		return
 	var fit := minf((hex_radius * 2.0) / ts.x, (sqrt(3.0) * hex_radius) / ts.y)
 	# 【2026-09-28·用户要求】个别英雄的取景微调（放大 / 平移）—— 表在 `DataRegistry.HERO_ART_FIT`，
@@ -745,6 +825,20 @@ func _apply_hex_art() -> void:
 		uv.append(Vector2((p.x - dpos.x) / dsz.x * ts.x, (p.y - dpos.y) / dsz.y * ts.y))
 	_art_hex.texture = _art
 	_art_hex.uv = uv
+	_sync_art_shadow()
+
+# 【2026-10-03】把人物落影那几层**完全对齐人物层**：同一张贴图、同一套 uv、同一显隐
+#   （错位与逐层浓度是建层时写死的 `position` / `color`）。
+#   ⚠️ 起手建场与"变身换卡面"都只走 `_apply_hex_art()` ⇒ 在这里兜住，漏一次就会留上一张图的暗剪影。
+func _sync_art_shadow() -> void:
+	if _art_hex == null:
+		return
+	for sh in _art_shadows:
+		if sh == null or not is_instance_valid(sh):
+			continue
+		sh.texture = _art_hex.texture
+		sh.uv = _art_hex.uv
+		sh.visible = _art_hex.visible
 
 # 刷新技能词条标签（疾/嘲/渗/勤/候，用于变身继承技能后）
 # 古灵精怪变身等场景可能从"无词条"变到"有词条"：节点可能尚未创建，按需补建。
@@ -1094,7 +1188,12 @@ func make_visual_copy() -> Node2D:
 	var g := Node2D.new()
 	# ⚠️ 名字**留给调用方起**（`Battle._start_drag_ghost()` = "DragGhost" / `_play_vanish_copy()` = "WithdrawFx"）：
 	#   同名同父的节点会被引擎改名（"@Xxx@N"）⇒ 调试/探针按名字找就会找错人。
-	for n in [_shadow, _hex, _art_hex, _dome]:
+	# ⚠️ 层的顺序 = 画面顺序（先底后上）：棋盘投影 → 阵营底色 → **人物落影（可能多层）** → 人物 → 穹顶。
+	var layers: Array = [_shadow, _hex]
+	layers.append_array(_art_shadows)
+	layers.append(_art_hex)
+	layers.append(_dome)
+	for n in layers:
 		if n == null or not is_instance_valid(n):
 			continue                 # `_shadow` / `_dome` 是开关项（常量为 0 时不建）⇒ 允许缺
 		var c := (n as Polygon2D).duplicate() as Polygon2D

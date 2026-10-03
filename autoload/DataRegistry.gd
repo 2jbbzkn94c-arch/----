@@ -977,6 +977,10 @@ func get_summon(id: String) -> HeroDef:
 # 素材是"图标+近白实底"：首次使用把白底抠成透明，同时记录主体包围盒（宽/高/中心）。
 # 供 Unit 棋子与 HexCard 卡面按"主体宽度"等比放大，并把图标主体精确放到数字下方。
 const ICON_HEART := "res://assets/美术资源/爱心.png"
+# 【2026-10-03·用户要求「图标里还有个嘲讽血量背景，替换嘲讽英雄的血量」】带 `<嘲讽>` 的英雄（`Skill.TAUNT`：
+#   战锤/复仇者/装甲堡垒/塔盾…）血量数字底下不再用爱心，改用这张"嘲讽血量背景"（数字照旧压在上面）。
+#   判据走技能位（`Unit._hp_icon_path()` 读 `skills.has(Skill.TAUNT)`）⇒ 变身成/变回嘲讽英雄时跟着换。
+const ICON_HP_TAUNT := "res://assets/图标/嘲讽血量背景.png"
 const ICON_ATK := "res://assets/美术资源/攻击.png"
 const ICON_ATK_RANGED := "res://assets/美术资源/攻击_远程.png"   # 远程角色的攻击力图标（弩）
 const ICON_ATK_LOGISTICS := "res://assets/美术资源/攻击_后勤.png"   # 后勤角色的攻击力图标（齿轮）

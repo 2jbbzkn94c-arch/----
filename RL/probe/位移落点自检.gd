@@ -46,8 +46,123 @@ func _run() -> void:
 		["ENEMY", "hero_11", Vector2i(1, 6), "队友塔盾（贴着她 ⇒ 原地不孤立）"],
 		["PLAYER", "hero_27", Vector2i(2, 3), "暗域（换位）"],
 		["PLAYER", "hero_30", Vector2i(2, 4), "嬉皮死神（孤立 ×2）"]])
+	# 【2026-10-02·用户「做，但落点是暗域能走到，且能打的到对方目标的格子，不需要全部」】⑥ + 成本
+	_sweep_27()
+	_cost_arm()
 	print("PROBE|END")
 	get_tree().quit(0)
+
+## 【2026-10-02 追加】**"只猜最近那一格" vs "所有开火格取最坏"** 的对照扫描 ——
+##   同一个盘面（= ⑤ 那局：她贴着队友、暗域换位、嬉皮死神孤立 ×2），把**暗域站在哪一格**逐个换一遍，
+##   看有没有"旧口径（最近开火格）会低记"的起点 —— 用户实报的就是这种（日志 3 伤、真实 6 伤）。
+func _sweep_27() -> void:
+	var hits: Array[String] = []
+	var n_start := 0
+	for y in 7:
+		for x in 5:
+			var s := Vector2i(x, y)
+			if s == Vector2i(2, 6) or s == Vector2i(1, 1) or s == Vector2i(1, 6):
+				continue                      # 被占（她 / 长剑 / 队友）
+			var r := _one_start(s)
+			if r.is_empty():
+				continue
+			n_start += 1
+			if absf(float(r["old"]) - float(r["new"])) > 0.01:
+				hits.append("起点%s｜旧=%.0f（最近落点%s）｜新=%.0f（全部落点%s）⇒ **差 %+.0f**" % [
+					str(s), float(r["old"]), str(r["old_cell"]), float(r["new"]),
+					str(r["lands"]).replace(" ", ""), float(r["new"]) - float(r["old"])])
+	print("PROBE|⑥ 扫描|可站起点 %d 个，其中**旧口径低记**的有 %d 个" % [n_start, hits.size()])
+	for h in hits:
+		print("PROBE|⑥ 低记|%s" % h)
+
+## 一个"暗域起点"的账：旧口径（最近那个开火格，含原地）vs 新口径（所有开火格取最坏）
+##   盘面照 ①：她 (2,6) ／ 队友塔盾 (1,6) ／ 长剑 (1,1)（只在某些落点够得到她）／暗域换位。
+func _one_start(s: Vector2i) -> Dictionary:
+	var descs: Array = []
+	for r0 in [
+		["ENEMY", "hero_40", Vector2i(2, 6), "红帽"],
+		["ENEMY", "hero_11", Vector2i(1, 6), "队友塔盾"],
+		["PLAYER", "hero_18", Vector2i(1, 1), "长剑"],
+		["PLAYER", "hero_27", s, "暗域"]]:
+		var fn := DataRegistry.Faction.ENEMY if String(r0[0]) == "ENEMY" else DataRegistry.Faction.PLAYER
+		descs.append(_desc(fn, String(r0[1]), r0[2] as Vector2i, String(r0[3])))
+	var occ := {}
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
+	var ai = FORK.new(_grid)
+	ai.difficulty = 3
+	ai.log_decisions = false
+	var sim = ai.build_state(descs, occ, {}, {}, {}, {}, {})
+	var t = sim.units[0]                       # 她 = 红帽（被估算挨打的那一个）
+	var a = sim.units[3]                       # 暗域
+	if not ai._threat_can_hit(sim, a, t.cell, t):
+		return {}                              # 这个起点够不到她 ⇒ 没有落点
+	var base := {}
+	var base_v: float = ai._incoming_total_on(sim, t, t.cell, base, false, true)
+	# 改前口径：复制自删除前的 `_threat_fire_cell()`（原地 ⇒ 原地；否则取路网距离最近的开火格）
+	var oc := _old_fire_cell(ai, sim, a, t)
+	var old_v := base_v
+	if oc.x != -99:
+		var o1 := {}
+		old_v = maxf(base_v, ai._incoming_total_on(sim, t, oc, o1, false, true))
+	var nw := {}
+	var new_v: float = ai._incoming_total_on(sim, t, t.cell, nw)
+	return { "old": old_v, "new": new_v, "old_cell": oc, "base": base_v,
+		"lands": ai._displace_landing_cells(sim, t, t.cell) }
+
+func _old_fire_cell(ai, sim, a, t) -> Vector2i:
+	if ai._threat_fire_ok_at(sim, a, a.cell, t.cell, t):
+		return a.cell
+	var budget: int = ai._threat_emove_next(sim, a)
+	if budget <= 0:
+		return Vector2i(-99, -99)
+	var best := Vector2i(-99, -99)
+	var best_d := 1 << 30
+	for c in ai._sim_walk_cells(sim, a.cell, budget, (a.skills as Array).has(DataRegistry.Skill.INFILTRATE)):
+		if not ai._threat_fire_ok_at(sim, a, c, t.cell, t):
+			continue
+		var d: int = ai.grid.distance(a.cell, c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+## 【2026-10-02 追加】**成本读数**：同一个盘面里，含"落点全集"的那一趟 vs 只算原地的 `no_displace` 那一趟。
+func _cost_arm() -> void:
+	var descs: Array = []
+	for r0 in [
+		["ENEMY", "hero_40", Vector2i(2, 6), "红帽"],
+		["ENEMY", "hero_11", Vector2i(1, 6), "队友塔盾"],
+		["PLAYER", "hero_27", Vector2i(2, 3), "暗域"],
+		["PLAYER", "hero_30", Vector2i(2, 4), "嬉皮死神"]]:
+		var fn := DataRegistry.Faction.ENEMY if String(r0[0]) == "ENEMY" else DataRegistry.Faction.PLAYER
+		descs.append(_desc(fn, String(r0[1]), r0[2] as Vector2i, String(r0[3])))
+	var occ := {}
+	for i in descs.size():
+		occ[descs[i]["cell"]] = i
+	var ai = FORK.new(_grid)
+	ai.difficulty = 3
+	ai.log_decisions = false
+	var sim = ai.build_state(descs, occ, {}, {}, {}, {}, {})
+	var t = sim.units[0]
+	var lt := ai._displace_landing_cells(sim, t, t.cell)
+	var lt_txt := str(lt).replace(" ", "")
+	print("PROBE|成本|落点集合=%s（%d 个）｜她=%s 攻%s 移%s 射%s｜暗域=%s 攻%s 移%s 射%s" % [
+		lt_txt, lt.size(),
+		t.name, str(t.eatk), str(t.emove), str(t.atk_range),
+		sim.units[2].name, str(sim.units[2].eatk), str(sim.units[2].emove), str(sim.units[2].atk_range)])
+	const N := 300
+	var t0 := Time.get_ticks_usec()
+	for _i in N:
+		ai._incoming_total_on(sim, t, t.cell, {}, false, true)
+	var t1 := Time.get_ticks_usec()
+	for _i in N:
+		ai._incoming_total_on(sim, t, t.cell)
+	var t2 := Time.get_ticks_usec()
+	var base_ms := float(t1 - t0) / float(N) / 1000.0
+	var full_ms := float(t2 - t1) / float(N) / 1000.0
+	print("PROBE|成本|只算原地(no_displace) %.3f ms/次｜含落点全集 %.3f ms/次｜倍数 ×%.2f" % [
+		base_ms, full_ms, full_ms / maxf(base_ms, 0.0001)])
 
 func _panel(tag: String, rows: Array) -> void:
 	var descs: Array = []

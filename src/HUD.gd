@@ -61,6 +61,10 @@ var _top_stack_blue: Control = null
 var _top_stack_red: Control = null
 var _my_marks: Array = []      # 本端视角的"我方"那排（左）
 var _op_marks: Array = []      # 本端视角的"对方"那排（右）
+# 【2026-10-03·用户「哪方的行动回合，你在哪方的名字框外面增加一个绿色高亮」】
+#   阵营（`DataRegistry.Faction`）→ 那个名字框上的绿框节点（`Panel`，`name = "TurnRing"`）；
+#   每帧由 `_refresh_turn_ring()` 按 `GameState.active_side` 定显隐。
+var _plate_rings := {}
 var _death_fx: DeathFx = null  # 阵亡演出层（全屏，只画特效；比状态栏晚加入 ⇒ 画在状态栏之上）
 # 【2026-09-28·用户要求·击杀演出】击杀特效层（全屏）：击杀者卡面滑进画面停一下 + 阵营色拖影
 #   触发 = `Battle.kill_intro_requested`（**开打前**的预告）：Battle 会一直等到这里播完、调
@@ -76,7 +80,7 @@ var _reveal_pending := { "my": 0, "op": 0 }
 var _mark_filled := { "my": 0, "op": 0 }
 var _pause_btn: Button = null        # 暂停键（仅单机显示，放右上角）
 var _pause_overlay: Control = null   # 暂停遮罩（暂停时显示"已暂停/继续游戏"）
-var _ladder_confirm: Control = null  # 【天梯】"确定放弃本次天梯？"的再确认层（用户要求）
+var _ladder_confirm: Control = null  # 【天梯】"确定认输？"的再确认层（用户要求；2026-10-03 文案统一前叫"确定放弃本次天梯？"）
 # 【2026-09-25 用户要求·天梯主动放弃】放弃确认后**也要弹结算面板**（提示"才X连胜，跑什么？去简单难度偷偷进步啊？"）
 #   ⇒ 这个一次性标记让 `show_result()` 知道"这次是放弃、不是打输"（用它选文案 + 保持整棵树暂停）。
 var _ladder_gave_up := false
@@ -113,9 +117,19 @@ const END_BTN_IMG_H := 112.0   # 图片按钮的高度（宽按图的比例 ⇒ 
 const NAME_FRAME_BLUE := preload("res://assets/界面/蓝方名字框.png")
 const NAME_FRAME_RED := preload("res://assets/界面/红方名字框.png")
 # 【2026-09-29·用户要求「单机敌方用难度+AI」】难度档名（下标 = `GameState.ai_difficulty`：
-#   0 简单 / 1 普通 / 2 困难 / 3 噩梦）⇒ 单机右侧名字显示成「噩梦AI」这样。
-const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦"]
-const NAME_PLATE_H := 34.0
+#   0 简单 / 1 普通 / 2 困难 / 3 噩梦 / 4 噩梦+）⇒ 单机右侧名字显示成「噩梦AI」这样。
+# 【2026-10-03·用户口径「你的自进化不要在界面显示出来」】档位 5「自进化」**从界面摘掉**（本表不再列它）：
+#   引擎那边照旧（`Battle.AI_EVOLVE_WEIGHTS_PATH` / `AI_EVOLVE_SCRIPT_PATH` 与 `_nightmare_weights_path(5)` 都还在，
+#   探针与跑批仍能直接设 `GameState.ai_difficulty = 5`），只是**菜单/HUD 不再提供、也不再显示这一档**。
+#   ⚠️ 本表长度 = 可显示的档数；界面那条 `clampi(..., AI_DIFF_NAMES.size() - 1)` 会兜住越界下标。
+const AI_DIFF_NAMES := ["简单", "普通", "困难", "噩梦", "噩梦+"]   # 【2026-10-03·用户口径】第 5 档「噩梦1」改名「噩梦+」
+# 【2026-10-03·用户「名字框高度加高一点」】名字框（= 顶部状态栏第一行）的高度：**34 → 42**。
+#   高度账（`_build()` 那几处 `top.size` / `col_box.size` / `status_bottom` 都从这一个常量推）：
+#     `NAME_PLATE_H + 1 + DeathMark.SLOT_D(38)` = **81**，再加 8px 余量 = 89 ≤ 棋盘让出的 **101**
+#     （`Battle.gd::top_reserve = 101`，独立实测值）⇒ 还留 12px。**上限 ≈ 48**（再高就压到棋盘最上一排）。
+#   ⚠️ 素材是**整张拉伸**铺满框：框变高后素材会被纵向拉伸（新素材 6.40:1 → 框 223:42 = 5.31:1，约 +21%）；
+#     嫌缎带变胖就让美术按新比例重出（推荐 **531×100** 或 1062×200）。
+const NAME_PLATE_H := 42.0
 # 【2026-09-29·用户要求「战斗中上方状态栏的背景增加透明度」】顶部状态栏那块底的**不透明度**：
 #   0 = 完全透明（只剩名字框 / 阵亡标志 / 回合数浮在地面上）、1 = 完全不透明。
 #   原来是 **0.85**（几乎实心、把地面压住了），现在调成 **0.55**；想更透继续往下调（0.35 已经很透）。
@@ -138,6 +152,19 @@ const NAME_EDGE_PAD := 12.0
 #   火焰 · 剩余时间」留的宽度（左右两条名字框各占 `(屏宽 − 24 − 本值) / 2`、等长）。
 #   这组文字会随回合数/计时变长 ⇒ `_fit_top_center()` 仍会按实际宽度逐档缩字号兜底。
 const TOP_MID_GAP := 250.0
+# 【2026-10-03·用户「哪方的行动回合，你在哪方的名字框外面增加一个绿色高亮」】轮到哪一方行动，
+#   就给哪一方的名字框套一圈**绿框**；权威口径 = `GameState.active_side`（和左上「第 N 回合」同一路：
+#   单机由 `Battle._begin_side()` / `end_current_side()` 推、联机由 `GameState.sync_turn()` 推、
+#   回放里每段快照还原时也会写它）⇒ 谁行动谁亮，动画 / 替补 / 放炸弹那几段都算在行动回合里。
+#   ⚠️ 名字框**顶边就贴着屏幕顶**（`_build()` 里 `col_box.position.y = 1`）⇒ 再往外扩就没地方了，
+#   所以这圈绿框正好画在名字框那一格的**最外一圈**上（观感 = 框外围一圈绿）：
+#   厚度 `TURN_RING_W`（像素）· 圆角 `TURN_RING_R`（跟素材端头那个圆角接近）· 颜色/透明度 `TURN_RING_COLOR`。
+#   ⚠️ 显示范围（用户三次口径演进后的最终版）= **先手已定的开局阶段（卡组三选一 / 竞技场 2 选 1 /
+#   部署两态）亮本局先手 + 行动回合六态亮行动方 + `IDLE` 空窗按"开打前亮先手 / 开打后亮行动方"**；
+#   `ENDED` 与 `match_over` 不亮 —— 判据全在 `_refresh_turn_ring()` 里（含为什么不能用 `active_side`）。
+const TURN_RING_W := 4
+const TURN_RING_R := 10
+const TURN_RING_COLOR := Color(0.35, 1.0, 0.40, 0.95)
 # 【2026-09-29·用户要求】左下角「菜单」按钮的素材；**高度与「替补队伍」那个图标按钮一致**
 #   （`TEAM_TOGGLE_ICON_H = 58`），宽度按原图比例 ⇒ 两个图标按钮同高、大小观感一致。
 const MENU_TEX := "res://assets/界面/菜单_透明.png"
@@ -878,13 +905,16 @@ func _show_arena_pair(pair: Array) -> void:
 		panel.position = Vector2((vsize.x - 420) / 2.0, (vsize.y - 120) / 2.0)
 		return
 	# 倒计时（选卡上方大字）：剩余秒数由 Battle 每帧递减，超时自动选第 1 张
-	# 【2026-09-29·用户要求「竞技场二选一倒计时字号加大」】52 → **64**、描边 6 → **8**
-	#   （与部署阶段那个大字倒计时**同一套字号/描边**，两处观感一致；配套把面板预留高度也加高，见下面 `ph`）。
+	# 【2026-09-29·用户要求「竞技场二选一倒计时字号加大」】52 → **64**、描边 6 → **8**。
+	# 【2026-10-03·用户又提「竞技场2选1倒计时字号加大」】64 → **96**、描边 8 → **12**（按比例放大）。
+	#   ⚠️ 当年"与部署阶段那个大字倒计时同一套字号"的理由**已经不成立**：部署阶段那枚 64 号大字
+	#   2026-09-29 就删了（读秒搬去状态栏，见 `_show_deploy_panel()` 上方那段说明）⇒ 全场只剩这一个
+	#   "大字倒计时"，不用再跟谁对齐。想再大/再小只改这个字号 + 下面 `ph` 那份预留高度（必须同步）。
 	var timer := Label.new()
-	timer.add_theme_font_size_override("font_size", 64)
+	timer.add_theme_font_size_override("font_size", 96)
 	timer.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
 	timer.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
-	timer.add_theme_constant_override("outline_size", 8)
+	timer.add_theme_constant_override("outline_size", 12)
 	timer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	timer.text = ""
 	wrapbox.add_child(timer)
@@ -923,7 +953,9 @@ func _show_arena_pair(pair: Array) -> void:
 	var pw := total_w + 40.0
 	# 【2026-09-29】顶部大字倒计时的预留高度 78 → **96**：字号 52 → 64 之后行高约 83px，
 	#   原来的 78 会让大字贴到卡片上（面板高度是这里手算的，不靠容器的 min size 兜底）。
-	var ph := card_h + 40.0 + 96.0   # 预留顶部大字倒计时空间
+	# 【2026-10-03·字号 64 → 96】预留高度同步 96 → **140**（96 号行高约 125px + 十几像素余量）。
+	#   ⚠️ 这两处必须一起动：只改字号不改这里 = 大字会压到卡片上（探针 `竞技场倒计时自检` 量的就是这条缝）。
+	var ph := card_h + 40.0 + 140.0   # 预留顶部大字倒计时空间
 	panel.custom_minimum_size = Vector2(pw, ph)
 	panel.size = Vector2(pw, ph)
 	# 画面正中央（略偏上，给下方飞入路径留空间）
@@ -1749,7 +1781,9 @@ func _build() -> void:
 			# 【2026-09-29·用户要求「把双方的名字都用白色」】名字不再按阵营上色，一律**白色**
 			#   （框内文字带黑描边 ⇒ 蓝框/红框上都看得清）；`_faction_ui_color()` 仍给阵亡演出用。
 			"我方" if mine else "敌方", Color(1.0, 1.0, 1.0), plate_font, bar_w,
-			HORIZONTAL_ALIGNMENT_LEFT if is_left else HORIZONTAL_ALIGNMENT_RIGHT)
+			# 【2026-10-03·用户「名字居中」】名字从"贴外缘"改成**框内居中**（`NAME_EDGE_PAD` 那两处
+			#   左右缩进只对 LEFT/RIGHT 生效，居中时用不到；`_fit_center` 那套量宽逻辑不受影响）。
+			HORIZONTAL_ALIGNMENT_CENTER)
 		# 框自己别被 VBox 拉宽（素材按原比例，拉宽就变形）：靠外缘摆
 		plate.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN if is_left else Control.SIZE_SHRINK_END
 		if mine:
@@ -1757,6 +1791,24 @@ func _build() -> void:
 		else:
 			_op_death_name = plate.get_node_or_null("Name") as Label
 		col_box.add_child(plate)
+		# 【2026-10-03·用户「哪方的行动回合，你在哪方的名字框外面增加一个绿色高亮」】
+		#   每个名字框自带一圈绿框：`Panel` + 只描边不填心的 `StyleBoxFlat`（`draw_center = false`）。
+		#   铺满名字框那一格（`PRESET_FULL_RECT`）⇒ 框以后变宽/变高都自动跟；显隐见 `_refresh_turn_ring()`
+		#   （节点名 `TurnRing`，探针按名字找得到）。
+		var ring := Panel.new()
+		ring.name = "TurnRing"
+		ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ring.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var ring_sb := StyleBoxFlat.new()
+		ring_sb.draw_center = false
+		ring_sb.bg_color = Color(0, 0, 0, 0)
+		ring_sb.border_color = TURN_RING_COLOR
+		ring_sb.set_border_width_all(TURN_RING_W)
+		ring_sb.set_corner_radius_all(TURN_RING_R)
+		ring.add_theme_stylebox_override("panel", ring_sb)
+		ring.visible = false
+		plate.add_child(ring)
+		_plate_rings[side_fn] = ring
 		# 【2026-09-29·用户报「第三枚和其他的间隔不一样」】**不用容器自动排列，改成固定节距**：
 		#   原来是 `HBoxContainer` + `separation = 6` ⇒ 间距由容器算，任何容器/主题/分辨率的取整
 		#   都可能让它不那么整齐。现在每枚标记的 x **按节距直接算**（`i * (SLOT_D + MARK_GAP)`），
@@ -2267,6 +2319,100 @@ func _set_round_text(round_num: int, _player_side: bool) -> void:
 	_top_fit_key = ""          # 文字/火焰都变了 ⇒ 强制重算一次中间那组的字号
 	_fit_top_center()
 
+## 【2026-10-03·用户「名字框有白边啊」→「名字框的白色背景也弄进去了啊」】素材是**彩色缎带画在纯白底上**
+##   （量出来：四角与缎带外面那一圈全是纯白，缎带本身有黑描边；整张不透明）⇒ 照原样画出来就是
+##   "白色背景也弄进去了"。这里两步处理（同一个缓存，素材只算一次）：
+##     ① **去白底**：从四条边做**泛洪**，把与外界连通、且近白的像素 `alpha` 置 0
+##        —— 只吃"缎带外面"的白，缎带内部的白/高光保留（泛洪撞到缎带的黑描边就停）。
+##        素材本来就抠好（透明像素 ≥5%）⇒ 跳过这一步。
+##     ② **裁到内容边界**：再把四周全透明的行/列去掉，`trim` = 裁掉的 (左,上,右,下) 记进贴图 meta
+##        （`_make_name_plate()` 算九宫格边距时要减掉它）。
+##   ⚠️ 别改成"整张图白色一律透明"：缎带里的白色高光会被一起打穿（与 `DataRegistry.stat_icon()`
+##      那条"作者已抠好就别再抠白"同一个道理）。
+static var _plate_prep_cache := {}
+## 泛洪用的四邻（显式类型：`for d in [Vector2i…]` 拿到的是 Variant ⇒ `d.x` 无法推断类型、编译报错）
+const DIRS4: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+
+static func _prepare_name_plate(tex: Texture2D) -> Texture2D:
+	if tex == null:
+		return null
+	var key := tex.get_rid()
+	if _plate_prep_cache.has(key):
+		return _plate_prep_cache[key]
+	_plate_prep_cache[key] = tex          # 先占位：异常时也不重复算
+	var img := tex.get_image()
+	if img == null:
+		return tex
+	img.convert(Image.FORMAT_RGBA8)
+	var w := img.get_width()
+	var h := img.get_height()
+	if w < 8 or h < 8:
+		return tex
+	# ---- ① 去白底（泛洪，只吃与外界相连的近白）----
+	var clear_n := 0
+	for y in h:
+		for x in w:
+			if img.get_pixel(x, y).a < 0.08:
+				clear_n += 1
+	if float(clear_n) / float(w * h) < 0.05:
+		var seen := PackedByteArray()
+		seen.resize(w * h)
+		var stack: Array = []
+		for x in w:
+			for yv in [0, h - 1]:
+				var y := int(yv)
+				var i0: int = y * w + x
+				if seen[i0] == 0 and _plate_is_white(img.get_pixel(x, y)):
+					seen[i0] = 1
+					stack.append(i0)
+		for y in h:
+			for xv in [0, w - 1]:
+				var x := int(xv)
+				var i1: int = y * w + x
+				if seen[i1] == 0 and _plate_is_white(img.get_pixel(x, y)):
+					seen[i1] = 1
+					stack.append(i1)
+		while not stack.is_empty():
+			var p: int = stack.pop_back()
+			var px := p % w
+			var py := p / w
+			img.set_pixel(px, py, Color(0, 0, 0, 0))
+			for dv in DIRS4:
+				var nx: int = px + dv.x
+				var ny: int = py + dv.y
+				if nx < 0 or ny < 0 or nx >= w or ny >= h:
+					continue
+				var ni: int = ny * w + nx
+				if seen[ni] == 1:
+					continue
+				if _plate_is_white(img.get_pixel(nx, ny)):
+					seen[ni] = 1
+					stack.append(ni)
+	# ---- ② 裁到内容边界 ----
+	var x0 := w; var y0 := h; var x1 := -1; var y1 := -1
+	for y in h:
+		for x in w:
+			if img.get_pixel(x, y).a > 0.05:
+				x0 = mini(x0, x); y0 = mini(y0, y)
+				x1 = maxi(x1, x); y1 = maxi(y1, y)
+	if x1 < x0 or y1 < y0:
+		return tex                          # 整张都被吃空了：原样退回，别把界面搞没
+	var l := x0
+	var t := y0
+	var r := w - 1 - x1
+	var b := h - 1 - y1
+	if l + r + t + b > 0:
+		img = img.get_region(Rect2i(l, t, w - l - r, h - t - b))
+	var out := ImageTexture.create_from_image(img)
+	out.set_meta("trim", Vector4i(l, t, r, b))
+	_plate_prep_cache[key] = out
+	return out
+
+## 近白判据（去白底用）：不透明 + 三通道都 > 0.86。想更狠/更松就调这个数。
+static func _plate_is_white(c: Color) -> bool:
+	return c.a > 0.5 and c.r > 0.86 and c.g > 0.86 and c.b > 0.86
+
+
 ## 【2026-09-29·用户要求】"名字框 + 框内居中名字"：框是素材（`蓝方名字框.png` / `红方名字框.png`），
 ##   名字写在框里。返回外框 `Control`，里面的 `Label` 命名为 `Name`（"我方/敌方"由它显示，
 ##   联机换真名那条路仍改它的 `text` —— 见 `_refresh_deaths()` 里那两处 `_my_death_name.text = ...`）。
@@ -2286,8 +2432,13 @@ func _make_name_plate(tex: Texture2D, txt: String, col: Color, font_size: int, w
 	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	# 【2026-09-29·用户贴的 `SHADOWED_VARIABLE_BASE_CLASS`】这里原来叫 `tr` ⇒ 遮蔽了 `Object.tr()`
 	#   （翻译函数），每次加载脚本都报一条警告 ⇒ 改名 `plate_bg`，只是换名字、行为不变。
+	# 【2026-10-03·用户重做素材后】**素材比例已经和目标一致**（蓝 384×60 = 6.40:1、红 3776×576 = 6.56:1，
+	#   而显示框是 223×34 = 6.56:1）⇒ 不需要九宫格了，回到**整张拉伸**（`TextureRect` + `STRETCH_SCALE`）：
+	#   直接铺满框、最多 3% 横向微差（眼睛看不出）。原来那套九宫格（`NinePatchRect` + `NAME_PATCH_*`
+	#   四个边距）是为"素材 2:1、显示 17:1"那版做的 ⇒ 连同四个常量一起删掉。
+	#   素材还是**不透明 + 白底**（四角 0.98 近白）⇒ 仍走 `_prepare_name_plate()` 去白底、裁到内容边界。
 	var plate_bg := TextureRect.new()
-	plate_bg.texture = tex
+	plate_bg.texture = _prepare_name_plate(tex)
 	plate_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	plate_bg.stretch_mode = TextureRect.STRETCH_SCALE
 	plate_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -2303,8 +2454,10 @@ func _make_name_plate(tex: Texture2D, txt: String, col: Color, font_size: int, w
 	lb.horizontal_alignment = align
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	lb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	# 【2026-09-29·用户要求「状态栏上双方的名字都贴边显示」】名字不再框内居中，而是**贴外缘**：
-	#   左框（蓝方）靠左、右框（红方）靠右；离框边留 `NAME_EDGE_PAD` 免得压在框沿的花纹上。
+	# 【2026-09-29·用户要求「状态栏上双方的名字都贴边显示」】名字**贴外缘**：左框（蓝方）靠左、
+	#   右框（红方）靠右；离框边留 `NAME_EDGE_PAD` 免得压在框沿的花纹上。
+	# 【2026-10-03·用户「名字居中」】现在两边都传 `HORIZONTAL_ALIGNMENT_CENTER` ⇒ 这两处缩进
+	#   **不生效**（居中时不需要），但保留着：以后想改回贴边，把调用点那一个参数换回 LEFT/RIGHT 即可。
 	if align == HORIZONTAL_ALIGNMENT_LEFT:
 		lb.offset_left += NAME_EDGE_PAD
 	elif align == HORIZONTAL_ALIGNMENT_RIGHT:
@@ -2551,6 +2704,7 @@ func _on_kill_intro(killer: Unit, _victim: Unit) -> void:
 func _process(_dt: float) -> void:
 	_refresh_deaths()
 	_refresh_controls()
+	_refresh_turn_ring()   # 谁行动谁的名字框亮绿框（挂这里而不是 `_refresh_controls()`：回放里那条会早退）
 	# 检测战斗阶段切换（替补落位完成/部署完成/回输入态等）→ 补刷新顶部"第X回合·阶段"标签。
 	# 阶段是本地状态机、无专门信号：仅在真正变化时刷新一次，避免每帧重写。
 	if battle != null and is_instance_valid(battle):
@@ -2711,7 +2865,7 @@ func _set_edge_warning(on: bool) -> void:
 # 按钮可用性/可见性刷新：
 # 1) 结束回合：仅当本端操作方 == 当前行动方且处于我方输入状态时可点（非我方回合禁用）；
 # 2) 重开：联机（含联机竞技场）不需要，隐藏；
-# 3) 返回：联机返回大厅，单机返回选人界面。
+# 3) 返回：联机返回大厅，单机返回**主菜单**（结算面板那枚按钮的文案已按用户要求写成「返回主菜单」）。
 ## 本局是否在放录像（`Battle._replay_mode`）。回放里战场按钮全部收起 —— 用户 2026-09-27 报
 ## 「怎么录像功能可以点击下方的按钮」：回放本来就不该有"结束回合/重开/返回选人"这些入口，
 ## 退出回放走回放控制条自己的「返回」。
@@ -2782,12 +2936,73 @@ func _refresh_controls() -> void:
 	#   同理挂在这条每帧刷新的路上：进竞技场部署 ⇒ 展开；部署一完成 ⇒ 自动收回（只在状态变化时动一次）。
 	_sync_arena_team_panel()
 
+## 【2026-10-03·用户「哪方的行动回合，你在哪方的名字框外面增加一个绿色高亮」】
+##   两侧名字框各挂一圈绿框（`TURN_RING_*`，左蓝 = `Faction.PLAYER` · 右红 = `ENEMY`），
+##   **哪一方"当前该被指着"就亮哪一侧**，判据分三档（都是"这一刻谁是主角"）：
+##     ① **行动回合**（`PLAYER_INPUT` / `ENEMY_TURN` / `ANIMATING` / `SUBSTITUTING` / `PLACE_SUB` /
+##        `PLACE_BOMB`）⇒ 亮**行动方** `GameState.active_side`；
+##     ② **开局准备阶段**（`DECK_PICK` 卡组三选一 / `ARENA_DRAFT` 竞技场 2 选 1 / `DEPLOY` /
+##        `PLACE_DEPLOY`）⇒ 亮**本局先手** `battle._first_side`（那时还没有"行动方"）；
+##     ③ **`IDLE` 空窗**：开打前（①的第 1 局部署前那段，含「战斗开始」横幅 1.2 秒）亮**先手**、
+##        开打后的空窗（替补/落位中间那几帧）仍亮**行动方** —— 免得中间那几帧闪一下。
+##   已结束（`ENDED`）与 `match_over` 一律不亮；先手还没定的更早阶段（重开瞬间）也不亮。
+##   ⚠️ 挂 `_process()` 的每帧刷新路上（**不能**挂 `_refresh_controls()`：那条在回放里会早退，
+##   而回放里每段快照还原时也会写 `GameState.active_side`，绿框本就该跟着录像亮）。
+##   ⚠️ 三个必须留神的点：① 开局准备阶段 `GameState.active_side` **还没被 `_start_match()` 写过**
+##   （探针实测部署期 `active_side = 0` 而 `_first_side = 1`）⇒ 用 `active_side` 会**亮反边**；
+##   ② 别用 `GameState.match_running` 当"开始没开始"的门 —— 本会话第 1 局，它要到部署**之后**
+##   才置 true；第 2 局起 `reset_match()` 里就置 true 了（同一面旗两种含义）⇒ 只在 `IDLE` 那一档
+##   拿它区分"开打前 / 开打后"（这两段要的侧别不同，见 ③）；
+##   ③ 用户口径演进：先在行动回合亮 → 再要求"**先手框从游戏开始就显示**"（于是加 ② 的部署两态）→
+##   再问"**怎么竞技场 2 选 1 阶段没有高亮**"（于是 `ARENA_DRAFT` / `DECK_PICK` 也进来）。
+func _refresh_turn_ring() -> void:
+	if _plate_rings.is_empty():
+		return
+	var b = battle if battle != null and is_instance_valid(battle) else null
+	if b == null:
+		return
+	var st: int = b.state
+	var acting: bool = st == Battle.State.PLAYER_INPUT or st == Battle.State.ENEMY_TURN or st == Battle.State.ANIMATING \
+			or st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB or st == Battle.State.PLACE_BOMB
+	var pre_match: bool = st == Battle.State.DECK_PICK or st == Battle.State.ARENA_DRAFT \
+			or st == Battle.State.DEPLOY or st == Battle.State.PLACE_DEPLOY
+	var show := false
+	var side: int = GameState.SIDE_PLAYER
+	if not GameState.match_over:
+		if acting:
+			show = true
+			side = GameState.active_side
+		elif pre_match and b._first_side_decided:
+			show = true
+			side = b._first_side          # 先手（此刻 active_side 还没被 start_match 写过，不能用）
+		elif st == Battle.State.IDLE:
+			if GameState.match_running:
+				show = true               # 开打后的空窗：跟行动方（不是先手），中间那几帧不闪
+				side = GameState.active_side
+			elif b._first_side_decided:
+				show = true               # 开打前那段 IDLE（含"战斗开始"横幅）：还是先手
+				side = b._first_side
+	var act_fn: int = b.side_faction(side)
+	for fn in _plate_rings.keys():
+		var ring: Panel = _plate_rings[fn]
+		if ring == null or not is_instance_valid(ring):
+			continue
+		ring.visible = show and int(fn) == act_fn
+
 # 【2026-09-28·用户要求】联机认输：先喊**完整的一句**给对端（本端也回显气泡），再走认输结算。
 func _on_surrender_pressed() -> void:
 	if battle == null or not is_instance_valid(battle):
 		return
 	_send_chat(battle.SURRENDER_LINE)
 	battle.surrender_online()
+
+# 【2026-10-03·用户要求「普通模式和竞技场模式也需要在菜单键增加认输按钮」】单机菜单面板里那枚「认输」：
+#   与联机那枚（`_on_surrender_pressed`）同名同义，只是**不喊话、不广播**（单机没有对端）；
+#   真结算交给 `Battle.surrender_local()`（判对方胜 + 弹结算面板，与联机认输同一条路）。
+func _on_local_surrender_pressed() -> void:
+	if battle == null or not is_instance_valid(battle):
+		return
+	battle.surrender_local()
 
 # 属性浮层实时跟随鼠标，并收敛到屏幕内（避免被底部/右侧挡住）
 # 触屏长按查看时 _tooltip_pin_rect 非空：固定显示在目标卡上方，不跟随手指（避免被手指遮挡）。
@@ -2912,22 +3127,24 @@ func _on_pause_pressed() -> void:
 	resume.pressed.connect(_on_resume_pressed)
 	vb.add_child(resume)
 	# 【2026-09-27·用户要求】「重开 / 返回选人」已整合进暂停面板（底部常驻行只剩结束回合）：
-	#   单机普通模式给这两个；**天梯**仍只给「保存并退出 / 放弃本次天梯」（重开会作废本局，口径冲突）。
+	#   单机普通模式给这两个；**天梯**只给「认输」（2026-10-03 文案统一：原来叫「放弃本次天梯」；
+	#   重开会作废本局，口径冲突）。
 	if GameState.ladder_mode != "":
-		var save_quit := Button.new()
-		save_quit.text = "保存并退出"
-		save_quit.add_theme_font_size_override("font_size", 20)
-		save_quit.custom_minimum_size = Vector2(240, 50)
-		save_quit.pressed.connect(_on_ladder_save_quit)
-		vb.add_child(save_quit)
+		# 【2026-10-03·用户要求「普通模式和天梯模式只要认输，不要返回主菜单按键」】这里原来还有一枚
+		#   **「保存并退出」**（= 天梯的"回主菜单"那条路：存一份快照就换场景）⇒ 按"只要认输"的口径**删掉**，
+		#   天梯暂停面板现在只剩「继续游戏 / 认输」。
+		#   ⚠️ 代价（用户口径优先，但记在这里）：**不能再"中途存档走人、下次接着打"**了 —— 要恢复就把
+		#   `save_quit` 那三行加回来（`_on_ladder_save_quit()` 与结算面板里那枚同名按钮都还在，未受影响）。
 		var give_up := Button.new()
-		give_up.text = "放弃本次天梯"
+		# 【2026-10-03·用户要求「天梯模式的放弃本次天梯也改成认输」】文案统一成「认输」（**行为一字未动**：
+		#   仍是"清当前连胜 + 删本轮存档 + 弹结算面板"那一套，见 `_ladder_do_give_up()`；确认层文案同步）。
+		give_up.text = "认输"
 		give_up.add_theme_font_size_override("font_size", 20)
 		give_up.custom_minimum_size = Vector2(240, 50)
 		give_up.pressed.connect(_on_ladder_give_up)
 		vb.add_child(give_up)
 		# 【2026-09-24 用户要求】原来按钮下面还有一块小字（"天梯普通模式 · 第 N 局 · 当前连胜 M 场" + 两行按钮说明）
-		#   ⇒ 已删；暂停面板现在就三行：继续游戏 / 保存并退出 / 放弃本次天梯。
+		#   ⇒ 已删；暂停面板现在就两行：继续游戏 / 认输。
 	else:
 		var p_restart := Button.new()
 		p_restart.text = "重开"
@@ -2935,15 +3152,25 @@ func _on_pause_pressed() -> void:
 		p_restart.custom_minimum_size = Vector2(240, 50)
 		p_restart.pressed.connect(_on_restart)
 		vb.add_child(p_restart)
-		var p_back := Button.new()
-		# 【2026-09-27·用户要求】普通模式暂停里的这个按钮 = **返回主菜单**（文案原写"返回选人"，
-		#   但 `_on_back_to_menu` 走的就是 `change_scene_to_file(Menu.tscn)`、落点是主菜单页
-		#   —— Menu 的组队页只有 `net_edit_mode` 才会直接进 ⇒ 这里只是把文案改成与实际一致）。
-		p_back.text = "返回主菜单"
-		p_back.add_theme_font_size_override("font_size", 20)
-		p_back.custom_minimum_size = Vector2(240, 50)
-		p_back.pressed.connect(_on_back_to_menu)
-		vb.add_child(p_back)
+		# 【2026-10-03·用户要求「普通模式和天梯模式只要认输，不要返回主菜单按键」】这里原来还有一枚
+		#   **「返回主菜单」**（`_on_back_to_menu()`）⇒ **删掉**：认输那条路本来就能出去（判负 → 结算面板里
+		#   有返回按钮），留着它等于"随时悄悄溜走、连这一局的负都不记"。
+		#   ⚠️ `_on_back_to_menu()` 本身**保留**（结算面板那两枚按钮还在用它，见 `show_result()`）。
+		# 【2026-10-03·用户要求「普通模式和竞技场模式也需要在菜单键增加认输按钮」】菜单面板最后加一枚
+		#   「认输」（与天梯那枚「放弃本次天梯」同一个位置口径：最下面、最不容易误触）：
+		#   非联机、非天梯（= 普通模式 / 竞技场模式 / 自由部署沙箱）都会看到它；
+		#   点它 = `Battle.surrender_local()`（判对方胜，走与联机认输同一条结算路 ⇒ 结算面板/记账/胜负音都齐）。
+		#   ⚠️ 这枚按钮自己**不**调 `_resume()`（与天梯那枚同款）：走 `Battle.surrender_local()` ⇒
+		#   `_apply_surrender()` ⇒ `show_result()` —— 那条路按"**正常打输**"收场（`state = ENDED` +
+		#   `match_over = true` ⇒ 背后本来就没有 AI/动画在接着跑，结算面板会把暂停解开，探针实测 `paused = false`）。
+		#   ⚠️ 天梯那枚确认后仍保持**冻结**，是因为它带着 `_ladder_gave_up` 标记（见 `show_result()` 里那两处）；
+		#   两条路都各按原样，别混。`_on_restart()` 开头有 `_resume()` ⇒ "再战一局"照旧能开。
+		var p_surrender := Button.new()
+		p_surrender.text = "认输"
+		p_surrender.add_theme_font_size_override("font_size", 20)
+		p_surrender.custom_minimum_size = Vector2(240, 50)
+		p_surrender.pressed.connect(_on_local_surrender_pressed)
+		vb.add_child(p_surrender)
 	panel.reset_size()
 	var pw: float = clampf(maxf(panel.get_combined_minimum_size().x, 300.0), 300.0, maxf(vsize.x - 40.0, 300.0))
 	var ph: float = panel.get_combined_minimum_size().y
@@ -2990,14 +3217,16 @@ func _on_ladder_give_up() -> void:
 	vb.add_theme_constant_override("separation", 14)
 	panel.add_child(vb)
 	var title := Label.new()
-	title.text = "确定放弃本次天梯？"
+	# 【2026-10-03·用户要求「天梯模式的放弃本次天梯也改成认输」】按钮文案已改成「认输」⇒ 确认层文案同步
+	#   （原来两处都写"放弃本次天梯"，点了「认输」却问"确定放弃本次天梯？"就对不上了）。
+	title.text = "确定认输？"
 	title.add_theme_font_size_override("font_size", 26)
 	title.add_theme_color_override("font_color", Color(1, 0.6, 0.5))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 	# ⚠️ 这里**不要**再加说明小字（用户 2026-09-24：「你不要自己乱加这种描述，显得很乱，需要的话我会让你加的」）
 	var yes := Button.new()
-	yes.text = "确定放弃"
+	yes.text = "确定认输"
 	yes.add_theme_font_size_override("font_size", 20)
 	yes.custom_minimum_size = Vector2(240, 50)
 	yes.pressed.connect(_ladder_do_give_up)
@@ -3026,6 +3255,13 @@ func _close_ladder_confirm() -> void:
 #      结算浮层自己按 `PROCESS_MODE_WHEN_PAUSED` 收输入（见 `show_result()`），点「返回主菜单」才真的换场景。
 func _ladder_do_give_up() -> void:
 	_close_ladder_confirm()
+	# 【2026-10-03·用户要求「…点击认输不录像」】天梯这枚认输原来**整条路都不落录像**（它不走
+	#   `_apply_surrender()`，而是自己 `show_result()` 收尾）⇒ 补两刀：先把当前局面补成一段，
+	#   再按"输"落盘（`_rec_finish(false)`）。⚠️ 两处都自带 `_rec_on` / `has_frames()` 守卫 ⇒
+	#   重复调用安全、真·空局（还没有局面）依旧不落盘。
+	if battle != null and is_instance_valid(battle):
+		battle._rec_capture_if_empty()
+		battle._rec_finish(false)
 	GameState.ladder_final_streak = Stats.current_streak(Stats.current_mode_key())
 	Stats.reset_streak(Stats.current_mode_key())
 	LadderStore.finish_run()
@@ -3142,6 +3378,12 @@ func _defeat_anim_side(loser_fn: int) -> void:
 			continue
 		var base_pos: Vector2 = mk2.position
 		var tw: Tween = mk2.create_tween()
+		# 【2026-10-03·用户「天梯模式的认输失败动画怎么不对」】**这条演出必须能在"暂停"里跑**：
+		#   天梯那枚「认输」走 `_ladder_do_give_up()` ⇒ `show_result()`，而它**故意保持整棵树暂停**
+		#   （战斗冻结在结算面板背后）⇒ tween 默认跟节点/树一起停 ⇒ 骷髅头不摇、爆炸停在第一帧并且
+		#   永远不 `queue_free()`（`_StatusBurst` 靠 `_process`），面板却照样弹出来 ⇒ 看着就是"动画不对"。
+		#   `TWEEN_PAUSE_PROCESS` = 无论暂停与否都继续走；正常那条路（没暂停）行为逐位不变。
+		tw.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 		var amp := 3.0
 		for seg in 3:
 			var step: float = 0.10 - float(seg) * 0.025
@@ -3167,6 +3409,10 @@ func _defeat_anim_side(loser_fn: int) -> void:
 			center = r.position + r.size * 0.5
 	var burst := _StatusBurst.new()
 	burst.z_index = 5
+	# 【2026-10-03·用户「天梯模式的认输失败动画怎么不对」】爆炸是 `_process` 驱动的 ⇒ 天梯"认输"那条路
+	#   （树保持暂停）里它会**冻在第一帧且永不回收**。标成 `PROCESS_MODE_ALWAYS` ⇒ 暂停中照常演、演完自毁
+	#   （⚠️ 不能写 `WHEN_PAUSED`：那个是"**只在**暂停时处理" ⇒ 会把正常那条路（未暂停）弄成冻住）。
+	burst.process_mode = Node.PROCESS_MODE_ALWAYS
 	if _kill_fx != null and is_instance_valid(_kill_fx):
 		_kill_fx.add_child(burst)
 	else:
@@ -3382,7 +3628,7 @@ func show_result(win: bool, play_sound: bool = true) -> void:
 		return   # 天梯：结算面板不再有"返回"类按钮（退出走这里或暂停键）
 	if ladder and not win:
 		# 输了 = 本轮已经结束（存档在 `_ladder_on_match_result()` 里删掉了）⇒ 只剩"回主菜单"一条路；
-		# 「保存并退出 / 放弃本次天梯」在**暂停界面**（对局中退出用那两个）。
+		# 「保存并退出 / 认输」在**暂停界面**（对局中退出用那两个）。
 		var back := Button.new()
 		back.text = "返回主菜单"
 		back.custom_minimum_size = Vector2(260, 50)
@@ -3403,7 +3649,11 @@ func show_result(win: bool, play_sound: bool = true) -> void:
 	# 单机/联机都显示：联机由主机权威广播重启（不退出大厅连接）
 
 	var to_menu := Button.new()
-	to_menu.text = "返回选卡" if not GameState.is_online else "返回大厅"
+	# 【2026-10-03·用户要求「普通模式和竞技场模式点击认输后，结算界面应该是返回主菜单，不是返回选人」】
+	#   文案由「返回选卡」改成 **「返回主菜单」** —— 只是**把文案改成与实际落点一致**：
+	#   `_on_back_to_menu()` 单机走的就是 `change_scene_to_file(Menu.tscn)`，而 Menu 默认落在**主菜单页**
+	#   （组队页只有联机 `net_edit_mode` 才会直接进）。⚠️ 联机那半边照旧「返回大厅」（它回的是 NetLobby）✗别混。
+	to_menu.text = "返回主菜单" if not GameState.is_online else "返回大厅"
 	to_menu.custom_minimum_size = Vector2(260, 48)
 	to_menu.add_theme_font_size_override("font_size", 18)
 	to_menu.pressed.connect(_on_back_to_menu)
@@ -3456,7 +3706,9 @@ func _on_back_to_menu() -> void:
 		NetBus.stop()
 		get_tree().change_scene_to_file("res://scenes/NetLobby.tscn")
 		return
-	GameState.arena_mode = false   # 返回选人界面：退出竞技场模式（再来一局时不再走竞技场）
+	GameState.arena_mode = false   # 退出竞技场模式（再来一局时不再走竞技场）
+	# 【2026-10-03】落点澄清：单机这里回到的是 **Menu.tscn 的主菜单页**（不是选人/组队页）——
+	#   结算面板那枚按钮的文案已按用户要求改成「返回主菜单」（见 `show_result()`）。
 	# 【天梯】回主菜单**不算放弃**（用户拍板）：存档留着，下次进天梯可以继续；
 	#   只把"本局属于天梯"这个标记清掉，免得之后玩普通/竞技场被当成天梯局。
 	GameState.ladder_mode = ""
@@ -3557,6 +3809,9 @@ class DeathMark extends Control:
 		scale = Vector2(0.35, 0.35)
 		rotation = 0.0
 		var t := create_tween()
+		# 【2026-10-03】与 `_defeat_anim_side()` 里那两处同因：天梯「认输」是在**暂停态**下弹结算的，
+		#   这段骷髅"弹出+摇晃"也要照演 ⇒ 不让它跟着树停。
+		t.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
 		t.set_parallel(false)
 		# ① 弹出：0.35 → 1.26 → 1.0（BACK 缓动，像"啪"地盖章）
 		t.tween_property(self, "scale", Vector2(1.26, 1.26), 0.14).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)

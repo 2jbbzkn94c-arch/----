@@ -1,0 +1,777 @@
+{
+ "_来源": "tb.qiaohome.top（朋友的酒馆纷争 Web 版）前端包 assets_index-C7Dr4zfu.js 内嵌的英雄数组",
+ "_怎么扒的": "脚本 .dsh/tmp/extract_tb_heroes.py（以 `{kind:` 为锚 + 字段正则）",
+ "_可信度": "字段与 wasm 里的 serde schema 串逐字对应（kindnamedescattackTypedefenseTypeattackPowermaxHealthmobilityisBarrierisSummonpermeatefeatures）⇒ 这份内嵌数组就是喂给引擎的那张表；wasm 里只剩 `' not found in heroes.yaml'` 的报错串",
+ "_字段": "kind(8000xxx=英雄 · 8200001=骷髅兵 · 830000x=障碍) · name · attackType(melee/range/unable) · defenseType(normal/taunt/barrier) · attackPower · maxHealth · mobility · isBarrier · isSummon · permeate · features(英文代号) · rarity(white/gold/purple/rainbow —— 4 档，与实力**无关**)",
+ "_与我们的对拍结论": "移动力口径 40/40 完全一致（我方 <疾行> ⇒ mobility 3，否则 2）；3 条数值不同：圣光 HP 21vs18 · 德鲁伊 HP 20vs17 · 锤头鲨 atk 2vs1、HP 20vs21；名字差异 3 个（大骑士/大大骑士 · 毒蛇淑女/毒蛇女士 · 沉默术士/沉默）；他们有 42 个英雄，我们 50（我们独有：共鸣者/坠炮手/宿魂/荆棘树人/装甲堡垒/负墟 + 巨剑）",
+ "units": [
+  {
+   "name": "白游侠",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 19,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "white_ranger"
+   ],
+   "rarity": "white",
+   "kind": 8000001
+  },
+  {
+   "name": "烈焰祭司",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 18,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "flame_priest"
+   ],
+   "rarity": "gold",
+   "kind": 8000002
+  },
+  {
+   "name": "超新星",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 19,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "supernova"
+   ],
+   "rarity": "gold",
+   "kind": 8000003
+  },
+  {
+   "name": "小阴影",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 18,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "tiny_shadow"
+   ],
+   "rarity": "gold",
+   "kind": 8000004
+  },
+  {
+   "name": "嬉皮死神",
+   "desc": "攻击时，如果目标周围没有其他敌人，则造成2倍伤害",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 20,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "hippy_death"
+   ],
+   "rarity": "purple",
+   "kind": 8000005
+  },
+  {
+   "name": "火枪手",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 4,
+   "maxHealth": 20,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": "white",
+   "kind": 8000006
+  },
+  {
+   "name": "长角",
+   "desc": "攻击时，将目标击退1格。如果目标不能被击退，则造成2倍伤害",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 24,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "horn"
+   ],
+   "rarity": "purple",
+   "kind": 8000007
+  },
+  {
+   "name": "烛火",
+   "desc": null,
+   "attackType": "unable",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 17,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "light_fire"
+   ],
+   "rarity": "gold",
+   "kind": 8000008
+  },
+  {
+   "name": "雪拳",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 26,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "snow_fist"
+   ],
+   "rarity": "gold",
+   "kind": 8000009
+  },
+  {
+   "name": "战锤",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 24,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "war_hammer"
+   ],
+   "rarity": "gold",
+   "kind": 8000010
+  },
+  {
+   "name": "太阳斩",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 16,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "sun_slash"
+   ],
+   "rarity": "purple",
+   "kind": 8000011
+  },
+  {
+   "name": "伐木工",
+   "desc": "“快给我点事情做！”",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 27,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "lumberjack"
+   ],
+   "rarity": "white",
+   "kind": 8000012
+  },
+  {
+   "name": "塔盾",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 1,
+   "maxHealth": 40,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "tower_shield"
+   ],
+   "rarity": "white",
+   "kind": 8000013
+  },
+  {
+   "name": "长剑",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 18,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "long_sword"
+   ],
+   "rarity": "gold",
+   "kind": 8000014
+  },
+  {
+   "name": "毒蛇女士",
+   "desc": "攻击时，目标获得中毒。中毒的角色在每回合开始时受到1伤害",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 21,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "snake_lady"
+   ],
+   "rarity": "white",
+   "kind": 8000015
+  },
+  {
+   "name": "医护兵",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 16,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "medic"
+   ],
+   "rarity": "white",
+   "kind": 8000016
+  },
+  {
+   "name": "红帽",
+   "desc": "死亡时，对周围的所有敌人造成13点伤害",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 5,
+   "maxHealth": 13,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "red_hat"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000017
+  },
+  {
+   "name": "猎颅者",
+   "desc": "替补：伤害生命值最低的敌人，并使其获得眩晕，直到下个回合结束。眩晕的敌人不能行动",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 17,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "skull_hunter"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000018
+  },
+  {
+   "name": "德鲁伊",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 17,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "druid"
+   ],
+   "rarity": "white",
+   "kind": 8000019
+  },
+  {
+   "name": "梅林",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 20,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "merlin"
+   ],
+   "rarity": "purple",
+   "kind": 8000020
+  },
+  {
+   "name": "黄金矿工",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 18,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "gold_miner"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000021
+  },
+  {
+   "name": "死灵法师",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 18,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "necromancer"
+   ],
+   "rarity": "purple",
+   "kind": 8000022
+  },
+  {
+   "name": "圣诞老人",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 24,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "santa"
+   ],
+   "rarity": "white",
+   "kind": 8000023
+  },
+  {
+   "name": "炸弹人",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 20,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "bomber"
+   ],
+   "rarity": "purple",
+   "kind": 8000024
+  },
+  {
+   "name": "傀儡师",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 19,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "puppeteer"
+   ],
+   "rarity": "white",
+   "kind": 8000025
+  },
+  {
+   "name": "大大骑士",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 21,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "knight"
+   ],
+   "rarity": "gold",
+   "kind": 8000026
+  },
+  {
+   "name": "血锁",
+   "desc": "射程+2。只能攻击直线方向上的目标。攻击时，将目标拖到血锁面前",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 2,
+   "maxHealth": 24,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "bloodlock"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000027
+  },
+  {
+   "name": "古灵精怪",
+   "desc": "在对手的回合结束时，变形为你队伍中的另一个角色",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 18,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "changeling"
+   ],
+   "rarity": "purple",
+   "kind": 8000028
+  },
+  {
+   "name": "风语者",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 14,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "wind_whisper"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000029
+  },
+  {
+   "name": "沉默",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 15,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "silencer"
+   ],
+   "rarity": "purple",
+   "kind": 8000030
+  },
+  {
+   "name": "复仇者",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 26,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "revenger"
+   ],
+   "rarity": "gold",
+   "kind": 8000031
+  },
+  {
+   "name": "涌电技师",
+   "desc": null,
+   "attackType": "unable",
+   "defenseType": "normal",
+   "attackPower": 0,
+   "maxHealth": 27,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "electrician"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000032
+  },
+  {
+   "name": "末日",
+   "desc": null,
+   "attackType": "unable",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 18,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "doom"
+   ],
+   "rarity": "purple",
+   "kind": 8000033
+  },
+  {
+   "name": "赏金猎人",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 19,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "hunter"
+   ],
+   "rarity": "gold",
+   "kind": 8000034
+  },
+  {
+   "name": "古拉博士",
+   "desc": "攻击时，如果目标的生命值大于古拉博士，则治疗古拉博士",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 4,
+   "maxHealth": 15,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "vampire"
+   ],
+   "rarity": "gold",
+   "kind": 8000035
+  },
+  {
+   "name": "鼠队长",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 4,
+   "maxHealth": 18,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": "white",
+   "kind": 8000036
+  },
+  {
+   "name": "影丸",
+   "desc": null,
+   "attackType": "range",
+   "defenseType": "normal",
+   "attackPower": 5,
+   "maxHealth": 14,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": "white",
+   "kind": 8000037
+  },
+  {
+   "name": "独脚龟",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 33,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": "white",
+   "kind": 8000038
+  },
+  {
+   "name": "暗域",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 3,
+   "maxHealth": 20,
+   "mobility": 3,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": true,
+   "features": [
+    "shadow_realm"
+   ],
+   "rarity": "purple",
+   "kind": 8000039
+  },
+  {
+   "name": "波盾",
+   "desc": "替补：使你在场的所有英雄获得护盾。获得护盾的角色免疫下一次伤害",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 4,
+   "maxHealth": 16,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "wave_shield"
+   ],
+   "rarity": "gold",
+   "kind": 8000040
+  },
+  {
+   "name": "锤头鲨",
+   "desc": "每当敌人受到伤害时，攻击力+1，直到回合结束",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 21,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "hammerhead"
+   ],
+   "rarity": "rainbow",
+   "kind": 8000041
+  },
+  {
+   "name": "圣光",
+   "desc": null,
+   "attackType": "melee",
+   "defenseType": "taunt",
+   "attackPower": 2,
+   "maxHealth": 18,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": false,
+   "permeate": false,
+   "features": [
+    "holy_light"
+   ],
+   "rarity": "gold",
+   "kind": 8000042
+  },
+  {
+   "name": "骷髅兵",
+   "desc": "“口胡...！”",
+   "attackType": "melee",
+   "defenseType": "normal",
+   "attackPower": 1,
+   "maxHealth": 1,
+   "mobility": 2,
+   "isBarrier": false,
+   "isSummon": true,
+   "permeate": false,
+   "features": [
+    "skeleton"
+   ],
+   "rarity": null,
+   "kind": 8200001
+  },
+  {
+   "name": "酒桶",
+   "desc": "可以被破坏",
+   "attackType": "unable",
+   "defenseType": "barrier",
+   "attackPower": 0,
+   "maxHealth": 3,
+   "mobility": 0,
+   "isBarrier": true,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": null,
+   "kind": 8300002
+  },
+  {
+   "name": "树桩",
+   "desc": "可以被破坏",
+   "attackType": "unable",
+   "defenseType": "barrier",
+   "attackPower": 0,
+   "maxHealth": 2,
+   "mobility": 0,
+   "isBarrier": true,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": null,
+   "kind": 8300003
+  },
+  {
+   "name": "水晶",
+   "desc": "可以被破坏",
+   "attackType": "unable",
+   "defenseType": "barrier",
+   "attackPower": 0,
+   "maxHealth": 2,
+   "mobility": 0,
+   "isBarrier": true,
+   "isSummon": false,
+   "permeate": false,
+   "features": [],
+   "rarity": null,
+   "kind": 8300004
+  }
+ ]
+}

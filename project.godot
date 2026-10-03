@@ -15,7 +15,7 @@ config/version="0.1.0"
 run/main_scene="res://scenes/Menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://assets/图标/游戏图标.png"
-config/version_date="2026-10-02 02:48"
+config/version_date="2026-10-03 18:22"
 
 [autoload]
 

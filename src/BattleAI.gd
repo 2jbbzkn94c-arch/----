@@ -9,8 +9,10 @@ extends RefCounted
 ## 敌方强力 AI：对敌方"本回合全部可能操作"做搜索并打分，选出最优行动序列。
 ## 【2026-09-15 架构变更】本文件 = **生产 AI**（简单/普通/困难三档），预测引擎与 RL 候选同源：
 ##   · 简单/普通/困难：就是本篇。区分只有 _beam()（50 / 100 / 200）与 _jitter()（±8 / ±1.5 / 0）。
-##   · 噩梦（难度 3）：Battle._make_battle_ai() 加载 RL/ai/AI_Battle.gd（本篇的副本 + 可注入权重）
-##     并注入 RL/weights/噩梦.json → **英雄特化**档（HERO_VALUE 49 条 + 按英雄覆盖 _wh()）。
+##   · 噩梦（难度 3）/ 噩梦+（难度 4）：Battle._make_battle_ai() 加载 RL/ai/AI_Battle.gd
+##     （本篇的副本 + 可注入权重）并注入 RL/weights/噩梦.json 或 噩梦1.json
+##     → **英雄特化**档（HERO_VALUE 49 条 + 按英雄覆盖 _wh()）。
+##     【2026-10-02】3 与 4 **同一个 AI / 同一套算力**，只差权重文件：噩梦 = 冻结对照、噩梦+ = 实验档。
 ## 所有 w_* 成员的默认值 = 生产口径；不注入权重时行为就是生产行为。
 ## 保真约定：**本文件的内部模拟必须与真实结算一致**（墓碑/被贴远程/一次性道具/落停引爆等
 ## 一批修正都在这里；改动时要跑 RL/harness 对拍与矩阵验证）。
@@ -308,7 +310,6 @@ class Sim:
 		# 圣光发盾），就会改到**别的候选/父局面**的单位身上：血量、alive、墓碑格全被跨候选改写。
 		# 后果（实测物证）：评分与**评估顺序**挂钩 —— 只把终选层"边比边推演"改成"先全部推演再比"
 		# （逻辑完全等价），出招就变了 2 个盘面；逐项拆解显示**同一个局面对象**两次评估的
-		# ①障碍绕路 / ⑤位置拉力 / ⑦威胁预判 / ⑮下回合挨打 全都不同（§14#184；⑦/⑮ 已于 2026-09-20 第三轮删除）。
 		# 修法：单位循环结束后，把队列里的引用**按 `sim_index` 映射到克隆自己的单位**。
 		c.pending_died = []
 		for e in pending_died:
@@ -396,6 +397,10 @@ var last_tp_layouts_used := 0     # 经漏斗送进阶段 2 的阵型数（受 T
 # 【2026-10-01·`SUMMON_LAYOUTS`】本次搜索**实际**用的漏斗上限（有召唤物时可能被换小）；0 = 还没跑过。
 var last_tp_layout_cap := 0
 var last_tp_leaves := 0           # 阶段 2 真正评估出的"完整计划"个数
+# 【2026-10-02·噩梦+·`REPLY_PEEK`"对手回合一瞥"的账】（只进 `[搜索分账]`，纯取证）
+var last_reply_n := 0             # 本次真正拿去"让对手打一回合"的末态个数
+var last_reply_swaps := 0         # 其中"因为看了对手一眼而改选"的次数（0 = 与不看时同解）
+var last_reply_ms := 0            # 这一瞥花了多久
 # 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】阶段 1 的两笔去重账：
 #   `evals` = 真正跑了多少次完整 `_evaluate`（= 没去重时的候选条数）；`dups` = 其中"同末态"被丢掉的条数。
 #   两笔都**与开关无关地统计**（关着也数）⇒ 用户在自己实机里就能看到 n! 水分有多大，不用另跑批。
@@ -643,6 +648,15 @@ const REDCAP_TRADE_W := 0.0
 #   ⚠️ **对称**：我方红帽被对面打爆、炸死对面的人时，同样按"炸死几个"给**我方**加分（对面 AI 也会疼）。
 #   ⚠️ 只在末态结算（与 ①③④ 同层），0 = 关 ⇒ 生产三档逐位不变。
 const REDCAP_BLAST_DMG := 13.0        # 自爆伤害（`heroes/hero_40_红帽.gd:19` 的 13；写死：这是机制事实）
+# 【2026-10-03·用户口径】「红帽**刚好在安全血线之上**也很危险 —— 玩家自己吃个反击就可以把红帽压在安全下线
+#   之下，自爆掌控权又到玩家手里」⇒ **危险判据（`_redcap_blast_threat()`）从"她的血 ≤ 我方最大单击"放宽成
+#   "她的血 ≤ 我方最大单击 × 本系数"**（默认 **2.0** = "她自己吃一发反击就能被压到线下、下一发就能点火"）。
+#   ⚠️ 这是**上界口径**：反击伤害 ≈ 我方那一发（取同一个 `line`）；她**队友的散射溅到她**、她自己**踩我方雷**
+#      这两条更宽的路径**没有**另算（要更保守就把系数调大）。
+#   ⚠️ 只改**危险判据**（㉛ / 阶段 1 的 AoE 总账 ⇒ 决定"我方要不要站进她那片圈"）；"**别把她压到一击线以下**"
+#      那道候选护栏（`_redcap_push_unsafe()`）仍然只认**一击线本身** —— 两件事，别混。
+#   ⚠️ 1.0 = 关掉这一层（回到 2026-10-03 之前的口径）。
+const REDCAP_NEAR_LINE_MULT := 2.0
 # 【2026-10-01·见文件头那段说明】⑥「自爆换命」的力度：按"被炸死的我方单位身价"全价的多少倍罚。默认 0 = 关。
 const REDCAP_BLAST_SELF_W := 0.0
 # 【2026-09-26·用户拍板选项 2】㉖「**脆皮输出的暴露总量**」（键 `EXPOSURE_TOTAL_W`，默认 0 = 逐位不变）。
@@ -678,6 +692,50 @@ const EXPOSURE_OUT_MIN := 8.0         # 「有输出」的界限（**写死**：
 #   ⚠️ 只在**末态**结算（与 ⑳㉑㉒㉓㉖ 同层，中途恒 0；纯站位量）。
 #   ⚠️ 剂量：首版值写体感值，**未过剂量批**（建议 0 / 2 / 4 三臂）；`_term_defs` 里能读到本项读数。
 const AOE_RIDER_TOTAL_W := 0.0
+# ---- 【2026-10-03·用户实机报「我有长剑的时候，AI 还是站成一排被我一串三」】㉛ 的**阶段 1 门**
+#   （键 `AOE_LAYOUT_GATE`，默认 0 = 关 ⇒ 逐位不变）。
+# **病灶（代码级）**：㉛ 上面那行写着"只在**末态**结算"，而 `SEARCH_MODE = 2` 的**阶段 1 就是用
+#   `_layout_score()` 排阵型的、它调的是 `_evaluate(sim, complete)` 且传 `complete = false`**
+#   （见 `_layout_score()` 开头：`complete` 就是 `end_of_turn`）⇒ **㉛ 在"决定谁站哪"那一步恒等于 0**。
+#   ⇒ "散开"的阵型在阶段 1 的代理分里毫无优势 ⇒ **根本进不了前 `TWO_PHASE_LAYOUTS`(16) 名漏斗**，
+#   阶段 2 再准也只能在那 16 套里挑 ⇒ 用户看到的就是"照样站成一排"。
+#   ⚠️ 这是**同一个坑第二次**：㉘（装甲堡垒挡刀站位）当初也挂在末态门上，剂量从 0.75 加到 12.0
+#   计划都不动，最后就是靠**去掉门**修好的（见 `const TANK_SCREEN_W` 处那段注释与
+#   `RL/probe/堡垒站位自检.gd`）。本键照抄 `TANK_FRONT_W`（`_layout_score()` 里那三行）的先例：
+#   **只在阶段 1 的代理分里多算这一笔，`_evaluate()` / `_eval_breakdown()` 一个字都不动**
+#   ⇒ 四档（含噩梦 3）行为**逐位不变**，只由 `RL/weights/噩梦1.json` 打开。
+#   ⚠️ 值不是独立旋钮：它用的就是 `AOE_RIDER_TOTAL_W`（噩梦=2.0）⇒ 1 = "让阶段 1 也看见它"。
+#   ⚠️ **未过批**（2026-10-03 机器过热、跑不了批）：体感优先、一行可退。
+#   回退：把下面那行改 0（或删掉权重文件里那一行）。
+const AOE_LAYOUT_W := 0.0
+# ---- 【2026-10-03·用户口径·方案 1】⑥（规则B）补「**AoE 团队总量**」（`OPEN_AOE_TOTAL_W`，默认 0 = 关）----
+# 用户原话：「规则B在判断**开局要不要往前冲**的时候，把 AOE 伤害也考虑进去。不要出现
+#   **收到最高伤害的单位没有超过阈值，但是后面被 AOE 波及的加起来受到巨额伤害**，这波前压就是亏的」。
+# **病灶**：⑥ 是**逐单位**判 `max(挨打合计 − 阈值, 0)` ⇒ 只要**没有单个单位超阈值**就罚 0；
+#   一队人各挨 3（而且是被**同一把长剑一刀**换来的）在账上是**免费**的。
+# **本键**：`罚 = W × Σ_{我方存活单位} [ 该单位这个落点会挨的 AoE「形状」伤害 ]` —— **团队总量**、不是 max。
+#   **只算 AoE 形状那三族**（`_aoe_riders_on()`：散射/剑气/自爆），**不重复算普通单击**（那部分 ⑥ 已按 per-unit 管）。
+# **作用面**：`_layout_score()`（= **阶段 1 排阵型/前压那一步**，正是用户说的"判断要不要往前冲"）——
+#   ⚠️ ⑥ 本身在 `_layout_score()` 里被**临时清零**（见 `a_save/ae_save` 那三行："个人暴露三项"中途算不准），
+#   所以"前压会不会亏"在那一层**原本是没有账的** ⇒ 本项补的正是这个洞。
+#   ⚠️ 它**不挂末态门**：与 ⑳㉓㉜ 同族（纯站位量），阶段 1 就该看得见。
+#   ⚠️ **暂不加进 `_evaluate()`**（终局分）：那要动 Σ 自校验的两处同改，留作下一步（见训练日志的施工清单）。
+# ⚠️ 引擎默认 0 ⇒ 四档（含噩梦 3）**逐位不变**；只由 `RL/weights/噩梦1.json` 打开。剂量批 0.5 / 1 / 2。
+# 回退：把下面那行改 0（或删掉权重文件里那一行）。
+const OPEN_AOE_TOTAL_W := 0.0
+# ---- 【2026-10-03·用户口径】排阵型时的「**落单会被死神打双倍**」账（`OPEN_ISOLATE_W`，默认 0 = 关）----
+# 用户原话：「我说的是**玩家有死神**，AI 现在会处理吗？会无意思的落单吗」。
+# **现状**：死神的 ×2 **已经在威胁尺子里**（`_sim_mult_at()`，与生产共用 `DmgModel`；"挨打合计"问的是
+#   "我落到那一格会挨多少"，判据含"目标孤立"）⇒ ⑦核心风险 / ㉖暴露总量 / ⑥ 都吃得到。
+# **但缺口与 AOE 那件事同源**：⑥ 在 `_layout_score()`（= **决定谁站哪**那一步）**权重被临时清零**、
+#   ⑦ 是 max 型、㉖ 只看脆皮输出 ⇒ 若"落单多挨的那一下"**不够让谁成为全队最危险、也不在 ㉖ 名单里**，
+#   那么**在排阵型那一步它是没有账的** ⇒ 会出现用户说的「**无意落单**」。
+# **本键**：`罚 = W × Σ_{我方单位}[ 因落单而多吃的那一份死神伤害 ]`（只有目标**确实孤立**
+#   且死神**真够得到**它时才计；只算 `hero_30`，且它得活着、未被沉默/眩晕）。加在 `_layout_score()`。
+# ⚠️ 与通用抱团两项（⑳5.0 / ㉓3.0每格）**不重复**：那两项量的是"离队友多远"，本项量的是"落单的**价钱**"。
+# ⚠️ 引擎默认 0 ⇒ 四档（含噩梦 3）逐位不变；只由 `RL/weights/噩梦1.json` 打开。剂量批 0.5 / 1 / 2。
+# 回退：把下面那行改 0（或删掉权重文件里那一行）。
+const OPEN_ISOLATE_W := 0.0
 # ---- 【2026-09-20 新增·默认关】"原地不动"候选（`STAY_OPTION`）----
 # 起因（用户实机日志 + 读代码）：
 #   日志行 `装甲堡垒 移动 (2,1)→(3,1)(保持/拉距、避威胁(-2伤)、下回合挨打4.0(1人/最大4)、规则B罚0.0) → 不攻击 [本步 Δ-3.3]`
@@ -812,6 +870,80 @@ const FORM_ESCAPE_W := 0.0
 const FORM_RADIUS := 2          # 抱团半径（**路网步数**；2 = 一步能回援 = "互相够得着"）
 const FORM_ROUTE_MAX := 6       # ㉓ 梯度上限（步）：被墙/敌人隔死也按 6 步算 ⇒ 最多罚 5 份（有界）
 const FORM_ESCAPE_MIN := 2      # 每个单位至少留 2 个可走邻格（1 个 = 只剩一条路；0 = 死胡同）
+# ---- 【2026-10-02·用户口径】队形族（⑳抱团 / ㉓离队距离）的「**按身份分档**」----
+# 用户原话：「**抱团不一定是最好的操作**（朋友的 AI 也提过）…像现在这种情况，**伐木工本身是不怕被分割的
+#   英雄**，他不是脆皮、没有生命危险、不是核心 ⇒ **他不需要强制抱团**，也不需要他在这个局面为某个脆皮挡攻击路线」。
+# **现役口径的病灶**：⑳（孤立 1 份）与 ㉓（离队每步 1 份 × `FORM_SPREAD_CELL_W` 3.0）对**每个非召唤物同价**
+#   ⇒ 一个 27 血、非核心、无输出的厚血单位，也被 `3.0/步` 钉在队形里；
+#   而 ⑤位置拉力只有 `1.2/格` ⇒ **"离队"比"压上"贵 2.5 倍**，逼得所有单位都缩在队里
+#   （实机复刻：伐木工贴住对方远程那一手被 ㉓ 罚 −3.00、⑳ 罚 −5.00 级）。
+# **本键**：`FORM_ROLE_GATE = 1` 时改成按身份分档 —— 只有"**会为落单真付出代价**"的单位拿全价，
+#   判据**复用 ㉖ 的同一把门** `_exposure_covered()`（脆皮「血上限 ≤ `EXPOSURE_HP_MAX`」**且**有输出）
+#   ⇒ 脆皮输出照旧被钉在队里；厚血/非核心/后勤乘 `FORM_ROLE_TANK_MULT`（默认 0.25，不设 0 是为了
+#   留一点弱拉力，避免坦克无脑单骑深入）。
+# ⚠️ **只管 ⑳ 与 ㉓**（队形族）；㉑（退路/被夹）与 ⑦/㉖（挨打计价）**不受本键影响**。
+# ⚠️ 引擎默认 0 ⇒ 四档与噩梦(3) **逐位不变**；只由 `RL/weights/噩梦1.json` 打开。
+# 回退：把下面那行改 0（或删掉权重文件里那一行）。
+const FORM_ROLE_GATE := 0
+const FORM_ROLE_TANK_MULT := 0.25   # 不在意的单位（厚血/非核心）的队形项系数
+# ---- 【2026-10-03·用户实机反馈】坦克的「**护卫**」尺子（`FORM_GUARD_GATE`，默认 0 = 关）----
+# 用户原话：「**坦克把抱团改了之后，他都不去贴身保护输出和远程了**」。
+# **病灶**：`FORM_ROLE_GATE` 把坦克的 ⑳/㉓ 乘 0.25 ⇒ **连"该待在脆皮/远程身边"这件事一起削掉了**
+#   ⇒ 坦克不再去挡刀 / 挡攻击路线。但坦克的本职**不是"跟大队抱团"，是"护住要保护的人"**。
+# **本键 = 1**：对**非须保护**的单位（厚血 / 战士 / 纯坦克）把 ⑳/㉓ 的**对象**换掉 ——
+#   不再看"离最近**任意**队友多远"，只看"离最近的**须保护**队友多远"
+#   （须保护 = `<后勤>` 或 `_exposure_covered()`，与上面分档同一集合），且**恢复全价**（`care = 1.0`）——
+#   因为这时它量的是"有没有在干护卫这件事"，罚太轻就拉不动它。
+#   ⚠️ 若场上**一个须保护的队友都没有**（或都死了）⇒ 该单位的 ⑳/㉓ **整笔跳过**（没人可护 ⇒ 不罚它）。
+#   ⚠️ 须保护的单位自己**不变**（仍按"离最近任意队友"算 —— 它们要的是"有人贴身"）。
+#   ⚠️ 引擎默认 0 ⇒ 四档与噩梦(3) 逐位不变；只由 `RL/weights/噩梦1.json` 打开。
+const FORM_GUARD_GATE := 0
+# ---- 【2026-10-03·用户口径（可选项）】坦克的「**挡刀位置**」奖励（`FORM_SCREEN_W`，默认 0 = 关）----
+# 用户原话：「坦克站在"**脆皮与最近敌人之间**"时给正分（真正的挡路线/挡刀，
+#   塔盾 hero_11 的"替相邻队友扛 1 点"就吃这个）」—— **不是距离罚，是位置奖励**。
+# **为什么光有 `FORM_GUARD_GATE` 不够**：那把尺子只做到"**待在脆皮 2 步内**"（⑳ 半径 2 / ㉓ 离队距离）
+#   ⇒ 站在脆皮**身后**（背对敌人）与站在**敌人那一侧**拿一样的分。
+# **本键 = 1**：对每个**须保护的**队友 P（`_form_is_protected()`），先取它**最近的敌人** E*
+#   （路网步数，尺子 = `_form_route_field()`：障碍/墓碑/**敌人**算墙、我方身体不算），
+#   再看有没有**非须保护**的队友 T（坦克/厚血）同时满足：
+#     ① T 与 P **贴身**（格距 1 —— 塔盾"替相邻队友扛 1 点"也是这道门）
+#     ② T **比 P 更靠近 E\***（`d(T,E*) < d(P,E*)` ⇒ 它站在 P 朝敌人那一侧、把路挡在中间）
+#   命中一对 (P,T) 记 1 分（`+ W × Σ`）。
+# ⚠️ **不给"隔着半个地图也算"**：只有 `d(P,E*) ≤ SCREEN_RANGE`（敌人**够得着** P）时才计数 ——
+#   否则"站在脆皮与 6 步外的敌人之间"也拿分，等于给"永远贴着脆皮"发钱。
+# ⚠️ **不挂 `end_of_turn` 门**（与 ㉘ 同一条理由，那是量出来的）：`SEARCH_MODE=2` 的**阶段 1 就是用
+#   `_layout_score()` 排阵型的、它传 `end_of_turn = false`** ⇒ 带门的话本项在"决定谁站哪"那一步恒 0，
+#   剂量加到 12 计划都不动（见 `const TANK_SCREEN_W` 处那段）。中途口径 = "按**此刻**的占位算"，
+#   给的正是排阵型要的那笔**相对梯度**。
+# ⚠️ 引擎默认 0 ⇒ 四档与噩梦(3) **逐位不变**；只由 `RL/weights/噩梦1.json` 打开。
+# 回退：把下面那行改 0（或删掉权重文件里那一行）。
+const FORM_SCREEN_W := 0.0
+const SCREEN_RANGE := 4        # "敌人够得着 P" 的路网步数上限（移动 2 + 射程 2）；量纲常量、不是可调键
+# ---- 【2026-10-03·用户「AI 会不会去找对方核心、能打核心就打核心」】目标价值权重（`FOCUS_VALUE_POW`，默认 0 = 关）----
+# 用户原话：「现在AI会去找对方3人队伍里的核心吗，然后针对核心，在能打核心的时候就去打核心吗？」→「要」。
+# **病灶（引擎实况）**：②身价 是**状态项**（单位死了整项才消失）⇒ **打伤核心一分不加**；
+#   ③血量账 1 点血 = 1 分、**不分身价**；④集火 frac² 按「打掉血 ÷ 它回合初血」⇒ 天然偏好**血少的那个**。
+#   全引擎**没有"敌方的核心是谁"这个概念**（`_core_raw()` 那套算的是**我方**核心，只给 ⑦ 用；
+#   搜 `priorit*`/`best_target`/`enemy_core` ⇒ 0 个命中）。
+# **本键**：把"**打掉对面多少血**"那一侧按**该目标的核心度**放大 ——
+#   核心度复用 ⑦ 的同一套口径（`_core_raw()` = `身价^(1−w) × 输出潜力^w`，w = `RISK_CORE_OUTPUT_W`），
+#   参考值 = **对面存活单位的核心度均值** ⇒ 比值是"队内相对"，不吃绝对值（身价队内只差 1.01~1.23×，
+#   光按身价加权推不动，必须用"身价 × 输出潜力"这套才有区分度）。
+#   `FOCUS_VALUE_POW = p`：倍率 = (目标核心度 ÷ 对面均值)^p。0 = 关（**逐位不变**）· 1 = 线性 · 2 = 强偏好。
+# ⚠️ **必须同时作用在三处**（否则阶段 1 的代理分会把"打核心"那套阵型提前剪进漏斗外）：
+#   ① `_tp_hit_gain()`（阶段 1 的代理分）② `_evaluate()` 的 ③ + ④ ③ `_eval_breakdown()` 的同两项。
+# ⚠️ 只放大"**对面掉血**"那一侧；我方掉血照旧（血量池折算）；击杀那份（②身价 ×1.25）本来就是按身价算的。
+const FOCUS_VALUE_POW := 0.0
+# ---- 【2026-10-02·用户口径】㉑ **只考虑远程**（`FORM_ESCAPE_RANGED_ONLY`，默认 0 = 关）----
+# 用户原话：「**㉑ 只考虑远程**」。
+# **依据**：㉑ 的初衷就是远程（2026-09-21 用户报「远程…走进死胡同，或者选择贴墙，最后被玩家包夹」），
+#   但实现里 `Σ` 对**每个非召唤物**同价 ⇒ **近战（射程 1 ⇒ 要打就必须贴身）每次进攻都交一笔贴脸税**
+#   （实测：贴住对方远程那一手被 ㉑ 收 −2.00，而它把对方输出 5→1 的收益只有 ⑦ 的 +1.20）。
+#   ⇒ 本键 = 1 时，**近战单位整个跳过 ㉑ 那两半**（退路 + 被夹份）；远程照旧被管。
+# ⚠️ 只影响 ㉑；⑳/㉓（队形族）与合并模式那套不受影响。
+# ⚠️ 引擎默认 0 ⇒ 四档与噩梦(3) **逐位不变**；只由 `RL/weights/噩梦1.json` 打开。
+# 回退：把下面那行改 0（或删掉权重文件里那一行）。
+const FORM_ESCAPE_RANGED_ONLY := 0
 # 【2026-09-28 新增】㉑ 的"相邻敌人"那一半从**数人头**换成**威胁计价**之后的**量纲补偿**（内部常量，不是可调键）：
 #   新口径的单点 = 真实单击 × 血量池倍率 ÷ `TRADE_HP_REF`(20)，**再与"相邻队友能打回去的那一下"相减取正**
 #   （旧口径 = 邻敌数 − 邻友数，也是净值）⇒ 取 3.0 让"一个 3 攻普通敌人贴脸"≈ 旧口径的 1 分：
@@ -821,6 +953,60 @@ const FORM_ESCAPE_MIN := 2      # 每个单位至少留 2 个可走邻格（1 �
 #      ② 坦克挨同一刀更便宜（血量池倍率进 ㉑，与 ③⑥⑦ 同口径 —— 用户 2026-09-24 方案 A 的意图）；
 #      ③ **队友"能还手"按威胁折算**（旧口径只数人头 ⇒ 一个 1 攻后勤与一个 6 攻巨剑队友同样"解围"）。
 const FORM_ESCAPE_SCALE := 3.0
+# ---- 【2026-10-02 新增·默认关】**㉑ 被夹份的"退得掉"门**（`FORM_ESCAPE_ESCAPABLE`）----
+# 用户拍板方案 1；**默认 0 = 关 ⇒ 四档（含噩梦）逐位不变**，只由 `RL/weights/噩梦1.json` 打开。
+# 病灶（探针 `RL/probe/对方总输出自检.gd` 读数 · 噩梦权重）：
+#   旧口径下 ㉑ 的"被夹份" = `max(贴身敌人的威胁 − 贴身队友能还手, 0) × FORM_ESCAPE_SCALE` **恒收** ⇒
+#   **近战输出每次进攻都要交一笔税** —— 它射程 1、要打就必须贴身；而 `friend_back` 只有
+#   "带一个贴身队友、且那队友能打到同一个敌人"时才填得上 ⇒ **单刀突进永远付全款**。
+#   实测：一对一贴脸（对方是被我们贴住的远程 ⇒ 那一刀只有 1 点）⇒ 1.0 × 3.0 × FORM_ESCAPE_W(2.0)
+#   = **−6.00 分**；而同一笔 1 点伤害在 ⑥规则B（交战阈值 8 ⇒ 0）/ ⑦（归一化 ≈0.16）/
+#   ㉖（血上限 18 > 15 不进"脆皮输出"的门 ⇒ 0）上合计不到 0.2 分 ⇒ **㉑ 一个人把"贴脸"标了 6 倍价**
+#   （参 ③血量账：1 点血 = 1 分）⇒ AI 在数学上不敢贴、还会主动躲开贴脸。
+#   开成 1 之后：**下回合能走到一格"不贴任何敌人"的落点 ⇒ 这一份整笔不收**；只有真被围住、跑不掉的才收。
+#   ⚠️ 与"贴上去还能退 ⇒ 不收"配套的语义：㉑ 罚的是**被夹**（跑不掉），不是"站得靠前"。
+# 口径：与 `_sim_pin_escape_fire_cell()` **同一把尺子**（`_threat_emove_next` + `_sim_walk_cells` +
+#   `_sim_enemy_adjacent`，见 `_sim_step_out_of_pin()`）。
+# 短路口：`foe_threat <= friend_back`（绝大多数局面根本没有贴身敌人）时**一次 BFS 都不跑**。
+# 回退：把本键在权重文件里删掉/写 0（引擎默认 0 ⇒ 逐位回到 2026-09-28 口径）。
+const FORM_ESCAPE_ESCAPABLE := 0
+# ---- 【2026-10-02·用户拍板·默认关】**"最后一人保命"**（`LAST_MAN_W`）----
+# 用户原话：「AI 现在对自己处于弱势的局面是不是没有特别的强化？比如 AI 已经死了 2 个人了，他本回合行动的
+#   时候会考虑下回合会再死另一个吗？现在遇到的情况就是，AI 的某个英雄下回合必死了，但他还是和往常一样
+#   参与战斗，没有被保护起来。我觉得**除非能斩杀对方**，否则那个必死的英雄躲起来用走位苟一下，
+#   争取多几回合时间，可能会翻盘」。
+# **病灶（三件事叠在一起，缺一件都出不来）**：
+#   ① **没有任何一项为"下回合会死"付钱**：⑮必死折（判据＝挨打合计 ≥ 当前血）2026-09-24 已整条删除
+#      （当时依据：噩梦档 2026-09-22 早已把它归零、防守侧罚分历史读数全在噪声带内）；
+#   ② ⑦核心风险读的确实是"挨打合计 ÷ 血"，但它是 **max 型**（只罚全队最危险的那一个）
+#      ⇒ 另一个单位更危险时，这个"必死"的**一分钱不罚**；
+#   ③ **候选表里根本没有"躲"这个选项**：`_actions_for()` 的撤退过滤（2026-09-22 用户拍板「AI 会一直跑，
+#      那根本没意义」）把"能打却不打、只往后缩"的候选**直接丢掉**（例外只有"这一步真吃到道具/金矿"）。
+# **本项**（键 > 0 时开）：对每个**我方存活单位**，若它的末态格「挨打合计 ≥ 当前血」（= 同一把尺子判定
+#   "下回合会被打死"）⇒ 罚 `W × 这一条命值多少终局分`。
+#   ⚠️ **罚额不是拍的常数，而是从 ⑩终局项 的曲线里取**（`_one_life_loss()`，与 `_terminal_value()` 共用
+#     同一条 `TERMINAL_MINE_CURVE`）：**只剩 1 条命**（再死就判负）时丢一条 = **900 分**（用户 2026-10-02 拍板：**只在最后一条命生效**，剩 3/2 条命时本键完全不存在）；原来那句"3 条命 10 分 / 2 条命 90 分"的写法已作废 ——
+#     ⇒ 压倒一切非斩杀收益 ✓
+#     —— 这正是用户要的"**除非能斩杀，否则苟住**"：斩杀对面最后一人从 `TERMINAL_FOE_CURVE` 拿 +1000
+#     ⇒ 依然压得过这 900 ⇒ 该换的时候照换 ✓（这条量纲是**从既有终局曲线推出来的**，不是新拍的偏好）。
+#   ⚠️ **配套（同一次改动）**：`_actions_for()` 的撤退过滤对"**当前格就必死**的单位"开一条口子
+#     （`_last_man_hide_ok()`）—— 否则候选表里没有"躲"这一手，本项再贵也没得选。放行的**只有"躲"**，
+#     别的过滤条件一个字没动；而且"躲了还是死"的那些格子拿不到任何好处（罚额照旧）⇒ 它会**只在真能保命时**才躲。
+#   0 = 关（**逐位不变**；引擎默认与四档权重都没写这个键）。
+#   ⚠️ **只在"再死一个就判负"时生效**（用户 2026-10-02 拍板：「**剩 3/2 条命的情况你别动，还没输就给我
+#     尽情战斗**。我怕你改了，我的 AI 又变得避战了」）⇒ `_mine_lives() > 1` 时**罚分与"躲"的口子都不给**：
+#     剩 3/2 条命时本键**完全不存在**（行为与没这个键逐位相同），只有最后一条命才按 **900 分**
+#     （= ⑩终局项里"从剩 1 条掉到 0 条"的那 900 分）算账 ⇒ 既拿到"最后一人苟住"，中局又不会变怂。
+const LAST_MAN_W := 0.0
+# 【2026-10-02】⑩终局项的两条曲线（**唯一来源**：`_terminal_value()` 与 `LAST_MAN_W` 共用）。
+#   下标 = 还剩几条命（`death_line − 累计阵亡`，夹到 0..3）；0 = 那一边没人了。
+const TERMINAL_MINE_CURVE := [ -1000.0, -100.0, -10.0, 0.0 ]
+const TERMINAL_FOE_CURVE := [ 1000.0, 100.0, 10.0, 0.0 ]
+# ⚠️ 【2026-10-02 实测·与上面 `FORM_ESCAPE_SCALE` 注释不符·待你拍板】那条注释（以及 `_term_defs`
+#   里 ㉑ 的公式串）写着"单点 = 真实单击 × 血量池倍率 **÷ TRADE_HP_REF(20)**"，但 `_adj_foe_hit_on()`
+#   里**没有除法、也没有 × 血量池倍率**（`TRADE_HP_REF` 只被 `_incoming_pool_mult()` 用）。
+#   探针反推确认：1 点伤害 ⇒ 单点值恰为 1.0（若除 20 应为 0.056）⇒ **㉑ 的实际力度是注释口径的 20 倍**。
+#   本次只加"退得掉"门、**不动这个量纲**（按要求"噩梦本身不要动"）；这条留给用户决定是否修文档或修值。
 # ---- 【2026-09-22 晚·用户拍板】㉓「队形一把尺」：把 ⑳ 并进 ㉓，㉑ 退役（`FORM_MERGE_MODE = 1`）----
 # 用户原话：「㉑ `FORM_ESCAPE_W` 删、⑳ `FORM_COHESION_W` 并进 ㉓（合成"一把队形尺"：只用"与最近队友的
 #   格距"梯度，把 0/1 孤立份并成一个分段函数）」。
@@ -1172,9 +1358,6 @@ const SIM_BOMB_DAMAGE := 5
 # ---- 路网距离（把障碍/墓碑当墙的真步数）----
 # 走位评分不能只看直线：被墙隔开时"离敌人 2 格"可能实际要绕 6 格。
 const INF_DIST := 1 << 29
-# 障碍"挡路"惩罚：按实际绕路代价计分（而不是按障碍个数给固定小分），
-# 于是"拆掉真正挡路的墙"能抬高局面分，拆不挡路的墙几乎不加分。
-const OBSTACLE_DETOUR_WEIGHT := 4.0    # 每个"被墙挡出来的代价"的分值
 
 # ===================== 【RL 新增】可注入权重 =====================
 # 上面那批 const 是原版写死的评分权重。这里把它们镜像成实例成员：默认值 = 原版常量，
@@ -1199,7 +1382,6 @@ const OBSTACLE_DETOUR_WEIGHT := 4.0    # 每个"被墙挡出来的代价"的分�
 # 其余键**故意不写死**（依据弱或作用环境要变）：`HP_VALUE_W`（合并 +4.48 但 CI 跨 0，且探针说它敏感）·
 #   `THREAT_INCOMING_W`（sd 57、两方向都不显著；曾想交给 `RISK_W`，而 `RISK_W` 自己也在 2026-09-20 随分摊族删了）·
 #   `BUFF_TAKE_WEIGHT`（唯一显著过一次但翻正 ⇒ 不稳健）· `THREAT_DEAD_FOLD`/`THREAT_MOVE_DISCOUNT`/
-#   `OBSTACLE_DETOUR_WEIGHT`（方向已定、最优值未定 ⇒ 先留着）。
 # 恢复办法：把对应的 `const` 改回 `var` + 在 `set_weights` 里加回一行即可（都不影响别处）。
 # 2026-09-20 就是这么把 `ENGAGE_PULL_PER_CELL` 恢复回来的（可参照它的三处改动）。
 var w_gold_low_atk := GOLD_LOW_ATK
@@ -1246,6 +1428,25 @@ var w_exposure_total := EXPOSURE_TOTAL_W
 var w_exposure_hp_max := EXPOSURE_HP_MAX
 # 【2026-09-29·默认关】㉛ AoE 形状总账（见 `const AOE_RIDER_TOTAL_W` 处说明）
 var w_aoe_rider_total := AOE_RIDER_TOTAL_W
+# 【2026-10-03·默认关】㉛ 的"阶段 1 门"（见 `const AOE_LAYOUT_GATE` 处说明）：1 = 排阵型时也算这一笔。
+# 【2026-10-03·用户「值是不是有点大了…会不会把脆皮给对面露出来」】`AOE_LAYOUT_W` = **阶段 1 里 ㉛ 那一笔的倍率**
+#   （0 = 关；0.5/1.0/2.0 = 半量/等量/加倍）。原来是 0/1 门、开门即**满量**（复用 `AOE_RIDER_TOTAL_W` = 2.0）
+#   ⇒ 力度不可调。⚠️ ㉛ 只罚 **㉖ 门外**的单位（坦/半肉/后勤）⇒ 它推的是**坦克散开**，而 `FORM_GUARD_GATE`
+#   推的是**坦克贴在须保护队友身边** —— **两者方向相反**，坦克散过头 = 脆皮少了挡刀那层 ⇒ 必须先可调再扫。
+var w_aoe_layout := AOE_LAYOUT_W
+# 【2026-10-03·默认关】⑥ 的"AoE 团队总量"（见 `const OPEN_AOE_TOTAL_W` 处说明）：前压那一步要不要付这笔钱。
+var w_open_aoe_total := OPEN_AOE_TOTAL_W
+# 【2026-10-03·默认关】排阵型时的「落单会被死神打双倍」账（见 `const OPEN_ISOLATE_W` 处说明）。
+var w_open_isolate := OPEN_ISOLATE_W
+# 【2026-10-03·纯取证】最近一次 `_layout_score()` 里 ㉛ 那一笔的值（只给 `[搜索分账]` 打印用，不参与决策）
+var last_aoe_layout_val := 0.0
+# 【2026-10-03·纯取证】本次搜索里见过的**最高目标核心倍率**（`FOCUS_VALUE_POW` 生效时 >1 = 在挑核心）
+var last_core_mult := 0.0
+# 【2026-10-03·纯取证】本回合**场上真有的**英雄 id 集合（只给日志过滤用 —— 用户报「场上没有的英雄
+#   怎么也出现在英雄特化里」：原来列的是**权重文件里写着的**英雄段键 = 配置，不是场上）。
+var last_field_heroes := {}
+# 【2026-10-03·纯取证】最近一次打印用的局面快照（给"英雄段键**逐键绝对贡献**"重算 `_evaluate()` 用）。
+var last_print_sim = null
 # 【2026-09-20·默认关】"原地不动"候选（见 `const STAY_OPTION` 处说明）。默认 0 ⇒ 逐位不变。
 var w_stay_option := STAY_OPTION
 # 【2026-09-20 已删·用户拍板】`w_threat_alloc` / `THREAT_ALLOC_W`（⑮分摊总量）随分摊族一起删（见 `_dead_fold()` 上方说明）。
@@ -1256,8 +1457,23 @@ var w_idle_hit_penalty := IDLE_HIT_PENALTY
 # 【2026-09-21·默认关】两项队形评分（抱团 / 退路被夹），见 `const FORM_COHESION_W` 处说明。
 var w_form_cohesion := FORM_COHESION_W
 var w_form_escape := FORM_ESCAPE_W
+# 【2026-10-02·默认关】㉑ 被夹份的"退得掉"门（见 `const FORM_ESCAPE_ESCAPABLE` 处说明）。
+var w_form_escape_escapable := FORM_ESCAPE_ESCAPABLE
+# 【2026-10-02·默认关】"最后一人保命"（见 `const LAST_MAN_W` 处那整段说明）。
+var w_last_man := LAST_MAN_W
 # 【2026-09-22·默认关】⑳ 抱团的每格距离梯度（见 `const FORM_SPREAD_CELL_W` 处说明）。
 var w_form_spread := FORM_SPREAD_CELL_W
+# 【2026-10-02·用户口径】队形族按身份分档（⑳/㉓ 只对"会为落单付代价"的单位收全价）
+var w_form_role_gate := FORM_ROLE_GATE
+var w_form_role_tank_mult := FORM_ROLE_TANK_MULT
+# 【2026-10-03·用户实机反馈】坦克的护卫尺子（⑳/㉓ 对非须保护单位只按"须保护队友"算）
+var w_form_guard_gate := FORM_GUARD_GATE
+# 【2026-10-03】目标价值权重（"打核心"）：把"对面掉血"那一侧按目标核心度放大，见 const 处说明
+var w_focus_value_pow := FOCUS_VALUE_POW
+# 【2026-10-02·用户口径】㉑ 只考虑远程（近战不再为"贴身进攻"交税）
+var w_form_escape_ranged_only := FORM_ESCAPE_RANGED_ONLY
+# 【2026-10-03·用户口径（可选项）】坦克的"挡刀位置"奖励：站在脆皮与最近敌人之间给正分，见 const 处说明
+var w_form_screen := FORM_SCREEN_W
 # 【2026-09-22 晚·默认关】队形"一把尺"开关（`FORM_MERGE_MODE = 1` ⇒ ⑳ 并进 ㉓、㉑ 退役）。
 var w_form_merge := FORM_MERGE_MODE
 # 【2026-09-22 新增·默认关】㉒隔断（见 `const SPLIT_W` 处说明）：把玩家切开 = 塔盾扛不到、
@@ -1265,7 +1481,6 @@ var w_form_merge := FORM_MERGE_MODE
 var w_split := SPLIT_W
 var w_threat_discount := THREAT_MOVE_DISCOUNT
 var w_focus_fire := FOCUS_FIRE_WEIGHT
-var w_obstacle_detour := OBSTACLE_DETOUR_WEIGHT
 # 【2026-09-19 新增·默认 0 = 关】推进停止线：停在"对方下回合够不到"的那一格（口径 A，
 # 见文件上方 `ENGAGE_STANDOFF` 的说明）。它是**规则开关**不是权重，所以按 0/1 用。
 # 【2026-09-20 解 const】"进圈拉力"（每格分）：默认 = const `ENGAGE_PULL_PER_CELL` = 1.2
@@ -1306,6 +1521,8 @@ var w_summon_preplan := SUMMON_PREPLAN
 var w_inc_memo := INC_MEMO
 # 【2026-09-25】阶段 2 的内层宽度（见 `const TWO_PHASE_INNER` 处说明）。默认 0 ⇒ 沿用 `beam / 8`。
 var w_tp_inner := TWO_PHASE_INNER
+# 【2026-10-02·噩梦+】"对手回合一瞥"（`REPLY_PEEK`）：主搜索排前几个完态要拿去"让对手打一回合"再重排。
+var w_reply_peek := REPLY_PEEK
 # 【2026-09-25】漏斗名额的"同轮廓限席"（见 `const FUNNEL_DIVERSITY` 处说明）。默认 0 ⇒ 逐位不变。
 var w_funnel_div := FUNNEL_DIVERSITY
 # 【2026-09-25·用户「减少漏掉更值的那一手」】搜索后的"逐单位复查"（见 `const TWO_PHASE_POLISH` 处说明）。默认 0 ⇒ 逐位不变。
@@ -1473,7 +1690,8 @@ func set_weights(t: Dictionary) -> void:
 			"HEAL_CREDIT_W": w_heal_credit = float(v)
 			"THREAT_MOVE_DISCOUNT": w_threat_discount = float(v)
 			"FOCUS_FIRE_WEIGHT": w_focus_fire = float(v)
-			"OBSTACLE_DETOUR_WEIGHT": w_obstacle_detour = float(v)
+			# 【2026-10-03】目标价值权重（"打核心"，0 = 关 ⇒ 逐位回到改动前）。
+			"FOCUS_VALUE_POW": w_focus_value_pow = maxf(float(v), 0.0)
 			"BEAM": w_beam = int(v)
 			# 【2026-09-23 用户拍板】单次搜索的思考时间上限（毫秒；见 `var time_budget_ms` 处说明）。
 			#   为什么要能注入：两阶段搜索的**出手阶段**常被这个上限砍掉 ⇒ 表现为"AI 只挪位不出手"，
@@ -1559,6 +1777,12 @@ func set_weights(t: Dictionary) -> void:
 			"EXPOSURE_HP_MAX": w_exposure_hp_max = float(v)
 			# 【2026-09-29·默认关】㉛ AoE 形状总账（见 const AOE_RIDER_TOTAL_W 处说明）
 			"AOE_RIDER_TOTAL_W": w_aoe_rider_total = float(v)
+			# 【2026-10-03·默认关】㉛ 的阶段 1 门（0 = 关，逐位回到改动前）。
+			"AOE_LAYOUT_W": w_aoe_layout = maxf(float(v), 0.0)
+			# 【2026-10-03·默认关】⑥ 的"AoE 团队总量"（0 = 关，逐位回到改动前）。
+			"OPEN_AOE_TOTAL_W": w_open_aoe_total = maxf(float(v), 0.0)
+			# 【2026-10-03·默认关】排阵型时的「落单会被死神打双倍」账（0 = 关）。
+			"OPEN_ISOLATE_W": w_open_isolate = maxf(float(v), 0.0)
 			# 【2026-09-20·默认关】"原地不动"候选（1 = 允许；见 const STAY_OPTION 处说明）
 			"STAY_OPTION": w_stay_option = int(v)
 			# 【2026-09-20 已删·用户拍板】`THREAT_SUM_CAP`（见文件上方「整族删除」说明）。
@@ -1566,8 +1790,21 @@ func set_weights(t: Dictionary) -> void:
 			# 【2026-09-21·默认关】两项队形评分：抱团（孤立罚）/ 退路被夹，见 const FORM_COHESION_W 处说明
 			"FORM_COHESION_W": w_form_cohesion = float(v)
 			"FORM_ESCAPE_W": w_form_escape = float(v)
+			# 【2026-10-02·默认关】㉑ 被夹份的"退得掉"门（1 = 退得掉就不收；见 const FORM_ESCAPE_ESCAPABLE）
+			"FORM_ESCAPE_ESCAPABLE": w_form_escape_escapable = int(v)
+			# 【2026-10-02·默认关】"最后一人保命"（见 const LAST_MAN_W 处说明）
+			"LAST_MAN_W": w_last_man = float(v)
 			# 【2026-09-22·默认关】⑳ 的每格距离梯度（见 const FORM_SPREAD_CELL_W 处说明）
 			"FORM_SPREAD_CELL_W": w_form_spread = float(v)
+			# 【2026-10-02·用户口径】队形族按身份分档（0 = 关，逐位回到改动前）。
+			"FORM_ROLE_GATE": w_form_role_gate = maxi(int(v), 0)
+			"FORM_ROLE_TANK_MULT": w_form_role_tank_mult = clampf(float(v), 0.0, 1.0)
+			# 【2026-10-03·用户实机反馈】坦克的护卫尺子（0 = 关，逐位回到改动前）。
+			"FORM_GUARD_GATE": w_form_guard_gate = maxi(int(v), 0)
+			# 【2026-10-03·用户口径（可选项）】坦克的"挡刀位置"奖励（0 = 关，逐位回到改动前）。
+			"FORM_SCREEN_W": w_form_screen = maxf(float(v), 0.0)
+			# 【2026-10-02·用户口径】㉑ 只考虑远程（0 = 关，逐位回到改动前）。
+			"FORM_ESCAPE_RANGED_ONLY": w_form_escape_ranged_only = maxi(int(v), 0)
 			# 【2026-09-22 晚·默认关】队形"一把尺"（1 = ⑳ 并进 ㉓、㉑ 退役；见 const FORM_MERGE_MODE）
 			"FORM_MERGE_MODE": w_form_merge = int(v)
 			# 【2026-09-22·默认关】㉒隔断（"用身体把玩家切开"，见 const SPLIT_W 处说明）
@@ -1595,6 +1832,8 @@ func set_weights(t: Dictionary) -> void:
 			"INC_MEMO": w_inc_memo = int(v)
 			# 【2026-09-25】阶段 2 内层宽度（0 = 沿用 beam/8；见 const TWO_PHASE_INNER 处说明）
 			"TWO_PHASE_INNER": w_tp_inner = maxi(int(v), 0)
+			# 【2026-10-02·噩梦+】"对手回合一瞥"的深度（0 = 关，逐位回到改动前）。
+			"REPLY_PEEK": w_reply_peek = maxi(int(v), 0)
 			# 【2026-09-25】漏斗名额按"战术轮廓"限席（0 = 关；见 const FUNNEL_DIVERSITY 处说明）
 			"FUNNEL_DIVERSITY": w_funnel_div = maxi(int(v), 0)
 			# 【2026-09-25】搜索后的逐单位复查（0 = 关；见 const TWO_PHASE_POLISH 处说明）
@@ -2063,6 +2302,39 @@ const PROMISE_REPAIR := 0
 const PROMISE_REPAIR_PASSES := 2      # 最多几趟（一趟内每个单位只换一次；不再改进就停）
 const PROMISE_REPAIR_MAX_ACTIONS := 60   # 单个单位一趟最多试几手（防"单位多 × 候选多"爆掉）
 
+# ---- 【2026-10-02·噩梦+·用户「你增加深度」】"对手回合一瞥"（`REPLY_PEEK`，默认 0 = 关）----
+# 病灶：`_search_two_phase` 的最后一步是**在"我方回合打完"的末态里挑分最高的一个** ——
+#   整条搜索从头到尾**没有对手的下一步**。于是"我这回合打死谁 / 我站哪"是在**假设对手不动**的
+#   前提下比的：明明砍出 8 伤、自己却会掉 6 血的那套阵型，与只砍 4 伤但全身而退的那套，
+#   现役尺子只看到"8 > 4"（下一步挨的打、送掉的人都不进账）。
+# 本键做什么：把主搜索排前 `REPLY_PEEK` 个**完态**各克隆一份，让**对面按贪心打一个回合**
+#   （见 `_reply_turn_score()`），再用**完整 `_evaluate()`** 重新排一次序 —— 分最高的那套才落地。
+#   即"深度 2"：我方一整回合 + 对手一回合，仍由**同一把尺子**（`_evaluate`）收尾。
+# ⚠️ 对手那一回合**绝不能用 `_evaluate` 挑招**：本表 ②身价 把阵营写死（`u.fn == ENEMY` 为我方、
+#   对面 ×`PLAYER_VALUE_MULT`）⇒ 让对手"最小化 `_evaluate`"等于让它按**我们的价值观**走棋
+#   （当年"真推演"把"对面会来打我们"判成 0 就是这个根因）。所以对手的招由**阵营中立**的
+#   `_reply_step_value()` 选：只认"谁掉了多少血、掉的是谁"。
+# ⚠️ 成本：`REPLY_PEEK` ×（对手各单位 × 其候选数）次"克隆 + `_apply`" + `REPLY_PEEK` 次完整 `_evaluate`
+#   ⇒ 相对阶段 2 的 `leaves`（实机 1484 次）只是零头；仍受 `TIME_BUDGET_MS` / `abort_requested` 约束。
+# ⚠️ 只在 `SEARCH_MODE ≥ 1`（两阶段）路径上生效（现役档位就是 2）；旧束搜索路径不接本键。
+# 怎么验：`[搜索分账]` 尾部会多出 `· 回合一瞥：重排 N 套 / 改选 K 次 / Xms`
+#   （`改选 K 次` = 有多少回合因为"看了对手一眼"而换了计划）。
+# 回退：把下面那行改 0（或删掉 `噩梦1.json` 里的 `REPLY_PEEK`）⇒ 逐位回到改动前。
+# ⚠️⚠️ **名字为什么叫 `REPLY_PEEK`（而不是 REPLY_TOPK）**：本文件"学棋类/围棋 AI"那一节里
+#   **旧键 `REPLY_TOPK` 已于 2026-09-20 判死**（rp4 Δ−0.45 / rp8 +1.74，CI 跨 0；登记见
+#   `Data/Progress_tracking/1_通用策略.md` §四/§五）—— 本键**不是它的重试**，三处机制都换了：
+#     ① **对手模型**：旧版"取让我方评分掉最多的那一手" = 让对手**最小化 `_evaluate`**，而 `_evaluate`
+#        的阵营是不对称的（②身价 写死 `u.fn == ENEMY` 为我方、对面 ×`PLAYER_VALUE_MULT`）⇒ 那等于
+#        让对手**按我们的价值观**走棋（"对面会来打我们"曾被判成 0 的同一个根因）。本键换成
+#        **阵营中立**的 `_reply_step_value()`：只认"谁掉了多少血、掉的是谁"。
+#     ② **重排公式**：旧版是 `score + REPLY_W × drop`（往加权和里**再加一项**、还得调 W）—— 而本文件
+#        自己的教训就是"往静态加权和里再加项是无效的"。本键改成把**对手打完之后的局面**直接交给
+#        完整 `_evaluate()` 排序，不引入任何新权重项。
+#     ③ **挂点**：旧版挂在**旧束搜索**的收敛处（`SEARCH_MODE ≥ 1` 时那段根本走不到）；本键挂在
+#        **两阶段搜索**的收尾（现役档位就走这条路）。
+const REPLY_PEEK := 0
+const REPLY_KILL_W := 2.0        # 对手眼里"打死一个"的额外价码 = 该单位攻击力 × 本值（血量损失另算）
+
 # ---- 【2026-09-25·用户「长剑是步臭棋…他本来可以打 6 伤」】搜索后的"逐单位复查"（`TWO_PHASE_POLISH`）----
 # 为什么需要它：阶段 1 是按**代理分**把阵型排进漏斗的，而"某个单位换一手"的那套阵型一旦掉出前 N，
 #   阶段 2 就永远看不到它 ⇒ 引擎自己的诊断（`_print_decision()` 的「⚠️ 没选的那一手更值」）把这类
@@ -2386,6 +2658,9 @@ func search(sim: Sim, enemy_faction: int) -> Array:
 	last_tp_layouts_built = 0
 	last_tp_layouts_used = 0
 	last_tp_leaves = 0
+	last_reply_n = 0          # 【2026-10-02·噩梦+】"对手回合一瞥"的账
+	last_reply_swaps = 0
+	last_reply_ms = 0
 	last_tp_p1_evals = 0
 	last_tp_p1_dups = 0
 	last_tp_p2_evals = 0
@@ -2894,8 +3169,14 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	var t_p2 := Time.get_ticks_msec()                      # 【取证】阶段 2 计时起点
 	var best: Dictionary = {}
 	var best_wiped: Dictionary = {}
+	# 【2026-10-02·噩梦+·`REPLY_PEEK`】主搜索排前几名的**完态**（"我方回合已全部行动完"的末态）先收在这儿，
+	#   等所有阵型比完，再各让对手打一回合、用完整 `_evaluate` 重排（见 `_reply_rerank()`）。
+	var reply_pool: Array = []
 	var layout_n := mini(lay_n, layouts.size())
 	# 【2026-09-23 深夜⑱·用户拍板 A】**保送"全员原地"那套阵型进阶段 2**。
+	#   ⚠️ 【2026-10-02·修】判据已从"`path` 为空"改成"**英雄一个都没动**"（`_tp_path_has_hero_step()`，
+	#     见该函数处的说明）—— `SUMMON_PREPLAN` 会把召唤物的几步先写进 `path` ⇒ 旧判据认不出这套阵型、
+	#     重建一套 `path=[]` 的 ⇒ 一旦它胜出就**丢了召唤物的步骤**（分数算了、实机不做）。
 	#   为什么必须保送：模式 2 的阶段 2 是**唯一**还会发"移动+攻击"整套组合的地方（`_tp_attack_actions()`
 	#   开头 `if w_search_mode >= 2: return _actions_for(sim, idx)`），而它对**已经在阶段 1 挪过位**的单位
 	#   只剩"原地出手 / 敲障碍 / 不打"（`_actions_for()` 按 `u.moved` 卡住移动）⇒ **只有"全员都还没动"
@@ -2911,11 +3192,18 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 	if layout_n > 0:
 		var stay_i := -1
 		for li0 in layouts.size():
-			if (layouts[li0]["path"] as Array).is_empty():
+			# 【2026-10-02·修·用户报「AI 都不动骷髅就结束了」】判据从"`path` 为空"改成"**英雄一个都没动**"
+			#   （`_tp_path_has_hero_step()`）—— 见那个函数处的说明：`SUMMON_PREPLAN` 会把召唤物的几步
+			#   先写进 `path` ⇒ "英雄全原地"那套的 `path` 不再为空 ⇒ 旧判据认不出它、于是**重建一套 `path=[]`
+			#   的**（而它的 `sim` 里召唤物那几步**已经算过**）⇒ 一旦它胜出，返回的计划就丢了召唤物的步骤：
+			#   **分数算了、实机不做**（用户那局的两只骷髅就是这么站住的）。
+			if not _tp_path_has_hero_step(layouts[li0]):
 				stay_i = li0
 				break
 		if stay_i < 0:
-			layouts.append(_tp_state(sim, [], {}, _layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets)))
+			# 兜底重建：**必须把召唤物预置的那几步一起带上**（否则 sim 与 path 不一致 —— 就是上面那个 bug）。
+			layouts.append(_tp_state(sim, sm_pre_path.duplicate(true), sm_pre_done.duplicate(),
+				_layout_score(sim, start_can_hit, enemy_idxs.size() == 0, start_targets)))
 			stay_i = layouts.size() - 1
 		if stay_i >= layout_n:
 			var keep0: Dictionary = layouts[layout_n - 1]
@@ -3041,6 +3329,12 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 				continue
 			if best.is_empty() or _cmp_state(st, best):
 				best = st
+			# 【2026-10-02·噩梦+·`REPLY_PEEK`】顺手把这个完态收进"回合一瞥"的候选池。
+			#   ⚠️ 这里**只收不剪**（剪枝与"取前 K"都放到 `_reply_rerank()` 里做）：本循环体在实机里
+			#   要跑 `leaves`（实机 1484）× 阵型 次，在这里排序等于给每个完态都排一次；
+			#   而收进数组是 O(1)。收的是**引用**，不克隆 ⇒ 内存也只是多几百个指针。
+			if w_reply_peek > 0:
+				reply_pool.append(st)
 		if abort_requested:
 			return []   # 【2026-09-23】协作式中断：主线程在重开/切场景 ⇒ 立刻放弃
 		if deadline > 0 and Time.get_ticks_msec() >= deadline:
@@ -3052,6 +3346,13 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		best = best_wiped
 	if best.is_empty():
 		return []
+	# 【2026-10-02·噩梦+·`REPLY_PEEK`】"对手回合一瞥"（默认 0 = 关）：上面比出来的前几名**都是在
+	#   "假设对手不动"的尺子上排的** ⇒ 这里各让对手贪心打一回合、用完整 `_evaluate` 重排一次。
+	#   ⚠️ 顺序：**在复查/补手之前** —— 这样复查与补手的起点就是"已经考虑了对手下一步"的那套计划。
+	if w_reply_peek > 0 and not abort_requested:
+		best = _reply_rerank(best, reply_pool)
+		if best.is_empty():
+			return []
 	# 【2026-09-25·用户「减少漏掉更值的那一手」】搜索后的"逐单位复查"（键 `TWO_PHASE_POLISH`，默认 0 = 逐位不变）：
 	#   把"某个单位换一手更值、却被阶段 1 的代理分挤出漏斗"的那类漏，用完整 `_evaluate` 补回来。
 	if w_tp_polish > 0 and not abort_requested:
@@ -3069,6 +3370,120 @@ func _search_two_phase(sim: Sim, enemy_idxs: Array) -> Array:
 		#   复查/补手与日志共用它，这里不再重填（只补一次"计划已定"的注释）。
 		_print_decision(sim, best)
 	return best["path"]
+
+## ---- 【2026-10-02·噩梦+·`REPLY_PEEK`】"对手回合一瞥"：让对面按贪心打一回合，再用完整 `_evaluate` 重排 ----
+## 为什么：主搜索的末态比较**假设对手不动**（病灶见 `REPLY_PEEK` 常量处的长注释）。
+## 三个函数的分工：
+##   `_reply_rerank()`     —— 收口：候选池按末态指纹去重、逐个算"一瞥分"、选最高的那套计划（顺手记账）。
+##   `_reply_turn_score()` —— 一次"一瞥"：克隆末态 ⇒ 让对面每个还能动的单位贪心出一手 ⇒ `_evaluate()`。
+##   `_reply_step_value()` —— **阵营中立**的单步净值：只认"谁掉了多少血、掉的是谁"（绝不用 `_evaluate`，
+##                            否则等于让对手按我们的价值观走棋，见常量处注释）。
+## ⚠️ 三者都**不改任何真实状态**（全程在克隆体上做）⇒ 最坏情况只是选错计划，不会污染对局。
+## ⚠️ **本层有意不吃 `TIME_BUDGET_MS` 的余额**（只受 `abort_requested` 约束）：它是一次**有界**的
+##   收尾计算（`K × 对手单位数 × 候选数` 次 clone+apply，外加 `K` 次完整 `_evaluate`；K=8 时实机量级
+##   < 0.2s，相对 40s 的预算可忽略）。若让它去抢搜索剩下的那点余额，**最难的回合（正是最需要"看一眼
+##   对手"的回合）反而会一个末态都瞥不到 ⇒ 本键在最该生效的地方静默失效**（本文件反复踩过的坑）。
+func _reply_rerank(best: Dictionary, pool: Array) -> Dictionary:
+	if pool.is_empty():
+		return best
+	var t0 := Time.get_ticks_msec()
+	# ① 取前 K：池子里是**全部**完态（本回合每个阵型 × 每条出手线），按末态分（= "不看对手"时那一把尺子）
+	#    排序后只留前 `REPLY_PEEK` 条 —— 与用户口径「对最终候选的前 K 条做推演」逐字一致。
+	#    ⚠️ 剪枝放在这里（而不是收集的地方）是为了只排一次序；池子里存的是**引用**，不克隆。
+	pool.sort_custom(_cmp_state)
+	var cands: Array = pool.slice(0, w_reply_peek)
+	if not best.is_empty():
+		cands.append(best)   # 兜底态（"我方被全灭"那条路）可能不在池里；重复的会被下面的指纹去掉
+	var scored: Array = []
+	var seen: Dictionary = {}
+	for st in cands:
+		var dg := _sim_digest(st["sim"])   # 同一个末态可能由不同阵型走到 ⇒ 只瞥一次
+		if seen.has(dg):
+			continue
+		seen[dg] = true
+		scored.append({ "st": st, "reply": _reply_turn_score(st["sim"]), "score": float(st["score"]) })
+		last_reply_n += 1
+		if abort_requested:
+			break
+	last_reply_ms += Time.get_ticks_msec() - t0
+	if scored.is_empty():
+		return best
+	# 主序 = "一瞥分"（我方整回合 + 对手一回合之后的完整评分）；**并列时**回到原来的末态分
+	# （= "不看对手"时同一把尺子的排法）⇒ 本来就没有争议的回合不会被这一瞥改动。
+	scored.sort_custom(func(a, b):
+		var d := float(a["reply"]) - float(b["reply"])
+		if absf(d) > 1.0e-9:
+			return d > 0.0
+		return float(a["score"]) > float(b["score"]))
+	var win: Dictionary = scored[0]["st"]
+	if not best.is_empty() and win["sim"] != best["sim"]:
+		last_reply_swaps += 1
+	return win
+
+## 一次"一瞥"：把"我方回合打完"的末态克隆一份，**当作对手回合的开始**让对面贪心出一轮手，
+## 再用完整 `_evaluate()` 给结果打分（我方视角，与主搜索收尾**同一把尺子**）。
+## ⚠️ "对手回合开始"= `Unit.reset_for_new_turn()`（真实 `Battle.gd` 切回合时对**所有**单位调）⇒
+##   这里显式复位对手的 `moved/attacked`，且**两边都**复位 `counter_used`（反击在新回合是满的）。
+##   不复位就会踩"对面在模拟里显示已行动 ⇒ 一手不出 ⇒ 本键静默失效"的坑。
+## ⚠️ 有意不建模（只影响排序、不影响任何真实状态）：对手回合开始的猛毒/灼烧掉血、古灵精怪变身还原、
+##   回合开始类增益。⇒ "一瞥"略偏乐观，但它回答的是"**哪套阵型更抗打**"，方向一致。
+## ⚠️ 对手的单步门槛是 **0**：赚不到东西（纯挪窝）就原地不动，不引入无谓漂移。
+func _reply_turn_score(sim_ours_end: Sim) -> float:
+	var s: Sim = sim_ours_end.clone()
+	var ours := int(s.active_fn)
+	var foe_fn := int(DataRegistry.Faction.ENEMY) if ours == int(DataRegistry.Faction.PLAYER) else int(DataRegistry.Faction.PLAYER)
+	for u in s.units:
+		var su: SimUnit = u
+		if su == null or not su.alive:
+			continue
+		su.counter_used = false
+		if su.fn == foe_fn:
+			su.moved = false
+			su.attacked = false
+	s.active_fn = foe_fn as DataRegistry.Faction
+	for i in s.units.size():
+		var u2: SimUnit = s.units[i]
+		if u2 == null or not u2.alive or u2.fn != foe_fn or u2.attacked:
+			continue
+		var best_a: Dictionary = {}
+		var best_v := 0.0
+		for a in _actions_for(s, i):
+			var s2: Sim = s.clone()
+			_apply(s2, i, a)
+			var v := _reply_step_value(s, s2, foe_fn)
+			if v > best_v:
+				best_v = v
+				best_a = a
+		if not best_a.is_empty():
+			_apply(s, i, best_a)
+		if abort_requested:
+			break
+	s.active_fn = ours as DataRegistry.Faction
+	return _evaluate(s, true)
+
+## **阵营中立**的单步净值（对手挑招用；正 = 对手赚）：谁掉了多少血，以及"掉的是谁"。
+##   掉血：1 点 = 1 分（与 `_evaluate()` ③血量账同一口径）。
+##   打死：额外 `REPLY_KILL_W × 该单位攻击力` —— 活着的单位下回合还能输出/还能挡刀，只按血量算会低估击杀。
+## ⚠️ 两边**同一套权重**（`b.fn == foe_fn` 只决定正负号）⇒ 不存在"我们的价值观"渗进来（见常量处注释）。
+func _reply_step_value(before: Sim, after: Sim, foe_fn: int) -> float:
+	var v := 0.0
+	for j in before.units.size():
+		var b: SimUnit = before.units[j]
+		var a2: SimUnit = after.units[j]
+		if b == null or a2 == null or not b.alive:
+			continue
+		var killed: bool = not a2.alive
+		var lost := maxf(float(int(b.hp) - int(a2.hp)), 0.0)
+		if killed and lost <= 0.0:
+			lost = float(b.hp)   # 某些击杀路径只翻 `alive`、不把 hp 归零 ⇒ 按"这一份血全没了"算
+		if lost <= 0.0 and not killed:
+			continue
+		var worth := lost + (REPLY_KILL_W * float(b.eatk) if killed else 0.0)
+		if b.fn == foe_fn:
+			v -= worth          # 对手自己掉的血/人 = 它的代价
+		else:
+			v += worth          # 我方掉的血/人 = 它的收益
+	return v
 
 ## 两阶段搜索的状态字典：四个字段与现役 `search()` 的状态**同构**（好让 `_cmp_state` / `_greedy_finish` /
 ## `_print_decision` 直接复用；`tb` 只在并列裁决开启时才算，默认 0 ⇒ 空数组 ⇒ 逐位不变）。
@@ -3188,6 +3603,21 @@ func _permute_rec(a: Array, k: int, out: Array) -> void:
 ##        物理上不能兼得，用户选了后者（所以"让路"这条规则整个删掉了）。
 ##   ⚠️ "不能行动"（眩晕／本回合已出手）⇒ 返回空 ⇒ 调用方照样把它标成"处理过了"，不进联合枚举。
 ##   ⚠️ 距离一律走 `walk_dist()`（路网距离，与 `_tp_summon_slot_moves()` 同一把尺）。
+## 【2026-10-02·修·用户报「为什么这次 AI 都不动骷髅就结束了」】这套阵型的 `path` 里**有没有英雄的步骤**
+##   （召唤物的预置步不算）。**为什么需要它**：下面"保送全员原地"那一段原判据是 `path.is_empty()` = "一个单位
+##   都没动过"，而 `SUMMON_PREPLAN`（噩梦档现役）会**先把召唤物的几步写进 `path`** ⇒ "英雄全原地"那套的
+##   `path` 里带着那两步、不再为空 ⇒ 旧判据误判成"阵型里没有这一套" ⇒ 重建一套 `path = []` / `done = {}`
+##   的（可它的 `sim` 里召唤物那几步**已经 apply 过**）⇒ 只要它胜出，`search()` 返回的计划就**丢了召唤物的
+##   步骤**：**分数算了、实机不做**（用户那局两只骷髅全程站着）。⚠️ `SUMMON_PREPLAN = 0`（引擎默认/低档）
+##   时 `path` 里没有召唤物步骤 ⇒ 本判据与旧判据**逐位等价**（四档行为不变）。
+##   ⚠️ 用**这套阵型自己的 `sim`** 判下标身份：`path` 里存的 `idx` 是那个局面的 `sim.units` 下标。
+func _tp_path_has_hero_step(st: Dictionary) -> bool:
+	var sim: Sim = st["sim"]
+	for stp in (st["path"] as Array):
+		if not _is_summon_idx(sim, int(stp["idx"])):
+			return true
+	return false
+
 func _tp_summon_preplan(sim: Sim, idx: int) -> Dictionary:
 	if idx < 0 or idx >= sim.units.size():
 		return {}
@@ -3413,6 +3843,8 @@ func _tp_attack_actions(sim: Sim, idx: int) -> Array:
 	for t in _valid_targets(sim, u, u.cell):
 		if _redhood_kill_unsafe(sim, u, t, u.cell):
 			continue
+		if _redcap_push_unsafe(sim, u, t, u.cell):
+			continue   # 会把她从"打不死"压到"一碰就死"、而她的自爆够得到我方：这一击不打
 		out.append({ "move": null, "atk": int(t) })
 	for oc in sim.obstacles.keys():
 		var oc2: Vector2i = oc
@@ -3465,6 +3897,27 @@ func _layout_score(sim: Sim, start_can_hit: Dictionary = {}, complete: bool = tr
 	#   "同末态只评一次"的口径（本项只读位置）。默认 0 = 关 ⇒ 逐位不变；只在场上有装甲堡垒时非零。
 	if w_tank_front != 0.0:
 		sc += w_tank_front * _tank_front_val(sim)
+	# 【2026-10-03·用户实机报「我有长剑的时候，AI 还是站成一排被我一串三」】㉛ 也要让**阶段 1 看得见**
+	#   （见 `const AOE_LAYOUT_GATE` 处说明）：阶段 1 是**唯一**能让"排不排成一条线"影响整队布局的地方
+	#   （阶段 2 只能改出手、改不了位置）—— 与本函数上面 `TANK_FRONT_W` 那三行同一个先例。
+	#   ⚠️ 只加在**代理分**里：`_evaluate()` / `_eval_breakdown()` 一个字不动 ⇒ 默认 0 时四档逐位不变。
+	# 【2026-10-03·用户「AOE_LAYOUT_W 和 AOE_RIDER_TOTAL_W 这两个没重复吗」⇒ **确实会重复，已加门**】
+	#   `_evaluate(sim, complete)`：`complete = true` 时它**已经**把 ㉛（`w_aoe_rider_total`）算进去了
+	#   （㉛ 的门就是 `end_of_turn`）⇒ 这里再乘一次 = **双倍计价**。
+	#   本函数默认参数是 `complete = true` ⇒ 必须显式排除，否则"阶段 1 的那一笔"在 complete 调用里翻倍。
+	if w_aoe_layout != 0.0 and not complete:
+		var av := _aoe_rider_total(sim) * w_aoe_layout   # 倍率：0.5/1.0/2.0 = 半量/等量/加倍
+		last_aoe_layout_val = av          # 【纯取证】给 `[搜索分账]` 打一行
+		sc += av
+	# 【2026-10-03·用户口径·方案 1】⑥ 的「AoE 团队总量」：这一层（排阵型/判断要不要前压）原本**没有账** ——
+	#   ⑥ 的三行权重在这里被清零（见本函数开头 `a_save/ae_save`）、㉖/㉛ 又都挂末态门
+	#   ⇒ "一队人各挨 3（还是被同一把长剑一刀换来的）"在账上是免费的。本项就是补这个洞。
+	if w_open_aoe_total != 0.0:
+		sc -= w_open_aoe_total * _open_aoe_total(sim)
+	# 【2026-10-03·用户口径】「玩家有死神」时的落单账（见 `const OPEN_ISOLATE_W` 处说明）：
+	#   同一层、同一个病根 —— ⑥ 在这里被清零、⑦ 是 max 型、㉖ 只看脆皮 ⇒ "落单的价钱"原本看不见。
+	if w_open_isolate != 0.0:
+		sc -= w_open_isolate * _open_isolate_total(sim)
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
 		if u == null or not u.alive or u.fn != int(sim.active_fn) or u.attacked:
@@ -3556,9 +4009,9 @@ func _tp_hit_gain(sim: Sim, u: SimUnit, t: SimUnit, thp: int, tdealt: int) -> Ve
 	var hp0 := maxi(t.hp0, 1)
 	var f0 := float(tdealt) / float(hp0)
 	var f1 := float(tdealt + real) / float(hp0)
-	var g := float(real) * w_hp_value
+	var g := float(real) * w_hp_value * _target_core_mult(sim, t)
 	if w_focus_fire != 0.0:
-		g += w_focus_fire * (f1 * f1 - f0 * f0)
+		g += w_focus_fire * (f1 * f1 - f0 * f0) * _target_core_mult(sim, t)
 	if real >= cur:
 		g += _unit_value(sim, t) * PLAYER_VALUE_MULT   # 打死 ⇒ 对面 ②身价整项消失
 	return Vector2(g, float(real))
@@ -3856,6 +4309,13 @@ func pick_sub_hero(sim: Sim, roster: Array, cells: Array) -> String:
 ## 造一个"站在 `cell` 的替补"模拟单位（**不插进 `sim`**：伤害那把尺子只读它自己的属性与 `sim.units`）。
 ## 属性来源与 `_sim_spawn_sub()` **逐项相同**（含 `spawn_move` / `spawn_attack_range` 的出生期加成与
 ## `_sim_apply_hero_fixups()`）⇒ "探针算出来的这一击"与"真上场之后那一击"同源。
+## 【2026-10-02·T138·用户实机「共鸣者替补上来把我斩杀了，是不是没计算回合开始替补的共鸣者的技能效果」】
+##   **这个探针要不要带"共鸣"值**（队友攻击力之和）：`> 0` = 这一手是**回合开始的先补位**
+##   ⇒ 真规则里 `hero_47::on_side_turn_start()` 会在补位之后结算 ⇒ 落地即满攻；
+##   `-1`（默认）= 回合中途落位 ⇒ echo 不结算、落地 0 攻（T70 定的口径，逐位不变）。
+##   ⚠️ 由 `Battle` 侧按 `_echo_active_here()` 设（`_echo_sum_here()`），AI 只读。
+var echo_sum_here := -1
+
 func _sub_probe_unit(hid: String, cell: Vector2i) -> SimUnit:
 	var def = DataRegistry.get_hero(hid)
 	if def == null:
@@ -3880,6 +4340,10 @@ func _sub_probe_unit(hid: String, cell: Vector2i) -> SimUnit:
 	#   ⇒ 探针单位如果带着这个值，就会被算成"能一刀收"（其实它刚落位、还没共鸣，真打出去是 0/1 伤）。
 	#   ⇒ 探针一律把 echo 关掉（-1）：与"新落位的替补"的真实状态一致。
 	nu.echo_set = -1
+	# 【2026-10-02·T138】回合开始的先补位 ⇒ 这一手真会结算共鸣 ⇒ 探针按"落地后的攻击力"建
+	if echo_sum_here > 0 and hid == "hero_47":
+		nu.echo_set = echo_sum_here
+		nu.eatk = echo_sum_here
 	# 【2026-10-01 晚·用户「11 血的红帽，你从高攻往下排，找一个 6 攻、1 个 5 攻，不就收掉了吗？
 	#   为什么第一刀限定死了长剑？」】**登场 +攻 必须与搜索侧同源**：
 	#   `_sim_spawn_sub()`（搜索里真落位那一路）对太阳斩明确做过 `nu.eatk += 3`
@@ -3954,6 +4418,35 @@ func _finish_target_choice(sim: Sim, hero_id: String, cells: Array, mv: int, ar:
 	return best
 
 
+## 【2026-10-02·T139·用户实机「说超新星可以收掉残血目标，但是也没收掉」】**这一手到底能打出多少**：
+##   从落点 `from_cell` 出发 —— 原地 ＋ 这一回合**真的走得到**的每一格（`_sim_walk_cells`：身体/墓碑/障碍
+##   都当墙）—— 逐个问 `_threat_fire_ok_at()`（射程 ＋ 视线 ＋ **嘲讽门**）能不能打到 `t`，能打就在那一格
+##   算 `_sim_hit_est()`（= 站在那一格打出去多少，远程被贴身自动压 1；含倍率与受击侧修正），取最大。
+##   ⚠️ **旧口径是两把粗尺**：`approach_dist(落点, 目标) ≤ 走+射` ＋ `_adj_foe_hit_on()`（`d` 硬编码 1）
+##   ⇒ **不查嘲讽门 / 视线 / 身体阻挡 / "到底有没有合法开火格"** ⇒ 目标被[嘲讽]护住时照样报"能一刀收"
+##   —— 用户那局 超新星 就是这么把需求制的 雪拳（缺前排 46.6）顶掉的，实战却一个人头都没收到。
+func _sub_reach_hit(sim: Sim, sub_u: SimUnit, from_cell: Vector2i, t: SimUnit) -> float:
+	if sub_u == null or t == null or not t.alive:
+		return 0.0
+	var back := sub_u.cell
+	var best := 0.0
+	sub_u.cell = from_cell
+	var fires: Array = [from_cell]
+	for c in _sim_walk_cells(sim, from_cell, maxi(sub_u.emove, 0), sub_u.skills.has(DataRegistry.Skill.INFILTRATE)):
+		fires.append(c)
+	for f_v in fires:
+		var f: Vector2i = f_v
+		sub_u.cell = f
+		if not _threat_fire_ok_at(sim, sub_u, f, t.cell, t):
+			continue
+		_sim_refresh_pins(sim)
+		var hit := _sim_hit_est(sim, sub_u, t)
+		if hit > best:
+			best = hit
+	sub_u.cell = back
+	_sim_refresh_pins(sim)
+	return best
+
 ## 返回 `[Σ伤害, 最大的那一笔]`（第二项给 [圣盾] 扣减用：盾整次免伤、只挡一笔）。
 func _team_hit_pool(sim: Sim, t: SimUnit) -> Array:
 	var sum := 0.0
@@ -3966,7 +4459,7 @@ func _team_hit_pool(sim: Sim, t: SimUnit) -> Array:
 			continue
 		if approach_dist(sim, u.cell, t.cell) > u.emove + u.atk_range:
 			continue                       # 先走再打也够不到 ⇒ 这一手不参与合力
-		var one := _adj_foe_hit_on(sim, t, u)
+		var one := _sub_reach_hit(sim, u, u.cell, t)   # 【T139】真开火格 + 嘲讽门 + 真实单击
 		if one <= 0.0:
 			continue
 		sum += one
@@ -4021,7 +4514,7 @@ func sub_kill_scan(sim: Sim, cands: Array, cells: Array) -> Dictionary:
 				#    （快照带 `echo_set`），`Battle` 侧已按"落地时还没共鸣"剔除，这里也剔一遍。
 				if int(sub_u.eatk) <= 0:
 					continue
-				var sh := _adj_foe_hit_on(sim, t, sub_u)
+				var sh := _sub_reach_hit(sim, sub_u, c, t)   # 【T139】从**这个落点**出发的真实一击
 				var total := team + sh
 				if t.shield:
 					total -= maxf(sh, top)
@@ -4119,6 +4612,15 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 			(last_tp_layout_cap if last_tp_layout_cap > 0 else maxi(w_tp_layouts, 1))]
 		txt += " · 阶段2（出手）%.1fs：完整计划 %d 个" % [
 			float(last_tp_phase2_ms) / 1000.0, last_tp_leaves]
+		# 【2026-10-03·纯取证】㉛ 的"阶段 1 门"（`AOE_LAYOUT_GATE`）到底有没有在起作用：
+		#   这一行 = 最近一次 `_layout_score()` 里 ㉛ 那一笔的**扣分**（负数 = 有在躲 AoE 形状）。
+		#   恒 0 ⇒ 要么门上没开、要么这一局我方没人站在对手 AoE 的覆盖形状里。
+		if w_aoe_layout != 0.0:
+			txt += " · ㉛AoE形状(阶段1) %.2f" % last_aoe_layout_val
+		# 【2026-10-03·纯取证】"打核心"到底有没有在挑人：本次搜索里**见过的最高目标核心倍率**。
+		#   >1.30 ⇒ 它在为"打那个更值钱的目标"加价；恒 ≈1.00 ⇒ 要么门没开、要么对面三人价值太接近。
+		if w_focus_value_pow > 0.0:
+			txt += " · 打核心倍率(本次最高) %.2f" % last_core_mult
 		# 【2026-09-23 深夜·用户「怎么在不降水平的情况下减少思考时间」】把阶段 1 的**去重账**打出来：
 		#   `评分 N 次` = 真正跑了多少次完整 `_evaluate`；`丢 M 条 = X%` = 其中"同末态"（同一个阵型
 		#   被"谁先挪"的决定顺序复制出来的那几份）占多少。**X% 就是 n! 水分的直接读数**。
@@ -4153,6 +4655,11 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 		if last_polish_swaps > 0 or w_tp_polish > 0:
 			txt += " · 复查（逐单位改良）：换 %d 手 / +%.1f 分 / %.0fms" % [
 				last_polish_swaps, last_polish_gain, float(last_polish_ms)]
+		# 【2026-10-02·噩梦+·`REPLY_PEEK`】"对手回合一瞥"的账：拿去瞥了几个末态、其中多少次**改了选择**、
+		#   花了多久。`改选 0 次` = 这一回合"看没看对手"结论一样（不代表本键失效，见下一行的排查口径）。
+		if w_reply_peek > 0 or last_reply_n > 0:
+			txt += " · 回合一瞥：重排 %d 套 / 改选 %d 次 / %.0fms" % [
+				last_reply_n, last_reply_swaps, float(last_reply_ms)]
 		# 【2026-09-30·用户「能不能把这种 AI 都发现自己意思被剪的项也加入到评估，最后根据评分选路径」】
 		#   "认账补手"的账：试评了多少手、换掉几手、赚了多少分（同一把尺子：完整 `_plan_score`）。
 		if last_repair_swaps > 0 or w_promise_repair > 0:
@@ -4221,7 +4728,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var mc3: Variant = alt_combo.get("move")
 				var occ_ok := not (mc3 != null and pre.occ.has(mc3) and (pre.occ[mc3] as SimUnit) != pu)
 				if occ_ok:
-					var desc3 := ("在 %s 原地打 %s" % [str(pu.cell), alt_name]) if mc3 == null \
+					var desc3 := ("在 %s 原地打 %s" % [DataRegistry.cell_txt(pu.cell), alt_name]) if mc3 == null \
 						else ("从 %s 走到 %s 打 %s" % [DataRegistry.cell_txt(pu.cell), DataRegistry.cell_txt(mc3), alt_name])
 					var s_alt2 := pre.clone()
 					_apply(s_alt2, idx, alt_combo)
@@ -4400,6 +4907,13 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 					notes.append("%s 够不到" % t7.name)
 			if notes.size() > 0:
 				tr_note += "\n     其它敌人：" + "；".join(notes)
+		# 【2026-10-03·纯取证】记下**这一回合场上真有的**英雄（下面那行"英雄段键"按它过滤）。
+		last_field_heroes.clear()
+		for _fu in sim.units.size():
+			var _u2: SimUnit = sim.units[_fu]
+			if _u2 != null and _u2.alive:
+				last_field_heroes[String(_u2.hero_id)] = true
+		last_print_sim = sim        # 【纯取证】给"逐键绝对贡献"重算用
 		txt += "\n · %s：%s\n     原因：%s%s" % [u0.name, what,
 			_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)), alt_note]
 		# 【2026-09-26·用户要求】**纯走位步**（这一步没出手）补一行「本步分项」：这一步相对**走之前**的逐项 Δ，
@@ -4407,10 +4921,14 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 		#   用户原话：「前进一格 1.2，道具 2，其他收益呢」—— 上面那句 `原因：` 只有短语、**不带数值**，
 		#   读日志的人算不出账（那句"这一格挨打超出阈值"只是 ⑥ 的术语名，不代表扣了多少）。
 		#   ⚠️ 两侧都是 `end_of_turn = false`（中途态）⇒ ⑳㉑㉒㉓㉕ 恒为 0、不会出现在这里。
-		if not is_atk_step:
-			var dl := _plain_gap_terms(bd1, bd0, sc_step, 4)
-			if dl != "":
-				txt += "\n     本步分项：%s（合计 %+.1f）" % [dl, sc_step]
+		# 【2026-10-03·用户「沉默的其他评分是什么」】**出手步也打这一行**（原来只有纯走位步打）：
+		#   出手步以前只打「分差明细（现在这一手 − 那条备选）」⇒ **每一项都是相对差**，
+		#   读日志的人**拿不到绝对账**（用户那一局：5 项全是负的，真正赢的是残差桶 +31.9，
+		#   而它"不在分差比对内" ⇒ 看上去完全不明不白）。现在两支都打。
+		var dl := _plain_gap_terms(bd1, bd0, sc_step, 4)
+		if dl != "":
+			txt += "\n     本步分项：%s（合计 %+.1f）%s" % [dl, sc_step,
+				"　← 出手步：这是相对**本步之前**的逐项 Δ（绝对分见上面那条分差明细）" if is_atk_step else ""]
 		txt += tr_note
 		txt += "\n     %s" % _plain_incoming(end_sim, idx, landed)
 	# ② 计划里没有步骤的单位（= "整回合没动作"）：说明它本来能不能打、以及为什么没打
@@ -4453,23 +4971,25 @@ func _plain_incoming(end_sim: Sim, idx: int, cell: Vector2i) -> String:
 		# 【2026-09-26 修·日志自相矛盾】总和与逐笔必须同源（见 `_displace_total_max()`）：
 		#   胜出的是落点 ⇒ 主句写"被位移到 (x,y)"，并把"原地只有 M 伤"补在后面。
 		line = "下回合被位移到 %s 会挨 %.0f 伤%s（原地只有 %.0f 伤）" % [
-			str(info["disp_cell"]), inc, tail, float(info.get("base_total", 0.0))]
+			DataRegistry.cell_txt(info["disp_cell"]), inc, tail, float(info.get("base_total", 0.0))]
 	# 【2026-09-26·用户报「它可以被换到孤立的位置」】把**位移落点**也印出来：否则"被换位/被拉/被推之后
 	#   落到哪一格、那一格挨多少"在界面上完全看不见 —— 而那一格往往才是更坏的账（`_displace_landing_cells()`）。
+	# 【2026-10-02】落点从"每个位移者一个"变成"暗域能开火的每一格" ⇒ 改成印**最坏的两格**
+	#   （原来按返回顺序取前两个，集合一大就可能把最坏那格挤到第三位 ⇒ 日志反而看不出"换到落单位置会挨更多"）。
 	var lands := _displace_landing_cells(end_sim, eu, cell)
-	var bits: Array[String] = []
-	var k := 0
+	var rows2: Array = []
 	for lc in lands:
-		if k >= 2:
-			break
-		k += 1
 		var o2 := {}
 		var v2: float = _incoming_total_on(end_sim, eu, lc, o2, false, true)
 		var s2: Array[String] = []
 		for p2 in (o2.get("parts", []) as Array):
 			if p2 is Array and (p2 as Array).size() >= 2:
 				s2.append("%s%.0f" % [String(p2[0]), float(p2[1])])
-		bits.append("落到 %s 会挨 %.0f 伤（%s）" % [str(lc), v2, ("＋".join(s2) if s2.size() > 0 else "没人够得到")])
+		rows2.append([v2, "落到 %s 会挨 %.0f 伤（%s）" % [DataRegistry.cell_txt(lc), v2, ("＋".join(s2) if s2.size() > 0 else "没人够得到")]])
+	rows2.sort_custom(func(x, y): return float(x[0]) > float(y[0]))
+	var bits: Array[String] = []
+	for k in mini(2, rows2.size()):
+		bits.append(String(rows2[k][1]))
 	if bits.size() > 0 and not bool(info.get("displaced", false)):
 		line += "　⚠️ 被位移后：" + "；".join(bits)
 	return line
@@ -4500,10 +5020,10 @@ func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> St
 		elif t.skills.has(DataRegistry.Skill.TAUNT):
 			extra = "（打的是嘲讽单位）"
 		if mv != null and Vector2i(mv) != ur.cell:
-			return "走到 %s，然后打 %s（约 %.0f 伤%s）" % [str(mv), t.name, dmg, extra]
+			return "走到 %s，然后打 %s（约 %.0f 伤%s）" % [DataRegistry.cell_txt(mv), t.name, dmg, extra]
 		return "原地打 %s（约 %.0f 伤%s）" % [t.name, dmg, extra]
 	if mv != null and Vector2i(mv) != ur.cell:
-		return "只走到 %s（这一步不出手）" % str(mv)
+		return "只走到 %s（这一步不出手）" % DataRegistry.cell_txt(mv)
 	return "原地不动、也没出手"
 
 ## 【2026-09-23 深夜·用户拍板「加」】"现在这一手 − 那条备选"的**逐项分差**（正数 = 现在这一手在这项上更赚）。
@@ -4546,7 +5066,67 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 			# 【2026-09-29 晚·用户「黄金矿工的对不上，你把那个消了」】这一桶**本来就不是"未列项"**，
 			#   而是"英雄特化项"（金矿 `GOLD_*` / 血锁开团 / ⑯⑰⑱⑲ 的施加者覆盖值…）—— 见本函数头注。
 			#   名字改准 + 明写它与 `gap` 的关系，别再让读者以为"数字对不上"。
-			parts.append("英雄特化/其它 %+.1f（不在分差比对内）" % other)
+			# 【2026-10-03·用户「+31.9 是个黑盒，不明不白」】**把算术摊开**：这一桶 = `gap`（整份评分之差）
+			#   − `total`（`_eval_breakdown()` 里**通用项**字典之和）。它**不是"未列项"**，而是
+			#   **英雄特化项**（各 `hero_XX` 段的 `GOLD_*` / 血锁开团 / ⑯⑰⑱⑲ 的施加者覆盖值…）——
+			#   那些项根本不在 `_eval_breakdown()` 的通用字典里，所以只能以残差形式出现。
+			#   ⇒ 现在把两个被减数都打出来，读者可以自己核对 `other = gap − total`，
+			#     也知道这一桶里装的是**哪一类**东西（而不是"一堆对不上的数"）。
+			parts.append("英雄特化/其它 %+.1f（= 全量分差 %+.1f − 通用项合计 %+.1f；装的是各 hero_XX 段，不在分差比对内）"
+				% [other, float(gap), total])
+			# 【2026-10-03·用户「数值很大、影响了 AI 行为，我却不知道里面在算什么」】
+			#   桶里的钱全部来自 `w_hero`（扁平字典 `"hero_XX|KEY" -> 值`，`_wh()` 读它）⇒ **把生效清单打出来**。
+			#   ⚠️ 这是**清单、不是金额拆解**（金额要逐键置 0 重算，是下一步）。
+			#   为什么有用：一眼能看出"这一局到底有哪些英雄段在生效"（例如有 hero_34 ⇒ ⑰沉默的价、
+			#   有 hero_42 ⇒ 金矿的价…），比一个孤零零的 +31.9 强得多。
+			if absf(other) >= 1.0 and not w_hero.is_empty():
+				var hk: Array = []
+				for k in w_hero.keys():
+					var ks := String(k)
+					var kv := ks.split("|")
+					var hid := kv[0]
+					# ⚠️【2026-10-03·用户「场上没有的英雄怎么也出现在里面」】**只列场上真有的** ——
+					#   `w_hero` 是**权重文件里写着的英雄段**（配置），里面当然有这一局根本没上场的英雄；
+					#   不过滤就会读成"这一局在算这些英雄"，完全误导。
+					if not last_field_heroes.is_empty() and not last_field_heroes.has(hid):
+						continue
+					var key2 := kv[1] if kv.size() > 1 else ""
+					# 【2026-10-03·用户「把英雄名字写上」】中文名从**英雄脚本文件名**取
+					#   （`HeroRegistry._SCRIPTS` 里是 `res://heroes/hero_34_沉默术士.gd` ⇒ 去掉 `hero_34_` 前缀）。
+					#   为什么不用 `DataRegistry.get_hero()`：那是 HeroDef，字段名不确定；注册表路径是稳定的事实来源。
+					var nm := hid
+					var sc := String(HeroRegistry._SCRIPTS.get(hid, ""))
+					if sc != "":
+						nm = sc.get_file().get_basename().trim_prefix(hid + "_")
+					hk.append("%s（%s）|%s=%s" % [hid, nm, key2, str(w_hero[k])])
+				hk.sort()
+				parts.append("　↑ **场上真有的**英雄段键（%d 个）：%s" % [hk.size(), " · ".join(hk)])
+				# 【2026-10-03·用户「要」】**逐键绝对贡献**：把每个英雄段键**临时置 0**（⇒ 退回扁平兜底）
+				#   重算一次 `_evaluate()`，差值就是这条键此刻在推多少分。
+				#   ⚠️ 只动 `w_hero`（权重字典）、**不动局面**；算完原样还原。只在开日志时发生（每步 ≤ 十几次评分）。
+				#   ⚠️ 口径说明：得到的是「**这条英雄段键相对它的扁平兜底**值多少」，不是"这一项的全部金额"
+				#     （扁平兜底不是 0 的那几个键 —— 如 ⑫ 毒的 `POISON_TICK_VALUE` —— 看到的是两者之差）。
+				if last_print_sim != null:
+					var base_ev := _evaluate(last_print_sim, true)
+					var contrib: Array = []
+					for k2 in w_hero.keys():
+						var ks2 := String(k2)
+						var hid2 := ks2.split("|")[0]
+						if not last_field_heroes.is_empty() and not last_field_heroes.has(hid2):
+							continue
+						var save_v = w_hero[k2]
+						w_hero[k2] = 0.0
+						var ev0 := _evaluate(last_print_sim, true)
+						w_hero[k2] = save_v
+						var dc := base_ev - ev0
+						if absf(dc) >= 0.05:
+							contrib.append({ "k": ks2, "d": dc })
+					contrib.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
+					var cs: Array = []
+					for i2 in mini(4, contrib.size()):
+						cs.append("%s %+.1f" % [String(contrib[i2]["k"]), float(contrib[i2]["d"])])
+					if not cs.is_empty():
+						parts.append("　↑ 逐键**绝对**贡献（把该键置 0 后的差值）：" + " · ".join(cs))
 	if parts.is_empty():
 		return ""
 	var out := " · ".join(parts)
@@ -4587,7 +5167,6 @@ func _plain_reason(bd0: Dictionary, bd1: Dictionary, is_taunt: bool = false) -> 
 func _term_phrase(k: String, d: float, is_taunt: bool = false) -> String:
 	var better := d > 0.0
 	match k:
-		"①障碍绕路": return "少绕路" if better else "被墙逼着绕远路"
 		"②身价": return "换掉对面更值钱的单位" if better else "己方损失更值钱的单位"
 		"③血量账": return "打掉对面的血" if better else "自己这边要掉血"
 		"④集火frac²": return "继续集火同一个目标" if better else "火力分散了"
@@ -4667,7 +5246,7 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 		return _plain_no_attack_why(sim, ii)
 	# 有得打却没打：把"补上这一手"的分数差翻译成人话
 	var mv_txt := ("在 %s 原地打 %s" % [DataRegistry.cell_txt(iu.cell), best_name]) if best_combo.get("move") == null \
-		else ("从 %s 走到 %s 打 %s" % [str(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
+		else ("从 %s 走到 %s 打 %s" % [DataRegistry.cell_txt(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
 	var end_sim := sim.clone()
 	for st in (chosen["path"] as Array):
 		_apply(end_sim, int(st["idx"]), st["action"])
@@ -4678,7 +5257,7 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 	if end_sim.units[ii] == null or not (end_sim.units[ii] as SimUnit).alive or (end_sim.units[ii] as SimUnit).attacked:
 		return head + "，但它在「走完之后的局面」里已经出手/阵亡 ⇒ 这一手补不回去，没法比较"
 	if mc != null and end_sim.occ.has(mc) and (end_sim.occ[mc] as SimUnit) != end_sim.units[ii]:
-		return head + "，但走完之后 %s 那格已经被自己人占了 ⇒ 这一手补不回去" % str(mc)
+		return head + "，但走完之后 %s 那格已经被自己人占了 ⇒ 这一手补不回去" % DataRegistry.cell_txt(mc)
 	var bd_a := _eval_breakdown(end_sim, true)
 	var s_alt := end_sim.clone()
 	_apply(s_alt, ii, best_combo)
@@ -4886,7 +5465,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 			idle_txt += "\n   ↳ **没有任何能打到人的出招**：" + "；".join(why)
 		else:
 			var where_txt := ("在 %s 原地打 %s" % [DataRegistry.cell_txt(iu.cell), best_name]) if best_combo.get("move") == null \
-				else ("从 %s 走到 %s 打 %s" % [str(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
+				else ("从 %s 走到 %s 打 %s" % [DataRegistry.cell_txt(iu.cell), DataRegistry.cell_txt(best_combo["move"]), best_name])
 			idle_txt += "\n   ↳ 本回合**能打到人**（最好一击：%s，预估 %.1f 伤）却没出手 —— 以下是「补上这一手 vs 不动」的逐项对比：" % [
 				where_txt, best_dmg]
 			var mc2: Variant = best_combo.get("move")
@@ -4894,7 +5473,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 				and not (end_sim.units[ii] as SimUnit).attacked
 			if mc2 != null and end_sim.occ.has(mc2) and (end_sim.occ[mc2] as SimUnit) != end_sim.units[ii]:
 				ok_alt = false   # 末态里那个落点已被别人占了 ⇒ 这一手补不回去，硬算会给出假数
-				idle_txt += "\n   ↳ （不做数值对比：末态里 %s 已被占）" % str(mc2)
+				idle_txt += "\n   ↳ （不做数值对比：末态里 %s 已被占）" % DataRegistry.cell_txt(mc2)
 			if ok_alt:
 				var bd_a := _eval_breakdown(end_sim, true)
 				var s_alt := end_sim.clone()
@@ -4918,7 +5497,6 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 ## 公式文本里的数字取**当前生效的权重**（所以噩梦档开着 ENGAGE_PULL_PER_CELL=2.4 时会显示 2.40）。
 func _term_defs() -> Array:
 	return [
-		["①障碍绕路", "−Σ 被墙挡出的绕路代价 × OBSTACLE_DETOUR_WEIGHT(%.1f)" % w_obstacle_detour],
 		["②身价", "Σ_我方 身价 − Σ_对面 身价×PLAYER_VALUE_MULT(%.2f)（单位一死整项消失 = 击杀那笔钱）" % PLAYER_VALUE_MULT],
 		["③血量账", "`+HP_VALUE_W(%.2f) × 对面掉血 − HP_VALUE_W × 我方掉血×血量池倍率`（掉血**夹 ≥ 0** ⇒ 回血不进这一侧）；`HEAL_CREDIT_W(%.2f)`>0 时再追加**回血侧**：`+HEAL_CREDIT_W × 我方回血 − HEAL_CREDIT_W × 对面回血`（含溢出；与 ⑧ 的 `heal` 互斥，避免重复计价）" % [w_hp_value, w_heal_credit]],
 		["④集火frac²", "Σ_对面 FOCUS_FIRE_WEIGHT(%.1f) × (本回合已打掉血 ÷ 其回合初血)²" % w_focus_fire],
@@ -4934,7 +5512,7 @@ func _term_defs() -> Array:
 		["⑭坚固(堡垒)", "装甲堡垒(hero_48)：我方本回合**没移动**且**真被够得着** ⇒ +SOLID_HOLD_W(%.2f)（『站着不动换[坚固]』的价钱；值按英雄覆盖 `_wh` 取。⚠️ 2026-09-23：够得着 = 与 ⑥⑦ 同一把尺 —— 射程＋视线＋**单位身体**＋嘲讽门，**躲在队友后面、玩家其实打不到它 ⇒ 不给这 5 分**）" % w_solid_hold],
 		["⑯猛毒新挂", "+POISON_APPLY_W(%.2f) × 本回合**新挂上**猛毒的个数（毒蛇命中且目标**原本没毒**才计数；负墟免疫不计）。**值按施加者英雄覆盖读**（`_wh`）。与 ⑫ 互补：⑫ 付『毒在场上』的钱（状态），本项付『把毒铺开』的钱（动作）" % w_poison_apply],
 	["⑳抱团", "−FORM_COHESION_W(%.2f) × Σ_我方[ %d 格内**且中间没被障碍/墓碑挡开**的队友一个都没有 ⇒ 1 分 ]（只罚孤立、不罚挤在一起；**只在全队行动完的末态结算**，中途不算）" % [w_form_cohesion, FORM_RADIUS]],
-	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 贴身敌人的**威胁** − 贴身队友**能还手的威胁**) × %.0f ]（治贴墙/死胡同/被强敌包夹；**同样只在末态结算**。⚠️ 2026-09-28 用户拍板 A：两半都从**数人头**改成**威胁计价**（单点 = 该敌人下回合单击真实伤害 × 血量池倍率 ÷ TRADE_HP_REF；弱敌贴脸不再与强敌同价，坦克挨同一刀更便宜，**血锁自己把敌人拉过来**不再等于「我被夹住」），× %.0f 只是量纲补偿、不表达偏好，见 `const PULL_OPEN_W` 与 `FORM_ESCAPE_SCALE`）" % [w_form_escape, FORM_ESCAPE_MIN, FORM_ESCAPE_SCALE, FORM_ESCAPE_SCALE]],
+	["㉑退路/被夹", "−FORM_ESCAPE_W(%.2f) × Σ_我方[ max(0, %d − 可走邻格数) + max(0, 贴身敌人的**威胁** − 贴身队友**能还手的威胁**) × %.0f ]（治贴墙/死胡同/被强敌包夹；**同样只在末态结算**。⚠️ 2026-09-28 用户拍板 A：两半都从**数人头**改成**威胁计价**（单点 = 该敌人下回合单击真实伤害，**不打折、不归一** —— ⚠️ 2026-10-02 实测更正：本串原来写的「× 血量池倍率 ÷ TRADE_HP_REF」代码里没有，`TRADE_HP_REF` 只被 `_incoming_pool_mult()` 读；弱敌贴脸不再与强敌同价，坦克挨同一刀更便宜，**血锁自己把敌人拉过来**不再等于「我被夹住」），× %.0f 只是量纲补偿、不表达偏好，见 `const PULL_OPEN_W` 与 `FORM_ESCAPE_SCALE`。⚠️ **2026-10-02 新增·默认关**：`FORM_ESCAPE_ESCAPABLE = %d` 时被夹份再加一道「**退得掉**」门（下回合能走到一格不贴任何敌人 ⇒ 整笔不收；`_sim_step_out_of_pin()`），治「近战输出每次进攻都要交贴脸税」）" % [w_form_escape, FORM_ESCAPE_MIN, FORM_ESCAPE_SCALE, FORM_ESCAPE_SCALE, w_form_escape_escapable]],
 	["㉗位移开团", "+PULL_OPEN_W(%.2f) × Σ_被拉目标(拉完够得到它的我方单位数 − 现在够得到它的数) + PULL_ISOLATE_W(%.2f) × Σ_被拉成孤立的敌人数（**后半只在场上有活着且未被沉默/眩晕的嬉皮死神时才算** —— 孤立 ×2 是它的倍率）。两半都按**拉人落点**判（`_pull_out_landing()` 与真实 `Battle._pull_to()` 同式），是**动作层**的一笔（末态照里「被拉过来的」与「自己走过来的」同分 ⇒ 搜索结构上看不见它）" % [w_pull_open, w_pull_isolate]],
 	["㉒隔断", "+SPLIT_W(%.2f) × Σ_玩家(两两) clamp( min(「地形+**合格的我方身体**」的路网距离, %d) − max(「只看地形」的路网距离, %d), 0, %d )（**只付『我方身体造成的那部分切断』**：地形本来就隔开的不付；只在末态结算。⚠️ 算墙的我方单位必须**自己有队友在 %d 格内**（孤军堵路不加分）**且远程只有『没贴到玩家身上』时才算** —— 用户两条硬约束）" % [w_split, SPLIT_CAP, SPLIT_FREE_STEPS, SPLIT_CAP, FORM_RADIUS]],
 	["㉓离队距离", ("−FORM_SPREAD_CELL_W(%.2f) × Σ_我方非召唤物 max(0, 与**最近队友**的格距 − 1)（⑳ 的**距离梯度**：贴身 0 罚、格距 2 罚 1 份、格距 3 罚 2 份……**只看格距、不看地形**；**同样只在末态结算**）"
@@ -4942,8 +5520,10 @@ func _term_defs() -> Array:
 		["㉔破盾", "+SHIELD_BREAK_W(%.1f) × Σ 本回合破掉的盾 × REF(%.1f)/max(伤害, REF)（**用越低的伤害破盾越值**：1 点 poke = 满价、大招被盾吃掉 ≈ 0 价；对面盾被我方破 + / 我方盾被对面破 −）" % [w_shield_break, SHIELD_BREAK_DMG_REF]],
 		["㉕嘲讽吸火", "+TAUNT_SOAK_W(%.1f) × Σ_我方**非嘲讽**单位（**关掉嘲讽门**重算的挨打合计 − 实际挨打合计）× 血量池折算（= 因为嘲讽门，后排这回合少挨的那部分血；**躲在后排 = 差额 0 = 一分不得**，站到火力线上才赚）" % w_taunt_soak],
 		["㉘堡垒挡刀", "+TANK_SCREEN_W(%.2f) × Σ_我方单位（含**装甲堡垒自己那一格**）[ 关掉嘲讽门的挨打合计 − 实际挨打合计 ] × 血量池折算，按对手普攻总输出封顶（= **装甲堡垒站在这一格替全队挡下了多少刀**；站到「谁也没挡住」的位置 = 0 分）。⚠️ 只认 hero_48（塔盾替队友挨的那点血已进 ③血量账，再加是重复计价）· 只在末态结算 · 与 ㉕ 取值范围不重叠（两个键别同时开）" % w_tank_screen],
+		["㉜坦克挡刀位", "+FORM_SCREEN_W(%.2f) × Σ_{须保护队友 P × 坦克 T}[ T 与 P **贴身**（格距 1）**且 T 比 P 更靠近 P 的最近敌人 E* **（路网步数，敌人够得着 P 才算：d(P,E*) ≤ %d）]（= **站在脆皮与敌人之间**的那一笔；**不是距离罚、是位置奖励** —— `FORM_GUARD_GATE` 只管到「待在 2 步内」，站在脆皮**身后**与站在**敌人那一侧**同分。塔盾「替相邻队友扛 1 点」吃的就是这个门。⚠️ 不挂末态门，理由同 ㉘：阶段 1 排阵型时 `end_of_turn=false`）" % [w_form_screen, SCREEN_RANGE]],
 		["㉙buff被抢", "−BUFF_DENY_W(%.2f) × Σ_{末态仍留着的道具格}[ 类型价 × (我方**本回合**够得到过它 ? 1 : 0) × (对面**下回合**够得到它 ? 1 : 0) ]（两侧都用「路网步数 ≤ 移动力」这把尺；类型价取**对面吃掉能得的那一份** ⇒ 它已带盾的盾道具算 0、回血道具在 `HEAL_CREDIT_W>0` 时按面值 1.2）。补的是 ⑧ 的盲区：⑧ 只在踩上去那一刻付钱、且 AI 看不到「玩家下回合会来吃」这件事 ⇒ 现在「要么现在吃掉、要么别停在它旁边」。只在末态结算" % w_buff_deny],
 		["㉖暴露总量", "−EXPOSURE_TOTAL_W(%.2f) × Σ_{我方**脆皮输出**} 挨打合计（脆皮 = 面板血上限 ≤ EXPOSURE_HP_MAX(%.0f)；有输出 = `_output_potential()` ≥ EXPOSURE_OUT_MIN(%.0f) ⇒ 后勤/纯辅助/坦克不进。⑦ 是 **max 型 + 按核心系数归一** ⇒ 13 血挨 10 伤只值 0.82 分；本项按**点数**计。只在末态结算，与 ⑦ 共用一次 `_incoming_incs()`）" % [w_exposure_total, w_exposure_hp_max, EXPOSURE_OUT_MIN]],
+		["最后一人保命", "−LAST_MAN_W(%.2f) × 这一条命值多少终局分（从 ⑩终局项的同一条曲线取：**只在剩 1 条命（再死就判负）时生效 = 900 分**）× Σ_我方[ **末态挨打合计 ≥ 当前血** 的存活单位数 ]（剩 3/2 条命时本项恒 0：用户口径「还没输就给我尽情战斗」）（= 下回合会被打死的那几条命；判据与 ⑥⑦ 同一把尺子 `_incoming_total_on()`）。**用户口径**：「除非能斩杀对方，否则那个必死的英雄躲起来用走位苟一下」—— 斩杀对面最后一人从 `TERMINAL_FOE_CURVE` 拿 +1000 ⇒ 依然压得过这 900 ⇒ 该换的时候照换。**配套**：`_actions_for()` 的撤退过滤对当前格就必死的单位开一条口子（否则候选表里没有躲这一手）。0 = 关（逐位不变）" % [w_last_man]],
 		["㉛AoE形状", "−AOE_RIDER_TOTAL_W(%.2f) × Σ_{我方**㉖ 管不到**的单位（坦/半肉/后勤/无输出）} 它在当前格因对手 AoE **形状**会额外挨的血（三族见 `_aoe_riders_on()`：白游侠散射 / 长剑剑气 / 红帽自爆）。⚠️ 与 ㉖ **不重复计**（脆皮输出那部分由 ㉖ 按全部挨打合计罚）；**只管形状、不管普通挨打** ⇒ 不会变成「人人各自躲」。只在末态结算" % w_aoe_rider_total],
 		["红帽·血线", "−REDCAP_HP_FLOOR_W(%.2f) × max(0, 廉价解真实单击合计 + 1 − 红帽末态血)（廉价解 = 够得到她的 `<远程>`（打死她不吃自爆）· 血 ≤ REDCAP_CHEAP_HP(%.0f)（换掉不亏）· 能挂沉默的人；**不封顶**；**只在末态结算**）" % [w_redcap_hp_floor, w_redcap_cheap_hp]],
 		["红帽·替补风险", "−REDCAP_SUB_RISK_W(%.2f) × clamp(最坏一张替补对她末态格的威胁 ÷ 她的血, 0, 1.5)（威胁 = 从**本回合新立的墓碑格**出发的单击 + 登场技：猎颅者 攻击力点+[眩晕]；**只在末态结算**）" % w_redcap_sub_risk],
@@ -4960,7 +5540,6 @@ func _term_defs() -> Array:
 func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	_sim_sync_pins(sim)   # 与 `_evaluate()` 第一步一致（否则"远程被贴"的攻击力口径会漂）
 	var d := {}
-	d["①障碍绕路"] = -_obstacle_detour(sim)
 	var own := 0.0
 	for i in sim.units.size():
 		var u: SimUnit = sim.units[i]
@@ -4989,7 +5568,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 		if hu.fn == DataRegistry.Faction.ENEMY:
 			hp -= w_hp_value * lost * _incoming_pool_mult(hu)   # 与 _evaluate 同口径（血量池折算）
 		else:
-			hp += w_hp_value * lost
+			hp += w_hp_value * lost * _target_core_mult(sim, hu)   # 【2026-10-03】按目标核心度放大
 	d["③血量账"] = hp
 	var ff := 0.0
 	for i in sim.units.size():
@@ -5000,7 +5579,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 		if dealt <= 0:
 			continue
 		var frac := float(dealt) / float(maxi(ft.hp0, 1))
-		ff += w_focus_fire * frac * frac
+		ff += w_focus_fire * frac * frac * _target_core_mult(sim, ft)   # 【2026-10-03】按目标核心度放大
 	d["④集火frac²"] = ff
 	d["⑤位置拉力"] = _position_score(sim)
 	d["⑥规则B"] = _rule_b_score(sim)
@@ -5017,9 +5596,11 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	#   同一个 `_incoming_incs()`、同一个公式 —— 否则自校验 `Σ=… vs 本步 Δ…` 会漂）。
 	#   ⚠️ 2026-09-24：⑮必死折已删（见文件头 const 处），这里只剩 ⑦。
 	# 【2026-09-26·选项 2】㉖ 与 ⑦ 共用这一次 `_incoming_incs()`（⇒ Σ 自校验不会漂）
-	if w_risk != 0.0 or w_exposure_total != 0.0:
+	if w_risk != 0.0 or w_exposure_total != 0.0 or w_last_man != 0.0:
 		var incs_bd := _incoming_incs(sim)
 		d["⑦核心风险"] = _exposure_risk(sim, incs_bd)
+		if w_last_man != 0.0:
+			d["最后一人保命"] = _last_man_fold(sim, incs_bd)
 		d["㉖暴露总量"] = _exposure_total(sim, incs_bd)
 	if w_poison_apply != 0.0 or _any_hero_key(["POISON_APPLY_W"]):
 		d["⑯猛毒新挂"] = sim.poison_apply_val
@@ -5061,6 +5642,10 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 		var wts_bd := _wh("hero_48", "TANK_SCREEN_W", w_tank_screen)
 		if wts_bd != 0.0:
 			d["㉘堡垒挡刀"] = wts_bd * _tank_screen_val(sim)
+	# 【2026-10-03·用户口径（可选项）·默认关】㉜坦克挡刀位（与 `_evaluate()` 那一段逐行对应 ⇒ Σ 自校验不漂）
+	#   ⚠️ **不挂末态门**（与 ㉘ 同款；理由见 const FORM_SCREEN_W 处）。
+	if w_form_screen != 0.0:
+		d["㉜坦克挡刀位"] = w_form_screen * _screen_val(sim)
 	# 【2026-09-28·A 案·默认关】㉙「buff 被抢」（与 `_evaluate()` 那一段逐行对应 ⇒ Σ 自校验不漂）
 	#   同样只在末态列出来（与 ⑳㉑㉒㉓㉕ 同款）⇒ 两处必须同改。
 	if end_of_turn and w_buff_deny != 0.0:
@@ -5289,6 +5874,8 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 			for t in targets:
 				if _redhood_kill_unsafe(sim, u, t, mc):
 					continue   # 会点杀红帽且她身旁有己方单位（含我走过去之后）：自爆13伤不划算，不打这一击
+				if _redcap_push_unsafe(sim, u, t, mc):
+					continue   # 会把她压到"一碰就死"而我没有解决方案（她的落点圈里还有我方）：不打这一击
 				combos.append({ "move": null if mc == u.cell else mc, "atk": t })
 		elif not u.attacked and can_attack:
 			# 无目标可打，仅移动
@@ -5300,7 +5887,6 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 			if mc != u.cell:
 				combos.append({ "move": mc, "atk": -1 })
 	# 攻击障碍（清障）候选：
-	# 不再"只有当前格打不到人"才允许——障碍的价值由 _obstacle_detour 按**实际绕路代价**给分，
 	# 该不该花一次攻击去拆墙交给评分决定（真正挡路的墙值得拆，不挡路的墙分很低自然不拆）。
 	# ① 原地能打的障碍：任何情况下都是候选；
 	# ② "移动→拆障碍"：只在"这一回合哪儿都打不到人"时才展开（否则候选会爆炸），
@@ -5366,6 +5952,13 @@ func _actions_for(sim: Sim, idx: int) -> Array:
 				d0 = walk_dist(sim, u.cell, p0.cell)
 			if p1 != null:
 				d1 = walk_dist(sim, nc, p1.cell)
+			# 【2026-10-02·`LAST_MAN_W`】"当前格就必死"的单位：**保留"只走位不攻击"这一手**
+			#   （用户口径「除非能斩杀，否则那个必死的英雄躲起来用走位苟一下」）——
+			#   没有这道口子的话，候选表里根本没有"躲"，那一项再贵也没得选。见 `LAST_MAN_W` 处说明。
+			#   ⚠️ 键关着时 `_last_man_hide_ok()` 恒 false ⇒ 逐位不变。
+			if _last_man_hide_ok(sim, u, cur_inc):
+				kept.append(combo)
+				continue
 			if d1 > d0 and (any_attack_avail or cur_inc <= 3.0 or d1 > u.emove + u.atk_range):
 				continue   # 丢弃这种“无谓后撤/退到够不着”
 		kept.append(combo)
@@ -5508,6 +6101,52 @@ func _redhood_kill_unsafe(sim: Sim, u: SimUnit, target: Variant,
 		if float(u.hp) <= _wh(u.hero_id, "REDCAP_CHEAP_HP", w_redcap_cheap_hp):
 			return false
 	return self_adj or others_adj > 0   # 有己方单位贴着她（含"我走过去贴着她"）⇒ 点杀会把她炸到自己人
+
+## 【2026-10-03·用户口径】「你不能自己控制一下，AI 没有解决方案的时候，不要把红帽打到安全血线以下吗？
+##   等到玩家已经死两个了就可以打红帽了」
+##   **安全血线** = 她会被我方**一击杀**的那条线（`_redcap_kill_line()` —— 与 `_redcap_blast_threat()` 同一把尺：
+##   她此刻的血 > 我方对她能落上去的最大单击 ⇒ 玩家没法逼我们当回合引爆她）。
+##   **这一击** = 打她、把她从"打不死"压到"一碰就死"（末态 = `她血 − 这一击真实伤害 ≤ 安全血线`）。
+##   **"AI 没有解决方案"** = 她的**自爆落点圈**（`_redcap_blast_zone()`：她下回合走得到 + 1 格）里还有我方单位
+##   ⇒ 那一炸炸得到人、我们既躲不掉也不一定换得掉 ⇒ 干脆**别去碰她**。
+##   **两条例外（放行）**：① 对面**再死一个就判负**（`foe_dead >= death_line − 1`，用户原话「玩家已经死两个了
+##   就可以打红帽了」）⇒ 打死她就赢、13 点无所谓；② 她已被[沉默]/[眩晕] ⇒ 炸不出来，压血线是干净的。
+##   ⚠️ 与 `_redhood_kill_unsafe()` 的分工：**那个管"这一击会打死她"，本函数管"这一击把她压到一碰就死"**（打不死的那些）。
+##      两把尺子的伤害算式逐字相同（倍率 + 长角"退不动 2 倍" + 目标侧修正），只是比较对象一个是 `hp`、一个是"安全血线"。
+##   ⚠️ 只管**主动攻击**这一条路（与点杀护栏同一范围）：中毒/灼烧这类**回合末掉血**把她压到线下的情况不在这里。
+##   ⚠️ 训练侧：`RL/harness/对局.gd` **不传 `deads`** ⇒ 跑批里 `foe_dead = −1` ⇒ 例外 ① 恒不成立（比实机更保守）。
+func _redcap_push_unsafe(sim: Sim, u: SimUnit, target: Variant,
+		from_cell: Vector2i = Vector2i(-99, -99)) -> bool:
+	var at_cell: Vector2i = u.cell if from_cell.x == -99 else from_cell
+	var t: SimUnit = sim.units[int(target)] if target is int else target
+	if t == null or t.hero_id != "hero_40" or not t.alive:
+		return false
+	if t.silenced or t.stunned:
+		return false                       # 炸不出来 ⇒ 压她的血线没有附带代价
+	if sim.foe_dead >= maxi(sim.death_line, 1) - 1:
+		return false                       # 对面再死一个就判负 ⇒ 打死她就赢（用户口径：玩家已死 2 人就可以打）
+	var line := _redcap_kill_line(sim, t)
+	if float(t.hp) <= line:
+		return false                       # 打之前就已经在一击线以下 ⇒ 不是"这一击压下去的"（交给点杀护栏 + ㉛）
+	# 这一击的真实伤害（与 `_redhood_kill_unsafe()` / `_redcap_kill_line()` 同一把尺）
+	var one := float(u.eatk) * _sim_mult(sim, u, t)
+	if u.hero_id == "hero_32" and _kb_landing(sim, at_cell, t.cell).x == -99:
+		one *= 2.0                          # 长角：退不动 ⇒ 2 倍伤害（`_kb_landing()` 是纯计算）
+	if not t.shield:
+		one = _hit_after_target_mods(sim, t, t.cell, one, true)
+	var after := float(t.hp) - one
+	if after <= 0.0:
+		return false                       # 这一击会**打死**她 ⇒ 那是 `_redhood_kill_unsafe()` 的活
+	if after > line:
+		return false                       # 打完还在线上 ⇒ 没压到线下，不用管
+	# 真压到线下了：查"有没有解决方案" —— 她的落点圈里还有我方单位就说明没有（出手者按这一步的落点算）
+	for v in sim.units:
+		if v == null or not v.alive or v.fn != u.fn:
+			continue
+		var vc: Vector2i = at_cell if v == u else v.cell
+		if _redcap_blast_zone(sim, t, vc):
+			return true
+	return false
 
 ## 【2026-10-01·用户口径「也不能写死啊，如果红帽就是对方最后一个，必须要杀死」】
 ##   她是不是**对手场上唯一活着的人**（判据 = `sim.units` 里 `fn == t.fn` 且 `alive` 的只有她；
@@ -6059,6 +6698,11 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				sim.walk_cache_pass.clear()
 			else:
 				sim.obstacles[oc2] = nd
+		# 【2026-10-02·与真实侧同源】敲障碍也算一次"攻击结算" ⇒ 消耗"一次性攻击道具"
+		#   （真实 `Battle._finish_obstacle_hit()` 在伤害结算之后清 `Unit.atk_use_buff`；这里同样放在
+		#    `obs_dmg` 算完之后 —— 伐木工那 `eatk + 99` 照常吃到 +2 加成，用完才清）。
+		#   原来模拟侧不清 ⇒ 末态评分会把这个单位"下次攻击还带 +2"算进去，与真实盘分叉。
+		_sim_consume_atk_item(u)
 		_sim_flush_pending(sim)
 		_sim_flush_died(sim)   # 阵亡技效果（含自爆再杀人）排在守卫/消散之后
 		_sim_flush_subs(sim)   # 【RL 修正】落位在"阵亡→守卫"之后（真实：回合开始/中途补位）
@@ -6938,6 +7582,10 @@ func _sim_spawn_sub(sim: Sim, fn: int, hid: String, cell: Vector2i) -> void:
 	nu.atk_type = def.attack_type
 	nu.skills = def.skills.duplicate()
 	_sim_apply_hero_fixups(nu)   # 【RL 修正】出生修正与 build_state 共用（原来替补漏了这一步）
+	# 【2026-10-02·T138】回合开始的先补位 ⇒ 共鸣这一手会结算 ⇒ 按"落地后的攻击力"建（与探针同款）
+	if echo_sum_here > 0 and hid == "hero_47":
+		nu.echo_set = echo_sum_here
+		nu.eatk = echo_sum_here
 	nu.name = hid
 	sim.units.append(nu)
 	nu.sim_index = sim.units.size() - 1
@@ -7816,6 +8464,107 @@ func _sim_isolated(sim: Sim, target: SimUnit, attacker: SimUnit) -> bool:
 const FORM_DIRS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1),
 		Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)]
 
+## 【2026-10-02·用户口径】⑳/㉓ 的**按身份分档**系数（`FORM_ROLE_GATE`，引擎默认 0 = 关）。
+##   `1.0` = "**会为落单真付出代价**"的单位，两类：
+##     ① **脆皮 + 有输出** —— 复用 ㉖ 的同一把门 `_exposure_covered()`
+##        （面板血上限 ≤ `EXPOSURE_HP_MAX` **且** `_output_potential() ≥ EXPOSURE_OUT_MIN`）
+##     ② **后勤**（`<后勤>` 技能）—— ⚠️【2026-10-02 用户口径补】「**后勤也需要被保护啊**，
+##        你自己看看后勤都是些什么英雄，**都是怕被打的**」。
+##        **为什么不能只靠 ①（实测三个后勤全被挡在门外）**：烛火 HP **17**、末日 HP **18**
+##        ⇒ 过不了"血上限 ≤ 15"；涌电技师**攻 0**、HP 27 ⇒ 过不了"输出潜力 ≥ 8"
+##        （`_output_potential` = `攻×2.2 + 技能评分 + 补强`，它只有 4.4）⇒ **三个后勤全被当成坦克放养**。
+##        而后勤是**不能还手 / 还手极弱**的支援位，落单就是被白吃 ⇒ 必须与脆皮输出同档保护。
+##   `FORM_ROLE_TANK_MULT` = 其余（厚血 / 非核心 / 能自己打的战士）
+## 用户原话（第一句）：「伐木工本身是不怕被分割的英雄，他不是脆皮、没有生命危险、不是核心
+##   ⇒ 不需要强制抱团」。
+## ⚠️ **门关着时恒返回 1.0 且短路**（连 `_exposure_covered()` 都不调）⇒ 逐位回到现役口径。
+## ⚠️ 只管 ⑳/㉓（队形族）；㉑ 与 ⑦/㉖ 不受影响。
+func _form_role_mult(u: SimUnit) -> float:
+	if w_form_role_gate <= 0:
+		return 1.0
+	if _form_is_protected(u):
+		return 1.0
+	return w_form_role_tank_mult
+
+## 【2026-10-03·用户口径】"**须保护**"的单位集合（队形族与护卫尺子共用同一把门）：
+##   ① **`<后勤>`**（不能还手 / 还手极弱的支援位 —— 用户「后勤也需要被保护啊，都是怕被打的」）
+##   ② **脆皮 + 有输出**（复用 ㉖ 的门 `_exposure_covered()`：血上限 ≤ `EXPOSURE_HP_MAX` 且有输出）
+## ⚠️ 门关着时**不短路**（本函数只被 `_form_role_mult()` / 护卫尺子调，那两处各自先看自己的键）——
+##   所以这里恒按定义判，不做开关判断。
+func _form_is_protected(u: SimUnit) -> bool:
+	if u == null:
+		return false
+	if u.skills.has(DataRegistry.Skill.LOGISTICS):
+		return true
+	return _exposure_covered(u)
+
+## 【2026-10-03·用户口径（可选项）】「**坦克挡刀位**」的计数（机制见 `const FORM_SCREEN_W` 处说明）：
+##   返回**命中数**（每命中一对「须保护队友 P × 坦克 T」记 1）。门关着时调用方短路、不进这里。
+##   尺子 = `_form_route_field()`（障碍 / 墓碑 / **敌人**算墙，我方身体不算）⇒ 与 ⑳㉓㉒ 同一把。
+##   成本：**每个 P 一趟 BFS**（只在"有须保护队友"时）+ **每个"至少贴着一个 P"的坦克一趟 BFS**
+##   ⇒ 常见局面 1~3 趟（网格只有 5×7）；一个 P 都没有时**一趟都不跑**。
+func _screen_val(sim: Sim) -> float:
+	var prots: Array = []
+	for i in sim.units.size():
+		var p: SimUnit = sim.units[i]
+		if p == null or not p.alive or p.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if DataRegistry.summons.has(p.hero_id):
+			continue
+		if _form_is_protected(p):
+			prots.append(p)
+	if prots.is_empty():
+		return 0.0
+	# ① 每个 P 的「最近的敌人」（够不着就不算，见 SCREEN_RANGE 那条说明）
+	var pairs: Array = []          # [[P, E*, d(P,E*)], ...]
+	for p in prots:
+		var fld := _form_route_field(sim, p, SCREEN_RANGE)
+		var best_e: SimUnit = null
+		var best_d := SCREEN_RANGE + 1
+		for j in sim.units.size():
+			var e: SimUnit = sim.units[j]
+			if e == null or not e.alive or e.fn == DataRegistry.Faction.ENEMY:
+				continue
+			var d := _foe_road_dist(fld, e)
+			if d < best_d:
+				best_d = d
+				best_e = e
+		if best_e != null and best_d <= SCREEN_RANGE:
+			pairs.append([p, best_e, best_d])
+	if pairs.is_empty():
+		return 0.0
+	# ② 每个坦克：先挑出它贴身护着的那些 P（一个都没有 ⇒ 不跑 BFS），再比"谁更靠近那个敌人"
+	var hits := 0.0
+	for i in sim.units.size():
+		var t: SimUnit = sim.units[i]
+		if t == null or not t.alive or t.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if DataRegistry.summons.has(t.hero_id) or _form_is_protected(t):
+			continue
+		var adj: Array = []
+		for pr in pairs:
+			var p2: SimUnit = pr[0]
+			if grid.distance(t.cell, p2.cell) == 1:
+				adj.append(pr)
+		if adj.is_empty():
+			continue
+		var ft := _form_route_field(sim, t, SCREEN_RANGE + 1)
+		for pr2 in adj:
+			var e2: SimUnit = pr2[1]
+			if _foe_road_dist(ft, e2) < int(pr2[2]):
+				hits += 1.0
+	return hits
+
+## `fld` = 从某个**我方单位**出发的路网场（`_form_route_field()`）⇒ **敌人自己那一格永远不在场里**
+##   （它被当成墙）⇒ 到敌人的距离 = **它邻格里最小的那个 + 1**。
+func _foe_road_dist(fld: Dictionary, e: SimUnit) -> int:
+	var best := 9999
+	for n in grid.neighbors(e.cell):
+		var d := int(fld.get(n, 9999))
+		if d + 1 < best:
+			best = d + 1
+	return best
+
 func _formation_parts(sim: Sim) -> Vector3:
 	var coh := 0.0
 	var esc := 0.0
@@ -7842,8 +8591,50 @@ func _formation_parts(sim: Sim) -> Vector3:
 		#   全程没人读）⇒ 编辑器报 `UNUSED_VARIABLE`，**已删**（纯删死代码，行为零变化）。
 		var field := _form_route_field(sim, u, FORM_ROUTE_MAX if want_grad else FORM_RADIUS)
 		var has_buddy := _has_buddy(sim, u, field)
+		# 【2026-10-02·用户口径】⑳/㉓ 的**按身份分档**系数（`FORM_ROLE_GATE = 0` ⇒ 恒 1.0 ⇒ 逐位回到现役口径）
+		var care := _form_role_mult(u)
+		# 【2026-10-03·用户实机反馈】坦克的**护卫尺子**（`FORM_GUARD_GATE`，见 const 处说明）：
+		#   对**非须保护**的单位，⑳/㉓ 的对象从"任意队友"换成"**须保护的队友**"，且恢复全价（care = 1.0）。
+		var guard_only := false
+		var skip_escape := false     # 【2026-10-03·用户拍板 (d)】"没人可护"时 ㉑ 照旧跳过（见下）
+		if w_form_guard_gate > 0 and not _form_is_protected(u):
+			var any_protected := false
+			for j in sim.units.size():
+				var m0: SimUnit = sim.units[j]
+				if m0 == null or not m0.alive or m0 == u or m0.fn != u.fn:
+					continue
+				if DataRegistry.summons.has(m0.hero_id):
+					continue
+				if _form_is_protected(m0):
+					any_protected = true
+					break
+			# 【2026-10-03·用户拍板 (d)】原来这里是 `if not any_protected: continue`（⑳/㉓ 与 ㉑ 一起整笔跳过）
+			#   ⇒ **全厚血阵容**里（一个"脆皮有输出"/后勤都没有 —— 例如用户那局 复仇者 26 / 圣诞老人 24 /
+			#   宿魂 19 血，三个都不够 `_exposure_covered()` 的门）**所有人的 ⑳/㉓ 一起归零** ⇒ AI 完全没有
+			#   "别掉单"的拉力，只剩 ⑤位置拉力那一条（那局它还在后场捡 buff 就是这个原因）。
+			#   现在改成：**没人可护 ⇒ 退回默认尺子** —— 按"离最近**任意**队友"算 ⑳/㉓，价钱仍用 `care`
+			#   （非须保护 = `FORM_ROLE_TANK_MULT`，默认 0.25）⇒ 留一点**弱**拉力，又不把厚血钉死在队里。
+			#   ⚠️ `guard_only` 只在**真有人可护**时才启用 ⇒ "换对象 ＋ 全价"那套口径一字未动。
+			#   ⚠️ ㉑（退路/被夹）在"没人可护"时**照旧跳过**（用户这条只说"队形两项"；近战本来就由
+			#      `FORM_ESCAPE_RANGED_ONLY` 跳过 ⇒ 这里只是把原行为保持住）。
+			#   **回退**：把下面这个 `if any_protected:` 换回 `if not any_protected: continue`（＋删掉 `skip_escape`）。
+			if any_protected:
+				guard_only = true
+				care = 1.0            # 这时它量的是"有没有在护卫"，罚太轻拉不动
+				has_buddy = false
+				for j in sim.units.size():
+					var m1: SimUnit = sim.units[j]
+					if m1 == null or not m1.alive or m1 == u or m1.fn != u.fn:
+						continue
+					if DataRegistry.summons.has(m1.hero_id) or not _form_is_protected(m1):
+						continue
+					if int(field.get(m1.cell, FORM_RADIUS + 1)) <= FORM_RADIUS:
+						has_buddy = true
+						break
+			else:
+				skip_escape = true    # 没人可护 ⇒ ⑳/㉓ 照上面的新口径算，但 ㉑ 保持"不罚它"
 		if not merged and not has_buddy:
-			coh += 1.0
+			coh += care
 		# ③ ㉓离队距离（2026-09-22 新增）：到**最近队友**的**路网步数** − 1，纯距离梯度。
 		#   为什么需要它：① 是 0/1 阶跃 ⇒ 单位一旦掉单，「原地」和「再跑 3 格」代价一样，
 		#   只要 ⑤位置拉力(每格 2.4) 大过 `FORM_COHESION_W` 就会一路前冲、永不回头
@@ -7859,19 +8650,30 @@ func _formation_parts(sim: Sim) -> Vector3:
 					continue
 				if DataRegistry.summons.has(mate.hero_id):
 					continue
+				if guard_only and not _form_is_protected(mate):
+					continue      # 护卫尺子：只按"须保护的队友"算距离
 				mate_n += 1
 				var dw := int(field.get(mate.cell, FORM_ROUTE_MAX + 1))
 				if dw < dmin:
 					dmin = dw
 			if mate_n > 0:   # 全队只剩自己一个 ⇒ 没有「离队距离」可罚（① 的孤立罚照旧）
-				spread += float(maxi(0, mini(dmin, FORM_ROUTE_MAX) - 1))
+				spread += care * float(maxi(0, mini(dmin, FORM_ROUTE_MAX) - 1))
 		# 【2026-09-22 晚·合并模式】把 ⑳ 的 0/1 孤立份**并进 ㉓ 的曲线**：没有合格队友 ⇒ 加一个
 		#   固定台阶 `FORM_ISO_STEP_RATIO` 份（× ㉓ 的每格权重 ⇒ 现役取值下就等于旧的 ⑳ 5.0）。
 		#   判据仍用 `_has_buddy()`（路网感知：≤2 步；障碍 / 墓碑 / 敌方单位算墙）。
 		if merged and not has_buddy:
-			spread += FORM_ISO_STEP_RATIO
+			spread += care * FORM_ISO_STEP_RATIO
 		if merged:
 			continue          # 合并模式：㉑（退路/被夹）退役 ⇒ 那一趟扫整个跳过
+		if skip_escape:
+			continue          # 【2026-10-03·(d)】"没人可护"⇒ ㉑ 照旧跳过（队形两项已按上面的新口径算完）
+		# 【2026-10-02·用户口径】㉑ **只考虑远程**（`FORM_ESCAPE_RANGED_ONLY`，默认 0 = 现役 = 所有单位都算）：
+		#   ㉑ 的初衷本来就是**远程**（2026-09-21 用户原话：「远程…走进死胡同，或者选择贴墙，最后被玩家包夹」），
+		#   但实现里对**每个单位**同价 ⇒ **近战（射程 1，必须贴身才打得到）每次进攻都交一笔贴脸税**。
+		#   用户 2026-10-02 口径：「**㉑ 只考虑远程**」⇒ 近战整个跳过这一趟（㉑ 的两半都不算它）。
+		#   ⚠️ 只跳过 ㉑；⑳/㉓（队形族）与 `merged` 那套照旧（它们在上面已经算完）。
+		if w_form_escape_ranged_only > 0 and u.atk_type != DataRegistry.AttackType.RANGED:
+			continue
 		# ② 退路/被夹：数可走邻格 + **贴身威胁的净值**（2026-09-28 用户拍板 A，见 const 处说明）
 		var free_n := 0
 		var foe_threat := 0.0     # 贴身敌人里**最疼的那一下**
@@ -7911,7 +8713,13 @@ func _formation_parts(sim: Sim) -> Vector3:
 				continue
 			free_n += 1
 		esc += float(maxi(0, FORM_ESCAPE_MIN - free_n))
-		esc += maxf(foe_threat - friend_back, 0.0) * FORM_ESCAPE_SCALE
+		# 【2026-10-02 用户拍板·方案 1·默认关】被夹份加一道"**退得掉**"门（`FORM_ESCAPE_ESCAPABLE=1` 时）：
+		#   下回合能走到一格"不贴任何敌人"的落点 ⇒ 这一份**整笔不收**（只有真被围住、跑不掉的才收）。
+		#   病灶 / 依据 / 口径 / 回退见 `const FORM_ESCAPE_ESCAPABLE` 与 `_sim_step_out_of_pin()`。
+		#   ⚠️ 短路口：键 = 0 时 `and` 直接短路 ⇒ `_sim_step_out_of_pin()` **一次都不调** ⇒ 逐位回到旧口径。
+		var escapable: bool = w_form_escape_escapable > 0 and _sim_step_out_of_pin(sim, u)
+		if foe_threat > friend_back and not escapable:
+			esc += (foe_threat - friend_back) * FORM_ESCAPE_SCALE
 	return Vector3(coh, esc, spread)
 
 ## 【2026-09-25·用户点名改】队形族（⑳抱团 / ㉓离队距离 / ㉒的「算墙者不能掉单」）专用**限步路网**：
@@ -8048,43 +8856,6 @@ func _split_bfs(sim: Sim, start: Vector2i, walls: Dictionary) -> Dictionary:
 			frontier.append(n)
 	return dist
 
-func _obstacle_detour(sim: Sim) -> float:
-	if sim.obstacles.is_empty():
-		return 0.0   # 没墙就恒为 0（绝大多数局面走这条快路）
-	var total := 0.0
-	for i in sim.units.size():
-		var u: SimUnit = sim.units[i]
-		if not u.alive or u.fn != DataRegistry.Faction.ENEMY:
-			continue
-		var target: SimUnit = null
-		var straight := INF_DIST
-		for j in sim.units.size():
-			var p: SimUnit = sim.units[j]
-			if not p.alive or p.fn == u.fn:
-				continue
-			var sd := grid.distance(u.cell, p.cell)
-			if sd < straight:
-				straight = sd
-				target = p
-		if target == null or straight >= INF_DIST:
-			continue
-		var soft := soft_route_cost(sim, u.cell, target.cell)
-		if soft < INF_DIST:
-			total += maxf(float(soft - straight), 0.0)
-	return total * w_obstacle_detour
-
-## 【RL 修正】真实规则：眩晕让移动力直接归 0（`src/Unit.gd:426-432`
-## `effective_move()`：`if has_status(STUN) or has_status(THORN): return 0`；眩晕同时使
-## `can_move()/can_attack()/skill_allowed()` 全 false）。
-## 仿真里原来只置 `stunned` 标记、不动 `emove` → 检视器字段层读到 `状态[晕] 预测是→实际是`
-## （两边一致）却同时报 `有效移 预测N→实际0` —— 因为字段层的"有效移"是拿模拟的 `emove`
-## 与真实 `Unit.effective_move()` 直接比（见 `_snap_sim` / `_compare`），真实那一侧已经是 0 了。
-## 实测出处（`--selftest 40 --pai 1 --ai 1 --seed 7 --beam 50 --speed 20
-##   --picks "hero_07,hero_14,hero_34,hero_06" "hero_40,hero_23,hero_20,hero_39"`，
-## `RL/reports/w3/sub39_t5.log` #19）：猎颅者(hero_39) 替补登场 → 3 伤害 + 眩晕命中沉默术士，
-##   预测 `状态[晕] 否→是；有效攻 3→1`（无有效移）／实际 `…；有效移 3→0` → 判 DIFF。
-## 与 `_sim_apply_freeze` 同一做法（那一条是 −1，这一条是归 0），且都只改"效果的数值"，
-## 状态存在性字段（`stunned`）照旧置位。
 func _sim_apply_stun(t: SimUnit) -> void:
 	if t == null:
 		return
@@ -8168,10 +8939,6 @@ func _sim_refresh_pins(sim: Sim) -> void:
 func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	_sim_sync_pins(sim)   # 【RL 修正】先按当前位置刷新"远程被贴"的攻击力
 	var score := 0.0
-	# 障碍"挡路"惩罚：按**实际绕路代价**计分（不再按障碍个数给固定小分）。
-	# 于是"拆掉真正挡路的墙"会明显抬高局面分，"拆掉不相干的墙"几乎没有收益 ——
-	# 该不该花一次攻击去清障，交给评分决定（候选见 _actions_for 的清障分支）。
-	score -= _obstacle_detour(sim)
 	# 我方阵亡：**只**用来在下面跳过已死单位的身价项（"身价自动扣除"）。
 	# 【2026-09-19 删除·用户批准】原 `SELF_DEATH_W` 那一笔罚分已删（理由见下方删除说明）⇒
 	# 这里的 `my_dead_*` 计数随之不再被任何计分项使用；保留 `continue` 是**必须的**（身价扣除靠它）。
@@ -8227,7 +8994,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 			#   33 血坦克掉 4 点 = 2.4 分、15 血脆皮掉 4 点 = 5.3 分 ⇒ "坦克拿 2 点换 4 点"不再被判成亏。
 			score -= w_hp_value * lost * _incoming_pool_mult(hu)
 		else:
-			score += w_hp_value * lost   # 对面掉血 = 赚（**不折算**：那一侧由 ④集火 frac² 计价）
+			score += w_hp_value * lost * _target_core_mult(sim, hu)   # 对面掉血 = 赚（【2026-10-03】按目标核心度放大；我方掉血照旧按血量池折算）
 	# 【2026-09-19 删除·用户批准】这里原有「本回合击杀玩家单位的即时重奖」
 	#   `score += float(sim.killed_players) * w_kill_bonus`（`KILL_BONUS`=38）。
 	# 为什么删（用户 2026-09-18 指出、我当时写错过一次）：击杀的价值本来就有**三笔**——
@@ -8255,10 +9022,11 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	#   只有"为了 3 点伤害走进 3~4 人火力网"才被否掉（那正确）。详见 `_exposure_risk()` 上方说明。
 	score += _rule_b_score(sim)
 		# 【2026-09-26·选项 2】㉖ 与 ⑦ **共用这一次遍历** ⇒ 门放宽成"两项任一开着"。
-	if w_risk != 0.0 or w_exposure_total != 0.0:
+	if w_risk != 0.0 or w_exposure_total != 0.0 or w_last_man != 0.0:
 		var incs_ev := _incoming_incs(sim)
 		score += _exposure_risk(sim, incs_ev)
 		score += _exposure_total(sim, incs_ev)
+		score += _last_man_fold(sim, incs_ev)   # 【2026-10-02·LAST_MAN_W】共用同一份「挨打合计」
 	# 【2026-09-20 新增·默认关·T6】**"这一击新挂上毒"的动作收益**（见 `const POISON_APPLY_W` 处说明）：
 	#   `sim.poison_apply_val` 由 `_apply` 在"毒蛇命中且目标原本没毒"时累加，金额**已按施加者英雄覆盖读好**
 	#   （`_wh(u.hero_id, "POISON_APPLY_W", w_poison_apply)`，与金矿/坚固同口径）⇒ 这里直接加。
@@ -8304,6 +9072,14 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 		var wts := _wh("hero_48", "TANK_SCREEN_W", w_tank_screen)
 		if wts != 0.0:
 			score += wts * _tank_screen_val(sim)
+	# 【2026-10-03·用户口径（可选项）·新增·默认关】㉜坦克挡刀位（见 `const FORM_SCREEN_W` 处说明）：
+	#   坦克**站在须保护的队友与最近的敌人之间**（贴身 + 比它更靠近那个敌人）⇒ 每命中一对 +W 分。
+	#   **位置奖励**，不是距离罚 —— `FORM_GUARD_GATE` 只做到"待在 2 步内"，分不出"站前还是站后"。
+	#   ⚠️ **不挂"只在末态结算"这道门**（与 ㉘ 同一条理由，是量出来的）：`SEARCH_MODE=2` 的**阶段 1
+	#   就是靠 `_layout_score()` 排阵型的，而它传的是 `end_of_turn=false`** ⇒ 带门的话这项在"决定谁
+	#   站哪"那一步恒 0，剂量加到 12 计划都不动。中途口径 = "按**此刻**的占位算"，给的正是**相对梯度**。
+	if w_form_screen != 0.0:
+		score += w_form_screen * _screen_val(sim)
 	# 【2026-09-28·A 案·默认关】㉙「buff 被抢」（见 `const BUFF_DENY_W` 处说明）：
 	#   本回合明明够得到、却没去吃的道具，而对面下回合够得到 ⇒ 按道具价值扣分。
 	#   收口的两端：⑧ 只管"踩上去那一刻"，本项管"没踩、还留给对面" ⇒ 一起才是"要么吃掉、要么走开"。
@@ -8323,7 +9099,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 		if dealt <= 0:
 			continue
 		var frac := float(dealt) / float(maxi(ft.hp0, 1))
-		score += w_focus_fire * frac * frac
+		score += w_focus_fire * frac * frac * _target_core_mult(sim, ft)   # 【2026-10-03】按目标核心度放大
 	# 【已删 2026-09-19（用户同意）】原"集火次数"项：`score += w_focus_times × (hurt_times − 1)`
 	#   （同一玩家单位本回合被 ≥2 个敌方打过 → 加分）。三条依据见 `w_focus_times` 处的删除说明。
 	#   **保留 `FOCUS_FIRE_WEIGHT`（frac²）**：它才是"往同一目标叠伤害"的承重项。
@@ -8535,8 +9311,9 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 #       ② 对方剩 1 个时，"能收割就收割"的价值暴涨（人类玩家的收尾意识）；
 #       ③ 数值按 10 倍递进 ⇒ 是**凸**的，而不是线性的"每人头等值"。
 func _terminal_value(sim: Sim) -> float:
-	const MINE_CURVE := [ -1000.0, -100.0, -10.0, 0.0 ]    # 下标 = 我方还剩几条命（或存活数，见下）
-	const FOE_CURVE := [ 1000.0, 100.0, 10.0, 0.0 ]         # 下标 = 对方还剩几条命（0 = 全灭我赢）
+	# 【2026-10-02】两条曲线提到类级常量（`TERMINAL_MINE_CURVE` / `TERMINAL_FOE_CURVE`）——
+	#   `LAST_MAN_W`（"最后一人保命"）要把"丢一条命值多少"从同一条曲线上取 ⇒ **只能有一份来源**。
+	#   数值与拆分方式一字未动。
 	# 【2026-10-01 晚·用户「她没考虑 AI 已经死了 2 个了啊，**自爆就输了**」】**改成按"还剩几条命"**：
 	#   判负线是**累计阵亡** `death_line`（真实 `Battle.LOSS_DEATH_COUNT`）⇒ "还剩几条命" =
 	#   `death_line − 累计阵亡`，与"场上还剩几个"**不是一回事**（队伍 > 3 人时，场上还有 3 个也可能
@@ -8560,7 +9337,7 @@ func _terminal_value(sim: Sim) -> float:
 				foe += 1
 	mine = clampi(mine, 0, 3)
 	foe = clampi(foe, 0, 3)
-	return float(MINE_CURVE[mine]) + float(FOE_CURVE[foe])
+	return float(TERMINAL_MINE_CURVE[mine]) + float(TERMINAL_FOE_CURVE[foe])
 
 # 【2026-09-15 合并·用户决定】「威胁图」与「玩家反制前瞻」原本是**两项、两把尺子**在描述同一件事
 # （下回合会不会挨打）：
@@ -8754,6 +9531,61 @@ func _possess_battery_val(sim: Sim) -> float:
 			total += w * minf(inc, float(t.hp)) * _unit_value(sim, t) / 20.0
 	return total
 
+## 【2026-10-02·`LAST_MAN_W` 用】"我方还剩几条命" —— 判负线是**累计阵亡** `death_line`
+##   （= 真实 `Battle.LOSS_DEATH_COUNT`，由快照的 `deads` 带过来）；`deads` 未知（−1，老调用方/RL harness）
+##   ⇒ 退回"场上的存活数"（与 `_terminal_value()` 同一套退路、逐位一致）。
+func _mine_lives(sim: Sim) -> int:
+	if sim.my_dead >= 0 and sim.foe_dead >= 0:
+		return clampi(sim.death_line - sim.my_dead, 0, 3)
+	var n := 0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u != null and u.alive and u.fn == DataRegistry.Faction.ENEMY:
+			n += 1
+	return clampi(n, 0, 3)
+
+## 【2026-10-02·`LAST_MAN_W`】丢掉**这一条命**在 ⑩终局项里值多少分（正数 = 损失量）：
+##   `曲线[剩 n 条] − 曲线[剩 n−1 条]` ⇒ 剩 3 条时 10 分 / 剩 2 条时 90 / **剩 1 条（再死就判负）900**。
+func _one_life_loss(sim: Sim) -> float:
+	var lives := _mine_lives(sim)
+	if lives <= 0:
+		return 0.0
+	# ⚠️ 方向别写反：曲线是"**还剩越多命分越高**"（−1000 → 0）⇒ 损失量 = **后一项减前一项**（剩 1 条时 = (−100) − (−1000) = 900）。
+	return float(TERMINAL_MINE_CURVE[lives]) - float(TERMINAL_MINE_CURVE[lives - 1])
+
+## 【2026-10-02·`LAST_MAN_W`】末态的一笔：每个"**下回合会被打死**"的我方单位罚 `W × 这一条命值多少`。
+##   判据 = 同一把尺子「挨打合计 ≥ 当前血」（`incs` 由调用方一次算好，与 ⑦/㉖ 共用 ⇒ 不多跑尺子）。
+##   ⚠️ 键关着（= 0，引擎默认与四档）时立刻返回 0 ⇒ **逐位不变**。
+func _last_man_fold(sim: Sim, incs: Array) -> float:
+	if w_last_man == 0.0:
+		return 0.0
+	# 【2026-10-02·用户拍板】**只在"再死一个就判负"时才生效**：剩 3/2 条命时**一分钱都不罚** ——
+	#   用户原话「剩 3/2 条命的情况你别动，**还没输就给我尽情战斗**。我怕你改了，我的 AI 又变得避战了」。
+	if _mine_lives(sim) > 1:
+		return 0.0
+	var per := _one_life_loss(sim)
+	if per <= 0.0:
+		return 0.0
+	var n := 0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		if i < incs.size() and float(incs[i]) >= float(u.hp):
+			n += 1
+	return -w_last_man * per * float(n)
+
+## 【2026-10-02·`LAST_MAN_W`】"**这一手只走位不攻击**"要不要为保命放行（撤退过滤的唯一例外口子）：
+##   键开着 **且** 这个单位**站在当前格就会被打死**（挨打合计 ≥ 当前血）。⚠️ 键关着恒 false ⇒ 逐位不变。
+func _last_man_hide_ok(sim: Sim, u: SimUnit, cur_inc: float) -> bool:
+	if w_last_man == 0.0:
+		return false
+	# 【2026-10-02·用户拍板】只剩 1 条命（再死就判负）才给"躲"的口子；**剩 3/2 条命照旧参战**
+	#   —— 用户怕"AI 又变得避战"，所以这一条与上面那笔罚分**同一个闸门**。
+	if _mine_lives(sim) > 1:
+		return false
+	return cur_inc >= float(u.hp)
+
 func _exposure_risk(sim: Sim, incs: Array) -> float:
 	if w_risk == 0.0:
 		return 0.0
@@ -8805,6 +9637,51 @@ func _exposure_covered(u: SimUnit) -> bool:
 	return true
 
 ## ㉛ AoE 形状总账（见 `const AOE_RIDER_TOTAL_W` 处说明）：只给 **㉖ 门外**的单位补账 ⇒ 不重复计价。
+## 【2026-10-03·用户口径】排阵型时的「**落单会被死神打双倍**」账（见 `const OPEN_ISOLATE_W` 处说明）：
+##   `Σ_{我方单位}[ 因落单而多吃的那一份 hero_30 伤害 ]` —— 只算"目标确实孤立 + 死神真够得到它"。
+##   口径：×2 的**增量** = 一份普通单击（原伤害 ×1，翻倍后 ×2 ⇒ 多出来的正好是那一份）。
+func _open_isolate_total(sim: Sim) -> float:
+	if w_open_isolate <= 0.0:
+		return 0.0
+	var total := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		for j in sim.units.size():
+			var a: SimUnit = sim.units[j]
+			if a == null or not a.alive or a.fn == u.fn:
+				continue
+			if a.hero_id != "hero_30" or a.silenced or a.stunned:
+				continue                  # 死神不在场 / 被沉默 ⇒ 倍率不发动
+			# ⚠️ 判据签名是 `_sim_isolated_at(sim, 目标, 落点, 攻击者)` —— 多出来的那个 `攻击者`
+			#   是给"孤立"下定义的（"没有与**其他敌人**相邻"，敌人 = 相对攻击者而言）。
+			if not _sim_isolated_at(sim, u, u.cell, a):
+				continue                  # 不孤立 ⇒ 死神没有 ×2 可吃
+			if not _threat_can_hit(sim, a, u.cell, u):
+				continue                  # 够不到 ⇒ 这一格白担心
+			var raw := _echo_atk_now(sim, a) + float(_sim_turn_start_atk_bonus(sim, a))
+			var one := _hit_after_target_mods(sim, u, u.cell, raw, false)
+			if one > 0.0:
+				total += one
+	return total
+
+## 【2026-10-03·用户口径·方案 1】⑥ 补的「**AoE 团队总量**」（见 `const OPEN_AOE_TOTAL_W` 处说明）：
+##   `Σ_{我方存活单位} [ 该单位在当前格会挨的 AoE 形状伤害 ]` —— **团队总量**（不是 max）。
+##   ⚠️ 与 `_aoe_rider_total()` 的差别：那个**只算 ㉖ 门外的单位**（避免与 ㉖ 重复计价、且只在末态用）；
+##     本项**覆盖全队**、且用在**阶段 1 的前压判断**上 —— 那里 ⑥ 被清零、㉖ 又不生效 ⇒ 不重复。
+func _open_aoe_total(sim: Sim) -> float:
+	if w_open_aoe_total <= 0.0:
+		return 0.0
+	var total := 0.0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn != DataRegistry.Faction.ENEMY:
+			continue
+		for rdr in _aoe_riders_on(sim, u, u.cell):
+			total += float(rdr[1])
+	return total
+
 func _aoe_rider_total(sim: Sim) -> float:
 	if w_aoe_rider_total == 0.0:
 		return 0.0
@@ -8826,8 +9703,42 @@ func _core_raw(sim: Sim, u: SimUnit) -> float:
 		return _output_potential(u.hero_id)
 	return pow(base, 1.0 - w_risk_core_output_w) * pow(_output_potential(u.hero_id), w_risk_core_output_w)
 
-## 【2026-09-24 新增】"输出潜力" = **面板攻击力 × 2.2 + 技能评分 + 补强 + 远程权重**，**不含面板血量**。
-##   口径与 `DataRegistry.hero_strength()` 同源，只是把 `max_hp × 0.45` 那一项拿掉
+## 【2026-10-03·用户「AI 会不会去找对方核心、能打核心就打核心」】"**打这个目标值多少**"的相对倍率
+##   （见 `const FOCUS_VALUE_POW`）：倍率 = `(目标核心度 ÷ 对面存活单位的核心度均值) ^ FOCUS_VALUE_POW`。
+##   · 核心度 = `_core_raw()`（= `身价^(1−w) × 输出潜力^w`，与 ⑦核心风险 **同一套口径**）
+##   · 参考值取**对面均值** ⇒ 比值是"队内相对"，不吃绝对值
+##     （⚠️ 光按身价推不动：身价队内只差 1.01~1.23×；`身价 × 输出潜力` 那套才有 2~7× 的区分度）
+##   ⚠️ 门关着（`FOCUS_VALUE_POW = 0`）时**短路返回 1.0** ⇒ 逐位回到现役口径、零额外开销。
+##   ⚠️ **两把夹子**：比值先夹进 [0.2, 5.0]，**乘完幂之后再夹一次** —— 否则 p=2 时上限会变成 5² = **25×**
+##     （"砍核心一刀 = 砍杂鱼二十五刀"），那不是"会打核心"，那是"只看得到核心"。
+##     夹完结果 ⇒ **p 只决定"多快饱和"、不决定上限**（p=1 时两次夹子等价 ⇒ 与只夹比值**逐位相同**）。
+func _target_core_mult(sim: Sim, t: SimUnit) -> float:
+	if w_focus_value_pow <= 0.0 or t == null:
+		return 1.0
+	var ref := _foe_core_ref(sim)
+	if ref <= 0.0:
+		return 1.0
+	var _m := clampf(pow(clampf(_core_raw(sim, t) / ref, 0.2, 5.0), w_focus_value_pow), 0.2, 5.0)
+	if _m > last_core_mult:
+		last_core_mult = _m          # 【纯取证】给 `[搜索分账]` 打一行，见 `last_core_mult` 处说明
+	return _m
+
+## `_target_core_mult()` 的分母：**对面存活单位的核心度均值**（核心度 ≤ 0 的——召唤物等——不计入）。
+##   一个都没有（对面只剩召唤物）⇒ 返回 0 ⇒ 倍率退回 1.0（不做任何偏好）。
+func _foe_core_ref(sim: Sim) -> float:
+	var sum := 0.0
+	var n := 0
+	for i in sim.units.size():
+		var u: SimUnit = sim.units[i]
+		if u == null or not u.alive or u.fn == DataRegistry.Faction.ENEMY:
+			continue
+		var v := _core_raw(sim, u)
+		if v > 0.0:
+			sum += v
+			n += 1
+	return (sum / float(n)) if n > 0 else 0.0
+
+## 【2026-09-24 新增】"输出潜力" = **面板攻击力 × 2.2 + 技能评分 + 补强 + 远程权重**，**不含面板血量**。##   口径与 `DataRegistry.hero_strength()` 同源，只是把 `max_hp × 0.45` 那一项拿掉
 ##   （它是"抗伤能力"、不是"输出能力"）。召唤物照旧算 0（与 `_unit_value()` 同一条特殊处理）。
 ##   ⚠️ 用**面板**值、不用当前 `eatk`：当前攻击力会被麻痹/贴身/buff 带偏 ⇒ 保护权重会随局面抖。
 func _output_potential(hero_id: String) -> float:
@@ -9435,6 +10346,9 @@ func _outgoing_threat_on(sim: Sim, actor: SimUnit) -> float:
 # ---- 【2026-09-20 整族删除·用户拍板「要」】位移技能威胁一族 + `THREAT_SUM_CAP`/`_cap_hits()` ----
 # 删掉的函数：`_incoming_damage_on` · `_incoming_plain` · `_nova_threat_at` · `_displace_standing_cells` ·
 #   `_displace_landing_cell` · `_cap_hits`（以及常量 `DISPLACE_THREAT_W`/`DISPLACE_HEROES`/`THREAT_SUM_CAP`）。
+#   ⚠️ **2026-10-02 又删一个**：`_threat_fire_cell()`（单格版：取"离起点最近的能开火格"）——
+#   换成 `_threat_fire_cells()`（**全集**：原地 + 走得到且打得到目标的每一格），暗域换位的落点不再只猜一格
+#   （见 §五 T127）。同族的探针 `RL/probe/伤害日志自检.gd` 那一行调用随之失效（历史读数保留、不再可跑）。
 # **为什么它们是死的**：`_incoming_damage_on()` 在**引擎内 0 个调用点**（`search()`/`_evaluate()`/
 #   `_actions_for()` 都不调它）⇒ 它算得再准也没有一行代码读 ⇒ `DISPLACE_THREAT_W` 设成 >0 也不会改变
 #   出招；`_incoming_plain()` 只被它调用；`_cap_hits()` 只被 `_incoming_plain()` 调用 ⇒ 整族一次性删掉。
@@ -9717,10 +10631,30 @@ func _threat_hit_value(sim: Sim, t: SimUnit, d: int, discount: bool = true,
 	if pinned and _sim_pin_escapable(sim, t):
 		if d <= 1 or (target_cell.x != -99 and _sim_pin_escape_fire_cell(sim, t, target_cell, threatened)):
 			pinned = false
+	# ⚠️ 【2026-10-02 查证·**不改**（用户曾问「退不开且 `d>1` 是不是该记 0」）】这里"真贴身（退不开）时
+	#   仍返回 `1 + buff`"**不是**高估 —— 本函数是**裸值**，"够不够得到这一格"由 `_threat_can_hit()` 那道门判，
+	#   而那道门**是贴身感知的**（`_cell_in_range()` 在**每一格**都会重算"站那儿会不会又被贴身"⇒ 被贴身的
+	#   远程只在"离目标 1 格"的开火位才算数）⇒ 生产里 5 个调用点（①普攻 / 塔盾代扛 / 威胁差 / 红帽自爆 / ㉑）
+	#   **全部先过门** ⇒ "根本走不到任何开火位"的局面账上就是 **0**（探针 `RL/probe/贴身退不开自检.gd`
+	#   A/B 盘：能走 5 格、开火位 **0** 个 ⇒ 门=够不到、挨打合计 **0.0**，而裸值仍是 1.0）。
+	#   反过来，**一律记 0 会砍掉真实的一枪**：被贴身 + 退不开、但走得到目标旁边时，它真能打"贴身那一枪"
+	#   （射程压 1、基础压 1）= `1 + buff`（同探针 C/D 盘：`退得掉=false`、门=能打到、账 **1.0**）。
+	#   ⇒ 本值保持不变；要再加一道门只会多花一次 BFS、生产账逐位不变（没做）。
 	if pinned:
 		range_at = 1
 	# 【2026-09-23 深夜⑪·用户】共鸣者(hero_47) 这一下要用**技能后的攻击力**，不是面板值（见 `_echo_atk_now`）。
 	var base_atk := _echo_atk_now(sim, t)
+	# 【2026-10-02·用户「怎么计算挨远程打的时候，又计算成被贴边的了？远程是可以退后打满伤害的，
+	#   除非没有能打满伤害的位置」】**判定"这一下不贴身"时，基础攻击力必须换成"退开后的攻击力"**：
+	#   `t.eatk` 带的是**真实引擎那枚缓存标记**（`pin_flag` ← 快照里的 `ranged_adjacent`）——
+	#   **快照那一刻正贴着人的远程，eatk 早就是 1** ⇒ 后面那条"退得掉 ⇒ 按满额算"的分支会拿 1 当满额，
+	#   整条"退开打满"的判据等于白算（用户那局：火枪手 攻 4 被记成 1，装甲堡垒 1＋**火枪手1**＋毒1）。
+	#   `_sim_free_atk()` = 同一套公式在 `pin_flag = false` 下的值（面板 ＋ atk_mod ＋ pin_buffs ＋ 道具），
+	#   正是"退开之后 effective_atk() 会变成的数" —— 与 `_actions_for()` 那道"远程别贴着开火"的闸门同源。
+	#   ⚠️ 只在 `not pinned` 时换（真贴身那条仍按压 1 算）；取 `maxf` 是为了兼容共鸣者（`_echo_atk_now` 那条路
+	#   本来就更大）与"快照标记过期"的情形 ⇒ 只增不减，绝不会把伤害算低。
+	if not pinned:
+		base_atk = maxf(base_atk, float(_sim_free_atk(t)))
 	var dmg := base_atk
 	# ⚠️ 共鸣值**覆盖**"远程被贴身压 1"（真实 `Unit.effective_atk()` 在 `echo_set >= 0` 时**提前 return**）
 	#   ⇒ 共鸣中的共鸣者不做贴身回落（共鸣者本身是近战、走不到这一支，留着只为将来变身/改表时不埋雷）。
@@ -9766,6 +10700,22 @@ func _sim_pin_escape_fire_cell(sim: Sim, t: SimUnit, target_cell: Vector2i, thre
 		if threatened != null and not _taunt_allows(sim, t, threatened, c):
 			continue
 		return true
+	return false
+
+## 【2026-10-02 新增·用户拍板方案 1】㉑ 被夹份的"**退得掉**"门：这单位下回合能走到一格
+##   "**不贴任何敌人**"的落点吗？
+##   与 `_sim_pin_escape_fire_cell()` **同一把尺子**（同 `_threat_emove_next` / `_sim_walk_cells` /
+##   `_sim_enemy_adjacent` 三件套），只有一处不同：**不问"退了还够不够得到目标"** ——
+##   ㉑ 罚的是**被夹**（贴身的敌人），与能不能开火无关。
+##   ⚠️ 起点格本身不算退路（`_sim_walk_cells` 本就不含起点）⇒ "现在就被贴着、且一步都走不动" = 退不掉。
+##   走法与走位候选同一口径（障碍 / 墓碑 / 单位都当墙，渗透照穿）。
+func _sim_step_out_of_pin(sim: Sim, u: SimUnit) -> bool:
+	var budget := _threat_emove_next(sim, u)   # 含风语者下回合的 +1（与 `_sim_pin_escape_fire_cell` 同款）
+	if budget <= 0:
+		return false
+	for c in _sim_walk_cells(sim, u.cell, budget, u.skills.has(DataRegistry.Skill.INFILTRATE)):
+		if not _sim_enemy_adjacent(sim, u, c):
+			return true
 	return false
 
 ## 【2026-09-23 深夜⑪·用户】"共鸣者(hero_47) 下一回合打这一下的攻击力"。
@@ -10016,9 +10966,33 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 	#   这两笔都是"**它打我队友，我因为站在旁边 / 身后而多挨一下**" ⇒ 放在 ①.5 之后、与 ② 同层
 	#   （**不占开火位**、不参与"只留最高的 N 笔"的封顶 —— 它是某次普攻的附赠，不是另一次普攻）。
 	#   逐条真规则与口径见 `_aoe_riders_on()`。
+	# 【2026-10-03·用户「为什么会重复计算」⇒ **修**】同一施加者的**同一次出手只能结算一次**：
+	#   长剑一回合只打一次 ⇒ 一个单位**不可能**"既当主目标吃 3、又被同一刀的剑气再扫 3"。
+	#   用户的实证日志：`下回合在这一格会挨 6 伤（长剑3＋长剑剑气3）` ⇒ 虚高一倍，
+	#   而它同时喂给 ⑥可接受伤害 / ⑦核心风险 / ㉖暴露总量 ⇒ 单位"以为"要挨 6、实际只挨 3 ⇒ 更爱躲。
+	#   **规则**：① 该施加者若**已经按普通单击算过**（名字已在 `names` 里），它的 rider 不再计；
+	#           ② 同一施加者的多条 rider 之间**取 max**（也不相加）。
+	var rider_best := {}
 	for rdr in _aoe_riders_on(sim, t, cell):
-		inst.append(float(rdr[1]))
-		names.append(String(rdr[0]))
+		var lbl := String(rdr[0])
+		var who := lbl
+		for suf in ["自爆", "散射", "剑气"]:
+			if lbl.ends_with(suf):
+				who = lbl.substr(0, lbl.length() - suf.length())
+				break
+		var dup := false
+		for nm in names:
+			var ns := String(nm)
+			if ns == who or ns == who + "技":
+				dup = true
+				break
+		if dup:
+			continue                      # 它已经打过我一次了（普通单击）⇒ 这一刀不再重复计
+		if not rider_best.has(who) or float(rdr[1]) > float(rider_best[who]):
+			rider_best[who] = float(rdr[1])
+	for who2 in rider_best.keys():
+		inst.append(float(rider_best[who2]))
+		names.append(String(who2) + "形状")
 	# ② 移动后触发的技能（烛火/末日/涌电技师）
 	for i in sim.units.size():
 		var b: SimUnit = sim.units[i]
@@ -10097,6 +11071,8 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 ##      ⚠️ **只在"她这一回合真的可能死"时才算**（`_redcap_blast_threat()` = 她的血 ≤ **我方对她的最大单击**）
 ##         —— 否则"她把血打满时旁边站个人也吃 13"就太离谱。这条正是用户报的病：
 ##         AI 会把她"哐哐打到危险线下面"，而旧账里**给她送自爆窗口这件事一分不花**。
+##      ⚠️ 【2026-10-03·用户拍板「a」】**自爆落点放宽**：不再只算"她此刻站的那一格"，而是
+##         "**她下回合走得到、并在那儿倒下**"的所有格（`_redcap_blast_zone()`）—— 她**不需要**站上我方那格。
 ## 三条都是"**它出手/倒下时，我因为站位而多挨的那一下**"⇒ 给本单位记一笔 rider。
 ##   ④ **炸弹人 hero_35 地雷** 仍未做（同族暂缓）。
 ## ⚠️ 每个对手每回合只出一次手 ⇒ 多个"候选主目标"之间取 **max**、不叠加。
@@ -10119,15 +11095,22 @@ func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		var kind := 1 if a.hero_id == "hero_10" else (2 if a.hero_id == "hero_18" else (3 if a.hero_id == "hero_40" else 0))
 		if kind == 0:
 			continue
-		# ③ 对手红帽：**她这一回合真的可能死**才算自爆（判据 = 她的血 ≤ 我方对她的最大单击），
-		#    并且本单位得**与她相邻**（自爆范围 = 她那一格的 6 邻格）。
+		# ③ 对手红帽：**她这一回合真的可能死**才算自爆（危险门 `_redcap_blast_threat()`），
+		#    并且本单位得落在**她的自爆落点圈**里（`_redcap_blast_zone()`）**且是那个"反击触发器"**
+		#    （`_redcap_counter_trigger()` —— 用户 2026-10-03 口径「不需要所有人都避，只要注意反击会把她
+		#    降到安全血线的英雄」）。
 		#    ⚠️ 【2026-10-01】机制改成"**只炸敌对阵营**"之后这条判据**不受影响**：这里的 `a` 是**对面**的红帽、
 		#      `t` 是**我方**单位 ⇒ 我方本来就是她的敌人 ⇒ 照样吃这 13 点（只有"她自己的队友"不再被波及）。
+		#    ⚠️ 【2026-10-03·用户拍板「a」·用户原话「她下回合走得到、并能引爆的格」】**落点从"她就站在那儿"
+		#      放宽成"她下回合走得到、并在那儿倒下"**：她走到本格**旁边**再死，本格照样吃这 13
+		#      ⇒ 判据 = 她到本格的路网距离 `1 ≤ d ≤ 她下回合移动力 + 1`（老口径只认 `grid.distance == 1`）。
 		if kind == 3:
 			if not _redcap_blast_threat(sim, a):
 				continue
-			if grid.distance(a.cell, cell) != 1:
+			if not _redcap_blast_zone(sim, a, cell):
 				continue
+			if not _redcap_counter_trigger(sim, a, t):
+				continue   # 【T147】圈里**只有"反击够疼"的那个单位**需要避；其余人不收这 13
 			var b13 := _hit_after_target_mods(sim, t, cell, REDCAP_BLAST_DMG, false)
 			if b13 > 0.0:
 				out.append(["%s自爆" % a.name, b13])
@@ -10161,26 +11144,113 @@ func _aoe_riders_on(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 ##   ⇒ 只有"一碰就死"的状态才按会炸计。⚠️ 这是**上界口径**（与全引擎的威胁估计一致）：
 ##   "我们能打死她"里既含"我们主动杀"、也把"她下回合自己撞死"并进同一个判据。
 ##   开销：先用**几何距离 ≤ 移动力＋射程**预筛（O(1)），只有名义上够得着的我方单位才付 `_threat_can_hit()`。
-func _redcap_blast_threat(sim: Sim, her: SimUnit) -> bool:
-	if her == null or not her.alive or her.hp <= 0:
+## 【2026-10-03】`u` 那一发打在红帽身上的**算式核**（一把尺子供三处用：安全血线 / 反击量 / 打死判定）。
+##   `d` 由调用方给：`u` **主动**打她 = 路网距离；**她的反击** = 1（她贴身打过来）。
+func _redcap_strike_on(sim: Sim, u: SimUnit, her: SimUnit, d: int) -> float:
+	var raw := _threat_hit_value(sim, u, d, false, her.cell, her) + float(_sim_turn_start_atk_bonus(sim, u))
+	raw *= float(_sim_mult_at(sim, u, her, her.cell))
+	return _hit_after_target_mods(sim, her, her.cell, raw)
+
+## 【2026-10-03】"我方 `u` **主动**打红帽的那一下"（0 = 够不到 / 打不动）—— 判据都在 `_threat_can_hit()` 那把尺上。
+func _redcap_hit_on(sim: Sim, u: SimUnit, her: SimUnit) -> float:
+	if u == null or not u.alive or her == null or not her.alive or u.fn == her.fn:
+		return 0.0
+	if u.skills.has(DataRegistry.Skill.LOGISTICS):
+		return 0.0                     # 后勤没有普攻（`_threat_can_hit()` 同一道门）；但它**能反击**，见下面那个函数
+	var range_at := u.atk_range
+	if grid.distance(u.cell, her.cell) > range_at + _threat_emove_next(sim, u):
+		return 0.0                     # 几何预筛（路网距离 ≥ 几何距离 ⇒ 安全）
+	if not _threat_can_hit(sim, u, her.cell, her):
+		return 0.0
+	return _redcap_strike_on(sim, u, her, walk_dist(sim, u.cell, her.cell))
+
+## 【2026-10-03·T147】"她的反击" ≈ 我方 `u` 贴身那一发（`d = 1`）。
+##   ⚠️ **不看 `LOGISTICS`**：真实引擎里后勤**也能反击**（`src/Battle.gd` 反击段只要求
+##      `target.can_attack() and effective_atk() > 0` —— 那是"能攻击"，不是"能主动攻击"）。
+func _redcap_counter_dmg(sim: Sim, u: SimUnit, her: SimUnit) -> float:
+	if u == null or not u.alive or her == null or not her.alive or u.fn == her.fn:
+		return 0.0
+	if u.eatk <= 0.0:
+		return 0.0                     # 攻 0（麻痹等）反击打不出来（引擎：`effective_atk() > 0`）
+	return _redcap_strike_on(sim, u, her, 1)
+
+## 【2026-10-03·用户口径】「她已经在安全血线附近时**不需要所有人都避**，只要注意**反击会把她降到安全血线的
+##   那个英雄**」＋「**只有最疼那个**」—— 玩家想自己点火（让她打我方的单位、吃一发反击）**必须有一个"反击够疼"的
+##   我方单位当触发器**：她够得到它 · 这一下打不死它（死了就不反击）· 它的反击**够用**：
+##     · 她**还在线上**（`her.hp > 安全血线`）⇒ 这一发只要把她**打到线下**就够（门槛 `her.hp − 安全血线`）；
+##     · 她**已经在线下**（一碰就死）⇒ 必须**这一发直接把她打死**（门槛 `her.hp`）⇒ 只留**最疼那个**。
+##   ⇒ **圈里只有这种单位会被 ㉛ 收费**（其他人不再收 —— 用户原话「不需要所有人都避」）。
+##   ⚠️ 引擎依据（`src/Battle.gd` 反击段）：反击要 `target.alive and target.can_attack() and effective_atk() > 0`
+##      ＋ 本回合反击名额没用完；**位移后距离 ≤ 1 就能反击**（后勤照样反击）。
+##   ⚠️ 与 T144 / T146 的分工：T144 管"她那片**落点圈**有多大" · T146 把危险门放宽到"两发线" ·
+##      **本条决定"圈里到底谁需要躲"**；"她下回合走过来"这一层仍在（`_threat_can_hit()` 含"走一步再打"）。
+func _redcap_counter_trigger(sim: Sim, her: SimUnit, u: SimUnit) -> bool:
+	if u == null or not u.alive or u.fn == her.fn:
 		return false
+	var one := _redcap_counter_dmg(sim, u, her)
+	if one <= 0.0:
+		return false                   # 攻 0 / 够不到 ⇒ 这一发反击不存在
+	if not _threat_can_hit(sim, her, u.cell, u):
+		return false                   # 她够得到、也打得动它 ⇒ 她才会去打它（射程＋视线＋嘲讽门同一把尺）
+	var d := walk_dist(sim, her.cell, u.cell)
+	var hraw := _threat_hit_value(sim, her, d, false, u.cell, u) + float(_sim_turn_start_atk_bonus(sim, her))
+	hraw *= float(_sim_mult_at(sim, her, u, u.cell))
+	if _hit_after_target_mods(sim, u, u.cell, hraw, true) >= float(u.hp):
+		return false                   # 她这一下就能打死它 ⇒ 没有反击（引擎：`target.alive` 才反击）
+	# 【2026-10-03·用户口径「**只有最疼那个**」】两段判据：
+	#   · 她**还在安全血线上**（`her.hp > line`）：这一发反击只要把她**打到线下**就够 ⇒ 门槛 = `her.hp − line`；
+	#   · 她**已经在线下**（`her.hp ≤ line`，一碰就死）：必须**这一发直接把她打死** ⇒ 门槛 = `her.hp`
+	#     —— 这样"她残了"的时候，圈里只留**反击最疼的那个**（其余人不再被收那 13）。
+	#   ⚠️ 唯一的例外是"她只剩 1 血"：那时任何打得动她的反击都能收尾 ⇒ 仍会算触发器（机制事实，不是漏判）。
+	var line := _redcap_kill_line(sim, her)
+	var need := float(her.hp)
+	if need > line:
+		need -= line
+	return one >= need
+
+## 【2026-10-03·用户口径】"**安全血线**" —— 我方对红帽能落上去的**最大单击**（她这条线以下 = 一碰就死 = 玩家
+##   掌握了引爆权）。逐单位算式见 `_redcap_hit_on()`（与该判据原文**逐字相同**：`_threat_hit_value()` +
+##   `_sim_mult_at()` + `_hit_after_target_mods()`，几何预筛 + `_threat_can_hit()` 同一把尺）。
+##   ⇒ "她的血 ≤ 安全血线"就是 `_redcap_blast_threat()` 的判据本体（**一把尺，不许再抄第二份**）。
+func _redcap_kill_line(sim: Sim, her: SimUnit) -> float:
+	if her == null or not her.alive:
+		return 0.0
+	var best := 0.0
 	for i in sim.units.size():
 		var a: SimUnit = sim.units[i]
 		if a == null or not a.alive or a.fn == her.fn:
 			continue
-		if a.skills.has(DataRegistry.Skill.LOGISTICS):
-			continue                       # 后勤没有普攻（`_threat_can_hit()` 同一道门）
-		var range_at := a.atk_range
-		if grid.distance(a.cell, her.cell) > range_at + _threat_emove_next(sim, a):
-			continue                       # 几何预筛（路网距离 ≥ 几何距离 ⇒ 安全）
-		if not _threat_can_hit(sim, a, her.cell, her):
-			continue
-		var d := walk_dist(sim, a.cell, her.cell)
-		var raw := _threat_hit_value(sim, a, d, false, her.cell, her) + float(_sim_turn_start_atk_bonus(sim, a))
-		raw *= float(_sim_mult_at(sim, a, her, her.cell))
-		if _hit_after_target_mods(sim, her, her.cell, raw) >= float(her.hp):
-			return true
-	return false
+		var one := _redcap_hit_on(sim, a, her)
+		if one > best:
+			best = one
+	return best
+
+func _redcap_blast_threat(sim: Sim, her: SimUnit) -> bool:
+	if her == null or not her.alive or her.hp <= 0:
+		return false
+	# 【2026-10-03·用户口径】危险线不是"一击线"本身，而是 `REDCAP_NEAR_LINE_MULT × 一击线`：
+	#   玩家只要让她打我方的单位**吃一发反击**，就自己把她压到一击线以下（见那个 const 处说明）。
+	return _redcap_kill_line(sim, her) * REDCAP_NEAR_LINE_MULT >= float(her.hp)
+
+## 【2026-10-03·用户拍板「a」】**自爆落点圈**：她这一回合的自爆会不会波及 `cell`。
+##   老口径 = "她此刻就贴着本格"（`grid.distance(her.cell, cell) == 1`，只为"她原地倒下"买单）；
+##   新口径 = "**她下回合走得到、并在那儿倒下**" —— 她可以在任意一格 `p` 上死，自爆打 `p` 的 6 邻格
+##   ⇒ 只要存在这样的 `p` 与 `cell` 相邻，本格就得收这 13 分（**她不需要站上 `cell`**，`cell` 上站着我方单位也不影响）。
+##   **等价写法（不额外跑 BFS）**：`1 ≤ walk_dist(她 → cell) ≤ 预算 + 1`
+##   —— 最短路上的"倒数第二格"就是那个 `p`（一定走得到、且与 `cell` 相邻）；反向也成立。
+##   ⚠️ 尺子：`walk_dist` 是**几何上界**（`_bfs_field()` 只挡障碍/墓碑、不挡身体）⇒ 她的实际走位会被单位挡住，
+##      这一项**略微高估**；取舍与 ㉖ 的 `_threat_slots()` 同一句话（宁可高估，也不把热路径变成 BFS 黑洞）。
+##      `walk_dist` 按起点缓存（`sim.walk_cache`）⇒ 每个末态只付一次 BFS，之后都是字典查询。
+##   ⚠️ 开销：只有 `kind == 3`（对面红帽）且**她已一碰就死**（`_redcap_blast_threat()` 过了）才会走到这里
+##      ⇒ 场上没有"残血红帽"时零开销。
+func _redcap_blast_zone(sim: Sim, her: SimUnit, cell: Vector2i) -> bool:
+	if grid.distance(her.cell, cell) == 1:
+		return true                     # 她原地倒下（老口径，顺带省掉这次 BFS）
+	var budget := _threat_emove_next(sim, her)     # 她**下一回合**的移动力（含风语者光环，与其余威胁估计同一把尺）
+	if budget <= 0:
+		return false                    # 被钉住 / 移动力 0 ⇒ 只有原地那圈
+	var d := walk_dist(sim, her.cell, cell)
+	return d >= 1 and d <= budget + 1
 
 ## AoE 形状判据（与上面两条真规则逐字对应）：本单位所在的 `cell` 会不会被"打在 `primary` 上的那一下"波及。
 ##   ① 白游侠（远程）：只看**主目标的 6 邻格**（与它自己站哪无关）⇒ 纯几何、O(1)。
@@ -10226,33 +11296,37 @@ func _aoe_on_ray(from: Vector2i, dir: Vector2i, cell: Vector2i) -> bool:
 		cur += dir
 	return false
 
-## 【2026-09-29 晚·用户「暗域在 1,6 怎么打到 3,3 的长剑？」】**"暗域会从哪一格打过来"** = 换位那一下
+## 【2026-09-29 晚·用户「暗域在 1,6 怎么打到 3,3 的长剑？」】**"暗域会从哪几格打过来"** = 换位那一下
 ##   它自己站的格。真实时序：单位先**走到开火格**、再结算伤害，`on_attack` 里的
 ##   `_swap_units(attacker, target)` 换的是**当时这两个单位的格子** ⇒ 目标落到的是**暗域的开火格**
 ##   （贴着目标那一圈），**不是它回合开始时站的那一格**。
 ##   ⚠️ 原来这里直接用 `a.cell`（起点格）⇒ 只有"原地开火"时才对；一旦暗域是**走过去**打的，
 ##   日志就会写出"（3,3）的长剑被换到（1,6）"这种隔了 5 格的鬼话（用户当场抓出来）。
-##   取"离起点最近的那个能开火的格"（= 少走一步的走法），找不到回 (-99,-99)。
-func _threat_fire_cell(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> Vector2i:
+## 【2026-10-02·用户「做，但落点是暗域能走到，且能打的到对方目标的格子，不需要全部」】**从"最近那一格"改成一整套**：
+##   原地能开火 + 这一回合**走得到**、且从那儿**打得到目标**的每一格（= 它可能从哪几格打过来）。
+##   为什么必须全算：被换到**哪一格**决定"换了之后还挨不挨得到人"（换到落单位置 ⇒ 嬉皮死神那种翻倍就上身），
+##   只猜最近那一格会**持续漏账** —— 用户实报的正是这个：日志写 3 伤、真实挨 6 伤。
+##   ⚠️ 集合天然很小、**不是全盘**：开火格必须"离目标 ≤ 射程"（`_threat_fire_ok_at` = 射程 + 视线 + 嘲讽门）
+##   ⇒ 六边形邻圈最多 6 格；暗域这类近战（射程 1）最多就是目标周围那几格。
+##   ⚠️ 成本：每格要跑一次整份 `_incoming_total_on()` ⇒ 由 `DISPLACE_LANDING_MAX` 兜上限（见那处说明）。
+func _threat_fire_cells(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> Array:
+	var out: Array = []
 	if _threat_fire_ok_at(sim, a, a.cell, target_cell, threatened):
-		return a.cell                       # 原地就够得到 ⇒ 不挪
+		out.append(a.cell)                  # 原地就够得到 ⇒ 这是一条（不用挪）
 	var budget := _threat_emove_next(sim, a)
 	if budget <= 0:
-		return Vector2i(-99, -99)
-	var best := Vector2i(-99, -99)
-	var best_d := 1 << 30
+		return out
 	for c in _sim_walk_cells(sim, a.cell, budget, a.skills.has(DataRegistry.Skill.INFILTRATE)):
 		if not _threat_fire_ok_at(sim, a, c, target_cell, threatened):
 			continue
-		var d := grid.distance(a.cell, c)
-		if d < best_d:
-			best_d = d
-			best = c
-	return best
+		if not out.has(c):
+			out.append(c)
+	return out
 
 ## 【2026-09-26·用户要求】**位移落点重算**：对手四条位移的**真规则**（逐条照抄 `heroes/*.gd` 与 `src/Battle.gd`）——
 ##   ① **暗域 hero_27** `on_attack` → `Battle._swap_units()` ⇒ 它打到我 ⇒ **我落到它开火那一格**
-##      （⚠️ 2026-09-29 修：原来写成"落到它原来站的那一格" ⇒ 它走过去打时会算出隔好几格的落点，见 `_threat_fire_cell()`）。
+##      （⚠️ 2026-09-29 修：原来写成"落到它原来站的那一格" ⇒ 它走过去打时会算出隔好几格的落点；
+##        ⚠️ 2026-10-02 扩：它**可能从哪几格开火**就全算 —— 见 `_threat_fire_cells()`）。
 ##   ② **血锁 hero_41** → `Battle._pull_to()` ⇒ 把我**拉到它面前一格**（它自己的邻格里"离我最近"的那个空格）。
 ##   ③ **长角 hero_32** → `_knockback(target, unit.cell)` ⇒ 把我沿"它→我"方向**再推一格**（出界/被占/障碍/墓碑 ⇒ 推不动 ⇒ 改 2 倍伤害、不位移）。
 ##   ④ **超新星 hero_21** → 它打**我旁边那个队友** ⇒ 我（作为"目标相邻的敌人"）被 `_knockback(我, 队友格)` **推离那个队友一格**。
@@ -10267,8 +11341,8 @@ func _displace_landing_cells(sim: Sim, t: SimUnit, cell: Vector2i) -> Array:
 		match a.hero_id:
 			"hero_27":                                   # 暗域：换位（落点 = 它**开火那一格**，不是起点格）
 				if _threat_can_hit(sim, a, cell, t):
-					var fc27 := _threat_fire_cell(sim, a, cell, t)
-					if fc27.x != -99:
+					# 【2026-10-02】它**可能从哪几格开火**就全算（原地 + 走得到且打得到目标的每一格）
+					for fc27 in _threat_fire_cells(sim, a, cell, t):
 						_add_landing(out, sim, cell, fc27, a)
 			"hero_41":                                   # 血锁：拉人
 				if _threat_can_hit(sim, a, cell, t):
@@ -10293,7 +11367,7 @@ func _add_landing(out: Array, sim: Sim, from_cell: Vector2i, c: Vector2i, mover:
 	if c.x == -99 or c == from_cell:
 		return
 	# ⚠️ **换位的落点就是位移者开火时站的那一格**（它本来可能占着 ⇒ `mover` 传进来时那一格
-	#   不算"站不住"）；但**它要是走过去打的，落点就不是它起点格**（见 `_threat_fire_cell()` 那段）。
+	#   不算"站不住"）；但**它要是走过去打的，落点就不是它起点格**（见 `_threat_fire_cells()` 那段）。
 	var occ_self: bool = mover != null and c == mover.cell
 	if not occ_self and sim.occ.has(c):
 		return
@@ -10302,7 +11376,15 @@ func _add_landing(out: Array, sim: Sim, from_cell: Vector2i, c: Vector2i, mover:
 	if not out.has(c):
 		out.append(c)
 
-## 位移后的"最坏挨打合计"：对每个落点重算一遍（**最多两个**，成本护栏），取最大。
+## 【2026-10-02·用户「落点是暗域能走到，且能打的到对方目标的格子，不需要全部」】**落点评估的次数上限**。
+##   为什么要有：暗域换位现在把"它能开火的每一格"都当落点（见 `_threat_fire_cells()`），
+##   而**每一格都要跑一次整份 `_incoming_total_on()`**（引擎里最贵的那次查询：逐敌人查走位＋射程＋视线＋
+##   嘲讽门＋受击侧修正）⇒ 这是**成本护栏**，不是判据。
+##   ⚠️ **6 就是"全部"、不截断暗域**：开火格必须"离目标 ≤ 射程"，六边形一格只站一个人 ⇒ 近战（射程 1）
+##   的开火格最多 6 格；射程更大的位移者（或超新星那一族多落点）才会被它截住。
+const DISPLACE_LANDING_MAX := 6
+
+## 位移后的"最坏挨打合计"：对每个落点重算一遍（**最多 `DISPLACE_LANDING_MAX` 个**，成本护栏），取最大。
 ##   ⚠️ 内部用 `no_displace = true` 调 `_incoming_total_on()` —— 否则会无限递归。
 func _displace_total_max(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = {}) -> float:
 	var cells := _displace_landing_cells(sim, t, cell)
@@ -10316,7 +11398,7 @@ func _displace_total_max(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary =
 	var best := float(out.get("base_total", 0.0))     # 与"原地"比，胜出才改账
 	var n := 0
 	for c in cells:
-		if n >= 2:
+		if n >= DISPLACE_LANDING_MAX:
 			break
 		n += 1
 		var o2 := {}
@@ -10560,7 +11642,6 @@ func _position_score(sim: Sim) -> float:
 		#    偏向"不移动"的那条；③ 量级 0.5 分/单位（全表最小），且不分英雄（要表达 hero_48"没移动得[坚固]"
 		#    这类机制应该写成它的 `hero_XX` 专属项，而不是给全队发 0.5）。
 		# 现在本函数只剩纯结果导向的一条：够不着就压上（ENGAGE_PULL）。
-		# 拆墙绕路代价在 `_obstacle_detour()`（`OBSTACLE_DETOUR_WEIGHT`）；"增援靠拢"（`SIEGE_*` / `_siege_bonus()`）
 		# 已于 2026-09-15 按用户决定删除（与 ENGAGE_PULL 重复）。
 	return s
 

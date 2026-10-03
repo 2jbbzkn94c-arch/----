@@ -1,0 +1,6 @@
+﻿[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RL/自进化/probe/我的机制自检.gd" id="1"]
+
+[node name="MyMechCheck" type="Node"]
+script = ExtResource("1")
