@@ -1,0 +1,11 @@
+theme/NotoSansSC-Medium.otf
+=======================
+字体：Noto Sans SC Medium（思源黑体 / Noto Sans SC，Google 与 Adobe 合作开发）
+许可：SIL Open Font License 1.1（可自由嵌入、随程序分发）
+来源：取自本机已安装的 "Noto Sans SC Medium"，字节未做任何修改。
+许可证全文：https://scripts.sil.org/OFL
+
+为什么项目里要自带字体（而不是用系统的）：
+  桌面（Windows）和安卓能从系统里兜底找中文字体，所以以前没带字体也能正常显示；
+  但浏览器里没有"取系统字体"这个能力（Godot 的 SystemFont 在 Web 上是空的），
+  于是 Web 版所有中文都变成方块 —— 这份字体就是给 Web / iOS 用的，同时统一各端观感。

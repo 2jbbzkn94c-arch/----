@@ -510,7 +510,10 @@ const DIGIT_OUTLINE := 0.10
 # 【2026-10-02·用户要求】数字底下铺那张 `assets/图标/耐久度背景.png`（`DUR_BG_TEX`），
 #   框按字号缩放（`DIGIT_BG_BOX`，2026-10-03 两处统一放大到 1.86），整组仍在格子右下角（见 `_digit_anchor()`）。
 func _draw_cell_digit(center: Vector2, txt: String) -> void:
-	var f := ThemeDB.fallback_font
+	# 【字体统一】原来写死 `ThemeDB.fallback_font`（引擎内置 Open Sans，浏览器里没有中文字形）；
+	#   现在跟界面一样取项目主题的默认字体，数字才跟其它文字同一副字。
+	var th := ThemeDB.get_project_theme()
+	var f: Font = th.default_font if th != null and th.default_font != null else ThemeDB.fallback_font
 	var fs := _digit_font_px()
 	var tw := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var p := _digit_anchor(center) - Vector2(tw * 0.5, 0.0)

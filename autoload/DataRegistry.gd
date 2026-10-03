@@ -1082,13 +1082,22 @@ func _load_tex_any(path: String) -> Texture2D:
 			return ImageTexture.create_from_image(img)
 	return null
 
-# 数字/名字加粗：主题无粗体字体，用带中文的系统字体 + FontVariation 合成加粗（跨平台回退列表）
+# 数字/名字加粗：主题无粗体字体，拿**主题的默认字体**（Noto Sans SC）+ FontVariation 合成加粗。
+# ⚠️【Web 版文字乱码的真因之一】原来这里用 SystemFont（微软雅黑 / PingFang 回退列表）：
+#   浏览器里没有"取系统字体"这个能力，SystemFont 拿到的是空字体 ⇒ Web 版这些数字/名字全是方块。
+#   改成跟界面同一个字体，桌面 / 安卓 / iOS / 浏览器一致。
 func stat_bold_font() -> FontVariation:
 	if _stat_bold_font == null:
-		var sys := SystemFont.new()
-		sys.font_names = PackedStringArray(["Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "sans-serif"])
+		var base: Font = null
+		var th := ThemeDB.get_project_theme()
+		if th != null and th.default_font != null:
+			base = th.default_font
+		if base == null:   # 兜底：主题里没设默认字体时仍退回系统字体（桌面/安卓可用，浏览器会方块）
+			var sys := SystemFont.new()
+			sys.font_names = PackedStringArray(["Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "sans-serif"])
+			base = sys
 		_stat_bold_font = FontVariation.new()
-		_stat_bold_font.base_font = sys
+		_stat_bold_font.base_font = base
 		_stat_bold_font.variation_embolden = 0.9
 	return _stat_bold_font
 

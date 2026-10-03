@@ -1,4 +1,4 @@
-﻿# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
+# RlTrain.ps1 -- RL weight-training pipeline helpers for the tactics game.
 # PURE ASCII ONLY. PS 5.1 reads .ps1 as ANSI: any non-ASCII byte here becomes mojibake.
 # Chinese text lives only in .md reports written with the write tool.
 #
@@ -1555,6 +1555,10 @@ function Get-RuleScoreKeys {
              #   与 `TWO_PHASE_P1_BEAM` 同类：**不是评分权重、不进自动搜索**，是"算力分配"键。
              #   ⇒ 规则键 35 → 36。
              'TWO_PHASE_DEDUP',
+# 【2026-10-03·用户拍板「a」】顺序抛光 `ORDER_POLISH`（默认 0 = 关）：同一批出手里试换顺序、
+#   按完整 `_plan_score` 重评取优 —— 治「谁去吃嘲讽单位的反击」这类顺序问题。与上面几键同类：
+#   **算力键、不进自动搜索**；只在 `RL/weights/噩梦1.json` 打开。
+'ORDER_POLISH',
              # 【2026-09-24·用户「你把漏斗调到其他数值，跑一下」】**阶段 2 的漏斗宽度**（`TWO_PHASE_LAYOUTS`）。
              #   原来写死在引擎里（常量 16）⇒ T24 只能"改常量 + 重建副本 + 跑一个局面"比 16/32；
              #   提升成键后可以跑配对剂量批（`难度体检 -Mode funnel`：fn8 / fn16(对照) / fn32 / fn64）。

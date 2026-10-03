@@ -2,6 +2,7 @@
 
 [ext_resource type="Texture2D" uid="uid://rgjosy8l6aig" path="res://theme/btn_plate_dark.png" id="1_plate"]
 [ext_resource type="Texture2D" uid="uid://6hnw0wufp2fv" path="res://theme/panel_frame_dark.png" id="2_panel"]
+[ext_resource type="FontFile" uid="uid://bx6v201ehqsxq" path="res://theme/NotoSansSC-Medium.otf" id="3_font"]
 
 [sub_resource type="StyleBoxTexture" id="sb_disabled"]
 content_margin_left = 14.0
@@ -94,6 +95,7 @@ texture_margin_right = 18.0
 texture_margin_bottom = 18.0
 
 [resource]
+default_font = ExtResource("3_font")
 Button/colors/font_color = Color(0.93, 0.94, 1, 1)
 Button/colors/font_disabled_color = Color(0.5, 0.51, 0.55, 0.75)
 Button/colors/font_focus_color = Color(1, 1, 1, 1)

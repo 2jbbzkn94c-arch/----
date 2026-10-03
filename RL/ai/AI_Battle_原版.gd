@@ -245,7 +245,7 @@ class Sim:
 		c.my_dead = my_dead           # 【2026-10-03·用户「红帽为什么不去躲，而是去打人然后被反击死」⇒ 修】
 		c.foe_dead = foe_dead         #   **累计阵亡 / 判负线必须跟着分叉**：原来 clone() 漏了这三个标量 ⇒
 		c.death_line = death_line     #   搜索里每个局面都退回 −1（"未知"）⇒ ⑩终局项退回"按存活数"的老口径
-		                              #   ⇒ AI 看不见"再死一个就判负"（她那一死其实= 输掉整局）。
+									  #   ⇒ AI 看不见"再死一个就判负"（她那一死其实= 输掉整局）。
 		c.poison_applied = poison_applied   # 【T6】"新挂上毒"的次数也要跟着分叉
 		c.poison_apply_val = poison_apply_val   # 【T6】那笔钱的**已加权**金额（按施加者英雄覆盖，见字段说明）
 		c.shield_break_val = shield_break_val   # 【2026-09-23】㉔破盾的计价合计也要跟着分叉
@@ -1821,6 +1821,11 @@ func set_weights(t: Dictionary) -> void:
 			"SPLIT_W": w_split = float(v)
 			# 【2026-09-23·默认关】搜索模式（0 = 现役逐单位组合 / 1 = 两阶段联合搜索：先联合走位、再联合分配出手）
 			"SEARCH_MODE": w_search_mode = int(v)
+			# 【2026-10-03·用户拍板「a」】顺序抛光（`_order_polish()`）：同一批出手里试换顺序、按完整评分取更优。
+			#   起因：用户报「AI 已经死两人，为什么用复仇者去吃巨剑的反击？波盾血多还有盾」—— 那个计划里
+			#   复仇者排在波盾前面 ⇒ 嘲讽单位的**一回合一次反击**落在它头上；而"谁先出手"当时不可选（抛光默认关）。
+			#   只进权重文件、默认仍 0 ⇒ 不注入时四档逐位不变。
+			"ORDER_POLISH": w_order_polish = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1 每层保留宽度（算力分配键，见 const TWO_PHASE_P1_BEAM 处说明）
 			"TWO_PHASE_P1_BEAM": w_tp_p1_beam = int(v)
 			# 【2026-09-23 深夜·默认关】阶段 1"同末态去重"（1 = 开；见 const TWO_PHASE_DEDUP 处说明）
