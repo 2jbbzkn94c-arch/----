@@ -936,6 +936,7 @@ func _build_deck_preview(ids: Array) -> void:
 # 口径：单机对局的录像自动落盘（见 `Battle._rec_begin()` / `_rec_finish()`、`src/ReplaySession.gd`），
 #   这里只负责"列出来 + 点开看"。列表行 = 时间 · 模式 · 胜负 · 双方英雄 · 半回合数 · 时长。
 var _replay_overlay: Control = null
+var _replay_clear_confirm: Control = null   # 【2026-10-03】「清空全部录像」的再确认层（不存在时为 null）
 
 func _open_replays() -> void:
 	if _replay_overlay != null and is_instance_valid(_replay_overlay):
@@ -997,7 +998,69 @@ func _open_replays() -> void:
 	cancel.custom_minimum_size = Vector2(0, 48)
 	cancel.add_theme_font_size_override("font_size", 22)
 	cancel.pressed.connect(func(): _close_replays())
+	# 【2026-10-03·用户要求「录像加个一键清空录像列表」】列表非空时，在「返回」上面加一枚「清空全部录像」：
+	#   一次把列表条目 + 磁盘 json 全清（`ReplayStore.clear_all()`）；**不可撤销** ⇒ 先弹一次确认
+	#   （确认层只留标题 + 两个按钮，不加说明小字 —— 用户 2026-09-24 口径）。空列表时不显示这枚按钮。
+	if not list.is_empty():
+		var clr := Button.new()
+		clr.text = "清空全部录像"
+		clr.custom_minimum_size = Vector2(0, 48)
+		clr.add_theme_font_size_override("font_size", 22)
+		clr.pressed.connect(_confirm_clear_replays)
+		vb.add_child(clr)
 	vb.add_child(cancel)
+
+## 【2026-10-03】「清空全部录像」的再确认层（与 HUD 天梯「确定认输？」同一套写法：全屏遮罩 + 居中面板，
+##   标题 + 两个按钮，**不加任何说明小字**）。确认后清空并**原地重开列表**（于是立刻显示"还没有录像"）。
+func _confirm_clear_replays() -> void:
+	if _replay_clear_confirm != null and is_instance_valid(_replay_clear_confirm):
+		return
+	var ov := Control.new()
+	ov.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(ov)
+	_replay_clear_confirm = ov
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	ov.add_child(dim)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ov.add_child(center)
+	var panel := PanelContainer.new()
+	center.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	panel.add_child(vb)
+	var title := Label.new()
+	title.text = "确定清空全部录像？"
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.6, 0.5))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(title)
+	var yes := Button.new()
+	yes.text = "确定清空"
+	yes.add_theme_font_size_override("font_size", 20)
+	yes.custom_minimum_size = Vector2(240, 50)
+	yes.pressed.connect(_do_clear_replays)
+	vb.add_child(yes)
+	var no := Button.new()
+	no.text = "取消"
+	no.add_theme_font_size_override("font_size", 20)
+	no.custom_minimum_size = Vector2(240, 50)
+	no.pressed.connect(_close_clear_replays_confirm)
+	vb.add_child(no)
+
+func _close_clear_replays_confirm() -> void:
+	if _replay_clear_confirm != null and is_instance_valid(_replay_clear_confirm):
+		_replay_clear_confirm.queue_free()
+	_replay_clear_confirm = null
+
+func _do_clear_replays() -> void:
+	_close_clear_replays_confirm()
+	ReplayStore.clear_all()
+	_open_replays()   # 原地重开列表 ⇒ 立刻变成"还没有录像"
 
 func _close_replays() -> void:
 	if _replay_overlay != null and is_instance_valid(_replay_overlay):
@@ -1525,7 +1588,7 @@ func _ladder_go(m: String, fresh: bool) -> void:
 # 为什么单独写一份文本、而不直接复用主菜单的 `RULES_TEXT`：用户要的是**游戏模式说明**
 #   （普通模式 / 竞技场模式各自怎么开局、差在哪），而 `RULES_TEXT` 是全套玩法与关键词。
 #   末尾留一句指路：要看完整规则就去主菜单「游戏说明」。
-const MODE_HELP_TEXT := "《酒馆纷争》游戏模式说明\n\n【普通模式】\n· 进对局前先在编队页组队：从英雄池里选5-8名英雄，\n· 开战后在战斗内弹出「选择卡组」：从 3 个已存卡组里挑一个出战，也可以点「随机英雄」直接随机。\n\n【竞技场模式】\n· 开局进入选人界面：双方各选4次 ；没被选择的英雄进入对方卡组\n· 双方各凑 8 名之后轮流上首发，其余进替补席。\n\n【天梯普通模式 / 天梯竞技场模式】\n· 玩法分别与普通模式、竞技场模式完全一样，但目的是**打连胜**，难度固定「噩梦」。\n· 每局开始时自动存档：退出（含崩溃/强杀）后再进来，从**退出前那次回合开始**继续，不会重开对局。\n· 赢一局结算面板可点「继续挑战」，连胜 +1；**输一局本轮就结束**（当前连胜清零，最高连胜保留）。\n· 对局中要退出：点右上角「暂停」→「保存并退出」（进度留着，下次继续）或「放弃本次天梯」（本轮结束）。\n· 两个天梯各自独立计进度：可以同时各存一轮，互不影响。\n\n【两种模式共同的规则】\n· 每队 3 名首发上场，其余替补待命；一方累计阵亡 3 名英雄（含替补）即判负。\n·更完整的玩法与关键词说明，见主菜单的「游戏说明」。"
+const MODE_HELP_TEXT := "《酒馆纷争》游戏模式说明\n\n【普通模式】\n· 进对局前先在编队页组队：从英雄池里选5-8名英雄，\n· 开战后在战斗内弹出「选择卡组」：从 3 个已存卡组里挑一个出战，也可以点「随机英雄」直接随机。\n\n【竞技场模式】\n· 开局进入选人界面：双方各选4次 ；没被选择的英雄进入对方卡组\n· 双方各凑 8 名之后轮流上首发，其余进替补席。\n\n【天梯普通模式 / 天梯竞技场模式】\n· 玩法分别与普通模式、竞技场模式完全一样，但目的是**打连胜**，难度固定「噩梦」。\n· 每局开始时自动存档：退出（含崩溃/强杀）后再进来，从**退出前那次回合开始**继续，不会重开对局。\n· 赢一局结算面板可点「继续挑战」，连胜 +1；**输一局本轮就结束**（当前连胜清零，最高连胜保留）。\n· 对局中要退出：点左下角「菜单」→「保存并退出」（进度留着，下次继续）或「认输」（本轮结束）。\n· 两个天梯各自独立计进度：可以同时各存一轮，互不影响。\n\n【两种模式共同的规则】\n· 每队 3 名首发上场，其余替补待命；一方累计阵亡 3 名英雄（含替补）即判负。\n·更完整的玩法与关键词说明，见主菜单的「游戏说明」。"
 
 var _mode_help_overlay: Control = null
 

@@ -22,3 +22,18 @@ func on_attack(target: Unit) -> void:
 ##   （宿魂的普攻伤害本身仍由 Battle 结算：打盾时盾照旧被消耗掉。）
 func applies_status_on_hit() -> bool:
 	return true
+
+## 【2026-10-03·用户「宿魂的附体伤害也没有击杀特效」】击杀预告：**我挨的这一下会镜像给谁**。
+##   判据与 `Battle._possess_mirror()` 的结算**逐条同一把尺**：当前绑定到我身上、且**还活着**的
+##   那些目标（`battle._possess_targets_of()` 就是那趟循环的纯查询版），伤害数 = 我实际掉的血
+##   （调用方已按重伤/坚固/塔盾代扛算好），`atk = false`（镜像那句 `take_damage(dmg, false, false, "附体")`
+##   用的是默认 `is_attack = false`）。
+##   ⇒ `Battle._do_attack()` / `_play_counter()` 在开打前拿它播完这些人的击杀卡面，之后镜像才落地。
+##   ⚠️ 纯查询：不改绑定表、不结算、不动随机源。
+func mirror_hits_on_damage(amount: int) -> Array:
+	var out: Array = []
+	if amount <= 0 or unit == null or not is_instance_valid(unit):
+		return out
+	for t in battle._possess_targets_of(unit):
+		out.append({ "v": t, "dmg": amount, "atk": false })
+	return out

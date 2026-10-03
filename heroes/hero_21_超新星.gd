@@ -32,3 +32,20 @@ func on_attack_dead(target: Unit) -> void:
 			# 同上：波及致死也弹击杀卡面
 			battle.kill_intro_side(unit, v, unit.effective_atk(), true)
 			v.take_damage(unit.effective_atk(), false, false, "被%s的超新星击穿" % unit.display_name, true)
+
+## 【2026-10-03·用户口径「击杀特效要在杀死人之前」】击杀预告：这一招会**击穿**谁（相邻敌人里
+##   "后方被挡住、推不动"的那些）。判据与上面两个循环**逐条同一把尺**：同一批目标（目标同阵营的
+##   相邻单位）、同一个伤害数（`effective_atk()`）、`is_attack = true`；只多一层"推不动"的纯计算
+##   （`_knockback_dest()` —— 与真正推人时走的是同一个函数）。
+##   ⇒ `Battle._do_attack()` 在开打前拿它播完这些人的击杀卡面，之后上面那段同步循环照旧立刻结算。
+##   ⚠️ 纯查询：不推人、不结算、不动随机源。⚠️ 这是**预测**（真正结算时前面的受害者可能已经被推走、
+##   占住了后面某个人的落点）⇒ 极端情况下与实际差一个人，那一个就退回"伤害落地后补播卡面"。
+func side_hits_on_attack(target: Unit) -> Array:
+	var out: Array = []
+	if target == null or not is_instance_valid(target):
+		return out
+	var dmg: int = unit.effective_atk()
+	for v in battle._same_side_adjacent(target):
+		if battle._knockback_dest(v, target.cell).x == -99:
+			out.append({ "v": v, "dmg": dmg, "atk": true })
+	return out

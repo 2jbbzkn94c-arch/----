@@ -153,7 +153,6 @@ func _defer_early(cand: String) -> bool:
 	#   ⚠️ 这一条**数据里没有**（医护兵/烛火的克制列与被克制列都是空的）⇒ 按用户口径手工登记。
 	if cd != null and cd.skills.has(DataRegistry.Skill.LOGISTICS):
 		return not (revealed.has("hero_49") or revealed.has("hero_34"))
-	return false
 	# 【2026-10-03·用户「我角色列表里不是有他克制的人吗」】**改正：读数据、不手写清单**。
 	#   负墟 hero_44 的「克制」列原文 = **毒蛇淑女 / 战锤 / 雪拳 / 白游侠 / 沉默术士 / 猎颅者 / 巨剑 / 宿魂**
 	#   （它的技能：所有负面效果对其无效，**每受到一次负面效果攻击，攻击力 +1**）。
@@ -166,6 +165,7 @@ func _defer_early(cand: String) -> bool:
 				if revealed.has(String(b)):
 					return false
 		return true
+	return false   # 【2026-10-03】别的候选：不压（原来这行在负墟分支**之前** ⇒ 那段是死代码）
 
 
 func _enemy_pick() -> void:

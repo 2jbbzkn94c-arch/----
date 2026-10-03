@@ -104,6 +104,26 @@ func remove(id: String) -> void:
 	_idx = keep
 	_save()
 
+## 【2026-10-03·用户要求「录像加个一键清空录像列表」】把**全部**录像一次清掉（列表条目 + 磁盘上的 json）。
+##   为什么要专门一个函数、而不是在 UI 里循环 `remove()`：那样每删一条都要重写一遍索引文件（N 次落盘）；
+##   这里删文件一遍、索引只写一次。⚠️ **不可撤销** ⇒ UI 侧（`Menu._open_replays()` 的那枚「清空」）先弹一次确认。
+func clear_all() -> int:
+	var n := _idx.size()
+	for r in _idx:
+		var p := "%s/%s.json" % [DIR, String((r as Dictionary).get("id", ""))]
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	# 兜底：索引之外还可能留着孤儿 json（历史版本的异常退出）⇒ 整个目录扫一遍
+	if DirAccess.dir_exists_absolute(DIR):
+		var d := DirAccess.open(DIR)
+		if d != null:
+			for f in d.get_files():
+				if f.ends_with(".json"):
+					DirAccess.remove_absolute(ProjectSettings.globalize_path("%s/%s" % [DIR, f]))
+	_idx = []
+	_save()
+	return n
+
 ## 超出 `MAX_KEEP` 的从最旧删起（同时删文件，避免目录里留下孤儿 json）。
 func _prune() -> void:
 	while _idx.size() > MAX_KEEP:

@@ -23,3 +23,23 @@ func on_move() -> void:
 	if hurt_any:
 		play_skill_sfx()
 		fx()   # 确实伤到人才呈现专属特效
+
+## 【2026-10-03·用户口径「击杀特效要在杀死人之前」】击杀预告：移动后这一下肃清会打到谁。
+##   判据与上面两个循环**逐条同一把尺**：同一批目标（**先敌人、再队友**，都是"血比我低"的活人，
+##   不含自己）、同一个伤害数（`effective_atk()`）、`is_attack = true`。
+##   ⇒ `Battle._trigger_on_move()` 在 `on_move()` 之前拿它播完这些人的击杀卡面，之后那段同步循环
+##   照旧立刻结算 ⇒ 观感从"人已经死了卡面才出来"变成"卡面滑完 → 才倒下"。⚠️ 纯查询：不改状态。
+func side_hits_on_move() -> Array:
+	var out: Array = []
+	var dmg: int = unit.effective_atk()
+	# 顺序与 `on_move()` 一致：先敌人、再队友（多张卡面按这个顺序依次播）
+	for pass_faction in [false, true]:
+		for v in battle.units:
+			if v == null or not is_instance_valid(v) or not v.alive or v == unit:
+				continue
+			if v.hp >= unit.hp:
+				continue
+			if (v.faction == unit.faction) != pass_faction:
+				continue
+			out.append({ "v": v, "dmg": dmg, "atk": true })
+	return out

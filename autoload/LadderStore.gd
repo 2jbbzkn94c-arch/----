@@ -33,7 +33,7 @@ const LOCKED_DIFFICULTY := 4       # 【2026-10-03·用户口径「天梯模式�
 #   `噩梦.json` ⇒ 天梯**不会崩**，只是当场退化成噩梦档（判据里带 `FileAccess.file_exists`）。
 
 var _runs: Dictionary = {}    # mode -> {"mode":…, "difficulty":3, "match_no":局数, "player_deck":[…],
-                              #          "in_match":本局是否已开打（部署一开就 true）, "enemy_deck":[…]}
+							  #          "in_match":本局是否已开打（部署一开就 true）, "enemy_deck":[…]}
 var _snaps: Dictionary = {}   # mode -> 中局快照（Battle._ladder_snapshot() 的产物）；缺 = 当前不在对局中
 var _drafts: Dictionary = {}  # mode -> 竞技场选人阶段的中途存档（Battle._arena_draft_snapshot() 的产物）；缺 = 选人不在途
 
@@ -220,6 +220,43 @@ func _save() -> void:
 	if rerr != OK:
 		print("天梯存档改名失败: ", rerr)
 
+## 【2026-10-03】存档体积上限（超过就自愈裁剪，见 `_load()`）。正常档几十 KB~几 MB；出过一次 409 MB 的事故。
+const SNAP_FILE_MAX_BYTES := 32 * 1024 * 1024
+
+func _file_bytes() -> int:
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null:
+		return 0
+	var n := f.get_length()
+	f.close()
+	return n
+
+## 把巨型存档里"除 `[snaps]` 之外"的段落**流式**抄进临时文件，再替换回存档。
+func _trim_oversized() -> void:
+	var fin := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if fin == null:
+		return
+	var fout := FileAccess.open(TMP_PATH, FileAccess.WRITE)
+	if fout == null:
+		fin.close()
+		return
+	var skip := false
+	while not fin.eof_reached():
+		var line := fin.get_line()
+		var s := line.strip_edges()
+		if s.begins_with("[") and s.ends_with("]"):
+			skip = (s == "[snaps]")
+		if not skip:
+			fout.store_line(line)
+	fin.close()
+	fout.close()
+	var d := DirAccess.open("user://")
+	if d != null:
+		if d.file_exists("ladder.cfg"):
+			d.remove("ladder.cfg")
+		d.rename("ladder.cfg.tmp", "ladder.cfg")
+
+
 func _delete() -> void:
 	var d := DirAccess.open("user://")
 	if d == null:
@@ -230,6 +267,14 @@ func _delete() -> void:
 		d.remove("ladder.cfg.tmp")
 
 func _load() -> void:
+	# 【2026-10-03·用户「天梯卡死」】**巨型存档自愈**：快照里一旦混进"不该存的东西"（对象引用被 ConfigFile
+	#   按文本序列化 ⇒ 连贴图像素都写进去），文件会涨到几百 MB ⇒ `ConfigFile.load()` 解析要几十秒（表现=卡死）。
+	#   ⇒ 这里**先看体积**：超过 `SNAP_FILE_MAX_BYTES` 就**只保留 `[runs]` / `[drafts]` 两个小段、丢掉 `[snaps]`**，
+	#   并把裁好的内容写回存档（流式抄写、不整份读进内存）。⚠️ 代价：本轮天梯的"中途续档"退回
+	#   "未打完的部署"那一步（`has_pending_match()` 接手）—— 进度/连胜/卡组全部保住。
+	if _file_bytes() > SNAP_FILE_MAX_BYTES:
+		push_warning("[天梯] 存档异常巨大（%.1f MB）⇒ 丢掉快照段、保留进度段（自愈）" % (_file_bytes() / 1048576.0))
+		_trim_oversized()
 	_runs.clear()
 	_snaps.clear()
 	_drafts.clear()

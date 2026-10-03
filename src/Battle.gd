@@ -2489,19 +2489,18 @@ func _begin_deployment() -> void:
 	#   `_begin_deck_pick_after_intro()` 里演过了 ⇒ 这里只是给"不选卡组直接部署"的分支兜底
 	#   （续档恢复 / 联机重进部署不经过这里，所以不会重演）。
 	_start_board_intro_once()
-	# 【2026-09-28·用户口径】卡组三选一之后（= 走到这里的那一刻）：响 `Alert_BattleStart` +
-	#   中央横幅「战斗开始」；然后**停一拍**再进部署阶段（用户口径「弹战斗开始后，等一会才开始部署」）。
-	#   不选卡组的分支（自由部署等）同样在这里报一次。
-	if _announce_battle_start():
-		await get_tree().create_timer(BATTLE_START_HOLD).timeout
-	state = State.DEPLOY   # 先进入部署态：顶部标签显示"部署选人"而不是旧回合
-	# 【2026-09-30·用户报「竞技场 2 选 1 的队伍消失一下、部署又出来」】部署一开张就**交接**：
-	#   选人那段强开的队伍面板在这里落旗（下面 `deploy_refresh.emit()` 会用行动卡池顶上来，
-	#   两行卡同半径同序 ⇒ 看不出换块）。见 `_arena_to_deploy`。
-	_arena_to_deploy = false
-	# 【2026-09-24 天梯】部署一开就算"这一局已经开打"：把双方卡组记进本轮存档 ⇒
-	#   在部署/选人阶段退出（还没到第 1 回合、没有回合快照）时，下次进来能**用同一副卡组直接回到部署**，
-	#   而不是从选人页/选择卡组重来一遍（用户实测报的就是这个）。
+	# 【2026-10-03·用户「有时候竞技场2选1结束后，棋盘效果会再来一次」】**账本/先手/卡池这几步挪到
+	#   「战斗开始」那一拍之前，并就地落盘**：
+	#   原来它们排在 `await BATTLE_START_HOLD`（1.2 秒）**之后**，于是"2 选 1 刚选完、横幅还在演"
+	#   这一段里：`state` 还是 `IDLE`（本轮竞技场甚至是 `ARENA_DRAFT` 刚收）、`LadderStore` 里
+	#   **既没有回合快照、选人档也刚被清**、`_ladder_can_save()` 又按 `units.size() > 0` 判 ⇒
+	#   「保存并退出」**不落盘**、直接关游戏更是什么都没有 ⇒ 重进只能命中 `has_pending_match()`
+	#   那条兜底路，而那条路要 `_place_obstacles() + _spawn_opening_items()` **重新铺一遍棋盘**
+	#   ⇒ 障碍/道具重摇 + 开场演出（格子逐格亮、障碍落下）**再演一次**。
+	#   现在这一步一结束就有快照 ⇒ 重进走 `_resume_deploy_phase()`：棋盘原样、不再重演
+	#   （探针 `.dsh/tmp/开场演出次数自检.tscn` C 臂：部署阶段退出重进 ⇒ 开场演出 **0 次**、障碍一模一样）。
+	#   ⚠️ 顺序要紧：卡池/先手必须在**落盘之前**定好（否则快照里是空卡池，续档的部署面板会空着）；
+	#      `_apply_highlights()` / `deploy_refresh.emit()` 仍留在"进部署态"之后（HUD 按 state 建面板）。
 	if _ladder_active():
 		LadderStore.clear_draft()   # 【2026-09-25】选人已结束 ⇒ 撤掉选人存档（往后由"本局已开打"/回合快照接手）
 		LadderStore.note_match_started(GameState.player_deck, GameState.enemy_deck)
@@ -2512,6 +2511,23 @@ func _begin_deployment() -> void:
 	enemy_deployed = []
 	player_roster = []
 	enemy_roster = []
+	# 【2026-09-28·用户报「天梯竞技场是我的先手部署，但退出重进后变成对方先手」】部署**一开张**就落一次盘：
+	#   此刻一个人都还没上（`_deploy_after_pick()` 里那次 `_ladder_autosave()` 还没机会跑），而选人档刚被上面
+	#   那句 `clear_draft()` 撤掉 ⇒ 玩家此刻强退/崩溃就**一份档都没有**，重进直接重新掷先手。
+	#   快照里带着 `first_side` / `deploy_side` / 双方卡组与卡池 ⇒ 续档走 `_resume_deploy_phase()` 原样接着部署。
+	#   【2026-10-03】从"本函数末尾"挪到**这里**（横幅那一拍之前）—— 见函数开头的说明。
+	if _ladder_active():
+		_ladder_autosave(_first_side)
+	# 【2026-09-28·用户口径】卡组三选一之后（= 走到这里的那一刻）：响 `Alert_BattleStart` +
+	#   中央横幅「战斗开始」；然后**停一拍**再进部署阶段（用户口径「弹战斗开始后，等一会才开始部署」）。
+	#   不选卡组的分支（自由部署等）同样在这里报一次。
+	if _announce_battle_start():
+		await get_tree().create_timer(BATTLE_START_HOLD).timeout
+	state = State.DEPLOY   # 先进入部署态：顶部标签显示"部署选人"而不是旧回合
+	# 【2026-09-30·用户报「竞技场 2 选 1 的队伍消失一下、部署又出来」】部署一开张就**交接**：
+	#   选人那段强开的队伍面板在这里落旗（下面 `deploy_refresh.emit()` 会用行动卡池顶上来，
+	#   两行卡同半径同序 ⇒ 看不出换块）。见 `_arena_to_deploy`。
+	_arena_to_deploy = false
 	# 高亮出生区（我方蓝、敌方红
 	var pc := {}
 	for c in _deploy_cells(DataRegistry.Faction.PLAYER):
@@ -2529,12 +2545,6 @@ func _begin_deployment() -> void:
 			action_info.emit("等待对方选人…" if GameState.is_host else "轮到你（敌方）选人：点选下方英雄")
 	_sync_deploy_timer()
 	_deploy_banner_if_my_turn()   # 部署开始且轮到本端：中央提示"轮到你部署队伍"
-	# 【2026-09-28·用户报「天梯竞技场是我的先手部署，但退出重进后变成对方先手」】部署**一开张**就落一次盘：
-	#   此刻一个人都还没上（`_deploy_after_pick()` 里那次 `_ladder_autosave()` 还没机会跑），而选人档刚被上面
-	#   那句 `clear_draft()` 撤掉 ⇒ 玩家此刻强退/崩溃就**一份档都没有**，重进直接重新掷先手。
-	#   快照里带着 `first_side` / `deploy_side` / 双方卡组与卡池 ⇒ 续档走 `_resume_deploy_phase()` 原样接着部署。
-	if _ladder_active():
-		_ladder_autosave(_first_side)
 
 func _deploy_cells(faction: int) -> Array:
 	# 双方出生区整片高亮：玩家=底行整行，敌顶部顶帽第一满行
@@ -3030,6 +3040,42 @@ func _deploy_is_hard(id: String) -> bool:
 ##   · 其它槽（近战/远程 这类**泛化槽**）⇒ **"上位圈随机"**：分数在 `最高分 − band` 以内的所有人里
 ##     均匀随机（band 见 `const PICK_BAND_DEFAULT`）—— 治"泛化槽还是被最高分垄断"。
 ## `<替补>` 标签英雄不主动首发（既有口径）。
+## 【2026-10-03·用户口径】**"怕被针对的英雄别在前两格上"**（原判落在 `src/Deploy.gd::_defer_early()`，
+##   但那是**另一条部署入口** —— 单机线上走的是本文件的 `_enemy_deploy()` / `_recipe_deploy_pick()`
+##   （见 `_enemy_deploy()` 里那句"单机实际走的是**这里**"）⇒ 这条口径**当时落错了文件**，线上从来没生效过；
+##   2026-10-03 补到线上（判据 / 常量 / 含义与 `Deploy.gd` 那份**逐条同源**，两份都要改）。
+##   判据：候选自己的「被克制列」(`HeroDef.counters`) 里**一个都还没出现在玩家已上阵里** ⇒ 压后等对方先亮；
+##   已有人亮了 ⇒ 不压（该不该选交给 `_deploy_candidate_value()` 的净克制项）。
+##   ⚠️ 负墟 hero_44 的「被克制列」是**空的**，它的判据在「克制列」(`beats`)：那 8 个人（毒蛇淑女/战锤/雪拳/
+##      白游侠/沉默术士/猎颅者/巨剑/宿魂）**一个都还没亮** ⇒ 压后；亮了一个 ⇒ 有得吃、不压。
+##   ⚠️ 【Deploy.gd 那份的 bug】它把这段负墟判据写在 `return false` **之后** ⇒ **死代码**（永远不执行）⇒
+##      就算走那条入口也压不住。这里按"负墟分支在前"写。
+const EARLY_SLOTS := 2              # 前几格算"早"（用户：尽量不要前两个就上）
+const EARLY_DEFER_MULT := 0.2       # 早格上这些英雄时分数打几折（乘法、量纲无关）
+
+func _defer_early_slot(cand: String) -> bool:
+	if enemy_deployed.size() >= EARLY_SLOTS:
+		return false                       # 已经过了"前两格" ⇒ 不压
+	var revealed := {}
+	for h in player_deployed:
+		revealed[h] = true
+	var cd: DataRegistry.HeroDef = DataRegistry.get_hero(cand)
+	if cand == "hero_44":
+		# 负墟：看它的**克制列**（它靠"对面施加负面效果"吃饭）
+		if cd != null:
+			for b in cd.beats:
+				if revealed.has(String(b)):
+					return false           # 它克的人已经亮了 ⇒ 有得吃，不必压后
+			return true                    # 有克的人、一个都没亮 ⇒ 等对方先亮
+	if cd != null and cd.counters.size() > 0:
+		for x in cd.counters:
+			if revealed.has(String(x)):
+				return false               # 克它的人已经亮了 ⇒ 不压（该不该选由净克制项决定）
+		return true                        # 有克它的人、一个都没亮 ⇒ 等对方先亮
+	if cd != null and cd.skills.has(DataRegistry.Skill.LOGISTICS):
+		return not (revealed.has("hero_49") or revealed.has("hero_34"))
+	return false
+
 func _recipe_deploy_pick() -> bool:
 	if GameState.enemy_recipe.is_empty():
 		return false
@@ -3055,7 +3101,10 @@ func _recipe_deploy_pick() -> bool:
 		if cd.skills.has(DataRegistry.Skill.BENCH):
 			continue
 		cands.append(h)
-		scores.append(_deploy_candidate_value(h, enemy_deployed) + randf() * jitter)
+		var sc0: float = _deploy_candidate_value(h, enemy_deployed) + randf() * jitter
+		if _defer_early_slot(h):
+			sc0 *= EARLY_DEFER_MULT   # 【2026-10-03】前两格压后（见 `_defer_early_slot()`）
+		scores.append(sc0)
 	if cands.is_empty():
 		return false   # 该槽挑不出人 ⇒ 交回原逻辑（至少别空过）
 	var best := -1e18
@@ -3145,6 +3194,9 @@ func _enemy_deploy() -> void:
 					if v > best_have:
 						best_have = v
 						best_tail = tail
+				# 【2026-10-03·用户口径】"怕被针对的英雄别在前两格上"（见 `_defer_early_slot()`）
+				if _defer_early_slot(hc):
+					best_have *= EARLY_DEFER_MULT
 				cand_rows.append({ "h": hc, "sc": best_have, "tail": best_tail })
 			cand_rows.sort_custom(func(x, y): return float(x["sc"]) > float(y["sc"]))
 		var best_i := -1
@@ -3163,6 +3215,8 @@ func _enemy_deploy() -> void:
 				if cd != null and cd.skills.has(DataRegistry.Skill.BENCH):
 					continue
 				var sc := _deploy_candidate_value(cand, enemy_deployed)
+				if _defer_early_slot(cand):
+					sc *= EARLY_DEFER_MULT
 				if sc > best_sc:
 					best_sc = sc
 					best_i = i
@@ -4858,10 +4912,13 @@ func _enemy_adjacent_at(u: Unit, from_cell: Vector2i) -> bool:
 			return true
 	return false
 
+## 【2026-10-03·用户报「斩杀AI那一击，超新星贴身攻击也把旁边敌人震开了」】`also_count` = 把"**这一击刚打死的
+##   那个目标**"也当成一个贴身敌人（默认 null ⇒ 与原来逐位相同）。理由：这道闸门问的是"**命中那一刻**"的状态，
+##   而目标被这一击打死后 `alive=false`、当场退出本检查 ⇒ "贴身斩杀"会绕过"远程被贴身"那道门（见 `_trigger_on_attack`）。
 # 远程动态射程：有相邻敌人时射程降为 1；否则用基础射程(远程=2)
-func _has_enemy_adjacent(a: Unit) -> bool:
+func _has_enemy_adjacent(a: Unit, also_count: Unit = null) -> bool:
 	for v in units:
-		if v.alive and v.faction != a.faction and grid.distance(a.cell, v.cell) == 1:
+		if (v.alive or v == also_count) and v.faction != a.faction and grid.distance(a.cell, v.cell) == 1:
 			# 被障碍物隔断的相邻攻击不被贴：只有彼此能实际交战(视线通畅)才算
 			if _attack_path_blocked(a.cell, v.cell):
 				continue
@@ -6038,6 +6095,21 @@ func _do_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	#   那次预告 ⇒ 剑气杀死的单位没有击杀卡面（与 2026-09-28「长角双倍伤害打死对方时没有击杀特效」
 	#   同一类病灶：伤害走了另一条路径）。⇒ 这里在**同一个"开打前"时点**把它们也各预告一次。
 	await _kill_intro_pierce_preview(attacker, target)
+	# 【2026-10-03·用户口径「击杀特效要在杀死人之前」】本招**波及**到的人（超新星击穿 / 白游侠散射）：
+	#   与"主目标 / 剑气"同一个"开打前"时点，把这一片里会死的那些一并预告完 —— 之后英雄那段
+	#   **同步**伤害循环（`on_attack()` 里）照旧立刻结算，观感就是"卡面滑完 → 英雄出手 → 一片人倒下"。
+	#   ⚠️ 只在"这一招的技能真的会触发"时才预告，与 `_trigger_on_attack()` 的两道门同一把尺：
+	#      **沉默**（技能不触发）· **远程被贴身**（射程/效果都失效，含"这一击刚打死的贴身目标"，
+	#      判据传 `target` 进去 = 把它也算作贴身敌人，见 `_has_enemy_adjacent()`）。
+	if attacker.skill_allowed() and not (attacker.attack_type == DataRegistry.AttackType.RANGED \
+			and _has_enemy_adjacent(attacker, target)):
+		await _kill_intro_side_preview(attacker, _hero(attacker).side_hits_on_attack(target))
+	# 【2026-10-03·用户「宿魂的附体伤害也没有击杀特效」】这一击若落在**宿魂**身上，它会把这笔伤害
+	#   **镜像**给被它[附体]的人 ⇒ 那几个人会死的话，卡面也要在开打前播完（killer = 宿魂自己，
+	#   与红帽扑街自爆同一口径）。名单由宿魂自己报（`HeroBase.mirror_hits_on_damage()`，
+	#   别的英雄默认空 ⇒ 零开销）；伤害数按"他实际会掉多少血"预测（重伤/坚固/塔盾代扛同一把尺）。
+	await _kill_intro_side_preview(target, _hero(target).mirror_hits_on_damage(
+			_preview_taken_damage(target, _hero(attacker).preview_attack_damage(target), true)))
 	# 远程且非贴身（距1）：发射投掷物飞向目标，命中后结算（不贴身突进）
 	if attacker.attack_type == DataRegistry.AttackType.RANGED and grid.distance(attacker.cell, target.cell) > 1:
 		_launch_projectile(attacker, target, for_enemy)
@@ -6350,6 +6422,19 @@ func _attack_total(attacker: Unit, target: Unit) -> int:
 #   · 兜底：HUD 万一没回调，最多等 `KILL_INTRO_MAX_WAIT` 秒就放行，不会把对局卡死。
 const KILL_INTRO_MAX_WAIT := 3.0
 var _kill_intro_done := true
+## 【2026-10-03·用户口径「击杀特效要在杀死人之前」】同一对 (击杀者,被杀者) 在这么短的窗口内**只播一次**
+##   击杀卡面 —— 防"同一招里播两遍"：先播的预告（普攻主目标 / 剑气 / 波及 / 阵亡自爆）已经播过，
+##   之后那段**同步**伤害循环里的 `kill_intro_side()` 再请求一次就会被这里挡掉。
+##   ⚠️ 用时间窗而不是"每招清一次"：红帽扑街自爆发生在**阵亡 0.3 秒后**（`Unit.die()` 的淡出走完才发
+##      `died`），那会儿这一招可能已经收尾、下一招已经起手 ⇒ 按招清零会把这一对又放进来（同一对被播两遍）。
+##   ⚠️ 窗口取 3 秒：一张卡面约 1~1.5 秒，而"同一对击杀者→被杀者播两次"在这游戏里不可能有意义
+##      （被杀者只可能死一次）⇒ 宁可挡掉重复，也不会误伤正常演出。
+##   ⚠️ 纯演出记账：不参与任何伤害/判定；跑批/无 HUD 时 `_kill_intro()` 在上面那道"没人接信号"就返回了，
+##      根本走不到这里 ⇒ AI 跑批行为逐位不变。
+const KILL_INTRO_DEDUP_MS := 3000
+var _kill_intro_seen := {}      # key = "击杀者实例id|被杀者实例id" -> 上次播卡面的时刻（毫秒）
+## 阵亡自爆的预告递归深度（红帽炸死另一个红帽这种连锁）：超过上限就不再往下预告，防意外死循环。
+var _kill_intro_depth := 0
 
 ## 【2026-09-28·用户口径「对方音效放完才提示回合转换」】回合横幅前等对面英雄声音的上限（秒）
 const TURN_BANNER_VOICE_WAIT := 3.0
@@ -6567,6 +6652,16 @@ func _kill_intro(killer: Unit, victim: Unit, dmg: int, is_attack: bool = true) -
 		return
 	if kill_intro_requested.get_connections().is_empty():
 		return
+	# 【2026-10-03】同一对"击杀者→被杀者"在短窗口内只播一次（本招的预告已经播过 ⇒ 波及那处再请求就跳过）
+	var kk := "%d|%d" % [killer.get_instance_id(), victim.get_instance_id()]
+	var now_ms := Time.get_ticks_msec()
+	if now_ms - int(_kill_intro_seen.get(kk, -999999)) < KILL_INTRO_DEDUP_MS:
+		return
+	if _kill_intro_seen.size() > 64:   # 顺手清掉过期的（上限很小，正常一局几十次）
+		for k in _kill_intro_seen.keys():
+			if now_ms - int(_kill_intro_seen[k]) >= KILL_INTRO_DEDUP_MS:
+				_kill_intro_seen.erase(k)
+	_kill_intro_seen[kk] = now_ms
 	_kill_intro_done = false
 	kill_intro_requested.emit(killer, victim)
 	var waited := 0.0
@@ -6578,6 +6673,35 @@ func _kill_intro(killer: Unit, victim: Unit, dmg: int, is_attack: bool = true) -
 		await get_tree().process_frame
 		waited += get_process_delta_time()
 	_kill_intro_done = true
+	# 【2026-10-03·用户口径「击杀特效要在杀死人之前」】**这个被杀者自己有没有"阵亡时波及"**：
+	#   红帽扑街自爆会炸死相邻敌人 —— 那些人的卡面也要在爆炸**之前**播完（原来是在炸完之后才弹）。
+	#   判据由英雄自己给（`HeroBase.death_blast_hits()`，默认空）⇒ Battle 不认具体英雄。
+	#   ⚠️ 只在这一击**真的会打死它**的这条路上走到（上面的致死门已经过了），所以这里读它的
+	#      坐标/血量/沉默都是"死之前"的准确值；递归有深度上限，防红帽互炸那种连锁。
+	if _kill_intro_depth < 4 and is_instance_valid(victim):
+		_kill_intro_depth += 1
+		await _kill_intro_side_preview(victim, _hero(victim).death_blast_hits())
+		_kill_intro_depth -= 1
+
+## 【2026-10-03·用户口径「击杀特效要在杀死人之前」】**波及伤害**的击杀预告：
+##   把英雄报上来的"这一招会波及到谁"（`HeroBase.side_hits_on_attack()` / `side_hits_on_move()` /
+##   `death_blast_hits()`）逐个过一遍 `_kill_intro()` ⇒ 会死的那些**先播卡面**，之后英雄那段
+##   同步伤害循环照旧立刻结算。⚠️ 逐个 `await`：一次波及打死两个人就是两张卡依次播。
+##   ⚠️ 报上来的只是候选：存活 / 是否致死（含塔盾代扛）/ 召唤物不播 / 没人接信号，全由 `_kill_intro()` 判。
+func _kill_intro_side_preview(killer: Unit, hits: Array) -> void:
+	if hits == null or hits.is_empty():
+		return
+	if killer == null or not is_instance_valid(killer):
+		return
+	for e in hits:
+		if not is_instance_valid(killer) or not is_inside_tree():
+			return
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		var v = e.get("v", null)
+		if v == null or not is_instance_valid(v):
+			continue
+		await _kill_intro(killer, v, int(e.get("dmg", 0)), bool(e.get("atk", true)))
 
 ## HUD 播完击杀卡面回一个（见 `kill_intro_requested`）
 func kill_intro_finished() -> void:
@@ -6691,6 +6815,21 @@ func _apply_attack(attacker: Unit, target: Unit, for_enemy: bool) -> void:
 	target._shield_block_status = false   # 本次攻击结算完,清除"一点血都没打掉(不算打中)"标记
 	# 太阳斩：每次攻击后攻击力-1（立即显示，不等反击
 	_hero(attacker).on_after_attack()
+	# 【2026-10-03·用户口径「临时攻击buff要在攻击的瞬间就消失」】一次性攻击道具
+	#   （`Unit.atk_use_buff`，拾取 +`Battle.ATK_ITEM_BUFF`、只对**下一次攻击**生效）的
+	#   **消费点 = 命中结算完的这一刻**。
+	#   原来只在 `_finish_attack()` 里清 —— 而它排在**整段出招演出 + 反击**之后（近战：前冲 0.12
+	#   ＋回位 0.1，被反击再加 0.15＋0.1＋0.12 ≈ 半秒多）⇒ 画面上"黄字"（`Unit.atk_is_buffed()`
+	#   驱动的攻击力数字配色 / 棋子与属性卡同一个口径）在血都掉完了还挂着，看着像没消耗掉。
+	#   ⚠️ 位置必须**晚于所有读攻击力的结算**：`_attack_total()`（本函数开头）、自己结算伤害的英雄
+	#      （长角 `on_attack` 里再调 `_attack_damage()`）、`_trigger_on_attack()` 里的剑气穿透等
+	#      —— 它们都在上面、且这一段**同帧同步**跑完（没有任何 `await`）⇒ 这一击的伤害照常吃到
+	#      这笔加成，只是黄字在命中那一刻立刻回落（数值本身与改动前逐位一致）。
+	#   ⚠️ 与另两条同口径：敲障碍（`_finish_obstacle_hit`）本来就是"命中即清"；反击那条也在反击
+	#      伤害落地的同一个回调里清（`_play_counter` / `_launch_counter_projectile`）。
+	if attacker.atk_use_buff > 0:
+		attacker.atk_use_buff = 0
+		attacker.refresh_stats()
 	# 技能/攻击击杀：死亡格按攻击者主色补一发爆发粒子(普通平A击杀也有直观反馈)
 	if not target.alive and attacker.alive and is_instance_valid(target):
 		var kd := DataRegistry.hero_fx(attacker.hero_id)
@@ -6768,6 +6907,8 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool, _dist_at_hit: 
 	if not is_instance_valid(target) or not is_instance_valid(attacker):
 		_finish_attack(_safe_unit(attacker), for_enemy)
 		return
+	# 【2026-10-03】反击的击杀预告在下面 `await _kill_intro(counterer, …)`（先播卡面、再结算反击伤害）；
+	#   同一对"反击者→被反击者"若刚播过（`_kill_intro_seen` 的窗口）不会重复播。
 	var counterer := target
 	# 反击前先同步"远程被贴状态：战锤麻痹(-1)debuff 已在命中时施加，
 	# 而远程被贴身时基础攻击应降（若不同步，反击者会按未贴身的基础攻击反击，伤害错误偏高）
@@ -6791,6 +6932,10 @@ func _play_counter(attacker: Unit, target: Unit, for_enemy: bool, _dist_at_hit: 
 	if not is_instance_valid(counterer) or not is_instance_valid(attacker):
 		_finish_attack(_safe_unit(attacker), for_enemy)
 		return
+	# 【2026-10-03·同上（[附体]）】反击落在**宿魂**身上：它[附体]的那些人也会同受这笔伤害
+	#   ⇒ 会死的先播卡面（`cdmg` 就是这一下的面板伤害；实际掉血按重伤/坚固/塔盾代扛预测）。
+	await _kill_intro_side_preview(attacker, _hero(attacker).mirror_hits_on_damage(
+			_preview_taken_damage(attacker, cdmg, true)))
 	var cpos := board_view.cell_world_center(counterer.cell)   # 落点=自身格子中心（不受中途换瞬移影响
 	var lunge_to := cpos.lerp(board_view.cell_world_center(attacker.cell), COUNTER_LUNGE_FRAC)   # 沿反向轻冲一下（幅度见常量）
 	# 反击伤害 = 反击*实时攻击*（含buff/麻痹/冲锋加成，不套用远程相邻降攻
@@ -6889,6 +7034,10 @@ func _finish_attack(attacker: Unit, for_enemy: bool) -> void:
 	if alive_attacker:
 		attacker.attacked_this_turn = true
 		# 圣诞老人攻击 buff：本次攻击已用掉，效果消
+		# 【2026-10-03·用户口径「临时攻击buff要在攻击的瞬间就消失」】**主消费点已前移到命中那一刻**
+		#   （见 `_apply_attack()` 里那段说明）⇒ 正常打完这一招时这里已经是 0、什么也不做。
+		#   留着只兜底"`_apply_attack()` 没跑到"的收尾（出招演出途中攻击者被释放 / 目标失效：
+		#   `_play_melee_hit`、`_play_counter` 的守卫直接走 `_finish_attack()` 那几处）。
 		if attacker.atk_use_buff > 0:
 			attacker.atk_use_buff = 0
 			attacker.refresh_stats()
@@ -6987,9 +7136,12 @@ func _end_side(side: int) -> void:
 		print("[替补统计] 我方回合结束：我还可替补次数=%d" % _my_sub_quota())
 	_ending_side = false   # 结算完毕：之后（含换边演出期间）的阵亡恢复正常替补规
 	GameState.end_current_side(_first_side)
-	# 换边停顿：让"上一方回合结束的演出"下一方回合开始被动的演出"之间
-	# 有可感知间隔，不会首尾相连。停顿在 _begin_side 之前，故也先于下回合被动触发
-	await get_tree().create_timer(0.8, false).timeout
+	# 【2026-10-03·用户口径「换边停顿去掉」】这里原来有一句 `await get_tree().create_timer(0.8, false).timeout`：
+	#   作用是让"上一方回合结束的演出"与"下一方回合开始的被动演出"之间有可感知间隔、不会首尾相连。
+	#   用户实机反馈「点了结束回合，名字框那圈绿框已经转了，可要过一两秒才弹敌方回合」⇒ **去掉这一拍**
+	#   （横幅现在紧跟 `end_current_side()` 之后的 `_begin_side()`；那边还有"等对面英雄语音播完"那道等待）。
+	#   ⚠️ 想恢复：把这 1 行加回来即可（原值 0.8；想折中就用 0.4）。
+	#   ⚠️ 敌方那一处（`_run_enemy_turn()` 尾部、敌方行动完→我方回合）**没动**，仍是 0.8 —— 要一起去掉再说。
 	# 主机权威：先广播"新回合开（active_side 已推进、附当前回合号），再执行 _begin_side
 	# 即使 _begin_side 内部因替补等提前 return，客户端也能正确同步并进入等操作
 	if GameState.is_online and GameState.is_host:
@@ -7143,15 +7295,16 @@ func _trigger_on_attack(u: Unit, target: Unit, _for_enemy: bool) -> void:
 	if target == null or not target.alive:
 		if target != null and not u.skill_allowed():
 			return
-		if target != null and u.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(u):
-			return   # 远程被贴身：技能效果无法造成（死亡目标也一样）
+		# 【2026-10-03】把"刚被这一击打死的目标"也算进"贴身"（贴身斩杀不再绕过这道门）
+		if target != null and u.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(u, target):
+			return   # 远程被贴身：技能效果无法造成（死亡目标也一样 —— 含"这一击刚打死的那个贴身的人"）
 		if target != null:
 			_hero(u).on_attack_dead(target)   # 目标被打死时的专属效果（暗域占据/长剑穿透/白游侠AOE/超新星击退）
 			return
 	if not u.skill_allowed():   # 沉默：无法触发攻击后技能
 		return
-	if u.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(u):
-		return   # 远程被贴身：射程/攻击降为1，且技能效果无法造成
+	if u.attack_type == DataRegistry.AttackType.RANGED and _has_enemy_adjacent(u, target):
+		return   # 远程被贴身：射程/攻击降为1，且技能效果无法造成（target 在这里必然活着 ⇒ 与原来逐位相同）
 	_hero(u).on_attack(target)
 
 # 施加状态 + 统一日志。中文名从 StatusDB 取，调用方只给状态键
@@ -7203,8 +7356,39 @@ func _possess_mirror(caster: Unit, dmg: int) -> void:
 		if t == null or not is_instance_valid(t) or not t.alive:
 			_possess_links.erase(t)   # 目标已死/失效：清除绑定
 			continue
+		# 【2026-10-03·用户「宿魂的附体伤害也没有击杀特效」】这一下会把人打死 ⇒ 请求击杀卡面
+		#   （`killer` = **宿魂自己** —— 与红帽扑街自爆同一口径：谁身上的机制杀了人就播谁的卡）。
+		#   普攻 / 反击落在宿魂身上那两条路已经在**开打前**预告过（`_do_attack()` / `_play_counter()`
+		#   读 `HeroBase.mirror_hits_on_damage()`）⇒ 这里这一发会被 `_kill_intro_seen` 的去重窗口挡掉；
+		#   没有预告可用的来源（毒 / 烧血 / 炸弹 / 别人的波及伤害…）就靠这一句"伤害落地同时"补播。
+		kill_intro_side(caster, t, dmg, false)
 		t.take_damage(dmg, false, false, "附体")
 	_possess_depth -= 1
+
+## 【2026-10-03】某个宿魂当前**还活着**的[附体]目标（纯查询：不改绑定表、不清理失效项 ——
+##   清理仍归 `_possess_mirror()` / `_refresh_possess_links()`）。给击杀预告用（见
+##   `heroes/hero_46_宿魂.gd::mirror_hits_on_damage()`），与 `_possess_mirror()` 的循环同一把尺。
+func _possess_targets_of(caster: Unit) -> Array:
+	var out: Array = []
+	if caster == null or not is_instance_valid(caster):
+		return out
+	for t in _possess_links.keys():
+		if _possess_links.get(t) != caster:
+			continue
+		if t == null or not is_instance_valid(t) or not t.alive:
+			continue
+		out.append(t)
+	return out
+
+## 【2026-10-03】"这一下他**实际**会掉多少血"——**纯预测**，与 `Unit.take_damage()` 同一把尺：
+##   重伤 +1 / 坚固（仅攻击伤害）−1（`Unit.damage_amount()`）＋ 相邻塔盾代扛 −1
+##   （`_bulwark_preview_reduction()`，与 `_kill_intro()` 里那道致死门同一把尺）。
+##   只给击杀预告用（目前是[附体]镜像那条），不改任何状态。
+func _preview_taken_damage(victim: Unit, raw: int, is_attack: bool) -> int:
+	if victim == null or not is_instance_valid(victim):
+		return 0
+	var d := victim.damage_amount(raw, is_attack)
+	return maxi(d - _bulwark_preview_reduction(victim, d), 0)
 
 # 【2026-09-21 用户定稿·宿魂[附体]演出】每帧把当前绑定关系推给魂线视图。
 # 用**单位当前坐标**（`Unit.position`）而不是格子中心：这样攻击前冲、被击退、瞬移时线会跟着拉长/收缩。
@@ -7259,6 +7443,12 @@ func _adjacent_obstacles_at(cell: Vector2i) -> Array:
 func _trigger_on_move(u: Unit) -> void:
 	if not u.skill_allowed():   # 沉默：无法触发移动后技能
 		return
+	# 【2026-10-03·用户口径「击杀特效要在杀死人之前」】移动后技（末日肃清 / 烛火灼烧）的**波及**：
+	#   先把它会打死的那些人（`HeroBase.side_hits_on_move()`）的击杀卡面播完，再跑原来那段
+	#   同步伤害循环 ⇒ 观感与普攻那条一致（"卡面滑完 → 才倒下"），改前是"人已经死了卡面才出来"。
+	#   ⚠️ 这一段在"棋子已经落到目标格、道具/炸弹都已经结算完"之后（见 `_finish_move()`）⇒ 波及
+	#      名单（相邻谁、谁血比我低、我这一下多少攻）与真正结算那一刻**同一份**。
+	await _kill_intro_side_preview(u, _hero(u).side_hits_on_move())
 	# 【2026-09-28】**必须 await**：涌电技师的电击伤害要等技能音效播到后段才落（见
 	#   `hero_38_涌电技师.gd::ELECTRO_HIT_DELAY`）⇒ 这里不 await 的话那一手会"先结束、伤害后到"。
 	# 【2026-09-29】基类 `HeroBase.on_move()` 不是协程 ⇒ 引擎静态分析会对这一行报
@@ -11783,8 +11973,9 @@ func _run_enemy_turn() -> void:
 			if _CONSOLE_SUB_LOG:
 				print("[替补统计] 敌方回合结束：我可替补次数=%d" % _my_sub_quota())
 			GameState.end_current_side(_first_side)
-			# 换边停顿：敌方行动完我方回合开始被动之间留出间隔（与玩家结束回合一致）
-			await get_tree().create_timer(0.8, false).timeout
+			# 【2026-10-03·用户口径「AI 结束回合到我这边也会有这种停顿」】这里原来有一句
+			#   `await get_tree().create_timer(0.8, false).timeout`（与玩家侧那句同款换边停顿）⇒ **一并删掉**。
+			#   ⚠️ 想恢复：把它加回来（原值 0.8；折中 0.4）。
 			_begin_side(GameState.SIDE_PLAYER)
 
 # 后台线程入口：构建模拟状态并搜索敌方最优计划（不触碰场景，仅读 grid/DataRegistry）
@@ -13509,7 +13700,55 @@ func _ladder_snapshot(side: int) -> Dictionary:
 # 通用字段转储：只取"脚本自己声明的成员变量"里**可序列化**的那几种类型（对象/节点引用一律跳过）。
 # ⇒ 52 个英雄脚本里只有 3 个带对象级状态（锤头鲨 `bonus` / 风语者 `_aura_given` / 负墟 `_last_frame`），
 #   这条通用规则把它们一并覆盖，以后新增英雄状态也不用回来改这里。
-const _SNAP_TYPES := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_VECTOR2I, TYPE_ARRAY, TYPE_DICTIONARY]
+# 【2026-10-03·真凶】快照只收"**简单值**"（标量，或由简单值组成的 Array/Dictionary）——
+#   **只要某个成员里混进对象/资源/Packed，就整个成员不进快照**。为什么必须这么严：
+#   `Unit._art_shadows`（【2026-10-03】新加的"人物落影" = `Array[Polygon2D]`，见 `Unit._build_visual()`）
+#   原来是 `(v as Array).duplicate()` ⇒ **浅拷贝、对象引用照旧留着** ⇒ `ConfigFile.save()` 把它们
+#   **按文本序列化**（连贴图 Image 的 `data: PackedByteArray` 都写出来：512×483 RGBA ≈ 一个 5.6 MB 的文本块）
+#   ⇒ 天梯档涨到 **356 MB**、每半回合重写一次 ⇒ 用户报的"点进入游戏 / 点结束回合卡 4 秒"。
+#   （录像那条路走 JSON，`JSON.stringify` 遇到对象会跳过 ⇒ 只有走 ConfigFile 的天梯档中招，也解释了"只有天梯卡"。）
+#   ⚠️ 被丢掉的都是**演出层**成员（落影/标签/描边…）：`_apply_script_vars()` 见不到就保持原样，
+#      单位自己 `_build_visual()` 会重建 ⇒ 续档/回放观感不变。
+const _SNAP_SCALAR := [TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING, TYPE_VECTOR2I]
+
+## 【2026-10-03·用户报「怎么天梯模式退出重进后，伤害数字那些都消失了」】**不进快照**的成员名单
+##   —— "会话语义"的值：它们的单位是**本进程启动以来的时间/帧**，跨会话还原必然错。
+##   真凶 = `Unit._float_text_next_t`（"本棋子下一个飘字最早出现的时刻"，口径 `Time.get_ticks_msec()/1000`
+##   = 本进程已跑的秒数）：它原来跟着快照一起存/一起还原 ⇒ 玩家**退出游戏再进来**（进程重启、
+##   这个数从 0 重算）时，还原出来的值落在**未来几百秒**（= 上一个进程跑到那一刻的秒数）⇒
+##   该棋子之后每个飘字（伤害 -N / 治疗 +N / 圣盾 / 防住 / 被动 / 词条）都先"透明待命"、
+##   要等几百秒才亮起来 ⇒ 看起来就是"伤害数字那些全没了"。
+##   （探针 `.dsh/tmp/天梯飘字跨会话自检.tscn`：对照臂 alpha=1.00、跨会话臂 alpha=0.00。）
+##   ⚠️ 判据是"这个值能不能跨进程比较"：`_float_text_next_t` 不能 ⇒ 进名单；
+##      负墟 `_last_frame`（`Engine.get_process_frames()`）只做**相等**判重、错也只是少去重一次 ⇒ 不用管。
+const _SNAP_SKIP_FIELDS := ["_float_text_next_t"]
+
+## 递归挑"简单值"：返回 `[ok, 值]`；`ok = false` ⇒ 这一项里含对象/资源/Packed ⇒ 调用方**整个成员都不存**。
+func _snap_simple_only(v, depth: int = 0) -> Array:
+	if depth > 6:
+		return [false, null]              # 太深 ⇒ 不存（防自引用/病态结构把递归拖死）
+	var ty := typeof(v)
+	if _SNAP_SCALAR.has(ty):
+		return [true, v]
+	if ty == TYPE_ARRAY:
+		var out_a: Array = []
+		for e in (v as Array):
+			var r: Array = _snap_simple_only(e, depth + 1)
+			if not bool(r[0]):
+				return [false, null]
+			out_a.append(r[1])
+		return [true, out_a]
+	if ty == TYPE_DICTIONARY:
+		var out_d: Dictionary = {}
+		for k in (v as Dictionary).keys():
+			if not _SNAP_SCALAR.has(typeof(k)):
+				return [false, null]      # 键也得是简单值（否则序列化同样会爆）
+			var r2: Array = _snap_simple_only((v as Dictionary)[k], depth + 1)
+			if not bool(r2[0]):
+				return [false, null]
+			out_d[k] = r2[1]
+		return [true, out_d]
+	return [false, null]                  # 对象 / 资源 / Packed* / 其它：一律不存
 
 func _dump_script_vars(obj) -> Dictionary:
 	var out: Dictionary = {}
@@ -13524,14 +13763,12 @@ func _dump_script_vars(obj) -> Dictionary:
 		var nm := String(p.get("name", ""))
 		if nm == "":
 			continue
+		if _SNAP_SKIP_FIELDS.has(nm):
+			continue   # 【2026-10-03】会话语义的值不进快照（见 `_SNAP_SKIP_FIELDS` 的说明）
 		var v = obj.get(nm)
-		var ty := typeof(v)
-		if ty == TYPE_DICTIONARY:
-			out[nm] = (v as Dictionary).duplicate(true)
-		elif ty == TYPE_ARRAY:
-			out[nm] = (v as Array).duplicate()
-		elif _SNAP_TYPES.has(ty):
-			out[nm] = v
+		var r := _snap_simple_only(v)
+		if bool(r[0]):
+			out[nm] = r[1]
 	return out
 
 func _apply_script_vars(obj, d) -> void:
@@ -13539,6 +13776,8 @@ func _apply_script_vars(obj, d) -> void:
 		return
 	for nm in (d as Dictionary).keys():
 		var key := String(nm)
+		if _SNAP_SKIP_FIELDS.has(key):
+			continue   # 【2026-10-03】老档/老录像里带着它也要**不还原**（会话语义，见 `_SNAP_SKIP_FIELDS`）
 		obj.set(key, _snap_coerce(obj.get(key), (d as Dictionary)[nm]))
 
 ## 【2026-09-29 用户报「录像里赏金猎人对嘲讽的伤害没有当场翻倍，但后面会自动纠正伤害」·真凶】

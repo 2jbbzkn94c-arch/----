@@ -356,3 +356,37 @@ func preview_attack_damage(target: Unit) -> int:
 	if battle == null or unit == null:
 		return 0
 	return battle._attack_total(unit, target)
+
+# ---- 【2026-10-03·用户口径「击杀特效要在杀死人之前」】**波及伤害**的击杀预告（纯查询，只给演出用）----
+#   "打一片"的英雄（超新星击穿 / 白游侠散射 / 烛火灼烧 / 末日肃清 / 红帽自爆）的波及伤害写在
+#   `on_attack()` / `on_move()` / `on_died()` 的**同步循环**里，那里没法 `await` 演出 ⇒ 原来只能
+#   用 `Battle.kill_intro_side()` 让卡面**跟着伤害一起**弹 ⇒ 观感是"人已经死了、卡面才滑出来"。
+#   现在改成：由英雄自己把"这一招会波及到谁、多少伤害、算不算攻击伤害"报上来，Battle 在**招式起手前**
+#   统一播完这些人的击杀卡面，再照旧跑原来那段同步循环 ⇒ 与主目标那条（`_do_attack()` 的预告）同口径。
+#   ⚠️ 三个钩子必须是**纯查询**：不改任何状态、不动随机源（`battle.rng`）、不推人、不引爆。
+#   ⚠️ 判据要和自己的伤害循环**逐条同一把尺**（同一批目标、同一个伤害数、同一个 `is_attack`）——
+#      多报一个人 ⇒ 白白多播一张卡；少报一个 ⇒ 那一条又退回"先死再播"。
+#   ⚠️ 报上来的只是**候选**：是否真致死由 `Battle._kill_intro()` 自己判（存活 / 塔盾代扛 / 召唤物不播 /
+#      没人接就立刻返回），所以这里不必自己算"打不打得死"。
+#   每项一个字典：{ "v": Unit, "dmg": int, "atk": bool }
+#
+# 攻击时（含"目标被打死"那一支）的波及对象。默认无。
+func side_hits_on_attack(_target: Unit) -> Array:
+	return []
+
+# 移动后技的波及对象（烛火灼烧 / 末日肃清）。默认无。
+func side_hits_on_move() -> Array:
+	return []
+
+# 自己**阵亡**时的波及对象（红帽扑街自爆）。默认无。
+# ⚠️ 只在"这一击会打死我"的预告里被读（`Battle._kill_intro()` 内部），那时自己还活着 ⇒ 坐标/血量都是准的。
+func death_blast_hits() -> Array:
+	return []
+
+# 【2026-10-03·用户「宿魂的附体伤害也没有击杀特效」】"我**挨了这一下**会把伤害波及给谁"
+#   （宿魂的[附体]镜像：施加者受伤 ⇒ 被附体目标同受同等伤害）。默认无。
+#   形参 = 调用方按同一把尺算好的"我实际会掉多少血"（`Unit.damage_amount()` + 塔盾代扛，
+#   见 `Battle._preview_taken_damage()`）——镜像伤害就是这个数，不必自己再算一遍。
+#   每项一个字典：{ "v": Unit, "dmg": int, "atk": bool }
+func mirror_hits_on_damage(_amount: int) -> Array:
+	return []

@@ -76,6 +76,10 @@ class SimUnit:
 	var skills: Array = []
 	var moved := false
 	var attacked := false
+	# 【2026-10-03·用户「赏金猎人宁愿原地敲障碍，也不愿意走出去打负墟 6 伤」】"这一手打的是**单位**"
+	#   —— ⑨搏命激励只该奖励"死前换血"，敲障碍（`atk_obs`）不算。`attacked` 两种都会置真（规则上都是一次攻击结算），
+	#   所以另开一位：只有"`a` 带 `atk`"那条分支才置 `true`（见 `_apply()` 的 `if a.has("atk") ...` 块）。
+	var attacked_unit := false
 	var counter_used := false
 	var alive := true
 	var name := ""
@@ -243,6 +247,10 @@ class Sim:
 		c.rosters = rosters.duplicate(true)
 		c.auto_sub = auto_sub.duplicate()   # 【RL 修正】按阵营的"自动补位"标记：只读派生数据，跟着分叉
 		c.gold_taken = gold_taken
+		c.my_dead = my_dead           # 【2026-10-03·用户「红帽为什么不去躲，而是去打人然后被反击死」⇒ 修】
+		c.foe_dead = foe_dead         #   **累计阵亡 / 判负线必须跟着分叉**：原来 clone() 漏了这三个标量 ⇒
+		c.death_line = death_line     #   搜索里每个局面都退回 −1（"未知"）⇒ ⑩终局项退回"按存活数"的老口径
+									  #   ⇒ AI 看不见"再死一个就判负"（她那一死其实= 输掉整局）。
 		c.poison_applied = poison_applied   # 【T6】"新挂上毒"的次数也要跟着分叉
 		c.poison_apply_val = poison_apply_val   # 【T6】那笔钱的**已加权**金额（按施加者英雄覆盖，见字段说明）
 		c.shield_break_val = shield_break_val   # 【2026-09-23】㉔破盾的计价合计也要跟着分叉
@@ -279,6 +287,7 @@ class Sim:
 			cu.move = u.move
 			cu.emove = u.emove
 			cu.atk_range = u.atk_range
+			cu.attacked_unit = u.attacked_unit
 			cu.atk_type = u.atk_type
 			cu.skills = u.skills.duplicate()
 			cu.moved = u.moved
@@ -1449,6 +1458,10 @@ var last_core_mult := 0.0
 var last_field_heroes := {}
 # 【2026-10-03·纯取证】最近一次打印用的局面快照（给"英雄段键**逐键绝对贡献**"重算 `_evaluate()` 用）。
 var last_print_sim = null
+
+# 【2026-10-03·纯取证】本步是否已经打过"英雄段键 + 逐键贡献"那一行：一步里可能调 `_plain_gap_terms()` 好几次
+#   （"没选的那一手" / "为什么打的是它" / "本步分项"）⇒ 只让**第一处**打，免得同一份清单刷三遍。
+var _hero_keys_printed := false
 # 【2026-09-20·默认关】"原地不动"候选（见 `const STAY_OPTION` 处说明）。默认 0 ⇒ 逐位不变。
 var w_stay_option := STAY_OPTION
 # 【2026-09-20 已删·用户拍板】`w_threat_alloc` / `THREAT_ALLOC_W`（⑮分摊总量）随分摊族一起删（见 `_dead_fold()` 上方说明）。
@@ -3437,6 +3450,7 @@ func _reply_turn_score(sim_ours_end: Sim) -> float:
 	for u in s.units:
 		var su: SimUnit = u
 		if su == null or not su.alive:
+			su.attacked_unit = false
 			continue
 		su.counter_used = false
 		if su.fn == foe_fn:
@@ -4695,9 +4709,22 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 		var pre := replay.clone()          # 这一步之前的局面（"没选的那一手"要在它上面做反事实）
 		var pu: SimUnit = pre.units[idx]
 		var is_atk_step := int(a.get("atk", -1)) >= 0
-		var what := _plain_action_desc(sim, replay, ur, a)
+		var what := _plain_action_desc(pre, replay, ur, a)
 		_apply(replay, idx, a)
 		var bd1 := _eval_breakdown(replay)
+		# 【2026-10-03·纯取证】记下**这一回合场上真有的**英雄（下面那行"英雄段键"按它过滤）+ 这一步的局面快照
+		#   （给"英雄段键**逐键绝对贡献**"重算 `_evaluate()` 用）。
+		#   ⚠️ 位置从"每步的末尾"挪到**这里**（用户 2026-10-03 那条日志：第一步的清单是**没过滤**的 18 条、
+		#   而且**完全没有**逐键贡献那一行）—— 原因：`_plain_gap_terms()` 在**本步开头**就被调了
+		#   （"为什么打的是它 / 分差明细"），那时这两个字段还是**上一步**的值（第一步则是空）⇒ 过滤与贡献全落空。
+		#   现在放在"这一步的 `replay` 已经算完"之后、任何打印之前；`_hero_keys_printed` 也在这里复位。
+		last_field_heroes.clear()
+		for _fu in replay.units.size():
+			var _u2: SimUnit = replay.units[_fu]
+			if _u2 != null and _u2.alive:
+				last_field_heroes[String(_u2.hero_id)] = true
+		last_print_sim = replay      # 【纯取证】给"逐键绝对贡献"重算用
+		_hero_keys_printed = false
 		# 【2026-09-26·用户拍板】本步的**真实总分差**（中途态 `_evaluate`）—— 只给下面「本步分项」做自校验用：
 		#   各项之和 ≈ 它，差额落进「其它(未列)」（英雄特化项不进 `_eval_breakdown` 的字典）。
 		var sc_step := _evaluate(replay, false) - _evaluate(pre, false)
@@ -4718,7 +4745,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var tg2: SimUnit = pre.units[at2]
 				if tg2 == null or not tg2.alive:
 					continue
-				var dm2 := _sim_hit_est(pre, pu, tg2)
+				var dm2 := _sim_hit_at_landing(pre, idx, aa2, tg2)   # 【2026-10-03】按落点估（见 _sim_hit_at_landing）
 				if dm2 > alt_dmg:
 					alt_dmg = dm2
 					alt_combo = aa2
@@ -4787,7 +4814,7 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 				var tg3: SimUnit = pre.units[at3]
 				if tg3 == null or not tg3.alive:
 					continue
-				var dm3 := _sim_hit_est(pre, pu, tg3)
+				var dm3 := _sim_hit_at_landing(pre, idx, aa3, tg3)   # 【2026-10-03】按落点估
 				alt_alts.append({ "combo": aa3, "t": at3, "dmg": dm3, "name": tg3.name })
 			# 每个目标只留"最疼的那一手"
 			var best_by_t := {}
@@ -4909,13 +4936,6 @@ func _print_decision(sim: Sim, chosen: Dictionary) -> void:
 					notes.append("%s 够不到" % t7.name)
 			if notes.size() > 0:
 				tr_note += "\n     其它敌人：" + "；".join(notes)
-		# 【2026-10-03·纯取证】记下**这一回合场上真有的**英雄（下面那行"英雄段键"按它过滤）。
-		last_field_heroes.clear()
-		for _fu in sim.units.size():
-			var _u2: SimUnit = sim.units[_fu]
-			if _u2 != null and _u2.alive:
-				last_field_heroes[String(_u2.hero_id)] = true
-		last_print_sim = sim        # 【纯取证】给"逐键绝对贡献"重算用
 		txt += "\n · %s：%s\n     原因：%s%s" % [u0.name, what,
 			_plain_reason(bd0, bd1, ur.skills.has(DataRegistry.Skill.TAUNT)), alt_note]
 		# 【2026-09-26·用户要求】**纯走位步**（这一步没出手）补一行「本步分项」：这一步相对**走之前**的逐项 Δ，
@@ -5007,15 +5027,43 @@ func _sim_hit_est(sim: Sim, u: SimUnit, t: SimUnit) -> float:
 		return 0.0
 	return _hit_after_target_mods(sim, t, t.cell, float(int(u.eatk) * _sim_mult(sim, u, t)))
 
+## 【2026-10-03·用户拍板「a」】"这一手打出去多少伤"要按**落点**估（原来拿**移动前**的 `eatk` 去估）：
+##   对"被贴身的远程"会低估 —— 用户那局：沉默术士被独脚龟贴身 ⇒ 日志写「从 (2,2) 走到 (1,2) 打 独脚龟，约 1 伤」，
+##   而它走开一格后是 **3 伤**（搜索里的 ③血量账 一直是按 3 伤算的 ⇒ 只有这几句标签在骗人）。
+##   做法 = 克隆局面 ＋ **只落位**（走 `_apply()` 的移动分支那条现成路径，末尾自带 `_sim_refresh_pins()`）
+##   ＋ 在落点上重新估伤害。⚠️ **只给日志/诊断用**，不进任何评分、不改决策。
+func _sim_hit_at_landing(sim: Sim, idx: int, a: Dictionary, t: SimUnit) -> float:
+	if sim == null or t == null or idx < 0 or idx >= sim.units.size():
+		return 0.0
+	var u: SimUnit = sim.units[idx]
+	if u == null:
+		return 0.0
+	var mv: Variant = a.get("move")
+	if mv == null or Vector2i(mv) == u.cell:
+		return _sim_hit_est(sim, u, t)   # 原地出手（或已经站在落点上）⇒ 与老口径逐位相同
+	var s := sim.clone()
+	var mv_only: Dictionary = a.duplicate()
+	mv_only.erase("atk")
+	mv_only.erase("atk_obs")
+	_apply(s, idx, mv_only)
+	var su: SimUnit = s.units[idx]
+	var ti: int = t.sim_index
+	if su == null or not su.alive or ti < 0 or ti >= s.units.size():
+		return 0.0
+	var st: SimUnit = s.units[ti]
+	if st == null or not st.alive:
+		return 0.0
+	return _sim_hit_est(s, su, st)
+
 ## 把一步动作写成一句人话（不含任何分数）。
-func _plain_action_desc(sim: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> String:
+func _plain_action_desc(pre: Sim, replay: Sim, ur: SimUnit, a: Dictionary) -> String:
 	var mv: Variant = a.get("move")
 	var atk := int(a.get("atk", -1))
 	if atk == -2:
 		return "敲掉障碍 %s（清路）" % str(a.get("atk_obs", "?"))
 	if atk >= 0 and atk < replay.units.size():
 		var t: SimUnit = replay.units[atk]
-		var dmg := _sim_hit_est(sim, ur, t)
+		var dmg := _sim_hit_at_landing(pre, ur.sim_index, a, t)   # 【2026-10-03】按落点估
 		var extra := ""
 		if float(t.hp) <= dmg:
 			extra = "，这一击能击杀"
@@ -5078,10 +5126,29 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 				% [other, float(gap), total])
 			# 【2026-10-03·用户「数值很大、影响了 AI 行为，我却不知道里面在算什么」】
 			#   桶里的钱全部来自 `w_hero`（扁平字典 `"hero_XX|KEY" -> 值`，`_wh()` 读它）⇒ **把生效清单打出来**。
-			#   ⚠️ 这是**清单、不是金额拆解**（金额要逐键置 0 重算，是下一步）。
+			#   ⚠️ 清单里**括号内就是金额**（2026-10-03 用户「你把特化键的评分也弄出来」之后补上；口径见下面那段）。
 			#   为什么有用：一眼能看出"这一局到底有哪些英雄段在生效"（例如有 hero_34 ⇒ ⑰沉默的价、
 			#   有 hero_42 ⇒ 金矿的价…），比一个孤零零的 +31.9 强得多。
-			if absf(other) >= 1.0 and not w_hero.is_empty():
+			if absf(other) >= 1.0 and not w_hero.is_empty() and not _hero_keys_printed:
+				_hero_keys_printed = true
+				# 【2026-10-03·用户「你把特化键的评分也弄出来」】**逐键绝对贡献**：把每条键**临时置 0**
+				#   （⇒ 退回扁平兜底 = 该键在 `const` 里的默认值）重算一次 `_evaluate()`，差值就是它此刻在推多少分。
+				#   ⚠️ 只动 `w_hero`（权重字典）、**不动局面**；算完原样还原。只在开日志时发生（每步 ≤ 十几次评分）。
+				#   ⚠️ 口径：得到的是「**这条键相对它的扁平兜底**值多少」，不是"这一项的全部金额"
+				#     （扁平兜底不是 0 的键 —— 如 ⑫ 毒的 `POISON_TICK_VALUE` —— 看到的是两者之差）。
+				var contrib: Dictionary = {}
+				if last_print_sim != null:
+					var base_ev := _evaluate(last_print_sim, true)
+					for k2 in w_hero.keys():
+						var ks2 := String(k2)
+						var hid2 := ks2.split("|")[0]
+						if not last_field_heroes.is_empty() and not last_field_heroes.has(hid2):
+							continue
+						var save_v = w_hero[k2]
+						w_hero[k2] = 0.0
+						var ev0 := _evaluate(last_print_sim, true)
+						w_hero[k2] = save_v
+						contrib[ks2] = base_ev - ev0
 				var hk: Array = []
 				for k in w_hero.keys():
 					var ks := String(k)
@@ -5095,40 +5162,24 @@ func _plain_gap_terms(bd_now: Dictionary, bd_alt: Dictionary, gap: float = NAN, 
 					var key2 := kv[1] if kv.size() > 1 else ""
 					# 【2026-10-03·用户「把英雄名字写上」】中文名从**英雄脚本文件名**取
 					#   （`HeroRegistry._SCRIPTS` 里是 `res://heroes/hero_34_沉默术士.gd` ⇒ 去掉 `hero_34_` 前缀）。
-					#   为什么不用 `DataRegistry.get_hero()`：那是 HeroDef，字段名不确定；注册表路径是稳定的事实来源。
 					var nm := hid
 					var sc := String(HeroRegistry._SCRIPTS.get(hid, ""))
 					if sc != "":
 						nm = sc.get_file().get_basename().trim_prefix(hid + "_")
-					hk.append("%s（%s）|%s=%s" % [hid, nm, key2, str(w_hero[k])])
-				hk.sort()
-				parts.append("　↑ **场上真有的**英雄段键（%d 个）：%s" % [hk.size(), " · ".join(hk)])
-				# 【2026-10-03·用户「要」】**逐键绝对贡献**：把每个英雄段键**临时置 0**（⇒ 退回扁平兜底）
-				#   重算一次 `_evaluate()`，差值就是这条键此刻在推多少分。
-				#   ⚠️ 只动 `w_hero`（权重字典）、**不动局面**；算完原样还原。只在开日志时发生（每步 ≤ 十几次评分）。
-				#   ⚠️ 口径说明：得到的是「**这条英雄段键相对它的扁平兜底**值多少」，不是"这一项的全部金额"
-				#     （扁平兜底不是 0 的那几个键 —— 如 ⑫ 毒的 `POISON_TICK_VALUE` —— 看到的是两者之差）。
-				if last_print_sim != null:
-					var base_ev := _evaluate(last_print_sim, true)
-					var contrib: Array = []
-					for k2 in w_hero.keys():
-						var ks2 := String(k2)
-						var hid2 := ks2.split("|")[0]
-						if not last_field_heroes.is_empty() and not last_field_heroes.has(hid2):
-							continue
-						var save_v = w_hero[k2]
-						w_hero[k2] = 0.0
-						var ev0 := _evaluate(last_print_sim, true)
-						w_hero[k2] = save_v
-						var dc := base_ev - ev0
-						if absf(dc) >= 0.05:
-							contrib.append({ "k": ks2, "d": dc })
-					contrib.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
-					var cs: Array = []
-					for i2 in mini(4, contrib.size()):
-						cs.append("%s %+.1f" % [String(contrib[i2]["k"]), float(contrib[i2]["d"])])
-					if not cs.is_empty():
-						parts.append("　↑ 逐键**绝对**贡献（把该键置 0 后的差值）：" + " · ".join(cs))
+					hk.append({ "txt": "%s（%s）|%s=%s" % [hid, nm, key2, str(w_hero[k])],
+						"d": float(contrib.get(ks, 0.0)) })
+				if contrib.is_empty():
+					hk.sort_custom(func(a, b): return String(a["txt"]) < String(b["txt"]))
+				else:
+					hk.sort_custom(func(a, b): return absf(float(a["d"])) > absf(float(b["d"])))
+				var hks: Array[String] = []
+				for e in hk:
+					var suf := ""
+					if not contrib.is_empty():
+						suf = "（%+.1f）" % float(e["d"])
+					hks.append(String(e["txt"]) + suf)
+				var hint := "" if contrib.is_empty() else "，括号内 = 把它置 0 后的分差"
+				parts.append("　↑ **场上真有的**英雄段键（%d 个%s）：%s" % [hks.size(), hint, " · ".join(hks)])
 	if parts.is_empty():
 		return ""
 	var out := " · ".join(parts)
@@ -5239,7 +5290,7 @@ func _plain_idle_reason(sim: Sim, chosen: Dictionary, ii: int) -> String:
 		var tg: SimUnit = sim.units[at]
 		if tg == null or not tg.alive:
 			continue
-		var dm := _sim_hit_est(sim, iu, tg)
+		var dm := _sim_hit_at_landing(sim, ii, aa, tg)   # 【2026-10-03】按落点估
 		if dm > best_dmg:
 			best_dmg = dm
 			best_combo = aa
@@ -5391,7 +5442,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 		if atk >= 0 and atk < replay.units.size():
 			var t: SimUnit = replay.units[atk]
 			line += " → 攻击 %s" % t.name
-			var hit := int(_sim_hit_est(replay, ur, t))
+			var hit := int(_sim_hit_at_landing(replay, idx, a, t))   # 【2026-10-03】按落点估
 			if t.hp <= hit:
 				line += "（此击可击杀 hp%d≤这一刀%d）" % [t.hp, hit]
 			else:
@@ -5440,7 +5491,7 @@ func _print_decision_detailed(sim: Sim, chosen: Dictionary) -> void:
 			var tg: SimUnit = sim.units[at]
 			if tg == null or not tg.alive:
 				continue
-			var dm := _sim_hit_est(sim, iu, tg)
+			var dm := _sim_hit_at_landing(sim, ii, aa, tg)   # 【2026-10-03】按落点估
 			if dm > best_dmg:
 				best_dmg = dm
 				best_combo = aa
@@ -5589,7 +5640,7 @@ func _eval_breakdown(sim: Sim, end_of_turn: bool = false) -> Dictionary:
 	var doom := 0.0
 	for i in sim.units.size():
 		var u2: SimUnit = sim.units[i]
-		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked and _was_doomed(sim, u2):
+		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked_unit and _was_doomed(sim, u2):
 			doom += 6.0 + float(u2.eatk) * 1.5
 	d["⑨搏命激励"] = doom
 	if w_terminal != 0.0:
@@ -6731,6 +6782,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 				_sim_do_longhorn(sim, u, t, u_cell_at_hit, t_cell_at_hit)
 				_sim_consume_atk_item(u)   # 攻击结算完成：一次性攻击道具消耗（真实 _finish_attack）
 				u.attacked = true
+				u.attacked_unit = true
 				_sim_flush_pending(sim)
 				_sim_flush_died(sim)   # 阵亡技效果（含自爆再杀人）排在守卫/消散之后
 				_sim_flush_subs(sim)   # 【RL 修正】落位在"阵亡→守卫"之后（真实：回合开始/中途补位）
@@ -6853,6 +6905,11 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 					and not _sim_pinned_ranged(sim, u) \
 					and t_hp_before > u.hp and u.hp < u.max_hp:
 				u.hp = mini(u.hp + maxi(1, u.eatk), u.max_hp)
+			# 【2026-10-03·与真实同源修（用户报「斩杀那一击，超新星贴身攻击也把旁边敌人震开了」）】
+			#   "远程被贴身"要按**命中那一刻**判：`_sim_kill` 会把目标 alive 置假（真实 `Unit.die()` 也是立刻置假）
+			#   ⇒ 贴身斩杀会绕过闸门。所以在击杀结算**之前**先记一次判定，供下面那道"攻击后专属"门控使用
+			#   （此刻目标还活着 ⇒ 照样算一个贴身敌人；与真实 `Battle._has_enemy_adjacent(u, target)` 同式）。
+			var pinned_at_hit: bool = _sim_pinned_ranged(sim, u)
 			# 【RL 修正】击杀结算：立墓碑 + 阵亡技（原版只清 alive/occ，
 			# 于是 AI 以为死亡格还能走/能停 —— 见 _sim_kill / _sim_on_died）
 			if t.hp <= 0:
@@ -6864,7 +6921,9 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 超新星(hero_21)原来漏了这道门控，贴脸打人也会照常击退/击穿，AI 因此高估贴脸收益。
 			# 实测 hero_21·多敌·出招（X(2,4) 紧邻 D(2,3)，远程被贴）：真实 D2 留在 (2,2)，
 			# 模拟被推到 (2,1)。
-			if not u.silenced and not _sim_pinned_ranged(sim, u):
+			# 【2026-10-03】判据换成上面在击杀结算**之前**记下的 `pinned_at_hit`：原来这里重算
+			#   `_sim_pinned_ranged(sim, u)`，而 `_sim_kill` 已经把目标 alive 置假 ⇒ "贴身斩杀"漏判（真实侧已同步修）。
+			if not u.silenced and not pinned_at_hit:
 				if u.hero_id == "hero_21":
 					_sim_nova(sim, u, t)   # 超新星：目标相邻敌人击退/伤害
 				if u.hero_id == "hero_18":
@@ -6913,6 +6972,7 @@ func _apply(sim: Sim, idx: int, a: Dictionary) -> void:
 			# 本招里被推/被拉/换位造成的"过期标记"在这里被修正（实测 ctr3 #1：医护兵打完后有效攻 3→1）。
 			_sim_refresh_pins(sim)
 		u.attacked = true
+		u.attacked_unit = true
 	_sim_flush_pending(sim)
 	# 【RL 修正】阵亡技（红帽自爆）在**攻击收尾那次贴身刷新之后**才结算：
 	# 真实 `_finish_attack`（src/Battle.gd:3478-3499）里的 `_sync_ranged_adjacent()` 跑在
@@ -9261,7 +9321,7 @@ func _evaluate(sim: Sim, end_of_turn: bool = false) -> float:
 	# 反而奖励了"贴脸打 1 点"（远程最差走法）。
 	for i in sim.units.size():
 		var u2: SimUnit = sim.units[i]
-		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked and _was_doomed(sim, u2):
+		if u2.fn == DataRegistry.Faction.ENEMY and u2.attacked_unit and _was_doomed(sim, u2):
 			score += 6.0 + float(u2.eatk) * 1.5
 	# 【2026-09-15 已合并 · 2026-09-20 再删·用户决定】原来的"玩家反应前瞻"曾并进 `_threat_forecast`（威胁图位置统一算），
 	# **该族已于 2026-09-20 第三轮整族删除**（见 `_dead_fold()` 上方说明）⇒ 这里也不再有任何"挨打前瞻"项。
@@ -10469,6 +10529,19 @@ func _threat_can_hit(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: Si
 				return true
 		return false
 
+## ①.5 的增广路：给候选 `pi` 抢一个开火位；位子被占着、而占位者还能去别的位子 ⇒ 把它挪走
+##   （标准二分图匹配 / 匈牙利增广；`owner` = 开火位 → 候选下标）。
+##   ⚠️ `seen` 由调用方**每次尝试新开一个**（同一次增广里不重复走同一格，否则会绕圈）。
+func _fire_slot_take(cells: Array, pi: int, all_cells: Array, owner: Dictionary, seen: Dictionary) -> bool:
+	for c in cells:
+		if seen.has(c):
+			continue
+		seen[c] = true
+		if not owner.has(c) or _fire_slot_take(all_cells[int(owner[c])], int(owner[c]), all_cells, owner, seen):
+			owner[c] = pi
+			return true
+	return false
+
 ## 【2026-09-23 深夜⑧】"从 `from_cell` 开火能不能威胁到 `target_cell`" = 打得到 **且** 嘲讽允许：
 ##   嘲讽按**这一格**判（`_taunt_allows(..., from_cell)`）⇒ 换一个够不着嘲讽者的开火位就照样能打别人。
 func _threat_fire_ok_at(sim: Sim, a: SimUnit, from_cell: Vector2i, target_cell: Vector2i, threatened: SimUnit) -> bool:
@@ -10539,6 +10612,8 @@ func _sim_walk_cells(sim: Sim, from: Vector2i, budget: int, passing: bool = fals
 ##   ⚠️ 热路径（每次 `_evaluate` 都会调）⇒ **不**对空格逐个查视线、也不逐个敌人跑 BFS：
 ##     几何半径 2（我方最远射程）内的空格一律算作"可能站得上去的位"⇒ 这是个**上界**，
 ##     宁可略微高估（少扣一点分），也不把这一项变成新的性能黑洞。
+## ⚠️ 【2026-10-03·用户拍板「a」】现役 ①.5 **不再用它**（改成按真实开火位做最大权指派，见 `_incoming_total_on` 里那段）；
+##   保留本函数只因为**两个探针**直接调它读"几何上界"（`交战门逐单位自检` / `红帽沉默自检`）。
 func _threat_slots(sim: Sim, t: SimUnit, cell: Vector2i) -> int:
 	var n := 0
 	for c in _cells_within_radius(cell, 2):
@@ -10810,8 +10885,8 @@ func _bulwark_near(sim: Sim, target: SimUnit, cell: Vector2i) -> SimUnit:
 ##   只有 ㉕嘲讽吸火（`_taunt_soak()`）用它求"没有嘲讽时这个单位会挨多少"的对照值，别处一律用默认 false。
 ## `out`（可选，字典按引用传递）= 只给日志用：写回 `out["n"]`（**几"次"伤害**：N 个人打 + N 个技能
 ##   + 毒 1 次）与 `out["max"]`（其中最大的一次）。
-## 【2026-09-23 深夜⑨·用户】①普攻那一族先按 `_threat_slots()`（可站开火位数）削到上限，再叠加 ②③
-##   （技能/毒不占开火位）—— 详见函数体内 ①.5。
+## 【2026-09-23 深夜⑨·用户 ⇒ 2026-10-03 用户拍板「a」改口径】①普攻那一族受**开火位占位**限制（六边形一格只站一个人），再叠加 ②③
+##   （技能/毒不占开火位）—— 详见函数体内 ①.5（现口径 = 按**真实开火位**做最大权指派，不再用 `_threat_slots()` 的几何上界）。
 ## 【2026-09-25·`INC_MEMO`】把「挨打合计」的**同局面重复查询**合并成一遍（见 `const INC_MEMO` 处说明）。
 ##   键 = `sim 实例 id|单位下标|x|y|是否关嘲讽门`；`w_inc_memo <= 0` 时**直接透传**（逐位不变）。
 func _inc_memoized(sim: Sim, t: SimUnit, cell: Vector2i, ignore_taunt: bool = false) -> float:
@@ -10861,6 +10936,8 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 	#   `[[sim.units 下标, 伤害], …]`（骷髅兵·召唤那两笔记 −1）。给红帽那几条用法筛"廉价解"用；
 	#   对本函数的返回值与 `out` 的既有键**零影响**。
 	var pos_idx: Array = []
+	# 【2026-10-03·用户拍板「a」】每个候选的**可用开火位**（给 ①.5 的最大权指派用）
+	var pos_cells: Array = []
 	var pos_out: Array = []
 	# ① 普攻：能打到他的每个对手各一次（**只有这一族受开火位数量限制**，见下面 ①.5）
 	var pos_inst: Array = []
@@ -10874,7 +10951,8 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 		# 【2026-09-23 深夜⑧】嘲讽也折进 `_threat_can_hit()`：**按开火那格判**（够不着嘲讽者的格子照样能打别人）。
 		# 【2026-09-23 ㉕】`ignore_taunt=true` 时把嘲讽门关掉（`threatened=null`）—— 只给 `_taunt_soak()` 求对照值。
 		var gate_t: SimUnit = null if ignore_taunt else t
-		if not _threat_can_hit(sim, a, cell, gate_t):
+		var fcells := _threat_fire_cells(sim, a, cell, gate_t)
+		if fcells.is_empty():
 			continue
 		# 【2026-09-24 修·用户实机抓到的 bug】这一下还要 ① 补上**敌方回合开始**才发生的团队加攻
 		#   （烈焰祭司 hero_19：所有其他队友 +1），② 乘**攻击者自己的伤害倍率**（赏金猎人远程打
@@ -10890,6 +10968,7 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			pos_inst.append(one)
 			pos_names.append(a.name)
 			pos_idx.append(i)
+			pos_cells.append(fcells)
 	# ①.7 【2026-09-25·用户报「阈值比较伤害里还是没有骷髅」】对手**回合开始那一刻才召唤出来的骷髅兵**：
 	#   它们此刻还不在 `sim.units` 里 ⇒ 上面那一圈永远看不到它们（用户猜的「是因为骷髅是后面召唤的吗」= **正是**）。
 	#   机制铁证（三处）：`heroes/hero_33_死灵法师.gd::on_turn_start()` → `Battle._summon_skeletons()`
@@ -10938,32 +11017,32 @@ func _incoming_total_on(sim: Sim, t: SimUnit, cell: Vector2i, out: Dictionary = 
 			if sk_one > 0.0:
 				pos_inst.append(sk_one)
 				pos_names.append("骷髅兵·召唤")
+				pos_cells.append([sp])   # 骷髅的"占位"按落点格算（它得走到目标邻格才打得到）
 				pos_idx.append(-1)        # 不是编制内的单位（红帽那几条用法里会被跳过）
-	# ①.5 【2026-09-23 深夜⑨·用户】"同时能打到他的人"受**可站开火位的数量**限制：六边形一格站一个人，
-	#   目标周围只有 2 个能开火的位子时，最多 2 个敌人能同时打到他 —— 旧算法却把**每个"够得到"的
-	#   敌人都各算一笔**（3 个敌人 ⇒ 3 笔）⇒ 虚高。用户原话：「比如玩家只有两个位置能达到A英雄，
-	#   但是A英雄会把3个能够到他的伤害都算上，即使实际只有两个能打到，另一个贴不了身……我的想法是
-	#   这种情况，伤害就算能打到的最高两个之和」。
-	#   ⚠️【同日追加·别搞混】**只削普攻**：开火位挤占是"谁站到那一格架枪"的问题，而 ②"移动后触发"
-	#   （烛火/末日/涌电技师）是**顺着自己的路顺手放的**、③毒是**回合开始 tick**，两者既不占别人的
-	#   开火位、也不跟普攻抢位子 ⇒ 先按开火位数把**普攻**削到上限，再把技能/毒**原样加上去**，
-	#   最后才让圣盾"挡最大的一次"在这条合并后的清单上裁决。
-	var slots := maxi(_threat_slots(sim, t, cell), 1)
-	if pos_inst.size() > slots:
-		var order: Array = []
-		for i in pos_inst.size():
-			order.append({ "i": i, "v": float(pos_inst[i]) })
-		order.sort_custom(func(a, b): return float(a["v"]) > float(b["v"]))
-		for k in slots:
-			var oi := int(order[k]["i"])
-			inst.append(float(pos_inst[oi]))
-			names.append(String(pos_names[oi]))
-			pos_out.append([pos_idx[oi], float(pos_inst[oi])])
-	else:
-		for i in pos_inst.size():
-			inst.append(float(pos_inst[i]))
-			names.append(String(pos_names[i]))
-			pos_out.append([pos_idx[i], float(pos_inst[i])])
+	# ①.5 【2026-10-03·用户拍板「a」】**开火位按格占位**：六边形一格只站一个人 ⇒ "同时能打到他的人"不是
+	#   "每个够得到的人都各记一笔"，而要在「候选 × 它真能用的开火位」上做一次**最大权指派**（权 = 这一笔
+	#   伤害，每个开火位最多给一个人）。旧口径（2026-09-23 深夜⑨）是拿 `_threat_slots()` 数一个**几何上界**
+	#   再"只留最高的 N 笔" —— 那个数**不看嘲讽门 / 视线 / 谁真走得到**：用户那局白游侠只剩 **1** 个真开火位
+	#   (2,5)，几何数却 ≥3 ⇒ 三个敌人各记一刀 = 5 伤，而真实最多一个人能站上那一格 = **2** 伤。
+	#   实现 = **横截拟阵的贪心**：伤害降序逐个尝试，能用增广路（`_fire_slot_take()`）抢到一个不冲突的
+	#   开火位就收下 —— 对"每格容量 1"这种约束，这个贪心是**最优**的（不必上完整匈牙利算法）。
+	#   ⚠️ 与非普攻族的分工不变：②移动后技能 / ③毒 / ①.8 AoE 形状**不占开火位**，照旧原样叠加。
+	var slot_owner: Dictionary = {}       # 开火位 -> `pos_inst` 下标（此刻占着它的候选）
+	var kept_slot: Array = []
+	var ord_pos: Array = []
+	for i in pos_inst.size():
+		ord_pos.append({ "i": i, "v": float(pos_inst[i]) })
+	ord_pos.sort_custom(func(a2, b2): return float(a2["v"]) > float(b2["v"]))
+	for e2 in ord_pos:
+		var pi := int(e2["i"])
+		var seen_slot: Dictionary = {}
+		if _fire_slot_take(pos_cells[pi], pi, pos_cells, slot_owner, seen_slot):
+			kept_slot.append(pi)
+	kept_slot.sort()
+	for pi2 in kept_slot:
+		inst.append(float(pos_inst[pi2]))
+		names.append(String(pos_names[pi2]))
+		pos_out.append([pos_idx[pi2], float(pos_inst[pi2])])
 	# ①.8 【2026-09-26·用户拍板】"按对手实际有的 AoE 形状罚扎堆"第一批（白游侠散射 / 长剑剑气）：
 	#   这两笔都是"**它打我队友，我因为站在旁边 / 身后而多挨一下**" ⇒ 放在 ①.5 之后、与 ② 同层
 	#   （**不占开火位**、不参与"只留最高的 N 笔"的封顶 —— 它是某次普攻的附赠，不是另一次普攻）。
@@ -11241,7 +11320,7 @@ func _redcap_blast_threat(sim: Sim, her: SimUnit) -> bool:
 ##   **等价写法（不额外跑 BFS）**：`1 ≤ walk_dist(她 → cell) ≤ 预算 + 1`
 ##   —— 最短路上的"倒数第二格"就是那个 `p`（一定走得到、且与 `cell` 相邻）；反向也成立。
 ##   ⚠️ 尺子：`walk_dist` 是**几何上界**（`_bfs_field()` 只挡障碍/墓碑、不挡身体）⇒ 她的实际走位会被单位挡住，
-##      这一项**略微高估**；取舍与 ㉖ 的 `_threat_slots()` 同一句话（宁可高估，也不把热路径变成 BFS 黑洞）。
+##      这一项**略微高估**；取舍与别处同款 —— 宁可高估，也不把热路径变成 BFS 黑洞。
 ##      `walk_dist` 按起点缓存（`sim.walk_cache`）⇒ 每个末态只付一次 BFS，之后都是字典查询。
 ##   ⚠️ 开销：只有 `kind == 3`（对面红帽）且**她已一碰就死**（`_redcap_blast_threat()` 过了）才会走到这里
 ##      ⇒ 场上没有"残血红帽"时零开销。
@@ -11311,18 +11390,43 @@ func _aoe_on_ray(from: Vector2i, dir: Vector2i, cell: Vector2i) -> bool:
 ##   ⚠️ 集合天然很小、**不是全盘**：开火格必须"离目标 ≤ 射程"（`_threat_fire_ok_at` = 射程 + 视线 + 嘲讽门）
 ##   ⇒ 六边形邻圈最多 6 格；暗域这类近战（射程 1）最多就是目标周围那几格。
 ##   ⚠️ 成本：每格要跑一次整份 `_incoming_total_on()` ⇒ 由 `DISPLACE_LANDING_MAX` 兜上限（见那处说明）。
-func _threat_fire_cells(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: SimUnit = null) -> Array:
+## 【2026-10-03·用户拍板「a」】本函数现在有**两个用途**：① 上面那段（暗域的换位落点）；
+##   ② **挨打合计 ①.5 的"开火位占用"**（`_incoming_total_on` 拿它做最大权指派 ⇒ "一格只站一个人"）。
+##   ⇒ 为此补了两道与 `_threat_can_hit()` 对齐的判据：**后勤没有普攻**（恒空）＋ **宿魂瞬移**（任意合法落点）。
+##   `first_only = true` ⇒ 只回 0/1 个格子（热路径用；与 `_threat_can_hit()` 的提前退出同款）。
+##   ⚠️ 判据改一处就要**两处一起改**（`_threat_can_hit()` ↔ 本函数）。
+func _threat_fire_cells(sim: Sim, a: SimUnit, target_cell: Vector2i, threatened: SimUnit = null, first_only: bool = false) -> Array:
 	var out: Array = []
+	if a == null or a.skills.has(DataRegistry.Skill.LOGISTICS):
+		return out                          # 后勤没有普攻 ⇒ "能打到哪几格"恒为空（与 `_threat_can_hit()` 同口径）
+	if a.hero_id == "hero_46" and not a.stunned and a.emove > 0:
+		for c in _cells_within_radius(target_cell, maxi(a.atk_range, 1)):
+			if c == target_cell:
+				continue                    # 不能落在目标自己那格（单位占位）
+			if sim.obstacles.has(c) or sim.graves.has(c) or sim.occ.has(c):
+				continue                    # 站不了那儿
+			if _threat_fire_ok_at(sim, a, c, target_cell, threatened):
+				out.append(c)
+				if first_only:
+					return out
+		return out
 	if _threat_fire_ok_at(sim, a, a.cell, target_cell, threatened):
 		out.append(a.cell)                  # 原地就够得到 ⇒ 这是一条（不用挪）
+		if first_only:
+			return out
 	var budget := _threat_emove_next(sim, a)
 	if budget <= 0:
+		return out
+	# 几何预筛：几何距离 > 射程＋移动力 ⇒ 一定够不着（几何距离是路网下界 ⇒ 必要条件，安全）
+	if grid.distance(a.cell, target_cell) > a.atk_range + budget:
 		return out
 	for c in _sim_walk_cells(sim, a.cell, budget, a.skills.has(DataRegistry.Skill.INFILTRATE)):
 		if not _threat_fire_ok_at(sim, a, c, target_cell, threatened):
 			continue
 		if not out.has(c):
 			out.append(c)
+		if first_only:
+			return out
 	return out
 
 ## 【2026-09-26·用户要求】**位移落点重算**：对手四条位移的**真规则**（逐条照抄 `heroes/*.gd` 与 `src/Battle.gd`）——

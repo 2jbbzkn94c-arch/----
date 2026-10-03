@@ -22,4 +22,6 @@ func on_negative_blocked() -> void:
 	_last_frame = f
 	unit.atk_buff += 1
 	unit.refresh_stats()
-	unit._float_text("免疫负面 攻+1", Color(0.8, 0.75, 1.0), -22, -48)
+	# 【2026-10-03·用户口径「负墟技能效果（弹字）改为**吞噬**」】弹字只留技能名"吞噬"（原来是
+	#   "免疫负面 攻+1"这种把机制写进去的说明）；机制本身一字未动 —— 免疫照旧、攻+1 照旧。
+	unit._float_text("吞噬", Color(0.8, 0.75, 1.0), -22, -48)

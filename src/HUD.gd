@@ -639,7 +639,10 @@ func _show_deploy_panel() -> void:
 	#   重建 = `queue_free()` 旧的 + 末尾 `add_child` 新的 ⇒ 新面板会排在**暂停浮层之后**（画在它上面），
 	#   于是"点了菜单，卡池/队伍那一行又冒出来盖在暂停黑底上"。暂停时局面本来就不动，
 	#   等恢复（或下一次正常刷新）再建即可 ⇒ 这里直接让路。
-	if get_tree() != null and get_tree().paused:
+	# 【2026-10-03·用户贴的报错「HUD.gd:1529 Parameter data.tree is null」】**别写成 `get_tree() != null`**：
+	#   节点在「切场景 / 退出 / 重开」时会被**先移出场景树、再释放**，那时 `get_tree()` 自己就会报这条引擎错
+	#   （同 `_exit_tree()` 那条注释的口径）⇒ 判据用 `is_inside_tree()`。
+	if is_inside_tree() and get_tree().paused:
 		return
 	# 非部署阶段则收起
 	if battle.state != Battle.State.DEPLOY and battle.state != Battle.State.PLACE_DEPLOY:
@@ -931,6 +934,12 @@ func _show_arena_pair(pair: Array) -> void:
 	wrapbox.add_child(host)
 	_arena_pair = pair.duplicate()   # 【2026-09-29】选中演出要用（原来闭包直接抓 pair，回放驱动时拿不到）
 	var click_cb := func(hid: String): _arena_pick_anim(hid)
+	# 【2026-10-03·用户「竞技场录像，2选1怎么还能点」】回放里的 2 选 1 面板**只能看、不能点**：
+	#   选哪张由录像说了算（`Battle._replay_draft_frame()` 演完一轮再喊 `arena_replay_pick()` 飞卡），
+	#   观众点上去原来会走 `_arena_pick_anim()`（卡片真的飞一下 —— 结果不会被改，`_replay_draft_active`
+	#   那道门挡着，但看着"能点"就是错的）。⇒ 回放里**不接点击**（`clicked` 不连）、也不挂触屏那套
+	#   （`_setup_arena_touch()` 的短按确认）；**悬停查看属性保留**（纯查看，无害且有用）。
+	var view_only: bool = _in_replay()
 	for i in pair.size():
 		var hid: String = pair[i]
 		var def := DataRegistry.get_hero(hid)
@@ -944,11 +953,12 @@ func _show_arena_pair(pair: Array) -> void:
 			if DataRegistry.get_hero(hid2) == null:
 				return
 			_set_score_tooltip_hero(hid2))
-		card.clicked.connect(click_cb)
+		if not view_only:
+			card.clicked.connect(click_cb)
 		host.add_child(card)
 	# 触屏（安卓/iOS）：竞技场选人 = 短按确认、长按查看、按住滑动切换查看、松手不确认。
 	# 桌面保留 HexCard 自身的 hover 查看 + 点击确认。
-	if DisplayServer.is_touchscreen_available():
+	if DisplayServer.is_touchscreen_available() and not view_only:
 		_setup_arena_touch(pair, host, card_r, click_cb)
 	var pw := total_w + 40.0
 	# 【2026-09-29】顶部大字倒计时的预留高度 78 → **96**：字号 52 → 64 之后行高约 83px，
@@ -1519,7 +1529,10 @@ func _refresh_team_panel() -> void:
 		return
 	# 【2026-09-29·同 `_show_deploy_panel()` 那条】暂停期间不重建：重建会把面板挪到 HUD 子节点末尾
 	#   ⇒ 画在暂停浮层**上面**（用户报的"点了菜单还有列表冒出来"就是这一族）。恢复后再刷新即可。
-	if get_tree() != null and get_tree().paused:
+	# 【2026-10-03·用户贴的报错「HUD.gd:1529 Parameter data.tree is null」】**别写成 `get_tree() != null`**：
+	#   节点在「切场景 / 退出 / 重开」时会被**先移出场景树、再释放**，那时 `get_tree()` 自己就会报这条引擎错
+	#   （同 `_exit_tree()` 那条注释的口径）⇒ 判据用 `is_inside_tree()`。
+	if is_inside_tree() and get_tree().paused:
 		return
 	if _in_replay():
 		_close_team_panel()   # 回放里不摆常驻队伍卡（见 `_in_replay()` 的说明）
@@ -1846,6 +1859,7 @@ func _build() -> void:
 			# 局部 x：**两排同式** `MARK_EDGE_PAD + i * 步距` —— "贴哪一边"由行的对齐方式决定
 			#   （左行贴列左 ⇒ pad 落在右侧＝外侧；右行贴列右 ⇒ pad 落在左侧＝外侧）
 			mk.position = Vector2(MARK_EDGE_PAD + float(i) * step, 0.0)
+			mk.home = mk.position   # 【2026-10-03】记下"家"：摇晃从它起步、也回到它（见 `DeathMark.home` 那段）
 			marks_row.add_child(mk)
 			(_my_marks if mine else _op_marks).append(mk)
 	# 阵亡演出层：加在状态栏之后 ⇒ 同 z_index 下画在状态栏之上（弹窗类浮层是更晚 join 的，仍在其上）
@@ -2966,22 +2980,36 @@ func _refresh_turn_ring() -> void:
 			or st == Battle.State.SUBSTITUTING or st == Battle.State.PLACE_SUB or st == Battle.State.PLACE_BOMB
 	var pre_match: bool = st == Battle.State.DECK_PICK or st == Battle.State.ARENA_DRAFT \
 			or st == Battle.State.DEPLOY or st == Battle.State.PLACE_DEPLOY
+	# 【2026-10-03·用户「录像时候，部署阶段先手高亮框位置不对」】回放里的**开场流程**（竞技场选牌段 +
+	#   部署逐手）**不是**跑在 `ARENA_DRAFT` / `DEPLOY` 这两个状态下（回放侧统一在 `ANIMATING` 里按
+	#   "舞台帧 side = -1" 演，见 `_replay_begin()`）⇒ 上面那条状态判据在回放里**永远不成立**，于是掉进
+	#   "行动回合"那一档去读 `GameState.active_side` —— 而回放开场那份快照是 `_snap_take(GameState.SIDE_PLAYER)`
+	#   取的（`side` 恒 0）⇒ **先手是红方时绿框会亮在蓝方**。
+	# 【同日·用户「竞技场的开局的时候先手高亮提示框也是错的」】同一个病在**实机竞技场**也有：竞技场选牌段 /
+	#   开场横幅那几拍会走 `IDLE`·`ANIMATING` 这些状态，而 `IDLE` 那一档原来靠 `GameState.match_running`
+	#   区分"开打前后" —— 那面旗**第 2 局起在 `reset_match()` 里就置 true 了**（同一面旗两种含义，见
+	#   ③ 的旧注释）⇒ 竞技场重开一局时会被当成"开打后"去读 `active_side`（那时它还是 `start_match(PLAYER)`
+	#   写下的 0）⇒ 先手是红方时又亮错边。
+	# ⇒ 根治办法：**别再用状态名/旗子猜**，改用一个语义判据 —— `battle._deploy_done()`（双方各上满
+	#   `DEPLOY_COUNT_BATTLE` 人）**没完成就一律按先手亮**：它对普通模式 / 竞技场 / 天梯、实机与回放、
+	#   任何中间状态都成立（选牌段/开场横幅/部署期都是 false；第一回合开打前部署必然已完成 ⇒ 之后交给行动方）。
+	#   ⚠️ **必须排除"自由部署沙箱"**：那个模式不走部署系统（`_place_units()` 直接摆人）⇒
+	#   `_deploy_done()` **恒 false**（探针实测 state=2、场上有人时仍 false）⇒ 不排除就会把绿框一直锁在先手。
+	#   沙箱的标记就是 `GameState.no_death_limit`（`QuickTest` 那条路置的，别处不用）。
+	var before_action: bool = (not bool(b._deploy_done())) and not bool(GameState.no_death_limit)
+	var replay_opening: bool = bool(b._replay_mode) and not bool(b._replay_ready)
 	var show := false
 	var side: int = GameState.SIDE_PLAYER
 	if not GameState.match_over:
-		if acting:
+		if before_action or replay_opening or pre_match:
+			show = b._first_side_decided
+			side = b._first_side          # 先手（此刻 active_side 还没被 start_match 写过，不能用）
+		elif acting:
 			show = true
 			side = GameState.active_side
-		elif pre_match and b._first_side_decided:
-			show = true
-			side = b._first_side          # 先手（此刻 active_side 还没被 start_match 写过，不能用）
 		elif st == Battle.State.IDLE:
-			if GameState.match_running:
-				show = true               # 开打后的空窗：跟行动方（不是先手），中间那几帧不闪
-				side = GameState.active_side
-			elif b._first_side_decided:
-				show = true               # 开打前那段 IDLE（含"战斗开始"横幅）：还是先手
-				side = b._first_side
+			show = true                   # 开打后的空窗（替补/落位中间那几帧）：跟行动方
+			side = GameState.active_side
 	var act_fn: int = b.side_faction(side)
 	for fn in _plate_rings.keys():
 		var ring: Panel = _plate_rings[fn]
@@ -3127,14 +3155,20 @@ func _on_pause_pressed() -> void:
 	resume.pressed.connect(_on_resume_pressed)
 	vb.add_child(resume)
 	# 【2026-09-27·用户要求】「重开 / 返回选人」已整合进暂停面板（底部常驻行只剩结束回合）：
-	#   单机普通模式给这两个；**天梯**只给「认输」（2026-10-03 文案统一：原来叫「放弃本次天梯」；
-	#   重开会作废本局，口径冲突）。
+	#   单机普通模式给「重开 / 返回主菜单」；**天梯**给「保存并退出 / 认输」（2026-10-03 文案统一：
+	#   原来叫「放弃本次天梯」；重开会作废本局，口径冲突）。
 	if GameState.ladder_mode != "":
-		# 【2026-10-03·用户要求「普通模式和天梯模式只要认输，不要返回主菜单按键」】这里原来还有一枚
-		#   **「保存并退出」**（= 天梯的"回主菜单"那条路：存一份快照就换场景）⇒ 按"只要认输"的口径**删掉**，
-		#   天梯暂停面板现在只剩「继续游戏 / 认输」。
-		#   ⚠️ 代价（用户口径优先，但记在这里）：**不能再"中途存档走人、下次接着打"**了 —— 要恢复就把
-		#   `save_quit` 那三行加回来（`_on_ladder_save_quit()` 与结算面板里那枚同名按钮都还在，未受影响）。
+		# 【2026-10-03·用户报「**怎么天梯普通模式的保存并返回没了**」】这枚**加回来**了：
+		#   2026-10-03 早些时候用户口径「普通模式和天梯模式只要认输，不要返回主菜单按键」⇒ 当时把它删了；
+		#   现在用户发现少了它 —— 天梯"中途存档走人、下次接着打"就靠它（`_on_ladder_save_quit()`：
+		#   现补一份快照 + 回主菜单，本轮存档**保留**）。⇒ 天梯暂停面板恢复成
+		#   **继续游戏 / 保存并退出 / 认输** 三行。
+		var save_quit := Button.new()
+		save_quit.text = "保存并退出"
+		save_quit.add_theme_font_size_override("font_size", 20)
+		save_quit.custom_minimum_size = Vector2(240, 50)
+		save_quit.pressed.connect(_on_ladder_save_quit)
+		vb.add_child(save_quit)
 		var give_up := Button.new()
 		# 【2026-10-03·用户要求「天梯模式的放弃本次天梯也改成认输」】文案统一成「认输」（**行为一字未动**：
 		#   仍是"清当前连胜 + 删本轮存档 + 弹结算面板"那一套，见 `_ladder_do_give_up()`；确认层文案同步）。
@@ -3144,7 +3178,7 @@ func _on_pause_pressed() -> void:
 		give_up.pressed.connect(_on_ladder_give_up)
 		vb.add_child(give_up)
 		# 【2026-09-24 用户要求】原来按钮下面还有一块小字（"天梯普通模式 · 第 N 局 · 当前连胜 M 场" + 两行按钮说明）
-		#   ⇒ 已删；暂停面板现在就两行：继续游戏 / 认输。
+		#   ⇒ 已删；暂停面板现在就三行：继续游戏 / 保存并退出 / 认输。
 	else:
 		var p_restart := Button.new()
 		p_restart.text = "重开"
@@ -3784,6 +3818,14 @@ class DeathMark extends Control:
 
 	var filled := false          ## false = 未死亡标志（素材：蓝/红）；true = 死亡标志
 	var faction := DataRegistry.Faction.PLAYER   ## 这一行属于哪个**绝对阵营**（决定用蓝的还是红的那张）
+	# 【2026-10-03·用户「红色方的死亡标志最右边那个偶尔会偏离」】两件事必须记住：
+	#   ① `home` = 这一枚的"家"（HUD 创建时写一次）—— 摇晃**永远从家起步、也回家**；
+	#   ② `_tw` = 当前那段摇晃 tween —— 摇到一半又被摇一次时，旧的**必须先掐掉**。
+	#   旧实现两条都缺：`base = position` 取的是**当时**的位置（可能是上一段的中途偏移），而摇晃直接改
+	#   `position` ⇒ 两条 tween 互抢，谁最后结束谁说了算 ⇒ 偏出去最多 ±SHAKE_PX(3px) 且**再没人拨回来**。
+	#   最右边那枚最容易中招：它是最后一个被点亮的、也是结算震动里最后被摇的那一枚。
+	var home := Vector2.ZERO   ## 摆好之后由 HUD 写入（见 `_refresh_deaths()` 上方那段创建代码）
+	var _tw: Tween = null
 
 	# 【2026-09-29·用户贴的 `INT_AS_ENUM_WITHOUT_CAST`】`faction` 是枚举类型（下面那行 `:=`
 	#   从 `DataRegistry.Faction.PLAYER` 推出）⇒ 入参原来标 `int` 时赋值会报警 ⇒ 入参也标成枚举。
@@ -3804,11 +3846,14 @@ class DeathMark extends Control:
 	func pop_and_shake() -> void:
 		if not is_inside_tree():
 			return
+		if _tw != null and _tw.is_valid():
+			_tw.kill()                     # 上一段没演完 ⇒ 先掐掉（否则两条 tween 抢同一个 `position`）
+		position = home                    # 永远从"家"起步，不吃上一段留下的中途偏移
 		pivot_offset = size * 0.5
-		var base := position
 		scale = Vector2(0.35, 0.35)
 		rotation = 0.0
 		var t := create_tween()
+		_tw = t
 		# 【2026-10-03】与 `_defeat_anim_side()` 里那两处同因：天梯「认输」是在**暂停态**下弹结算的，
 		#   这段骷髅"弹出+摇晃"也要照演 ⇒ 不让它跟着树停。
 		t.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
@@ -3820,10 +3865,10 @@ class DeathMark extends Control:
 		for i in SHAKE_TIMES:
 			var dx := SHAKE_PX if i % 2 == 0 else -SHAKE_PX
 			var rot := 0.16 if i % 2 == 0 else -0.16
-			t.tween_property(self, "position", base + Vector2(dx, 0.0), 0.045)
+			t.tween_property(self, "position", home + Vector2(dx, 0.0), 0.045)
 			t.parallel().tween_property(self, "rotation", rot, 0.045)
 		# ③ 回中
-		t.tween_property(self, "position", base, 0.05)
+		t.tween_property(self, "position", home, 0.05)   # 回"家"（不是回"开始那一刻"）
 		t.parallel().tween_property(self, "rotation", 0.0, 0.05)
 
 	func _draw() -> void:

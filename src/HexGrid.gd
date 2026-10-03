@@ -76,6 +76,9 @@ func neighbors(cell: Vector2i) -> Array[Vector2i]:
 func distance(a: Vector2i, b: Vector2i) -> int:
 	var ra := _offset_to_axial(a)
 	var rb := _offset_to_axial(b)
+	# 【2026-10-03】这里 `/ 2` 是**故意的整数除**（六边形立方距离的分子恒为偶数）⇒ 用注解声明：
+	#   `/ 2.0` 再转回 int 会在热路径上白付一次浮点转换（与 `Menu.gd` / `DataRegistry.gd` 同一写法）。
+	@warning_ignore("integer_division")
 	return (abs(ra.x - rb.x) + abs(ra.x + ra.y - rb.x - rb.y) + abs(ra.y - rb.y)) / 2
 
 # 单位像素位置（flat-top 平顶，odd-q 列错位）：奇数列下移半格

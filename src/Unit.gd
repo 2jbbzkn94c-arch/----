@@ -721,7 +721,9 @@ func take_damage(amount: int, ignore_shield: bool = false, counter: bool = false
 #   原版反编译（Assembly-CSharp.dll）可证：`BuffInvincible` 的全部实现只有"把伤害归零 + AfterDefence
 #   自我消耗"，`Unit.AddBuff` 里**没有任何盾判定** ⇒ 毒蛇[猛毒] / 战锤麻痹 / 沉默 / 宿魂[附体] 一律照挂。
 #   `pierce_shield` 参数保留（hero_26 与 tests/ 下的自检还在传），但盾已不看它 —— 传不传结果一样。
-func add_status(s: String, pierce_shield: bool = false) -> void:
+	#   ⚠️ 形参名字前面加 `_`（`_pierce_shield`）是**故意的**：Godot 会把"没用上的形参"报成 `UNUSED_PARAMETER`，
+	#   加下划线等于声明"我知道它没用、别报"（与 `_tank_screens_someone(..., _tank)` 那次同一处理）。
+func add_status(s: String, _pierce_shield: bool = false) -> void:
 	# 负面免疫（负墟 hero_44 等）：规则全在英雄脚本自己的钩子里，这里只负责问一句、通知一声。
 	# 免疫者同样不挂状态；on_negative_blocked() 由英雄决定收益（负墟：同帧去重后攻击力+1）。
 	if behavior != null and StatusDB.is_negative(s) and behavior.immune_to_negative():
